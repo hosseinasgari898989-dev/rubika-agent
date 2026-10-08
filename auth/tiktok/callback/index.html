@@ -1,1 +1,63 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TikTok Authorization — Rubika Agent</title><style>body{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#07080d;color:#f6f7fb;padding:20px}.card{max-width:700px;padding:30px;border:1px solid #272d3a;background:#10131b;border-radius:22px}a{color:#5ce1ff}</style></head><body><main class="card"><h1>TikTok authorization callback</h1><p id="status">Authorization response received. The secure token exchange must be completed by the Rubika Agent backend.</p><p id="detail">Checking authorization response…</p><p>Never copy authorization codes, access tokens, or client secrets into chat messages or public repositories.</p><p><a href="../../../">Return to Rubika Agent</a></p><script>const q=new URLSearchParams(location.search),status=document.getElementById("status"),detail=document.getElementById("detail");if(q.get("error")){status.textContent="TikTok returned an authorization error.";detail.textContent=(q.get("error_description")||q.get("error"));}else if(q.get("code")){status.textContent="Authorization code received.";detail.textContent="The code reached the callback successfully. The next step is secure server-side token exchange."}else{detail.textContent="No authorization code is present in this URL."}</script></main></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TikTok Authorization — Rubika Agent</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#07080d;color:#f6f7fb;padding:20px}
+.card{width:min(720px,100%);padding:28px;border:1px solid #272d3a;background:#10131b;border-radius:22px;box-shadow:0 20px 80px rgba(0,0,0,.35)}
+a{color:#5ce1ff}.muted{color:#aeb5c4}.codebox{display:flex;gap:10px;margin-top:16px}.codebox input{min-width:0;flex:1;padding:14px;border-radius:12px;border:1px solid #323949;background:#0a0d13;color:#f6f7fb;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.btn{border:0;border-radius:12px;padding:0 18px;background:linear-gradient(90deg,#5ce1ff,#ff4fb3);font-weight:800;cursor:pointer;color:#07080d}.notice{margin-top:16px;padding:14px;border-radius:14px;background:#181d28;color:#aeb5c4;line-height:1.6}
+</style>
+</head>
+<body>
+<main class="card">
+<h1>TikTok authorization callback</h1>
+<p id="status">Checking the authorization response…</p>
+<p id="detail" class="muted"></p>
+<div id="codeSection" hidden>
+  <label for="codeInput"><strong>Authorization code</strong></label>
+  <div class="codebox">
+    <input id="codeInput" readonly>
+    <button class="btn" id="copyBtn">Copy code</button>
+  </div>
+  <p id="copyStatus" class="muted"></p>
+</div>
+<div class="notice">
+Never publish or share authorization codes, access tokens, refresh tokens, or client secrets. Authorization codes are temporary and should be exchanged securely on your own backend.
+</div>
+<p style="margin-top:22px"><a href="../../../">Return to Rubika Agent</a></p>
+<script>
+const q=new URLSearchParams(location.search);
+const status=document.getElementById("status");
+const detail=document.getElementById("detail");
+const section=document.getElementById("codeSection");
+const input=document.getElementById("codeInput");
+const copyBtn=document.getElementById("copyBtn");
+const copyStatus=document.getElementById("copyStatus");
+if(q.get("error")){
+  status.textContent="TikTok authorization failed.";
+  detail.textContent=q.get("error_description")||q.get("error");
+}else if(q.get("code")){
+  const code=q.get("code");
+  status.textContent="TikTok authorization succeeded.";
+  detail.textContent="The authorization code reached the callback successfully.";
+  input.value=code;
+  section.hidden=false;
+  copyBtn.addEventListener("click",async()=>{
+    try{
+      await navigator.clipboard.writeText(code);
+      copyStatus.textContent="Copied. Paste it only into your own secure Termux session.";
+    }catch{
+      input.focus();input.select();
+      copyStatus.textContent="Clipboard access was blocked. The code is selected; copy it manually.";
+    }
+  });
+}else{
+  status.textContent="No authorization code was received.";
+  detail.textContent="Start the TikTok Login flow again.";
+}
+</script>
+</main>
+</body>
+</html>
