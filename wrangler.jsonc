@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rubika-agent-control",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-12",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rubika-agent-db",
+      "database_id": "3ac941fe-4f06-4387-a44b-fc7f95d70d3a",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
