@@ -58,9 +58,9 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.mode == 'self-test'
         run: python -m agent.preflight self-test
       - name: Smoke-test live Cloudflare Worker
-        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'cloud-health'
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'cloud-health'
         env:
-          CONTROL_API_URL: https://rubika-agent-control.willow-poppy-10df.workers.dev
+          CONTROL_API_URL: https://rubika-agent-control.amber-harbor-f617.workers.dev
         run: python -m agent.preflight cloud-health
       - name: Verify Rubika bot and channel credentials
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'rubika-auth'

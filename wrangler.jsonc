@@ -3,6 +3,7 @@
   "name": "rubika-agent-control",
   "main": "src/index.js",
   "compatibility_date": "2026-10-12",
+  "account_id": "0b0905b85fb6b457c1f98dde50eb5e7f",
   "workers_dev": true,
   "observability": {
     "enabled": true
@@ -11,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "rubika-agent-db",
-      "database_id": "3ac941fe-4f06-4387-a44b-fc7f95d70d3a",
+      "database_id": "fb0dbb77-074e-46c7-b5ff-517a8b5969a4",
       "migrations_dir": "migrations"
     }
   ]
