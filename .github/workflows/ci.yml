@@ -34,6 +34,24 @@ jobs:
           python-version: "3.12"
       - name: Install pinned dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Verify installed Rubka API surface
+        run: |
+          python - <<'PY'
+          import inspect
+          import json
+          from importlib.metadata import version
+          from rubka import Bot
+
+          signature = inspect.signature(Bot)
+          required_methods = ("get_me", "get_chat", "send_video")
+          missing = [name for name in required_methods if not callable(getattr(Bot, name, None))]
+          if missing:
+              raise SystemExit("Required Rubka methods unavailable: " + ", ".join(missing))
+          for name in ("timeout", "show_progress"):
+              if name not in signature.parameters:
+                  raise SystemExit("Expected Bot constructor argument missing: " + name)
+          print(json.dumps({"rubka_version": version("rubka"), "api_surface": "ok", "publishing": False}))
+          PY
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
       - name: Run self-test
