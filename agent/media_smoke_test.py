@@ -110,7 +110,15 @@ def _request_cobalt(api_url: str, source_url: str) -> dict[str, Any]:
             raw = response.read(1024 * 1024)
             payload = json.loads(raw.decode("utf-8"))
     except HTTPError as exc:
-        raise SmokeError("cobalt_http_" + str(exc.code)) from None
+        category = "cobalt_error"
+        try:
+            error_payload = json.loads(exc.read(4096).decode("utf-8"))
+            error_code = str((error_payload.get("error") or {}).get("code") or "")
+            if error_code:
+                category = _safe_diagnostic(error_code)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            pass
+        raise SmokeError("cobalt_http_" + str(exc.code) + "_" + category) from None
     except (URLError, TimeoutError, OSError):
         raise SmokeError("cobalt_connection_error") from None
     except (json.JSONDecodeError, UnicodeDecodeError):
