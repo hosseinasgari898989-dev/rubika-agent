@@ -1,0 +1,64 @@
+name: Media download smoke test
+
+on:
+  push:
+    branches:
+      - media-download-smoke-test
+  workflow_dispatch:
+    inputs:
+      tiktok_url:
+        description: "One public TikTok video URL"
+        required: true
+        type: string
+        default: "https://www.tiktok.com/@dragonboyedits/video/7616247520657771796"
+      instagram_url:
+        description: "One public Instagram Reel URL (profile reels page also accepted for this smoke test)"
+        required: true
+        type: string
+        default: "https://www.instagram.com/poppyplaytimeco/reels/"
+      youtube_url:
+        description: "One public YouTube video or Short URL"
+        required: true
+        type: string
+        default: "https://www.youtube.com/watch?v=vkVFgmgLo1s"
+
+permissions:
+  contents: read
+
+jobs:
+  download-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ensure FFmpeg tools are available
+        run: |
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffprobe -version | head -n 1
+
+      - name: Install downloader
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade yt-dlp
+          python -m yt_dlp --version
+
+      - name: Download one public item from each platform and validate it
+        env:
+          TIKTOK_URL: ${{ inputs.tiktok_url || 'https://www.tiktok.com/@dragonboyedits/video/7616247520657771796' }}
+          INSTAGRAM_URL: ${{ inputs.instagram_url || 'https://www.instagram.com/poppyplaytimeco/reels/' }}
+          YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=vkVFgmgLo1s' }}
+        run: python -m agent.media_smoke_test
+
+      - name: Ensure temporary video files are not retained
+        if: always()
+        run: |
+          find "$RUNNER_TEMP" -maxdepth 4 -type f \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.webm' -o -iname '*.mov' -o -iname '*.m4v' -o -iname '*.ts' -o -iname '*.flv' \) -delete
