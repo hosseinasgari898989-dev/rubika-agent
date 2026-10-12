@@ -10,17 +10,17 @@ on:
         description: "One public TikTok video URL"
         required: true
         type: string
-        default: "https://www.tiktok.com/@dragonboyedits/video/7616247520657771796"
+        default: "https://www.tiktok.com/@huggyedit.fx/video/7648303639626272022"
       instagram_url:
-        description: "One public Instagram Reel URL (profile reels page also accepted for this smoke test)"
+        description: "One public Instagram Reel URL"
         required: true
         type: string
-        default: "https://www.instagram.com/poppyplaytimeco/reels/"
+        default: "https://www.instagram.com/reel/DUcUEgwiZ9S/"
       youtube_url:
         description: "One public YouTube video or Short URL"
         required: true
         type: string
-        default: "https://www.youtube.com/watch?v=vkVFgmgLo1s"
+        default: "https://www.youtube.com/watch?v=WL_nxD0JBfA"
 
 permissions:
   contents: read
@@ -53,9 +53,9 @@ jobs:
 
       - name: Download one public item from each platform and validate it
         env:
-          TIKTOK_URL: ${{ inputs.tiktok_url || 'https://www.tiktok.com/@dragonboyedits/video/7616247520657771796' }}
-          INSTAGRAM_URL: ${{ inputs.instagram_url || 'https://www.instagram.com/poppyplaytimeco/reels/' }}
-          YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=vkVFgmgLo1s' }}
+          TIKTOK_URL: ${{ inputs.tiktok_url || 'https://www.tiktok.com/@huggyedit.fx/video/7648303639626272022' }}
+          INSTAGRAM_URL: ${{ inputs.instagram_url || 'https://www.instagram.com/reel/DUcUEgwiZ9S/' }}
+          YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=WL_nxD0JBfA' }}
         run: python -m agent.media_smoke_test
 
       - name: Ensure temporary video files are not retained
