@@ -55,13 +55,15 @@ def _safe_error(stderr: str, timed_out: bool = False) -> str:
     text = stderr.lower()
     if any(token in text for token in ("login required", "log in", "sign in", "cookies", "authentication required")):
         return "login_or_access_restricted"
+    if "unexpected response from webpage request" in text:
+        return "platform_challenge_or_extractor_error"
     if any(token in text for token in ("private video", "private account", "not authorized", "not authorised")):
         return "private_or_unavailable"
     if "429" in text or "too many requests" in text or "rate limit" in text or "rate-limited" in text:
         return "rate_limited"
     if any(token in text for token in ("http error 403", "forbidden", "captcha", "verify you are human", "blocked by cloudflare", "anti-bot")):
         return "platform_access_blocked"
-    if "http error 404" in text or any(token in text for token in ("video unavailable", "does not exist", "requested content is not available")):
+    if "http error 404" in text or any(token in text for token in ("video unavailable", "video is unavailable", "does not exist", "requested content is not available")):
         return "video_unavailable_or_removed"
     if "unsupported url" in text:
         return "unsupported_url"
@@ -159,6 +161,7 @@ def test_one_platform(platform: str, raw_url: str, root: Path) -> dict[str, Any]
             "ok": False,
             "host": detail,
             "error": "no_video_file_created",
+            "diagnostic": _safe_diagnostic(stderr or stdout),
             "seconds": round(time.monotonic() - started, 2),
         }
 
