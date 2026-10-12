@@ -58,9 +58,15 @@ def _safe_error(stderr: str, timed_out: bool = False) -> str:
         return "private_or_unavailable"
     if any(token in text for token in ("429", "too many requests", "rate limit", "rate-limited")):
         return "rate_limited"
+    if any(token in text for token in ("http error 403", "forbidden", "captcha", "verify you are human", "blocked by cloudflare", "anti-bot")):
+        return "platform_access_blocked"
     if "unsupported url" in text:
         return "unsupported_url"
-    if any(token in text for token in ("video unavailable", "not available", "not found", "does not exist")):
+    if any(token in text for token in ("no video formats found", "requested format is not available", "no formats found")):
+        return "no_downloadable_format"
+    if any(token in text for token in ("unable to extract", "unable to parse", "extractor error")):
+        return "extractor_parse_error"
+    if any(token in text for token in ("video unavailable", "not available", "not found", "does not exist", "requested content is not available")):
         return "video_unavailable_or_removed"
     if "maximum file size" in text or "file is larger than" in text:
         return "size_limit"
