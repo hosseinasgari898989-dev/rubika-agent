@@ -1,13 +1,24 @@
-# Rubika Agent
+# Rubika-Agent — Cloud Edition
 
-GitHub Pages frontend for the Rubika Agent TikTok integration.
+هدف این مخزن اجرای ایجنت روبیکا بدون Termux و بدون سرویس پولی است.
 
-Public URLs after GitHub Pages is enabled:
-- Home: https://hosseinasgari898989-dev.github.io/rubika-agent/
-- Terms: https://hosseinasgari898989-dev.github.io/rubika-agent/terms.html
-- Privacy: https://hosseinasgari898989-dev.github.io/rubika-agent/privacy.html
-- TikTok callback: https://hosseinasgari898989-dev.github.io/rubika-agent/auth/tiktok/callback/
+## معماری مرحلهٔ اول
+- **Cloudflare Worker + D1:** وضعیت سرویس و دیتابیس فراداده‌ها.
+- **GitHub Actions:** اجرای تست‌ها و در مراحل بعد اجرای کارهای سنگین دانلود/اعتبارسنجی روی runner موقت.
+- **فایل ویدئوها:** روی runner موقت پردازش می‌شوند؛ R2 استفاده نمی‌شود.
+- **ارسال به روبیکا:** فقط بعد از تکمیل آداپترها، تنظیم Secrets و تست صریح فعال خواهد شد.
 
-The public site contains no TikTok client secret. OAuth code exchange and token storage belong in a secure backend or Worker.
+## محدودیت ایمنی این مرحله
+این نسخه هنوز چیزی در کانال منتشر نمی‌کند و منابع را پایش نمی‌کند. منابع در دیتابیس پیش‌فرض غیرفعال‌اند. تاریخ شروع باید هنگام روشن‌کردن ایجنت ثبت شود؛ پست‌های قدیمی نباید وارد صف شوند.
 
-Enable GitHub Pages for the main branch using the repository root as the publishing source.
+## Cloudflare
+Worker name: `rubika-agent-control`
+D1 database: `rubika-agent-db`
+Health endpoint: `/health`
+Status endpoint: `/api/status`
+
+## Secrets
+هرگز توکن روبیکا یا Cloudflare را داخل فایل‌ها، لاگ‌ها یا issueها قرار ندهید. نام Secretها در مرحلهٔ اجرای واقعی در مستندات همان مرحله اعلام می‌شود.
+
+## آزمون
+در GitHub Actions، workflow مربوط به CI تست‌های خودکار را اجرا می‌کند. در این مرحله اجرای دستی یا زمان‌بندی‌شدهٔ انتشار وجود ندارد.

@@ -1,0 +1,42 @@
+name: Cloud bootstrap checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - cloudflare-free-agent-bootstrap
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose a non-publishing check"
+        required: true
+        type: choice
+        options:
+          - self-test
+          - cloud-health
+        default: self-test
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Run self-test
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'self-test'
+        run: python -m agent.preflight self-test
+      - name: Smoke-test live Cloudflare Worker
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'cloud-health'
+        env:
+          CONTROL_API_URL: https://rubika-agent-control.willow-poppy-10df.workers.dev
+        run: python -m agent.preflight cloud-health
