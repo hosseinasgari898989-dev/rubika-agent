@@ -1,22 +1,23 @@
-"""One-time public-media download smoke test.
+"""Public-video smoke test using a short-lived, self-hosted Cobalt API.
 
-Downloads at most one short public video per supported platform to a temporary
-GitHub Actions runner directory, validates it with ffprobe, reports only safe
-metadata, and deletes all media afterward. It never logs in or publishes.
+This runs on a temporary GitHub Actions runner. It tests exactly one URL per
+platform, validates the resulting media with ffprobe, never logs in or posts
+anything, and removes all downloaded files when the run ends.
 """
 from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 ALLOWED_HOSTS = {
     "tiktok": ("tiktok.com",),
@@ -25,12 +26,18 @@ ALLOWED_HOSTS = {
 }
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".ts", ".flv"}
 MAX_FILE_BYTES = 100 * 1024 * 1024
-MAX_DURATION_SECONDS = 180
-PROCESS_TIMEOUT_SECONDS = 180
+MAX_API_SECONDS = 45
+MAX_DOWNLOAD_SECONDS = 180
+
+
+class SmokeError(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 
 
 def validate_public_video_url(platform: str, raw_url: str) -> tuple[bool, str]:
-    """Only allow public HTTPS links for the platform requested."""
+    """Only accept public HTTPS URLs belonging to the requested platform."""
     if platform not in ALLOWED_HOSTS:
         return False, "unsupported_platform"
     try:
@@ -40,240 +47,217 @@ def validate_public_video_url(platform: str, raw_url: str) -> tuple[bool, str]:
         return False, "invalid_url"
     if parsed.scheme != "https" or not host or not parsed.path:
         return False, "invalid_url"
-    if parsed.username or parsed.password:
+    if parsed.username or parsed.password or not host.replace(".", "").replace("-", "").isalnum():
         return False, "invalid_url"
     if not any(host == domain or host.endswith("." + domain) for domain in ALLOWED_HOSTS[platform]):
         return False, "platform_host_mismatch"
-    if not host.replace(".", "").replace("-", "").isalnum():
-        return False, "invalid_url"
     return True, host
 
 
-def _safe_error(stderr: str, timed_out: bool = False) -> str:
-    if timed_out:
-        return "download_timeout"
-    text = stderr.lower()
-    if any(token in text for token in ("login required", "log in", "sign in", "cookies", "authentication required")):
-        return "login_or_access_restricted"
-    if "unexpected response from webpage request" in text:
-        return "platform_challenge_or_extractor_error"
-    if any(token in text for token in ("private video", "private account", "not authorized", "not authorised")):
+def _classify_cobalt_error(payload: dict[str, Any]) -> str:
+    code = str((payload.get("error") or {}).get("code") or "").lower()
+    if "private" in code or "unavailable" in code or "not_found" in code:
         return "private_or_unavailable"
-    if "429" in text or "too many requests" in text or "rate limit" in text or "rate-limited" in text:
+    if "rate" in code or "limit" in code:
         return "rate_limited"
-    if any(token in text for token in ("http error 403", "forbidden", "captcha", "verify you are human", "blocked by cloudflare", "anti-bot")):
-        return "platform_access_blocked"
-    if "http error 404" in text or any(token in text for token in ("video unavailable", "video is unavailable", "does not exist", "requested content is not available")):
-        return "video_unavailable_or_removed"
-    if "unsupported url" in text:
+    if "auth" in code or "login" in code or "session" in code:
+        return "login_or_access_restricted"
+    if "service.unsupported" in code or "link.unsupported" in code:
         return "unsupported_url"
-    if any(token in text for token in ("no video formats found", "requested format is not available", "no formats found")):
-        return "no_downloadable_format"
-    if any(token in text for token in ("unable to extract", "unable to parse", "extractor error")):
-        return "extractor_parse_error"
-    if "maximum file size" in text or "file is larger than" in text:
-        return "size_limit"
-    if "duration" in text and ("too long" in text or "match filter" in text):
-        return "duration_limit"
-    return "extractor_or_download_error"
+    return "cobalt_error"
 
 
-def _safe_diagnostic(stderr: str) -> str:
-    """Keep one short error line while removing URLs, IPs, paths, and query strings."""
-    candidates = [line.strip() for line in stderr.splitlines() if line.strip()]
-    if not candidates:
-        return "no_error_detail"
-    line = next((line for line in reversed(candidates) if "error:" in line.lower()), candidates[-1])
-    line = re.sub(r"https?://[^\s\"'<>]+", "[URL]", line)
-    line = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[IP]", line)
-    line = re.sub(r"(?:/[A-Za-z0-9_.-]+){3,}", "[PATH]", line)
-    return line[:180]
-
-
-def _run_json(command: list[str], timeout: int) -> tuple[int, str, str, bool]:
+def _allowed_download_url(download_url: str, api_url: str) -> bool:
+    """Allow only the local Cobalt tunnel or an HTTPS source-media URL."""
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        return completed.returncode, completed.stdout, completed.stderr, False
-    except subprocess.TimeoutExpired:
-        return 124, "", "", True
+        parsed = urlparse(download_url)
+        api = urlparse(api_url)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    if parsed.scheme == api.scheme and parsed.netloc == api.netloc:
+        return True
+    return parsed.scheme == "https" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
 
 
-def test_one_platform(platform: str, raw_url: str, root: Path) -> dict[str, Any]:
-    started = time.monotonic()
-    valid, detail = validate_public_video_url(platform, raw_url)
-    if not valid:
-        return {
-            "platform": platform,
-            "ok": False,
-            "error": detail,
-            "seconds": 0,
-        }
+def _safe_diagnostic(code: str) -> str:
+    """Return only a controlled, non-sensitive error label."""
+    return "".join(ch for ch in code.lower() if ch.isalnum() or ch in "_-")[:80] or "unknown_error"
 
-    # A unique empty directory per platform ensures no old file can count as a success.
-    output_dir = root / platform
-    output_dir.mkdir(parents=True, exist_ok=True)
-    template = str(output_dir / "%(id)s.%(ext)s")
-    command = [
-        sys.executable, "-m", "yt_dlp",
-        "--no-warnings",
-        "--no-progress",
-        "--no-cache-dir",
-        "--socket-timeout", "15",
-        "--retries", "1",
-        "--fragment-retries", "1",
-        "--extractor-retries", "1",
-        "--playlist-end", "1",
-        "--max-downloads", "1",
-        "--max-filesize", "100M",
-        "--match-filter", f"duration <= {MAX_DURATION_SECONDS}",
-        "--format", "best[height<=720][ext=mp4]/best[height<=720]/best",
-        "--output", template,
-        "--no-overwrites",
-        "--no-continue",
-        raw_url,
-    ]
 
-    return_code, stdout, stderr, timed_out = _run_json(command, PROCESS_TIMEOUT_SECONDS)
-    if return_code != 0:
-        return {
-            "platform": platform,
-            "ok": False,
-            "host": detail,
-            "error": _safe_error(stderr, timed_out),
-            "diagnostic": _safe_diagnostic(stderr),
-            "seconds": round(time.monotonic() - started, 2),
-        }
-
-    candidates = sorted(
-        p for p in output_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in VIDEO_SUFFIXES
-        and not p.name.endswith((".part", ".ytdl"))
+def _request_cobalt(api_url: str, source_url: str) -> dict[str, Any]:
+    body = json.dumps({
+        "url": source_url,
+        "videoQuality": "480",
+        "filenameStyle": "basic",
+        "youtubeVideoCodec": "h264",
+    }).encode("utf-8")
+    req = Request(
+        api_url,
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "rubika-agent-public-media-smoke/1.0",
+        },
+        method="POST",
     )
-    if not candidates:
-        return {
-            "platform": platform,
-            "ok": False,
-            "host": detail,
-            "error": "no_video_file_created",
-            "diagnostic": _safe_diagnostic(stderr or stdout),
-            "seconds": round(time.monotonic() - started, 2),
-        }
+    try:
+        with urlopen(req, timeout=MAX_API_SECONDS) as response:
+            raw = response.read(1024 * 1024)
+            payload = json.loads(raw.decode("utf-8"))
+    except HTTPError as exc:
+        raise SmokeError("cobalt_http_" + str(exc.code)) from None
+    except (URLError, TimeoutError, OSError):
+        raise SmokeError("cobalt_connection_error") from None
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise SmokeError("cobalt_invalid_response") from None
 
-    media = candidates[0]
-    size_bytes = media.stat().st_size
-    if size_bytes <= 0:
-        return {
-            "platform": platform,
-            "ok": False,
-            "host": detail,
-            "error": "empty_download",
-            "seconds": round(time.monotonic() - started, 2),
-        }
-    if size_bytes > MAX_FILE_BYTES:
-        return {
-            "platform": platform,
-            "ok": False,
-            "host": detail,
-            "error": "size_limit",
-            "bytes": size_bytes,
-            "seconds": round(time.monotonic() - started, 2),
-        }
+    if not isinstance(payload, dict):
+        raise SmokeError("cobalt_invalid_response")
+    if payload.get("status") == "error":
+        raise SmokeError(_classify_cobalt_error(payload))
+    if payload.get("status") not in {"tunnel", "redirect"}:
+        raise SmokeError("cobalt_no_single_video")
+    download_url = payload.get("url")
+    if not isinstance(download_url, str) or not _allowed_download_url(download_url, api_url):
+        raise SmokeError("cobalt_unsafe_download_url")
+    return payload
 
+
+def _download_stream(download_url: str, destination: Path) -> int:
+    req = Request(download_url, headers={"User-Agent": "rubika-agent-public-media-smoke/1.0"})
+    started = time.monotonic()
+    total = 0
+    try:
+        with urlopen(req, timeout=30) as response:
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            if "application/json" in content_type or "text/html" in content_type:
+                raise SmokeError("cobalt_returned_non_media")
+            with destination.open("wb") as output:
+                while True:
+                    if time.monotonic() - started > MAX_DOWNLOAD_SECONDS:
+                        raise SmokeError("download_timeout")
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_FILE_BYTES:
+                        raise SmokeError("size_limit")
+                    output.write(chunk)
+    except SmokeError:
+        raise
+    except HTTPError as exc:
+        raise SmokeError("media_http_" + str(exc.code)) from None
+    except (URLError, TimeoutError, OSError):
+        raise SmokeError("media_download_error") from None
+
+    if total <= 0:
+        raise SmokeError("empty_download")
+    return total
+
+
+def _probe_media(path: Path) -> dict[str, Any]:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
-        return {
-            "platform": platform,
-            "ok": False,
-            "host": detail,
-            "error": "ffprobe_not_installed",
-            "bytes": size_bytes,
-            "seconds": round(time.monotonic() - started, 2),
-        }
-
-    probe_code, probe_stdout, probe_stderr, probe_timeout = _run_json(
-        [
-            ffprobe, "-v", "error",
-            "-show_entries", "format=duration:stream=codec_type,codec_name,width,height",
-            "-of", "json", str(media),
-        ],
-        30,
-    )
-    if probe_code != 0 or probe_timeout:
-        return {
-            "platform": platform,
-            "ok": False,
-            "host": detail,
-            "error": "media_validation_failed",
-            "bytes": size_bytes,
-            "seconds": round(time.monotonic() - started, 2),
-        }
-
+        raise SmokeError("ffprobe_not_installed")
     try:
-        probe = json.loads(probe_stdout)
+        completed = subprocess.run(
+            [
+                ffprobe, "-v", "error",
+                "-show_entries", "format=duration:stream=codec_type,codec_name,width,height",
+                "-of", "json", str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise SmokeError("media_validation_timeout") from None
+    if completed.returncode != 0:
+        raise SmokeError("media_validation_failed")
+    try:
+        probe = json.loads(completed.stdout)
         streams = probe.get("streams") or []
-        video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
-        audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+        video = next((s for s in streams if s.get("codec_type") == "video"), None)
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
         duration = float((probe.get("format") or {}).get("duration") or 0)
     except (ValueError, TypeError, json.JSONDecodeError):
-        video, audio, duration = None, None, 0.0
-
-    if not video or duration <= 0 or duration > MAX_DURATION_SECONDS + 1:
-        return {
-            "platform": platform,
-            "ok": False,
-            "host": detail,
-            "error": "duration_limit" if duration > MAX_DURATION_SECONDS + 1 else "invalid_video_stream_or_duration",
-            "bytes": size_bytes,
-            "seconds": round(time.monotonic() - started, 2),
-        }
-
+        raise SmokeError("media_validation_failed") from None
+    if not video or duration <= 0:
+        raise SmokeError("invalid_video_stream")
     return {
-        "platform": platform,
-        "ok": True,
-        "host": detail,
-        "bytes": size_bytes,
         "duration_seconds": round(duration, 2),
         "video_codec": video.get("codec_name"),
         "audio_codec": audio.get("codec_name") if audio else None,
         "width": video.get("width"),
         "height": video.get("height"),
         "has_audio": audio is not None,
-        "seconds": round(time.monotonic() - started, 2),
     }
+
+
+def test_one_platform(platform: str, source_url: str, api_url: str, root: Path) -> dict[str, Any]:
+    started = time.monotonic()
+    valid, detail = validate_public_video_url(platform, source_url)
+    if not valid:
+        return {"platform": platform, "ok": False, "error": detail, "seconds": 0}
+
+    destination = root / platform / "smoke-test.mp4"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        response = _request_cobalt(api_url, source_url)
+        size_bytes = _download_stream(response["url"], destination)
+        media = _probe_media(destination)
+        return {
+            "platform": platform,
+            "ok": True,
+            "host": detail,
+            "bytes": size_bytes,
+            "cobalt_status": response.get("status"),
+            **media,
+            "seconds": round(time.monotonic() - started, 2),
+        }
+    except SmokeError as exc:
+        return {
+            "platform": platform,
+            "ok": False,
+            "host": detail,
+            "error": _safe_diagnostic(exc.code),
+            "seconds": round(time.monotonic() - started, 2),
+        }
 
 
 def _write_summary(results: list[dict[str, Any]]) -> None:
     lines = [
         "## Rubika-Agent media download smoke test",
         "",
-        "No login/cookies were used. No Rubika message was sent. Temporary media is deleted after validation.",
+        "The test starts a short-lived self-hosted Cobalt API inside the GitHub Actions runner.",
+        "No credentials/cookies are used, no Rubika message is sent, and temporary media is deleted.",
         "",
-        "| Platform | Result | Downloaded size | Duration | Details |",
+        "| Platform | Result | Size | Duration | Details |",
         "|---|---|---:|---:|---|",
     ]
     for item in results:
         if item.get("ok"):
             details = f'{item.get("video_codec", "unknown")} {item.get("width", "?")}×{item.get("height", "?")}'
+            if item.get("has_audio"):
+                details += f' + {item.get("audio_codec") or "audio"}'
             lines.append(
-                f'| {item["platform"]} | ✅ downloaded + validated | {item.get("bytes", 0)} bytes | '
-                f'{item.get("duration_seconds", 0)} s | {details} |'
+                f'| {item["platform"]} | ✅ downloaded + validated | {item["bytes"]} bytes | '
+                f'{item["duration_seconds"]} s | {details} |'
             )
-        elif item.get("skipped"):
-            lines.append(f'| {item["platform"]} | ⚪ skipped | — | — | URL not provided |')
         else:
             lines.append(
-                f'| {item["platform"]} | ❌ failed | {item.get("bytes", "—")} | — | '
-                f'{item.get("error", "unknown")} |'
+                f'| {item["platform"]} | ❌ failed | — | — | {item.get("error", "unknown")} |'
             )
     lines.extend([
         "",
-        "**Note:** a failure may mean the post is private, login-restricted, removed, rate-limited, or unsupported. The test does not try to bypass access controls.",
+        "Failures are reported without trying to bypass sign-in, CAPTCHA, or private-post restrictions.",
     ])
     summary_path = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_path:
@@ -282,31 +266,44 @@ def _write_summary(results: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
+    api_url = os.getenv("COBALT_API_URL", "http://127.0.0.1:9000/").strip()
+    parsed_api = urlparse(api_url)
+    if parsed_api.scheme != "http" or parsed_api.hostname not in {"127.0.0.1", "localhost"}:
+        print(json.dumps({"ok": False, "error": "COBALT_API_URL_must_be_local_http"}))
+        return 2
+    if not api_url.endswith("/"):
+        api_url += "/"
+
     urls = {
         "tiktok": os.getenv("TIKTOK_URL", "").strip(),
         "instagram": os.getenv("INSTAGRAM_URL", "").strip(),
         "youtube": os.getenv("YOUTUBE_URL", "").strip(),
     }
-    results: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="rubika-media-smoke-") as temp:
+
+    configured = [(platform, url) for platform, url in urls.items() if url]
+    if not configured:
+        print(json.dumps({"ok": False, "error": "no_platform_urls_configured"}))
+        return 2
+
+    temp_root = os.getenv("RUNNER_TEMP") or tempfile.gettempdir()
+    with tempfile.TemporaryDirectory(prefix="rubika-cobalt-smoke-", dir=temp_root) as temp:
         root = Path(temp)
+        results = []
         for platform, url in urls.items():
-            if not url:
+            if url:
+                results.append(test_one_platform(platform, url, api_url, root))
+            else:
                 results.append({"platform": platform, "ok": False, "skipped": True, "error": "url_not_provided"})
-                continue
-            results.append(test_one_platform(platform, url, root))
+
+        attempted = [item for item in results if not item.get("skipped")]
         report = {
-            "ok": all(item.get("ok") for item in results if not item.get("skipped")) and
-                  any(not item.get("skipped") for item in results),
-            "downloaded_count": sum(1 for item in results if item.get("ok")),
-            "total_configured": sum(1 for item in results if not item.get("skipped")),
+            "ok": bool(attempted) and all(item.get("ok") for item in attempted),
+            "downloaded_count": sum(1 for item in attempted if item.get("ok")),
+            "total_configured": len(attempted),
             "results": results,
         }
-        report_path = Path(os.getenv("RUNNER_TEMP", temp)) / "rubika-agent-media-smoke-report.json"
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         _write_summary(results)
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
-        # Fail the workflow when any configured platform fails, but keep all source results visible.
         return 0 if report["ok"] else 1
 
 

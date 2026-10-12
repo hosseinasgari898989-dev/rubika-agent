@@ -1,6 +1,10 @@
 import unittest
 
-from agent.media_smoke_test import validate_public_video_url, _safe_error
+from agent.media_smoke_test import (
+    _allowed_download_url,
+    _classify_cobalt_error,
+    validate_public_video_url,
+)
 
 
 class MediaSmokeTests(unittest.TestCase):
@@ -28,11 +32,27 @@ class MediaSmokeTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "invalid_url")
 
-    def test_errors_are_sanitized(self):
-        self.assertEqual(_safe_error("Sign in to confirm you're not a bot"), "login_or_access_restricted")
-        self.assertEqual(_safe_error("HTTP Error 429: Too Many Requests"), "rate_limited")
-        self.assertEqual(_safe_error("unsupported URL"), "unsupported_url")
-        self.assertEqual(_safe_error("", timed_out=True), "download_timeout")
+    def test_cobalt_error_codes_are_classified(self):
+        self.assertEqual(
+            _classify_cobalt_error({"error": {"code": "error.api.content.post.private"}}),
+            "private_or_unavailable",
+        )
+        self.assertEqual(
+            _classify_cobalt_error({"error": {"code": "error.api.rate_exceeded"}}),
+            "rate_limited",
+        )
+        self.assertEqual(
+            _classify_cobalt_error({"error": {"code": "error.api.link.unsupported"}}),
+            "unsupported_url",
+        )
+
+    def test_download_url_must_be_local_cobalt_or_https(self):
+        api = "http://127.0.0.1:9000/"
+        self.assertTrue(_allowed_download_url("http://127.0.0.1:9000/tunnel?id=123", api))
+        self.assertTrue(_allowed_download_url("https://cdn.example.com/video.mp4", api))
+        self.assertFalse(_allowed_download_url("http://example.com/video.mp4", api))
+        self.assertFalse(_allowed_download_url("http://127.0.0.1:9001/private", api))
+        self.assertFalse(_allowed_download_url("file:///etc/passwd", api))
 
 
 if __name__ == "__main__":
