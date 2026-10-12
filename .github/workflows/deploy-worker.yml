@@ -14,17 +14,21 @@ on:
 permissions:
   contents: read
 
+# Never cancel a production deploy halfway through. New runs wait for the
+# active deployment to finish.
 concurrency:
   group: rubika-agent-worker-production
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -45,7 +49,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
-      - name: Deploy Worker from this repository
+      - name: Deploy the existing Worker from this repository
         run: npx --yes wrangler@4 deploy --config wrangler.jsonc
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -55,21 +59,41 @@ jobs:
           CONTROL_API_URL: https://rubika-agent-control.amber-harbor-f617.workers.dev
         run: |
           set -euo pipefail
+
           check_endpoint() {
             local endpoint="$1"
-            local output="/tmp/response.json"
+            local kind="$2"
+            local output
+            output="$(mktemp)"
+
             for attempt in 1 2 3 4 5; do
-              if curl --silent --show-error --fail "$endpoint" --output "$output" &&
-                 node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(j.ok!==true) process.exit(1)' "$output"; then
+              if curl --silent --show-error --fail --max-time 10 "$endpoint" --output "$output" &&
+                 node -e '
+                   const fs = require("fs");
+                   const kind = process.argv[2];
+                   const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+                   if (data.ok !== true) process.exit(1);
+                   if (kind === "health" && data.database !== "connected") process.exit(1);
+                   if (kind === "status" &&
+                       (data.publishing !== false ||
+                        data.capabilities?.publishing !== false ||
+                        data.agent?.enabled !== 0)) process.exit(1);
+                 ' "$output" "$kind"; then
+                echo "Verified $endpoint"
                 cat "$output"
+                rm -f "$output"
                 return 0
               fi
+
               echo "Attempt $attempt failed for $endpoint"
-              [ ! -f "$output" ] || cat "$output"
+              [ ! -s "$output" ] || cat "$output"
               sleep 2
             done
+
+            rm -f "$output"
             echo "::error::Health check failed for $endpoint"
             return 1
           }
-          check_endpoint "$CONTROL_API_URL/health"
-          check_endpoint "$CONTROL_API_URL/api/status"
+
+          check_endpoint "$CONTROL_API_URL/health" health
+          check_endpoint "$CONTROL_API_URL/api/status" status
