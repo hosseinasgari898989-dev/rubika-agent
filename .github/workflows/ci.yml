@@ -35,8 +35,8 @@ jobs:
       - name: Run self-test
         if: github.event_name != 'workflow_dispatch' || inputs.mode == 'self-test'
         run: python -m agent.preflight self-test
-      - name: Check deployed Cloudflare API
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'cloud-health'
+      - name: Smoke-test live Cloudflare Worker
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'cloud-health'
         env:
-          CONTROL_API_URL: ${{ vars.CONTROL_API_URL }}
+          CONTROL_API_URL: https://rubika-agent-control.willow-poppy-10df.workers.dev
         run: python -m agent.preflight cloud-health
