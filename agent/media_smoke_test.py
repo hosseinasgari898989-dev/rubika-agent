@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -56,23 +57,35 @@ def _safe_error(stderr: str, timed_out: bool = False) -> str:
         return "login_or_access_restricted"
     if any(token in text for token in ("private video", "private account", "not authorized", "not authorised")):
         return "private_or_unavailable"
-    if any(token in text for token in ("429", "too many requests", "rate limit", "rate-limited")):
+    if "429" in text or "too many requests" in text or "rate limit" in text or "rate-limited" in text:
         return "rate_limited"
     if any(token in text for token in ("http error 403", "forbidden", "captcha", "verify you are human", "blocked by cloudflare", "anti-bot")):
         return "platform_access_blocked"
+    if "http error 404" in text or any(token in text for token in ("video unavailable", "does not exist", "requested content is not available")):
+        return "video_unavailable_or_removed"
     if "unsupported url" in text:
         return "unsupported_url"
     if any(token in text for token in ("no video formats found", "requested format is not available", "no formats found")):
         return "no_downloadable_format"
     if any(token in text for token in ("unable to extract", "unable to parse", "extractor error")):
         return "extractor_parse_error"
-    if any(token in text for token in ("video unavailable", "not available", "not found", "does not exist", "requested content is not available")):
-        return "video_unavailable_or_removed"
     if "maximum file size" in text or "file is larger than" in text:
         return "size_limit"
     if "duration" in text and ("too long" in text or "match filter" in text):
         return "duration_limit"
     return "extractor_or_download_error"
+
+
+def _safe_diagnostic(stderr: str) -> str:
+    """Keep one short error line while removing URLs, IPs, paths, and query strings."""
+    candidates = [line.strip() for line in stderr.splitlines() if line.strip()]
+    if not candidates:
+        return "no_error_detail"
+    line = next((line for line in reversed(candidates) if "error:" in line.lower()), candidates[-1])
+    line = re.sub(r"https?://[^\s\"'<>]+", "[URL]", line)
+    line = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[IP]", line)
+    line = re.sub(r"(?:/[A-Za-z0-9_.-]+){3,}", "[PATH]", line)
+    return line[:180]
 
 
 def _run_json(command: list[str], timeout: int) -> tuple[int, str, str, bool]:
@@ -131,6 +144,7 @@ def test_one_platform(platform: str, raw_url: str, root: Path) -> dict[str, Any]
             "ok": False,
             "host": detail,
             "error": _safe_error(stderr, timed_out),
+            "diagnostic": _safe_diagnostic(stderr),
             "seconds": round(time.monotonic() - started, 2),
         }
 
@@ -211,7 +225,7 @@ def test_one_platform(platform: str, raw_url: str, root: Path) -> dict[str, Any]
             "platform": platform,
             "ok": False,
             "host": detail,
-            "error": "invalid_video_stream_or_duration",
+            "error": "duration_limit" if duration > MAX_DURATION_SECONDS + 1 else "invalid_video_stream_or_duration",
             "bytes": size_bytes,
             "seconds": round(time.monotonic() - started, 2),
         }
