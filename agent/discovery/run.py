@@ -142,7 +142,7 @@ def run_discovery(
         if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
             v7.tiktok_from_search_engines(store, seen["tiktok"])
 
-    if len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
+    if not phone_report_loaded and len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
         print("YouTube fallback: yt-dlp metadata search only; download=False.", flush=True)
         v7.discover_youtube_ytdlp(store, seen["youtube"])
         if len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
@@ -156,7 +156,7 @@ def run_discovery(
         os.getenv("INSTAGRAM_GRAPH_ACCESS_TOKEN", "").strip()
         and os.getenv("INSTAGRAM_GRAPH_USER_ID", "").strip()
     )
-    if len(store["instagram"]) < 1 and graph_configured:
+    if not phone_report_loaded and len(store["instagram"]) < 1 and graph_configured:
         print("Instagram fallback: configured official Graph API metadata search.", flush=True)
         instagram_graph = discover_official_hashtag_urls(max_results=2)
         for item in instagram_graph.candidates:
@@ -174,7 +174,7 @@ def run_discovery(
                 "media_type": item.media_type,
             }
             seen["instagram"].add(item.external_id)
-    elif len(store["instagram"]) < 1 and os.getenv("ALLOW_LEGACY_INSTAGRAM_INDEX", "").lower() == "true":
+    elif not phone_report_loaded and len(store["instagram"]) < 1 and os.getenv("ALLOW_LEGACY_INSTAGRAM_INDEX", "").lower() == "true":
         print("Instagram index diagnostic explicitly enabled by ALLOW_LEGACY_INSTAGRAM_INDEX.", flush=True)
         instagram = discover_public_indexed_urls(max_results=5)
         for item in instagram.candidates:
