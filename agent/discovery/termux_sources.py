@@ -549,7 +549,6 @@ def discover_youtube_metadata(
                 if feed_date:
                     published_at = feed_date
                     freshness_source = "public_channel_atom_feed"
-                    feed_date_enrichments += 1
             if published_at:
                 try:
                     parsed_date = datetime.fromisoformat(published_at)
@@ -561,6 +560,8 @@ def discover_youtube_metadata(
                 except ValueError:
                     published_at = None
                     freshness_source = ""
+            if published_at and freshness_source == "public_channel_atom_feed":
+                feed_date_enrichments += 1
             if not published_at:
                 # Flat search and public channel feeds can both omit the date.
                 # Keep such candidates unverified, never publish-ready.
