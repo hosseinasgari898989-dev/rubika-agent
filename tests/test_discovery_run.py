@@ -55,13 +55,14 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
                  return_value=InstagramDiscovery((instagram_candidate,), ()),
              ):
             report = runner.run_discovery(report_path=Path(folder) / "discovery.json")
+            report_text = (Path(folder) / "discovery.json").read_text(encoding="utf-8")
 
         self.assertEqual(report["summary"]["tiktok_candidates"], 5)
         self.assertEqual(report["summary"]["youtube_candidates"], 5)
         self.assertEqual(report["summary"]["instagram_candidates"], 1)
         self.assertFalse(report["summary"]["ready_to_publish"])
         self.assertTrue((Path(folder) / "discovery.json").is_file())
-        self.assertEqual(json.loads((Path(folder) / "discovery.json").read_text())["mode"],
+        self.assertEqual(json.loads(report_text)["mode"],
                          "public_discovery_only_no_download_no_publish")
 
 
