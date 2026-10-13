@@ -5,11 +5,7 @@ on:
     branches:
       - agent-brain-mega-v1
     paths:
-      - "agent/discovery/**"
-      - "termux/**"
       - "artifacts/termux_discovery.json"
-      - ".github/workflows/discovery-smoke.yml"
-      - "requirements.txt"
   workflow_dispatch:
 
 permissions:
