@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "delivery": {
+    "youtube_to_rubika_enabled": false,
+    "note": "YouTube discovery is retained, but sending videos sourced from YouTube to Rubika is paused until the owner supplies the next-stage rules."
+  },
+  "discovery": {
+    "tiktok_max_results": 36,
+    "known_source_max_results": 24,
+    "known_source_max_per_profile": 4,
+    "unknown_source_max_results": 12,
+    "tiktok_max_age_days": 90
+  },
+  "sources": [
+    {
+      "platform": "tiktok",
+      "handle": "meloaep_",
+      "profile_url": "https://www.tiktok.com/@meloaep_",
+      "trust_tier": "owner_selected",
+      "output_format": "square_1080x1080",
+      "require_visual_poppy_check": true,
+      "require_visual_edit_check": true,
+      "require_ai_quality_check": false,
+      "minimum_source_short_side": 480,
+      "notes": "Owner trusts editing quality and other quality signals; still verify visually that the clip is a Poppy Playtime edit. Deliver as 1:1."
+    },
+    {
+      "platform": "tiktok",
+      "handle": "smyxae",
+      "profile_url": "https://www.tiktok.com/@smyxae",
+      "trust_tier": "owner_selected",
+      "output_format": "square_1080x1080",
+      "require_visual_poppy_check": true,
+      "require_visual_edit_check": true,
+      "require_ai_quality_check": false,
+      "minimum_source_short_side": 480,
+      "notes": "Owner trusts editing quality, but many videos are unrelated to Poppy Playtime; visual Poppy Playtime and edit checks are mandatory. Deliver as 1:1."
+    },
+    {
+      "platform": "tiktok",
+      "handle": "menezxl9",
+      "profile_url": "https://www.tiktok.com/@menezxl9",
+      "trust_tier": "owner_selected",
+      "output_format": "square_1080x1080",
+      "require_visual_poppy_check": true,
+      "require_visual_edit_check": true,
+      "require_ai_quality_check": true,
+      "minimum_source_short_side": 720,
+      "notes": "Verify Poppy Playtime relevance, confirm it is an edit, enforce quality checks and deliver as 1:1."
+    },
+    {
+      "platform": "tiktok",
+      "handle": "rickkzn_",
+      "profile_url": "https://www.tiktok.com/@rickkzn_",
+      "trust_tier": "owner_selected",
+      "output_format": "preserve_source",
+      "require_visual_poppy_check": true,
+      "require_visual_edit_check": true,
+      "require_ai_quality_check": false,
+      "minimum_source_short_side": 480,
+      "notes": "Do not force 1:1; preserve the source aspect ratio. Verify visually that the clip is a Poppy Playtime edit."
+    },
+    {
+      "platform": "tiktok",
+      "handle": "saylex.aep812",
+      "profile_url": "https://www.tiktok.com/@saylex.aep812",
+      "trust_tier": "owner_selected",
+      "output_format": "preserve_source",
+      "require_visual_poppy_check": true,
+      "require_visual_edit_check": true,
+      "require_ai_quality_check": false,
+      "minimum_source_short_side": 480,
+      "notes": "No 1:1 requirement. Verify visually that the clip is a Poppy Playtime edit."
+    },
+    {
+      "platform": "tiktok",
+      "handle": "poppytv_ae",
+      "profile_url": "https://www.tiktok.com/@poppytv_ae",
+      "trust_tier": "owner_selected",
+      "output_format": "preserve_source",
+      "require_visual_poppy_check": true,
+      "require_visual_edit_check": true,
+      "require_ai_quality_check": false,
+      "minimum_source_short_side": 480,
+      "notes": "No extra source-format restriction. Verify visually that the clip is a Poppy Playtime edit."
+    }
+  ],
+  "unknown_source_defaults": {
+    "trust_tier": "unknown",
+    "output_format": "square_1080x1080",
+    "require_visual_poppy_check": true,
+    "require_visual_edit_check": true,
+    "require_ai_quality_check": true,
+    "minimum_source_short_side": 720,
+    "notes": "Unknown creators must pass full visual Poppy Playtime classification, edit classification, AI quality check, audio/music check, technical validation and duplicate checks. Default output is 1:1."
+  }
+}
