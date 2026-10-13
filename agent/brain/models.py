@@ -72,6 +72,15 @@ class InspectionResult:
             and min(self.width, self.height) >= 1080
         )
 
+    @property
+    def supports_vertical_normalization(self) -> bool:
+        """True when the source is large enough to create a 1080x1920 delivery copy."""
+        return bool(
+            self.ok and self.media_type == "video"
+            and self.width and self.height
+            and min(self.width, self.height) >= 480
+        )
+
 
 @dataclass(frozen=True)
 class Evaluation:
