@@ -189,6 +189,19 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
+  const directSent = {
+    platform: "youtube", external_id: "vkVFgmgLo1s",
+    canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
+    source_key: "channel", status: "sent", review_state: "pending",
+  };
+  const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST", body: directSent,
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "delivery_status_requires_attempt_api");
+}
+{
+  const state = env();
   const badApproval = {
     platform: "youtube", external_id: "vkVFgmgLo1s",
     canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
