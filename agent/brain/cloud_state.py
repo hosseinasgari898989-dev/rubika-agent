@@ -116,15 +116,22 @@ class CloudState:
         required = ("has_music",)
         if not isinstance(checks, dict) or not isinstance(probabilities, dict):
             raise CloudStateError("control_api_moderation_checks_missing")
+        required = ("has_music", "is_poppy_playtime", "is_edit")
+        optional = ("high_quality_edit",)
         output: dict[str, Any] = {
             "vision_confidence": float(result.get("confidence", 0.0)),
             "vision_model": str(result.get("model", ""))[:100],
             "human_review_required": True,
             "audio_review_required": checks.get("has_music") is None,
+            "moderation_uncertain": any(type(checks.get(key)) is not bool for key in required),
+            "moderation_missing_fields": [
+                key for key in (*required, *optional) if type(checks.get(key)) is not bool
+            ],
+            "quality_check_missing": type(checks.get("high_quality_edit")) is not bool,
             "auto_approved": False,
             "publishing": False,
         }
-        for key in required:
+        for key in (*required, *optional):
             check = checks.get(key)
             probability = probabilities.get(key)
             if probability is not None and (
