@@ -111,7 +111,7 @@ def run_one(report_path: Path, platform: str, output_report: Path) -> dict[str, 
     api_url = os.getenv("AGENT_API_BASE_URL", DEFAULT_CLOUD_API).strip()
     token = os.getenv("AGENT_API_TOKEN", "").strip()
     if not token:
-        raise RuntimeError("missing_AGENCY_API_TOKEN")
+        raise RuntimeError("missing_AGENT_API_TOKEN")
     if platform not in {"tiktok", "instagram", "youtube"}:
         raise RuntimeError("unsupported_platform")
 
