@@ -158,6 +158,7 @@ class TermuxMetadataParserTests(unittest.TestCase):
         found, attempts = discover_youtube_metadata(
             queries=("Poppy Playtime edit shorts",),
             max_results=10,
+            max_page_checks=0,
             ydl_factory=FakeYDL,
         )
         self.assertEqual([row["id"] for row in found], ["n38wy3o0DhY"])
@@ -235,6 +236,59 @@ class TermuxMetadataParserTests(unittest.TestCase):
         self.assertEqual(attempts[0]["stale_or_undated_skipped"], 1)
         self.assertEqual(attempts[-1]["candidate_dates_enriched"], 0)
         self.assertEqual(attempts[-1]["result"], "no_candidate_dates_matched")
+
+    def test_youtube_verifies_missing_date_from_public_video_page_metadata(self):
+        FakeYDL.instances = []
+        FakeYDL.info = {"entries": [{
+            "id": "n38wy3o0DhY",
+            "title": "Public short without search date",
+            "duration": 24,
+        }]}
+        published = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+        page_session = FakeFeedSession([
+            FakeFeedResponse(200, f'<html><meta itemprop="datePublished" content="{published}"></html>')
+        ])
+
+        found, attempts = discover_youtube_metadata(
+            queries=("Poppy Playtime edit shorts",),
+            max_results=10,
+            ydl_factory=FakeYDL,
+            page_session=page_session,
+        )
+
+        self.assertEqual(len(found), 1)
+        self.assertTrue(found[0]["freshness_verified"])
+        self.assertEqual(found[0]["freshness_source"], "public_video_page_datePublished")
+        self.assertEqual(found[0]["published_at"], datetime.fromisoformat(published).replace(tzinfo=timezone.utc).isoformat())
+        self.assertEqual(len(page_session.calls), 1)
+        self.assertEqual(attempts[-1]["method"], "public_video_page_metadata")
+        self.assertEqual(attempts[-1]["page_dates_extracted"], 1)
+        self.assertEqual(attempts[-1]["result"], "metadata_enriched")
+
+    def test_youtube_page_challenge_is_not_bypassed_and_date_stays_unverified(self):
+        FakeYDL.instances = []
+        FakeYDL.info = {"entries": [{
+            "id": "n38wy3o0DhY",
+            "title": "Public short without search date",
+            "duration": 24,
+        }]}
+        page_session = FakeFeedSession([
+            FakeFeedResponse(200, "<html>Sign in to confirm you are not a bot</html>")
+        ])
+
+        found, attempts = discover_youtube_metadata(
+            queries=("Poppy Playtime edit shorts",),
+            max_results=10,
+            ydl_factory=FakeYDL,
+            page_session=page_session,
+        )
+
+        self.assertEqual(len(found), 1)
+        self.assertFalse(found[0]["freshness_verified"])
+        self.assertEqual(found[0]["freshness_status"], "date_unavailable_verify_before_publish")
+        self.assertEqual(attempts[-1]["status_counts"], {"page_challenge_or_signin": 1})
+        self.assertEqual(attempts[-1]["result"], "no_public_page_dates_extracted")
+        self.assertEqual(len(page_session.calls), 1)
 
     def test_missing_yt_dlp_reports_a_safe_status(self):
         def missing(_options):
