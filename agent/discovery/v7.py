@@ -26,7 +26,7 @@ except ImportError:
     print("خطا: requests نصب نیست. اجرا کن: python -m pip install requests", flush=True)
     raise SystemExit(2)
 
-BASE = Path(__file__).resolve().parents[1]
+BASE = Path(__file__).resolve().parents[2]
 OUT = BASE / "artifacts" / "discovery_engine_v7_report.json"
 UA = ("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
