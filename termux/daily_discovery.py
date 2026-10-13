@@ -46,8 +46,15 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
 
 def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, Any]:
     """Collect phone-side public metadata, dedupe by platform ID, and save JSON locally."""
-    print("1/3 TikTok: checking selected public creator feeds with yt-dlp (metadata only)...", flush=True)
-    tiktok_candidates, tiktok_attempts = discover_tiktok_hashtags()
+    print("1/3 TikTok: checking six owner-selected profiles plus public hashtag pages (metadata only)...", flush=True)
+    tiktok_candidates, tiktok_attempts = discover_tiktok_hashtags(
+        include_unknown_sources=True,
+        max_results=36,
+        known_source_max_results=24,
+        unknown_source_max_results=12,
+        max_per_profile=4,
+        max_age_days=90,
+    )
     print("2/3 Instagram: searching public web indexes for Reel links (metadata only)...", flush=True)
     instagram_candidates, instagram_attempts = discover_instagram_hashtags()
     print("3/3 YouTube: flat search plus public channel-feed/page date checks (metadata only)...", flush=True)
@@ -95,7 +102,19 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
                 1 for row in normalized["youtube"]
                 if row.get("freshness_source") == "public_channel_atom_feed"
             ),
-            "tiktok_method": "yt_dlp_public_creator_profiles",
+            "tiktok_known_source_candidates": sum(
+                1 for row in normalized["tiktok"]
+                if isinstance(row.get("source_policy"), dict)
+                and row["source_policy"].get("known_source") is True
+            ),
+            "tiktok_unknown_source_candidates": sum(
+                1 for row in normalized["tiktok"]
+                if not (
+                    isinstance(row.get("source_policy"), dict)
+                    and row["source_policy"].get("known_source") is True
+                )
+            ),
+            "tiktok_method": "yt_dlp_owner_selected_profiles_plus_public_hashtag_pages",
             "instagram_method": "public_search_index_bing_rss_ddg_fallback",
             "youtube_method": "yt_dlp_flat_search_plus_public_channel_atom_feed",
             "paid_providers_used": [],
@@ -108,9 +127,11 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "instagram_search_queries": 3,
             "instagram_search_engines": 2,
             "instagram_max_age_days": 90,
-            "tiktok_max_creator_profiles": 10,
+            "tiktok_max_creator_profiles": 6,
+            "tiktok_max_per_known_profile": 4,
+            "tiktok_unknown_source_max_candidates": 12,
             "tiktok_max_age_days": 90,
-            "tiktok_max_results": 25,
+            "tiktok_max_results": 36,
             "youtube_searches": 4,
             "youtube_max_age_days": 90,
             "youtube_channel_feeds_max": 10,
