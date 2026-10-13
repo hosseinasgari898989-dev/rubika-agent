@@ -15,16 +15,18 @@ on:
       - "relay/**"
       - "render.yaml"
       - "requirements.txt"
+      - ".github/workflows/brain-ci.yml"
       - "tests/test_relay.py"
       - "tests/test_relay_client.py"
       - "tests/test_instagram_discovery.py"
       - "tests/test_instagram_graph_api.py"
+      - "tests/test_apify_instagram.py"
       - "tests/test_termux_sources.py"
+      - "tests/test_termux_instagram.py"
       - "tests/test_termux_daily_discovery.py"
+      - "tests/test_phone_report_integration.py"
       - "tests/test_tavily_discovery.py"
       - "tests/test_discovery_run.py"
-      - "tests/test_termux_instagram.py"
-      - "tests/test_phone_report_integration.py"
       - "config/trusted_sources.json"
       - "tests/test_authorization.py"
       - "tests/test_orchestrator.py"
@@ -37,8 +39,6 @@ on:
       - "tests/worker.test.mjs"
       - "tests/test_migrations.py"
       - "tests/test_proxitok_discovery.py"
-      - "tests/test_discovery_v7.py"
-      - ".github/workflows/brain-ci.yml"
   workflow_dispatch:
 
 permissions:
@@ -68,12 +68,13 @@ jobs:
           python -m unittest discover -s tests -p 'test_discovery_v7.py' -v
           python -m unittest discover -s tests -p 'test_instagram_discovery.py' -v
           python -m unittest discover -s tests -p 'test_instagram_graph_api.py' -v
+          python -m unittest discover -s tests -p 'test_apify_instagram.py' -v
           python -m unittest discover -s tests -p 'test_termux_sources.py' -v
+          python -m unittest discover -s tests -p 'test_termux_instagram.py' -v
           python -m unittest discover -s tests -p 'test_termux_daily_discovery.py' -v
+          python -m unittest discover -s tests -p 'test_phone_report_integration.py' -v
           python -m unittest discover -s tests -p 'test_tavily_discovery.py' -v
           python -m unittest discover -s tests -p 'test_discovery_run.py' -v
-          python -m unittest discover -s tests -p 'test_termux_instagram.py' -v
-          python -m unittest discover -s tests -p 'test_phone_report_integration.py' -v
           python -m unittest discover -s tests -p 'test_cloud_state.py' -v
           python -m unittest discover -s tests -p 'test_vision_moderator.py' -v
           python -m unittest discover -s tests -p 'test_migrations.py' -v
