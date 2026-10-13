@@ -1,6 +1,31 @@
 {
   "version": 1,
-  "sources": [],
+  "sources": [
+    {
+      "platform": "tiktok",
+      "source_key": "*",
+      "permission_basis": "explicit_permission",
+      "permission_confirmed": true,
+      "enabled": true,
+      "notes": "Project owner confirms Poppy Playtime edit content is authorized for this project; content classification and media validation still apply."
+    },
+    {
+      "platform": "youtube",
+      "source_key": "*",
+      "permission_basis": "explicit_permission",
+      "permission_confirmed": true,
+      "enabled": true,
+      "notes": "Project owner confirms Poppy Playtime edit content is authorized for this project; content classification and media validation still apply."
+    },
+    {
+      "platform": "instagram",
+      "source_key": "*",
+      "permission_basis": "explicit_permission",
+      "permission_confirmed": true,
+      "enabled": true,
+      "notes": "Project owner confirms Poppy Playtime edit content is authorized for this project; content classification and media validation still apply."
+    }
+  ],
   "items": [],
-  "note": "Empty by design: no third-party source or item can be downloaded until the owner records explicit reuse permission. permission_basis must be owner, explicit_permission, or license; enabled and permission_confirmed must both be true."
+  "note": "Project-level permission applies by platform; the brain must still classify content as relevant Poppy Playtime edits, reject duplicate/invalid media, and pass the configured content checks."
 }
