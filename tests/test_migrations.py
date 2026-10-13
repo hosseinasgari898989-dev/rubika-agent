@@ -14,6 +14,7 @@ class D1MigrationTests(unittest.TestCase):
         try:
             db.executescript((ROOT / "migrations" / "0001_init.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0002_brain_metadata.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0003_ai_usage_daily.sql").read_text(encoding="utf-8"))
 
             columns = {
                 row[1] for row in db.execute("PRAGMA table_info(items)").fetchall()
@@ -29,7 +30,7 @@ class D1MigrationTests(unittest.TestCase):
                 ).fetchall()
             }
             self.assertTrue({
-                "agent_config", "sources", "items", "runs", "delivery_attempts", "brain_events"
+                "agent_config", "sources", "items", "runs", "delivery_attempts", "brain_events", "ai_usage_daily"
             }.issubset(tables))
 
             db.execute(
@@ -46,6 +47,11 @@ class D1MigrationTests(unittest.TestCase):
                 ("tiktok:7616247520657771796",),
             ).fetchone()
             self.assertEqual(row, ("video", "unknown", "pending"))
+            db.execute("INSERT INTO ai_usage_daily (usage_day, request_count) VALUES ('2026-10-13', 1)")
+            self.assertEqual(
+                db.execute("SELECT request_count FROM ai_usage_daily WHERE usage_day = '2026-10-13'").fetchone(),
+                (1,),
+            )
         finally:
             db.close()
 
