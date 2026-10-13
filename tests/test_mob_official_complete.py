@@ -91,6 +91,45 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         self.assertEqual(rows[0]["published_at"], "2026-10-01T12:00:00+00:00")
         self.assertEqual(attempts[0]["result"], "ok")
 
+
+    def test_nested_article_body_is_not_truncated_when_og_description_is_missing(self):
+        homepage = "https://mobentertainment.com/"
+        article = "https://mobentertainment.com/news/nested-story"
+        homepage_html = (
+            '<a href="/news/nested-story">'
+            'Poppy Playtime official chapter announcement</a>'
+        )
+        article_html = """
+        <html><head>
+          <meta property="og:title" content="Official chapter announcement">
+          <meta property="og:image" content="https://cdn.mobentertainment.com/news/story.jpg">
+        </head><body>
+          <article><div class="article-body">
+            <div><p>The first genuine paragraph from the article.</p></div>
+            <div><p>The second genuine paragraph remains part of the caption.</p></div>
+          </div></article>
+        </body></html>
+        """
+        session = FakeSession({
+            homepage: FakeResponse(homepage_html),
+            article: FakeResponse(article_html),
+        })
+        sources = [
+            {"id": "mob_newsroom", "kind": "html_newsroom", "enabled": True,
+             "source_name": "Mob Entertainment newsroom", "url": homepage},
+            {"id": "mob_youtube", "kind": "youtube_atom", "enabled": False,
+             "channel_id": "UCXqV4yoyC_mmZye6VbKFPeQ", "url": "https://www.youtube.com/channel/UCXqV4yoyC_mmZye6VbKFPeQ"},
+            {"id": "steam_news", "kind": "steam_news_api", "enabled": False,
+             "app_id": 1721470, "url": "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/"},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = config_file(folder, sources)
+            rows, _ = discover_complete_official_posts(config_path=path, session=session)
+
+        self.assertEqual(len(rows), 1)
+        self.assertIn("The first genuine paragraph", rows[0]["original_caption"])
+        self.assertIn("The second genuine paragraph", rows[0]["original_caption"])
+
     def test_youtube_fallback_uses_the_video_post_not_its_thumbnail(self):
         homepage = "https://www.mobentertainment.com/"
         feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCXqV4yoyC_mmZye6VbKFPeQ"
