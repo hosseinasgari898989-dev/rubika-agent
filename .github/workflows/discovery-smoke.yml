@@ -29,6 +29,8 @@ jobs:
       - name: Run canonical URL extraction tests
         run: python -m agent.discovery.run --self-test
       - name: Run public discovery only
+        env:
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
         continue-on-error: true
         run: python -m agent.discovery.run --live
       - name: Upload diagnostics
