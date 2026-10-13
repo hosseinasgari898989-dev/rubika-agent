@@ -18,6 +18,7 @@ from .cloud_state import CloudState, CloudStateError
 from .ledger import MegaLedger, new_state
 from .models import Candidate
 from .pipeline import BatchResult, StagedMedia, stage_edit_batch
+from agent.source_policy import resolve_source_policy
 from ..storage.mega import MegaStorage, MegaStorageError
 
 
@@ -85,6 +86,7 @@ def candidates_from_report(path: str | Path) -> list[Candidate]:
                     source_key=source_key,
                     media_type=media_type,
                     source_tier="unknown",
+                    source_policy=resolve_source_policy(platform, source_key),
                 ))
             except ValueError:
                 continue
