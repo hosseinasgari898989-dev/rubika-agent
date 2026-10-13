@@ -24,6 +24,9 @@ class Candidate:
     hashtags: tuple[str, ...] = ()
     original_caption: str | None = None
     persian_translation: str | None = None
+    # Trusted creator/format policy resolved from repository configuration, never
+    # directly trusted from an external discovery row.
+    source_policy: dict[str, Any] = field(default_factory=dict, compare=False, hash=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.platform not in PLATFORMS:
