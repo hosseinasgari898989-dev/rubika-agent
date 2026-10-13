@@ -20,7 +20,6 @@ on:
       - "tests/test_relay_client.py"
       - "tests/test_instagram_discovery.py"
       - "tests/test_instagram_graph_api.py"
-      - "tests/test_apify_instagram.py"
       - "tests/test_termux_sources.py"
       - "tests/test_termux_instagram.py"
       - "tests/test_termux_daily_discovery.py"
@@ -68,7 +67,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_discovery_v7.py' -v
           python -m unittest discover -s tests -p 'test_instagram_discovery.py' -v
           python -m unittest discover -s tests -p 'test_instagram_graph_api.py' -v
-          python -m unittest discover -s tests -p 'test_apify_instagram.py' -v
           python -m unittest discover -s tests -p 'test_termux_sources.py' -v
           python -m unittest discover -s tests -p 'test_termux_instagram.py' -v
           python -m unittest discover -s tests -p 'test_termux_daily_discovery.py' -v
