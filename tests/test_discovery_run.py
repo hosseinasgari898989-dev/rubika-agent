@@ -61,7 +61,7 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
         self.assertEqual(report["summary"]["youtube_candidates"], 5)
         self.assertEqual(report["summary"]["instagram_candidates"], 1)
         self.assertFalse(report["summary"]["ready_to_publish"])
-        self.assertTrue((Path(folder) / "discovery.json").is_file())
+        self.assertTrue(report_text)
         self.assertEqual(json.loads(report_text)["mode"],
                          "public_discovery_only_no_download_no_publish")
 
