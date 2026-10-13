@@ -49,7 +49,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             self.assertEqual(report["summary"]["youtube_candidates"], 1)
             self.assertEqual(report["summary"]["instagram_candidates"], 1)
             self.assertEqual(report["summary"]["paid_providers_used"], [])
-            self.assertEqual(report["summary"]["tiktok_method"], "yt_dlp_public_creator_profiles")
+            self.assertEqual(report["summary"]["tiktok_method"], "yt_dlp_owner_selected_profiles_plus_public_hashtag_pages")
             self.assertEqual(report["summary"]["instagram_method"], "public_search_index_bing_rss_ddg_fallback")
             self.assertFalse(report["summary"]["ready_to_publish"])
             self.assertEqual(report["mode"], "metadata_only_no_download_no_publish")
