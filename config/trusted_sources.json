@@ -24,8 +24,32 @@
       "permission_confirmed": true,
       "enabled": true,
       "notes": "Project owner confirms Poppy Playtime edit content is authorized for this project; content classification and media validation still apply."
+    },
+    {
+      "platform": "mob_official",
+      "source_key": "mobentertainment.com",
+      "permission_basis": "explicit_permission",
+      "permission_confirmed": true,
+      "enabled": true,
+      "notes": "Project owner explicitly confirms authorization to reuse official Mob Entertainment newsroom media in the Rubika-Agent official-news lane."
+    },
+    {
+      "platform": "mob_official",
+      "source_key": "youtube.com",
+      "permission_basis": "explicit_permission",
+      "permission_confirmed": true,
+      "enabled": true,
+      "notes": "Project owner explicitly confirms authorization to reuse official Mob Entertainment YouTube media in the Rubika-Agent official-news lane."
+    },
+    {
+      "platform": "mob_official",
+      "source_key": "steamcommunity.com",
+      "permission_basis": "explicit_permission",
+      "permission_confirmed": true,
+      "enabled": true,
+      "notes": "Project owner explicitly confirms authorization to reuse official Poppy Playtime Steam news media in the Rubika-Agent official-news lane."
     }
   ],
   "items": [],
-  "note": "Project-level permission applies by platform; the brain must still classify content as relevant Poppy Playtime edits, reject duplicate/invalid media, and pass the configured content checks."
+  "note": "Source permission does not bypass source verification, deduplication, media validation or safe delivery-state handling."
 }
