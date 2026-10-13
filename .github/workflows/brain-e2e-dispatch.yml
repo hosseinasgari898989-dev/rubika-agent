@@ -152,6 +152,7 @@ jobs:
           command -v mega-rm
 
       - name: Log in to MEGA securely
+        id: mega_login
         run: |
           set -euo pipefail
           mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
@@ -166,12 +167,30 @@ jobs:
             --daily-limit "$CANDIDATE_LIMIT" \
             --output-report artifacts/brain-e2e-report.json
 
-      - name: Upload safe end-to-end report
+      - name: Safely reclaim stale confirmed-sent MEGA media
+        if: always() && steps.mega_login.outcome == 'success'
+        run: |
+          set -uo pipefail
+          python -m agent.brain.storage_cleanup \
+            --apply \
+            --min-age-hours 24 \
+            --max-delete 25 \
+            --output-report artifacts/storage-cleanup-report.json || {
+              result=$?
+              echo "::warning::MEGA cleanup did not fully complete (exit $result). Unknown, failed, and uncertain items are protected."
+              if [ ! -f artifacts/storage-cleanup-report.json ]; then
+                printf '{"ok":false,"status":"failed_closed","deleted_count":0}\n' > artifacts/storage-cleanup-report.json
+              fi
+            }
+
+      - name: Upload safe end-to-end and storage cleanup reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: brain-e2e-report
-          path: artifacts/brain-e2e-report.json
+          path: |
+            artifacts/brain-e2e-report.json
+            artifacts/storage-cleanup-report.json
           if-no-files-found: warn
           retention-days: 14
 
