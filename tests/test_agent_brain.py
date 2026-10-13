@@ -396,7 +396,7 @@ class NormalizerGuardTests(unittest.TestCase):
                 return source_info if Path(path) == source else output_info
 
             def fake_ffmpeg(command, **kwargs):
-                self.assertIn("pad=1080:1080:(ow-iw)/2:(oh-ih)/2:color=black", command)
+                self.assertIn("pad=1080:1080:(ow-iw)/2:(oh-ih)/2:color=black", " ".join(command))
                 self.assertIn("flags=lanczos", " ".join(command))
                 Path(command[-1]).write_bytes(b"fake normalized square output")
                 return subprocess.CompletedProcess(command, 0, "", "")
