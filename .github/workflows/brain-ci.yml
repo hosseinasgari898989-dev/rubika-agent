@@ -6,6 +6,9 @@ on:
       - agent-brain-mega-v1
     paths:
       - "agent/brain/**"
+      - "src/index.js"
+      - "wrangler.jsonc"
+      - "migrations/**"
       - "agent/storage/**"
       - "agent/discovery/**"
       - "tests/test_instagram_discovery.py"
@@ -14,6 +17,8 @@ on:
       - "tests/test_agent_brain.py"
       - "tests/test_mega_storage.py"
       - "tests/test_ledger.py"
+      - "tests/test_cloud_state.py"
+      - "tests/worker.test.mjs"
       - "tests/test_discovery_v7.py"
       - ".github/workflows/brain-ci.yml"
   workflow_dispatch:
@@ -42,3 +47,5 @@ jobs:
           python -m unittest discover -s tests -p 'test_discovery_v7.py' -v
           python -m unittest discover -s tests -p 'test_instagram_discovery.py' -v
           python -m unittest discover -s tests -p 'test_discovery_run.py' -v
+          python -m unittest discover -s tests -p 'test_cloud_state.py' -v
+          node tests/worker.test.mjs
