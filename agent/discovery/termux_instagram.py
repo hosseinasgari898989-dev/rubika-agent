@@ -469,6 +469,64 @@ def _search_item_published_at(value: str) -> str | None:
         return None
 
 
+def _search_page_published_at(body: str, permalink: str) -> str | None:
+    """Extract a date only from the relevant public search-result card."""
+    raw = html.unescape(body or "")
+    canonical = _canonical_media_url(permalink)
+    marker = canonical[1] if canonical else ""
+    position = raw.find(marker) if marker else -1
+    if position < 0:
+        return None
+    result_pattern = r"<(?:div|li)\\b[^>]*class=[\\\"'][^\\\"']*\\bresult(?:__body)?\\b[^\\\"']*[\\\"'][^>]*>"
+    prior = list(re.finditer(result_pattern, raw[:position], flags=re.IGNORECASE))
+    start = prior[-1].start() if prior else max(0, position - 700)
+    next_result = re.search(result_pattern, raw[position + len(marker):], flags=re.IGNORECASE)
+    end = position + len(marker) + next_result.start() if next_result else min(len(raw), position + 1400)
+    card = raw[start:end]
+
+    iso_match = re.search(r"\\b(20\\d{2})[-/](\\d{1,2})[-/](\\d{1,2})\\b", card)
+    if iso_match:
+        try:
+            return datetime(
+                int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)),
+                tzinfo=timezone.utc,
+            ).isoformat()
+        except ValueError:
+            pass
+
+    month_names = (
+        "January|February|March|April|May|June|July|August|September|October|November|December|"
+        "Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
+    )
+    month_match = re.search(
+        rf"\\b({month_names})\\s+(\\d{{1,2}}),?\\s+(20\\d{{2}})\\b",
+        card, flags=re.IGNORECASE,
+    )
+    if month_match:
+        raw_date = " ".join(month_match.groups())
+        for fmt in ("%B %d %Y", "%b %d %Y"):
+            try:
+                return datetime.strptime(raw_date, fmt).replace(tzinfo=timezone.utc).isoformat()
+            except ValueError:
+                pass
+
+    lowered = card.lower()
+    now = datetime.now(timezone.utc)
+    if re.search(r"\\btoday\\b", lowered):
+        return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    if re.search(r"\\byesterday\\b", lowered):
+        return (now - timedelta(days=1)).isoformat()
+    relative = re.search(
+        r"\\b(\\d+)\\s+(minute|hour|day|week|month|year)s?\\s+ago\\b",
+        lowered,
+    )
+    if relative:
+        quantity, unit = int(relative.group(1)), relative.group(2)
+        factors = {"minute": 1 / 1440, "hour": 1 / 24, "day": 1, "week": 7, "month": 30, "year": 365}
+        return (now - timedelta(days=quantity * factors[unit])).isoformat()
+    return None
+
+
 def discover_instagram_public_search(
     *,
     tags: tuple[str, ...] = INSTAGRAM_TAGS,
@@ -639,7 +697,10 @@ def discover_instagram_public_search(
                         if add_candidate(
                             shortcode, permalink, anchor.get("text", ""),
                             anchor.get("text", ""), tag,
-                            "termux_duckduckgo_public_search", None,
+                            "termux_duckduckgo_public_search",
+                            _search_page_published_at(
+                                getattr(response, "text", "") or "", permalink
+                            ),
                         ):
                             ddg_added += 1
                         if len(candidates) >= limit:
