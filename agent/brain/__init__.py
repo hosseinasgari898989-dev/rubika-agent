@@ -10,6 +10,7 @@ from .pipeline import BatchResult, StagedMedia, stage_edit_batch
 from .ledger import MegaLedger, new_state
 from .cloud_state import CloudState, CloudStateError
 from .relay_client import AuthorizedYouTubeRelay, RelayClientError
+from .authorization import SourceRegistry, SourceRegistryError, PermissionDecision
 
 __all__ = [
     "Candidate", "InspectionResult", "Evaluation",
@@ -18,4 +19,5 @@ __all__ = [
     "BatchResult", "StagedMedia", "stage_edit_batch",
     "MegaLedger", "new_state", "CloudState", "CloudStateError",
     "AuthorizedYouTubeRelay", "RelayClientError",
+    "SourceRegistry", "SourceRegistryError", "PermissionDecision",
 ]
