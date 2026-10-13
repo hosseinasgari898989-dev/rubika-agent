@@ -4,74 +4,122 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent.discovery import run as runner
 from agent.discovery import v7
-from agent.discovery.instagram import InstagramCandidate, InstagramDiscovery
-from agent.discovery.tavily import TavilyAttempt, TavilyCandidate, TavilyDiscoveryReport
 
 
 class DiscoveryOrchestratorTests(unittest.TestCase):
-    def test_unified_report_merges_sources_but_never_marks_it_publish_ready(self):
-        def fill_tiktok(store, seen):
-            for video_id in (
-                "7616247520657771796", "7557483116605033748", "7654660335898529038",
-                "7610592632179297558", "7615602468646407432",
-            ):
-                store["tiktok"][video_id] = {
-                    "platform": "tiktok", "id": video_id,
-                    "url": f"https://www.tiktok.com/@creator/video/{video_id}",
-                    "title": "Poppy Playtime edit",
-                }
-                seen.add(video_id)
-
-        def fill_youtube(store, seen):
-            for video_id in ("vkVFgmgLo1s", "n38wy3o0DhY", "AbcdefGhijk", "LMNOPQRSTuv", "aBcDeFgHiJk"):
-                store["youtube"][video_id] = {
-                    "platform": "youtube", "id": video_id,
-                    "url": f"https://www.youtube.com/watch?v={video_id}",
-                    "title": "Poppy Playtime fan edit",
-                }
-                seen.add(video_id)
-
-        instagram_candidate = InstagramCandidate(
-            platform="instagram",
-            external_id="AbCdEf_1234",
-            canonical_url="https://www.instagram.com/reel/AbCdEf_1234/",
-            post_type="reel",
-            query="Poppy Playtime edit",
-            method="test",
+    def test_phone_report_merges_canonical_metadata_without_live_searches(self):
+        tiktok_ids = (
+            "7616247520657771796",
+            "7557483116605033748",
+            "7654660335898529038",
+            "7610592632179297558",
+            "7615602468646407432",
         )
+        youtube_ids = (
+            "vkVFgmgLo1s",
+            "n38wy3o0DhY",
+            "AbcdefGhijk",
+            "LMNOPQRSTuv",
+            "aBcDeFgHiJk",
+        )
+        phone_report = {
+            "schema_version": 1,
+            "generated_at": "2026-10-13T12:00:00+00:00",
+            "source": "termux_phone",
+            "mode": "metadata_only_no_download_no_publish",
+            "summary": {},
+            "candidates": {
+                "tiktok": [
+                    {
+                        "platform": "tiktok",
+                        "id": video_id,
+                        "url": f"https://www.tiktok.com/@creator/video/{video_id}",
+                        "title": "Poppy Playtime edit",
+                        "media_type": "video",
+                    }
+                    for video_id in tiktok_ids
+                ],
+                "youtube": [
+                    {
+                        "platform": "youtube",
+                        "id": video_id,
+                        "url": f"https://www.youtube.com/shorts/{video_id}",
+                        "title": "Poppy Playtime fan edit",
+                        "duration_seconds": 45,
+                        "media_type": "video",
+                    }
+                    for video_id in youtube_ids
+                ],
+                "instagram": [
+                    {
+                        "platform": "instagram",
+                        "id": "AbCdEf_1234",
+                        "url": "https://www.instagram.com/reel/AbCdEf_1234/",
+                        "title": "Poppy Playtime Instagram Reel",
+                        "media_type": "video",
+                    }
+                ],
+            },
+            "attempts": [],
+        }
 
-        with tempfile.TemporaryDirectory() as folder, \
-             patch.object(v7, "known_ids", return_value={"tiktok": set(), "youtube": set()}), \
-             patch.object(v7, "tiktok_from_tikwm", side_effect=fill_tiktok), \
-             patch.object(v7, "tiktok_from_search_engines", return_value=None), \
-             patch.object(v7, "discover_youtube_ytdlp", side_effect=fill_youtube), \
-             patch.object(v7, "discover_youtube_html", return_value=None), \
-             patch.object(
-                 runner, "discover_public_indexed_urls",
-                 return_value=InstagramDiscovery((instagram_candidate,), ()),
-             ), \
-             patch.object(
-                 runner, "discover_social_urls",
-                 return_value=TavilyDiscoveryReport(
-                     candidates=(),
-                     attempts=(TavilyAttempt("instagram", "", None, 0, 0, 0, "not_configured"),),
-                 ),
-             ):
-            report = runner.run_discovery(report_path=Path(folder) / "discovery.json")
-            report_text = (Path(folder) / "discovery.json").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            phone_path = root / "termux.json"
+            phone_path.write_text(json.dumps(phone_report), encoding="utf-8")
+            with patch.object(
+                v7,
+                "known_ids",
+                return_value={"tiktok": set(), "youtube": set(), "instagram": set()},
+            ):
+                report = runner.run_discovery(
+                    report_path=root / "discovery.json",
+                    phone_report_path=phone_path,
+                )
+            report_text = (root / "discovery.json").read_text(encoding="utf-8")
 
         self.assertEqual(report["summary"]["tiktok_candidates"], 5)
         self.assertEqual(report["summary"]["youtube_candidates"], 5)
         self.assertEqual(report["summary"]["instagram_candidates"], 1)
+        self.assertTrue(report["summary"]["core_search_target_met"])
+        self.assertTrue(report["summary"]["termux_report_loaded"])
         self.assertFalse(report["summary"]["ready_to_publish"])
+        self.assertEqual(report["candidates"]["instagram"][0]["method"], "termux_phone")
         self.assertTrue(report_text)
-        self.assertEqual(json.loads(report_text)["mode"],
-                         "public_discovery_only_no_download_no_publish")
+        self.assertEqual(
+            json.loads(report_text)["mode"],
+            "metadata_only_no_download_no_publish",
+        )
+
+    def test_invalid_phone_report_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            invalid = root / "invalid.json"
+            invalid.write_text(json.dumps({
+                "schema_version": 1,
+                "source": "untrusted",
+                "mode": "metadata_only_no_download_no_publish",
+                "candidates": {
+                    "tiktok": [{
+                        "platform": "tiktok",
+                        "id": "12345678901",
+                        "url": "https://evil.example/@creator/video/12345678901",
+                    }]
+                },
+            }), encoding="utf-8")
+            with patch.object(
+                v7,
+                "known_ids",
+                return_value={"tiktok": set(), "youtube": set(), "instagram": set()},
+            ):
+                candidates, generated, status = runner._load_phone_report(invalid)
+        self.assertEqual(status, "invalid_report")
+        self.assertIsNone(generated)
+        self.assertEqual(candidates["tiktok"], [])
 
 
 if __name__ == "__main__":
