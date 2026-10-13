@@ -10,6 +10,7 @@ on:
       - "artifacts/termux_discovery.json"
       - ".github/workflows/discovery-smoke.yml"
       - "requirements.txt"
+      - "artifacts/termux_discovery.json"
   workflow_dispatch:
 
 permissions:
