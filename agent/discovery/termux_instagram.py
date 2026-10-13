@@ -470,21 +470,16 @@ def _search_item_published_at(value: str) -> str | None:
 
 
 def _search_page_published_at(body: str, permalink: str) -> str | None:
-    """Extract a date only from the relevant public search-result card."""
+    """Extract a date near the canonical result URL from public search HTML."""
     raw = html.unescape(body or "")
     canonical = _canonical_media_url(permalink)
     marker = canonical[1] if canonical else ""
     position = raw.find(marker) if marker else -1
     if position < 0:
         return None
-    result_pattern = r"<(?:div|li)\\b[^>]*class=[\\\"'][^\\\"']*\\bresult(?:__body)?\\b[^\\\"']*[\\\"'][^>]*>"
-    prior = list(re.finditer(result_pattern, raw[:position], flags=re.IGNORECASE))
-    start = prior[-1].start() if prior else max(0, position - 700)
-    next_result = re.search(result_pattern, raw[position + len(marker):], flags=re.IGNORECASE)
-    end = position + len(marker) + next_result.start() if next_result else min(len(raw), position + 1400)
-    card = raw[start:end]
+    card = raw[max(0, position - 900):min(len(raw), position + 1400)]
 
-    iso_match = re.search(r"\\b(20\\d{2})[-/](\\d{1,2})[-/](\\d{1,2})\\b", card)
+    iso_match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", card)
     if iso_match:
         try:
             return datetime(
@@ -499,7 +494,7 @@ def _search_page_published_at(body: str, permalink: str) -> str | None:
         "Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
     )
     month_match = re.search(
-        rf"\\b({month_names})\\s+(\\d{{1,2}}),?\\s+(20\\d{{2}})\\b",
+        rf"\b({month_names})\s+(\d{{1,2}}),?\s+(20\d{{2}})\b",
         card, flags=re.IGNORECASE,
     )
     if month_match:
@@ -512,17 +507,20 @@ def _search_page_published_at(body: str, permalink: str) -> str | None:
 
     lowered = card.lower()
     now = datetime.now(timezone.utc)
-    if re.search(r"\\btoday\\b", lowered):
+    if re.search(r"\btoday\b", lowered):
         return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    if re.search(r"\\byesterday\\b", lowered):
+    if re.search(r"\byesterday\b", lowered):
         return (now - timedelta(days=1)).isoformat()
     relative = re.search(
-        r"\\b(\\d+)\\s+(minute|hour|day|week|month|year)s?\\s+ago\\b",
+        r"\b(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago\b",
         lowered,
     )
     if relative:
         quantity, unit = int(relative.group(1)), relative.group(2)
-        factors = {"minute": 1 / 1440, "hour": 1 / 24, "day": 1, "week": 7, "month": 30, "year": 365}
+        factors = {
+            "minute": 1 / 1440, "hour": 1 / 24, "day": 1,
+            "week": 7, "month": 30, "year": 365,
+        }
         return (now - timedelta(days=quantity * factors[unit])).isoformat()
     return None
 
