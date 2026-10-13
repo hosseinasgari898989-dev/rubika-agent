@@ -171,6 +171,8 @@ def evaluate_edit_candidate(
         and not (name == "has_music" and checks.get("has_music") is False)
     ]
     checks["moderation_fields_missing"] = missing
+    if "has_music" in missing:
+        warnings.append("music_detection_review_required")
     if missing:
         warnings.append("required_video_checks_missing")
     if type(moderation.get("has_music")) is bool:
