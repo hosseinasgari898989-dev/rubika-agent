@@ -22,7 +22,7 @@ INSTAGRAM_TAGS = ("poppyplaytime", "huggywuggy", "catnap")
 MAX_RESULTS = 2
 MEDIA_PATH_RE = re.compile(r"^/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$", re.IGNORECASE)
 CANONICAL_URL_RE = re.compile(
-    r"(?:https?://)?(?:www[.] )?instagram[.]com/(reel|p|tv)/([A-Za-z0-9_-]{5,20})".replace("www[.] ", "www[.]"),
+    r"(?:https?://)?(?:www[.])?instagram[.]com/(reel|p|tv)/([A-Za-z0-9_-]{5,20})",
     re.IGNORECASE,
 )
 
