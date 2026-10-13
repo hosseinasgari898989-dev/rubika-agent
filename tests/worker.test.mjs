@@ -231,6 +231,26 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
+  const officialYoutubePost = {
+    platform: "mob_official",
+    external_id: "yt-abcdefghijk",
+    canonical_url: "https://www.youtube.com/watch?v=abcdefghijk",
+    source_key: "youtube.com",
+    status: "discovered",
+    review_state: "pending",
+    media_type: "video",
+    source_tier: "official",
+    original_caption: "Official Mob caption",
+    persian_translation: "کپشن رسمی",
+  };
+  const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST", body: officialYoutubePost,
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.item_id, "mob_official:yt-abcdefghijk");
+}
+{
+  const state = env();
   const directSent = {
     platform: "youtube", external_id: "vkVFgmgLo1s",
     canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
