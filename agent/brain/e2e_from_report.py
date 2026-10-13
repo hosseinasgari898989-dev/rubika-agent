@@ -249,6 +249,17 @@ def run_one(
         current_state["items"][item_id]["status"] = "ready"
         ledger.save(current_state)
 
+        remote_storage_key = item.get("storage_key")
+        if not isinstance(remote_storage_key, str) or not remote_storage_key.startswith("/Rubika-Agent/"):
+            return {
+                "ok": False,
+                "status": "staging_failed",
+                "platform": platform,
+                "item_id": item_id,
+                "publishing": False,
+                "reason": "staged_storage_key_missing",
+            }
+
         publish_run_id = uuid.uuid4().hex
         cloud.create_run(trigger_type="e2e_publish_smoke", run_id=publish_run_id)
         publisher = RubikaPublisher(
@@ -295,6 +306,7 @@ def run_one(
             send=send,
             record_attempt=record_attempt,
             delete_local=lambda: media_path.unlink(missing_ok=True),
+            delete_remote=lambda: storage.delete(remote_storage_key),
             max_attempts=3,
             sleep_seconds=1,
         )
