@@ -40,7 +40,7 @@ export default {
         await env.DB.prepare("SELECT 1 AS ok").first();
         return json({
           ok: true,
-          service: "rubika-agent-control",
+          service: "rubika-agent",
           database: "connected",
           mode: "bootstrap",
           publishing: false,
@@ -49,7 +49,7 @@ export default {
       } catch {
         return json({
           ok: false,
-          service: "rubika-agent-control",
+          service: "rubika-agent",
           database: "unavailable"
         }, 503);
       }
@@ -68,7 +68,7 @@ export default {
 
         return json({
           ok: true,
-          service: "rubika-agent-control",
+          service: "rubika-agent",
           agent: agent || { enabled: 0, started_at: null, updated_at: null },
           counts: {
             sources: sources?.count ?? 0,
