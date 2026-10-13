@@ -39,6 +39,20 @@ class FakeStatement {
       this.db.queueLimit = this.values[0];
       return { results: [...this.db.items.values()].filter(x => x.review_state === "approved" && x.status === "ready").slice(0, this.values[0]) };
     }
+    if (this.sql.includes("SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items")) {
+      this.db.seenQuery = { sql: this.sql, values: this.values };
+      const all = [...this.db.items.values()].map(item => ({
+        id: item.id, platform: item.platform, external_id: item.external_id,
+        media_sha256: item.media_sha256, status: item.status,
+        sent_at: item.sent_at || null, review_state: item.review_state,
+      }));
+      const filtered = this.sql.includes("WHERE platform = ?")
+        ? all.filter(item => item.platform === this.values[0])
+        : all;
+      const limit = this.sql.includes("WHERE platform = ?") ? this.values[1] : this.values[0];
+      const offset = this.sql.includes("WHERE platform = ?") ? this.values[2] : this.values[1];
+      return { results: filtered.slice(offset, offset + limit) };
+    }
     return { results: [] };
   }
   async run() {
@@ -98,6 +112,7 @@ class FakeDB {
     this.attempts = [];
     this.events = [];
     this.queueLimit = null;
+    this.seenQuery = null;
   }
   prepare(sql) {
     return new FakeStatement(this, sql);
@@ -173,6 +188,24 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(queue.status, 200);
   assert.equal(queue.body.publishing, false);
   assert.equal(state.DB.queueLimit, 100);
+}
+{
+  const state = env();
+  state.DB.items.set("youtube:vkVFgmgLo1s", {
+    id: "youtube:vkVFgmgLo1s",
+    platform: "youtube",
+    external_id: "vkVFgmgLo1s",
+    media_sha256: "c".repeat(64),
+    status: "sent",
+    review_state: "approved",
+  });
+  const response = await read(await worker.fetch(request(
+    "/api/brain/items/seen?limit=999&offset=-7&platform=youtube"
+  ), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].external_id, "vkVFgmgLo1s");
+  assert.deepEqual(state.DB.seenQuery.values, ["youtube", 500, 0]);
 }
 {
   const state = env();
