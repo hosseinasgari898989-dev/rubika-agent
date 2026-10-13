@@ -213,7 +213,8 @@ class PipelineTests(unittest.TestCase):
                 output_dir=Path(folder) / "normalized", inspector=inspect,
             )
             self.assertEqual(result.status, "ready")
-            self.assertTrue(result.ready_to_publish)
+            self.assertTrue(result.ready_for_review)
+            self.assertFalse(result.ready_to_publish)
             self.assertEqual(len(result.staged), 2)
 
     def test_partial_batch_never_reports_ready(self):
