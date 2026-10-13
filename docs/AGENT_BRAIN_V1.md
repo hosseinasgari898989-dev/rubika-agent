@@ -6,7 +6,7 @@
 - Discovery adapters must produce canonical source URLs, stable external IDs and source metadata. Search-result menus, tags and pages are not media candidates.
 - The default batch requirement remains five TikTok items and five YouTube items. Instagram is a budget-limited optional source; the phone collector asks Apify for at most two Reels per UTC day.
 - Candidate IDs and SHA-256 hashes are checked for duplicates. Source accounts in config/trusted_sources.json are intentionally empty until the owner chooses and verifies them.
-- Every file is inspected as the actual media type. Video output must be 1080x1080. The normalizer crops a source with at least 1080 pixels on both dimensions; the original is never overwritten. Center-cropping can cut off a subject, so a visual suitability check is still needed before approving a normalized clip.
+- Every file is inspected as the actual media type. Video delivery copies are normalized to vertical 1080x1920 MP4 while preserving the full source frame (smaller sources of at least 480 pixels per dimension can be upscaled and padded). The original is never overwritten; final output is re-validated before staging.
 - Metadata keywords and text checks are only weak signals. The six content checks for relevance, edit status, insults against Poppy characters, insults against other games/fandoms, editing effort and music are represented as explicit moderation fields. Without those fields the item is held for review and cannot enter a publish-ready batch.
 - Trusted sources can skip weak title/hashtag signal warnings, but not duplicate checks, file validation, resolution, or explicit content safety checks.
 
