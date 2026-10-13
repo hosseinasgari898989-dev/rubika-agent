@@ -239,6 +239,27 @@ def _make_item(
         return None
     if media_type not in {"image", "video"}:
         return None
+
+    parsed = urlparse(canonical_url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if source_platform == "youtube":
+        # Keep only the canonical video ID, dropping tracking parameters.
+        from urllib.parse import parse_qs
+        video_id = (parse_qs(parsed.query).get("v") or [""])[0]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            match = re.fullmatch(r"/([A-Za-z0-9_-]{11})/?", parsed.path) if host == "youtu.be" else None
+            video_id = match.group(1) if match else ""
+        if not video_id or not (_is_host(host, "youtube.com") or host == "youtu.be"):
+            return None
+        canonical_url = "https://www.youtube.com/watch?v=" + video_id
+    elif source_platform == "steam":
+        if not _is_host(host, "steamcommunity.com"):
+            return None
+        canonical_url = "https://steamcommunity.com" + parsed.path
+    else:
+        # Drop tracking query strings/fragments from official newsroom URLs.
+        canonical_url = parsed._replace(query="", fragment="").geturl()
+
     clean_media = _absolute_http_url(canonical_url, media_url)
     if not clean_media:
         return None
@@ -464,14 +485,29 @@ def _discover_steam(session: Any, sources: list[dict[str, Any]]) -> list[dict[st
     return output
 
 
-def _fingerprint(item: dict[str, Any]) -> str:
-    raw = " ".join(
-        (str(item.get("title") or ""), str(item.get("original_caption") or ""))
-    ).casefold()
-    raw = unicodedata.normalize("NFKC", raw)
+def _normalize_fingerprint_text(value: Any) -> str:
+    raw = unicodedata.normalize("NFKC", str(value or "")).casefold()
     raw = re.sub(r"[^\w]+", " ", raw, flags=re.UNICODE)
-    raw = re.sub(r"\s+", " ", raw).strip()
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest() if len(raw) >= 24 else ""
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _fingerprints(item: dict[str, Any]) -> set[str]:
+    """Detect the same substantial caption even when cross-post titles differ."""
+    title = _normalize_fingerprint_text(item.get("title"))
+    caption = _normalize_fingerprint_text(item.get("original_caption") or item.get("caption"))
+    values: set[str] = set()
+    if len(caption) >= 48:
+        values.add("caption:" + hashlib.sha256(caption.encode("utf-8")).hexdigest())
+    combined = " ".join(part for part in (title, caption) if part).strip()
+    if len(combined) >= 24:
+        values.add("combined:" + hashlib.sha256(combined.encode("utf-8")).hexdigest())
+    return values
+
+
+def _fingerprint(item: dict[str, Any]) -> str:
+    """Compatibility helper used by the earlier discovery tests."""
+    values = sorted(_fingerprints(item))
+    return values[0] if values else ""
 
 
 def discover_complete_official_posts(
@@ -520,14 +556,17 @@ def discover_complete_official_posts(
     )
     output: list[dict[str, Any]] = []
     seen_ids: set[tuple[str, str]] = set()
+    seen_urls: set[str] = set()
     seen_fingerprints: set[str] = set()
     for row in found:
         identity = (str(row.get("source_platform")), str(row.get("external_id")))
-        fingerprint = _fingerprint(row)
-        if identity in seen_ids or (fingerprint and fingerprint in seen_fingerprints):
+        canonical = str(row.get("canonical_url") or "")
+        fingerprints = _fingerprints(row)
+        if identity in seen_ids or (canonical and canonical in seen_urls) or fingerprints.intersection(seen_fingerprints):
             continue
         seen_ids.add(identity)
-        if fingerprint:
-            seen_fingerprints.add(fingerprint)
+        if canonical:
+            seen_urls.add(canonical)
+        seen_fingerprints.update(fingerprints)
         output.append(row)
     return output, attempts
