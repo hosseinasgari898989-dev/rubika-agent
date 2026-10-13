@@ -35,7 +35,7 @@ class BrainModelPolicyTests(unittest.TestCase):
     def inspection(self, **changes):
         values = dict(
             ok=True, media_type="video", sha256="a" * 64, size_bytes=1_000_000,
-            mime_type="video/mp4", width=1080, height=1080, duration_seconds=12.5,
+            mime_type="video/mp4", width=1080, height=1920, duration_seconds=12.5,
             has_audio=True, video_codec="h264", audio_codec="aac",
         )
         values.update(changes)
@@ -203,7 +203,7 @@ class PipelineTests(unittest.TestCase):
                 raw = Path(path).read_bytes()
                 return InspectionResult(
                     True, "video", hashlib.sha256(raw).hexdigest(), len(raw), "video/mp4",
-                    1080, 1080, 3.0, True, "h264", "aac",
+                    1080, 1920, 3.0, True, "h264", "aac",
                 )
 
             result = stage_edit_batch(
