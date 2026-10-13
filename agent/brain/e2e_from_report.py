@@ -215,6 +215,10 @@ def run_one(report_path: Path, platform: str, output_report: Path) -> dict[str, 
         payload["status"] = "ready"
         payload["review_state"] = "approved"
         cloud.upsert_item(payload)
+        current_state["items"][item_id]["cloud_payload"] = payload
+        current_state["items"][item_id]["review_state"] = "approved"
+        current_state["items"][item_id]["status"] = "ready"
+        ledger.save(current_state)
 
         publish_run_id = uuid.uuid4().hex
         cloud.create_run(trigger_type="e2e_publish_smoke", run_id=publish_run_id)
@@ -241,9 +245,16 @@ def run_one(report_path: Path, platform: str, output_report: Path) -> dict[str, 
                     else last_response.get("message_id")
                 )
             message_id = str(raw_message_id) if raw_message_id is not None else None
-            cloud.record_attempt(
-                item_id, number, status, error_code=error_code, message_id=message_id
-            )
+            # If the initial D1 attempt record fails, do not send anything. After
+            # a send, preserve the local ledger even if D1 briefly becomes unavailable.
+            try:
+                cloud.record_attempt(
+                    item_id, number, status, error_code=error_code, message_id=message_id
+                )
+            except Exception as exc:
+                if status == "started":
+                    raise RuntimeError("d1_attempt_preflight_failed") from None
+                current_state["items"][item_id]["d1_attempt_sync_error"] = _safe_error(exc)
             MegaLedger.record_attempt(
                 current_state, item_id, attempt_number=number, status=status,
                 error_code=error_code, message_id=message_id,
