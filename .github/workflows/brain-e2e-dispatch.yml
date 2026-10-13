@@ -60,7 +60,7 @@ jobs:
           if not isinstance(rows, list) or not rows:
               raise SystemExit("No candidates for the requested platform in the latest report.")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
-              env_file.write("PLATFORM=" + platform + "\\n")
+              env_file.write("PLATFORM=" + platform + "\n")
           print(f"Discovery report OK: platform={platform}, candidates={len(rows)}")
           PY
 
