@@ -264,8 +264,36 @@ async function upsertItem(env, body) {
   const moderationJson = body.moderation == null ? null : safeJson(body.moderation);
   if (body.validation != null && validationJson == null) return json({ ok: false, error: "invalid_validation_object" }, 400);
   if (body.moderation != null && moderationJson == null) return json({ ok: false, error: "invalid_moderation_object" }, 400);
-  if (reviewState === "approved" && (!moderationJson || statusValue !== "ready")) {
-    return json({ ok: false, error: "approval_requires_moderation_and_ready_media" }, 400);
+  if (reviewState === "approved") {
+    if (statusValue !== "ready" || !hash || !bytes || !validationJson) {
+      return json({ ok: false, error: "approval_requires_validated_ready_media" }, 400);
+    }
+    let validation;
+    try { validation = JSON.parse(validationJson); } catch { validation = null; }
+    if (!isObject(validation) || validation.ok !== true) {
+      return json({ ok: false, error: "approval_requires_successful_validation" }, 400);
+    }
+    if (platform === "mob_official") {
+      if (sourceTier !== "official" || mediaType === "unknown" || mediaType === "carousel") {
+        return json({ ok: false, error: "official_media_requires_verified_track_and_supported_type" }, 400);
+      }
+    } else {
+      const required = [
+        "poppy_relevant", "is_edit", "insults_poppy",
+        "insults_other_games", "high_effort", "has_music"
+      ];
+      let moderation;
+      try { moderation = JSON.parse(moderationJson || "null"); } catch { moderation = null; }
+      if (
+        platform === "mob_official" || mediaType !== "video" || !isObject(moderation) ||
+        required.some(key => typeof moderation[key] !== "boolean") ||
+        moderation.poppy_relevant !== true || moderation.is_edit !== true ||
+        moderation.insults_poppy !== false || moderation.insults_other_games !== false ||
+        moderation.high_effort !== true || moderation.has_music !== true
+      ) {
+        return json({ ok: false, error: "edit_approval_requires_all_content_checks" }, 400);
+      }
+    }
   }
 
   const id = platform + ":" + externalId;
