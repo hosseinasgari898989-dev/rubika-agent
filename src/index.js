@@ -419,6 +419,33 @@ async function addEvent(env, body) {
   }
 }
 
+async function seenItems(env, url) {
+  const limitRaw = Number(url.searchParams.get("limit") || "500");
+  const offsetRaw = Number(url.searchParams.get("offset") || "0");
+  const limit = Number.isInteger(limitRaw) ? Math.min(500, Math.max(1, limitRaw)) : 500;
+  const offset = Number.isInteger(offsetRaw) ? Math.min(1000000, Math.max(0, offsetRaw)) : 0;
+  const platform = text(url.searchParams.get("platform"), 24);
+  if (platform && !PLATFORMS.has(platform)) {
+    return json({ ok: false, error: "invalid_platform_filter" }, 400);
+  }
+  try {
+    const sql = platform
+      ? "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform = ? ORDER BY discovered_at DESC LIMIT ? OFFSET ?"
+      : "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items ORDER BY discovered_at DESC LIMIT ? OFFSET ?";
+    const statement = env.DB.prepare(sql);
+    const result = platform
+      ? await statement.bind(platform, limit, offset).all()
+      : await statement.bind(limit, offset).all();
+    return json({
+      ok: true,
+      items: result.results || [],
+      page: { limit, offset, returned: (result.results || []).length },
+    });
+  } catch {
+    return json({ ok: false, error: "seen_items_read_failed" }, 500);
+  }
+}
+
 async function approvedQueue(env, url) {
   const requested = Number(url.searchParams.get("limit") || "25");
   const limit = Number.isInteger(requested) ? Math.min(100, Math.max(1, requested)) : 25;
@@ -455,6 +482,9 @@ export default {
 
     if (path === "/api/brain/queue" && request.method === "GET") {
       return approvedQueue(env, url);
+    }
+    if (path === "/api/brain/items/seen" && request.method === "GET") {
+      return seenItems(env, url);
     }
     if (request.method !== "POST") {
       return json({ ok: false, error: "method_not_allowed" }, 405);
