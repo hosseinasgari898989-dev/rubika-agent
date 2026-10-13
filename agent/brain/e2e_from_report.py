@@ -33,8 +33,8 @@ from agent.source_policy import delivery_enabled
 
 DEFAULT_CLOUD_API = "https://rubika-agent.h98609294.workers.dev"
 DEFAULT_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
-# Actual Poppy Playtime relevance/edit status and soundtrack must all pass the
-# candidate's repository-defined policy before any manual test publication.
+# The agent brain enforces per-source metadata/edit/technical checks; AI only
+# classifies the extracted soundtrack. Every failed or uncertain gate stops delivery.
 
 
 def _utc_now() -> str:
@@ -59,18 +59,15 @@ def _safe_error(exc: Exception) -> str:
 
 
 def _matches_poppy_edit(candidate: Candidate) -> bool:
-    policy = candidate.source_policy or {}
-    if policy.get("require_visual_poppy_check") is True:
-        # Searchable metadata is not reliable enough to reject a source before
-        # the visual classifier has a chance to inspect its actual frames.
-        return True
-    text = candidate.searchable_text
+    # This is an agent-brain metadata prefilter. Creator identity is never enough
+    # to classify an individual upload; final policy checks run after download.
+    text = " ".join((candidate.title, candidate.caption, " ".join(candidate.hashtags))).casefold()
     relevance = (
         "poppy playtime", "poppyplaytime", "huggy wuggy", "huggywuggy",
-        "catnap", "kissy missy", "mommy long legs", "dogday",
+        "catnap", "cat nap", "kissy missy", "mommy long legs", "dogday",
         "smiling critters", "smilingcritters", "nightmare critters",
         "bobby bearhug", "craftycorn", "kickin chicken", "hoppy hopscotch",
-        "picky piggy", "bubba bubbaphant",
+        "picky piggy", "bubba bubbaphant", "#prototype", "prototype",
     )
     return any(term in text for term in relevance)
 
@@ -240,11 +237,11 @@ def run_one(
         )
         policy = staged_candidate.source_policy or {}
         required_checks = {"has_music": True}
-        if policy.get("require_visual_poppy_check") is True:
+        if policy.get("require_poppy_relevance_check") is True:
             required_checks["is_poppy_playtime"] = True
-        if policy.get("require_visual_edit_check") is True:
+        if policy.get("require_edit_signal_check") is True:
             required_checks["is_edit"] = True
-        if policy.get("require_ai_quality_check") is True:
+        if policy.get("require_brain_quality_check") is True:
             required_checks["high_quality_edit"] = True
         if not isinstance(moderation, dict) or any(
             moderation.get(name) is not expected
