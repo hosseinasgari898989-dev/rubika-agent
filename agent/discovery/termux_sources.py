@@ -456,16 +456,16 @@ def _discover_tiktok_public_hashtag_feeds(
             row["creator_trust_tier"] = row["source_policy"].get("trust_tier", "unknown")
             row["method"] = "termux_ytdlp_public_hashtag_feeds"
             row["discovery_origin"] = "public_hashtag_feed"
-            candidates.setdefault(video_id, row)
-            if video_id in candidates:
-                added = len(candidates)
+            if video_id not in candidates:
+                candidates[video_id] = row
+                added += 1
             if len(candidates) >= max_results:
                 break
 
         attempts.append({
             "platform": "tiktok", "method": "yt_dlp_public_hashtag_feeds",
             "query": "#" + tag, "parsed": parsed,
-            "new_unique": min(added, len(candidates)),
+            "new_unique": added,
             "stale_or_undated_skipped": stale_or_undated,
             "invalid_rows_skipped": invalid_rows,
             "result": "metadata_found" if added else "no_recent_public_hashtag_metadata",
