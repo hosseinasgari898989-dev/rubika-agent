@@ -322,14 +322,6 @@ def discover_tiktok_profiles(
             "result": "metadata_found" if added else "no_recent_relevant_public_video_metadata",
         })
         time.sleep(max(0.0, sleep_seconds))
-    if feed_results:
-        attempts.append({
-            "platform": "youtube",
-            "method": "public_channel_atom_feed",
-            "channels_checked": len(feed_results),
-            "candidate_dates_enriched": feed_date_enrichments,
-            "result": "metadata_enriched" if feed_date_enrichments else "no_candidate_dates_matched",
-        })
     return list(candidates.values()), attempts
 
 
@@ -604,5 +596,13 @@ def discover_youtube_metadata(
             "stale_or_undated_skipped": stale_or_undated,
             "freshness_unverified": freshness_unverified,
             "result": "metadata_found" if added else "no_recent_eligible_short_metadata",
+        })
+    if feed_results:
+        attempts.append({
+            "platform": "youtube",
+            "method": "public_channel_atom_feed",
+            "channels_checked": len(feed_results),
+            "candidate_dates_enriched": feed_date_enrichments,
+            "result": "metadata_enriched" if feed_date_enrichments else "no_candidate_dates_matched",
         })
     return list(candidates.values()), attempts
