@@ -29,7 +29,7 @@
     python -m venv .venv
     source .venv/bin/activate
     python -m pip install --upgrade pip
-    python -m pip install -r requirements.txt
+    python -m pip install requests yt-dlp==2026.08.19
     gh auth login
     gh auth setup-git
 
