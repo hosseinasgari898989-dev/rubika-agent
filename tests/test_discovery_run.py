@@ -10,6 +10,7 @@ from unittest.mock import patch
 from agent.discovery import run as runner
 from agent.discovery import v7
 from agent.discovery.instagram import InstagramCandidate, InstagramDiscovery
+from agent.discovery.tavily import TavilyAttempt, TavilyCandidate, TavilyDiscoveryReport
 
 
 class DiscoveryOrchestratorTests(unittest.TestCase):
@@ -53,6 +54,13 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
              patch.object(
                  runner, "discover_public_indexed_urls",
                  return_value=InstagramDiscovery((instagram_candidate,), ()),
+             ), \
+             patch.object(
+                 runner, "discover_social_urls",
+                 return_value=TavilyDiscoveryReport(
+                     candidates=(),
+                     attempts=(TavilyAttempt("instagram", "", None, 0, 0, 0, "not_configured"),),
+                 ),
              ):
             report = runner.run_discovery(report_path=Path(folder) / "discovery.json")
             report_text = (Path(folder) / "discovery.json").read_text(encoding="utf-8")
