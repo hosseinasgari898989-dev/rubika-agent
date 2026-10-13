@@ -1,4 +1,4 @@
-"""Conservative video normalizer: creates a square 1080x1080 copy, never overwrites source."""
+"""Video normalizers for safe delivery copies; originals are never overwritten."""
 from __future__ import annotations
 
 import subprocess
