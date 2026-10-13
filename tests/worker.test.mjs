@@ -20,6 +20,13 @@ class FakeStatement {
     return this;
   }
   async first() {
+    if (this.sql.startsWith("INSERT INTO ai_usage_daily")) {
+      const [day, limit] = this.values;
+      const current = this.db.aiUsageDaily.get(day) || 0;
+      if (current >= limit) return null;
+      this.db.aiUsageDaily.set(day, current + 1);
+      return { request_count: current + 1 };
+    }
     if (this.sql.includes("SELECT 1 AS ok")) return { ok: 1 };
     if (this.sql.includes("FROM agent_config")) {
       return { enabled: 0, started_at: null, updated_at: null };
@@ -113,6 +120,7 @@ class FakeDB {
     this.events = [];
     this.queueLimit = null;
     this.seenQuery = null;
+    this.aiUsageDaily = new Map();
   }
   prepare(sql) {
     return new FakeStatement(this, sql);
@@ -259,62 +267,96 @@ const read = async response => ({ status: response.status, body: await response.
   }), env()));
   assert.equal(response.status, 200);
 }
-{
-  const state = env();
-  state.AI = {
+function sampleVideoDataUrl() {
+  const bytes = Buffer.concat([
+    Buffer.from([0, 0, 0, 24]),
+    Buffer.from("ftypisom"),
+    Buffer.alloc(900, 7),
+  ]);
+  return "data:video/mp4;base64," + bytes.toString("base64");
+}
+
+function makeOmniAI() {
+  return {
     run: async (model, input) => {
-      assert.equal(model, "@cf/meta/llama-3.2-11b-vision-instruct");
-      assert.equal(input.image.startsWith("data:image/jpeg;base64,"), true);
-      assert.equal(input.messages.length, 2);
+      assert.equal(model, "@cf/cloudflare/clef-omni");
+      assert.equal(input.model, "clef-omni");
+      assert.equal(input.videos.length, 1);
+      assert.equal(input.videos[0].startsWith("data:video/mp4;base64,"), true);
+      assert.equal(Object.keys(input.questions).length, 6);
       return {
-        response: JSON.stringify({
-          poppy_relevant: true, is_edit: true, insults_poppy: false,
-          insults_other_games: false, high_effort: true, confidence: 0.88,
-        }),
+        answers: {
+          poppy_relevant: { noul: 0.98 },
+          is_edit: { noul: 0.94 },
+          insults_poppy: { noul: 0.01 },
+          insults_other_games: { noul: 0.03 },
+          high_effort: { noul: 0.91 },
+          has_music: { noul: 0.97 },
+        },
+        usage: { input_tokens: 9000 },
       };
     },
   };
-  const image = "data:image/jpeg;base64," + Buffer.from("x".repeat(900)).toString("base64");
-  const response = await read(await worker.fetch(request("/api/brain/moderate-frame", {
+}
+{
+  const state = env();
+  state.AI = makeOmniAI();
+  const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
     method: "POST",
-    body: { image, platform: "youtube", title: "Poppy Playtime edit", caption: "#edit" },
+    body: { video: sampleVideoDataUrl(), platform: "youtube", title: "Poppy Playtime edit", caption: "#edit" },
   }), state));
   assert.equal(response.status, 200);
-  assert.equal(response.body.ok, true);
+  assert.equal(response.body.model, "@cf/cloudflare/clef-omni");
   assert.equal(response.body.checks.poppy_relevant, true);
-  assert.equal(response.body.confidence, 0.88);
-  assert.equal(response.body.audio_review_required, true);
+  assert.equal(response.body.checks.has_music, true);
+  assert.equal(response.body.checks.insults_poppy, false);
   assert.equal(response.body.human_review_required, true);
   assert.equal(response.body.auto_approved, false);
   assert.equal(response.body.publishing, false);
+  assert.equal(state.DB.aiUsageDaily.size, 1);
+}
+{
+  const state = env();
+  state.AI = makeOmniAI();
+  const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
+    method: "POST",
+    body: { video: "data:text/html;base64," + Buffer.from("x".repeat(900)).toString("base64"), platform: "youtube" },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "moderation_video_format_invalid");
+  assert.equal(state.DB.aiUsageDaily.size, 0);
 }
 {
   const state = env();
   state.AI = { run: async () => { throw new Error("secret provider body"); } };
-  const image = "data:image/jpeg;base64," + Buffer.from("x".repeat(900)).toString("base64");
-  const response = await read(await worker.fetch(request("/api/brain/moderate-frame", {
-    method: "POST", body: { image, platform: "youtube" },
+  const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
+    method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" },
   }), state));
   assert.equal(response.status, 502);
   assert.equal(response.body.error, "vision_inference_failed");
   assert.equal(JSON.stringify(response.body).includes("secret provider body"), false);
+  assert.equal(state.DB.aiUsageDaily.size, 1);
 }
 {
   const state = env();
-  state.AI = { run: async () => { throw new Error("should never run"); } };
-  const response = await read(await worker.fetch(request("/api/brain/moderate-frame", {
-    method: "POST",
-    body: { image: "data:text/html;base64," + Buffer.from("x".repeat(900)).toString("base64"), platform: "youtube" },
+  state.AI = makeOmniAI();
+  for (let index = 0; index < 10; index++) {
+    const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
+      method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" },
+    }), state));
+    assert.equal(response.status, 200);
+  }
+  const overLimit = await read(await worker.fetch(request("/api/brain/moderate-video", {
+    method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" },
   }), state));
-  assert.equal(response.status, 400);
-  assert.equal(response.body.error, "vision_image_format_invalid");
+  assert.equal(overLimit.status, 429);
+  assert.equal(overLimit.body.error, "vision_daily_limit_reached");
+  assert.equal(state.DB.aiUsageDaily.values().next().value, 10);
 }
 {
-  const response = await read(await worker.fetch(request("/api/brain/moderate-frame", {
-    method: "POST",
-    body: { image: "data:image/jpeg;base64," + Buffer.from("x".repeat(900)).toString("base64"), platform: "youtube" },
-    token: null,
+  const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
+    method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" }, token: null,
   }), env()));
   assert.equal(response.status, 401);
 }
-console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction, and guarded vision inference.");
+console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction, Clef Omni video/audio moderation and daily cap.");
