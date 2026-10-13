@@ -7,7 +7,7 @@
       "platform": "mob_official",
       "source_platform": "website",
       "source_name": "Mob Entertainment newsroom",
-      "url": "https://mobentertainment.com/",
+      "url": "https://www.mobentertainment.com/",
       "enabled": true
     },
     {
@@ -17,7 +17,8 @@
       "source_platform": "website",
       "source_name": "Poppy Playtime official news",
       "url": "https://poppyplaytime.com/blogs/news.atom",
-      "enabled": true
+      "enabled": false,
+      "note": "Not part of the primary-plus-two-fallback plan for the first official Mob trial."
     },
     {
       "id": "mob_youtube",
@@ -36,7 +37,7 @@
       "source_platform": "tiktok",
       "source_name": "Mob Entertainment TikTok",
       "url": "https://www.tiktok.com/@mob.entertainment",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "poppy_instagram",
@@ -45,7 +46,7 @@
       "source_platform": "instagram",
       "source_name": "Poppy Playtime Instagram",
       "url": "https://www.instagram.com/poppyplaytimeco/",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "mob_x",
@@ -54,8 +55,18 @@
       "source_platform": "x",
       "source_name": "Mob Games Studios on X",
       "url": "https://x.com/mobgamesstudios",
-      "enabled": true,
-      "note": "Official reference discovered from the Mob Entertainment website; profile timeline collection is deferred to an adapter that can verify timestamps."
+      "enabled": false
+    },
+    {
+      "id": "steam_news",
+      "kind": "steam_news_api",
+      "platform": "mob_official",
+      "source_platform": "steam",
+      "source_name": "Poppy Playtime official Steam news",
+      "app_id": 1721470,
+      "feed_name": "steam_community_announcements",
+      "url": "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/",
+      "enabled": true
     }
   ],
   "dedupe": {
@@ -65,6 +76,6 @@
   },
   "publishing": {
     "enabled": false,
-    "reason": "Discovery and translation must be verified before the new official-content lane is allowed to publish media automatically."
+    "reason": "Publishing remains off by default; only the one-item manual trial with an explicit --publish flag can send a post."
   }
 }
