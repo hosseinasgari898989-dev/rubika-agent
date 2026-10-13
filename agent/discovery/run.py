@@ -72,6 +72,13 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
     if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
         print("TikTok fallback: documented public ProxiTok RSS feeds; RSS metadata only.", flush=True)
         proxitok = discover_public_rss()
+        for attempt in proxitok.attempts:
+            print(
+                f"ProxiTok RSS {attempt.instance} tag={attempt.tag}: "
+                f"status={attempt.status if attempt.status is not None else 'network_error'}, "
+                f"parsed={attempt.parsed_count}, new={attempt.added_count}, result={attempt.result}",
+                flush=True,
+            )
         for item in proxitok.candidates:
             if item.external_id in seen["tiktok"]:
                 continue
