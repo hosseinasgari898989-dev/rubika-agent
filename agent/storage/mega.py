@@ -79,6 +79,20 @@ class MegaStorage:
                     self._run(["mega-ls", current])
         return current
 
+    def list_directory(self, relative_dir: str = "") -> list[str]:
+        remote_dir = self.ensure_directory(relative_dir)
+        output = self._run(["mega-ls", remote_dir])
+        names = []
+        for line in output.splitlines():
+            value = line.strip()
+            if not value or value in {".", ".."}:
+                continue
+            # Keep basenames only; callers never interpret arbitrary output as a path.
+            name = value.rstrip("/").rsplit("/", 1)[-1]
+            if name and name not in {".", ".."}:
+                names.append(name)
+        return sorted(set(names))
+
     def upload(self, local_path: str | Path, relative_dir: str = "staging") -> str:
         path = Path(local_path)
         if not path.is_file() or path.stat().st_size <= 0:
