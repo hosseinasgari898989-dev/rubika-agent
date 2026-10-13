@@ -200,7 +200,7 @@ class CloudState:
             "errors": list(inspection.errors),
             "warnings": list(inspection.warnings),
         }
-        moderation_names = ("has_music",)
+        moderation_names = ("has_music", "is_poppy_playtime", "is_edit", "high_quality_edit")
         moderation = {
             key: evaluation.checks[key]
             for key in moderation_names
