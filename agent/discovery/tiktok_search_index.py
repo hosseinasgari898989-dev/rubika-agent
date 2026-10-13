@@ -26,7 +26,7 @@ DEFAULT_QUERIES = (
     'site:tiktok.com/@ "smiling critters" edit',
 )
 DIRECT_VIDEO_RE = re.compile(
-    r"https?://(?:www\\.)?tiktok\\.com/@([A-Za-z0-9._-]{1,40})/video/(\\d{10,25})",
+    r"https?://(?:www\.)?tiktok\.com/@([A-Za-z0-9._-]{1,40})/video/(\d{10,25})",
     re.IGNORECASE,
 )
 
@@ -105,7 +105,7 @@ def _tiktok_video_url(raw_url: str) -> tuple[str, str, str] | None:
     if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
         return None
     match = re.fullmatch(
-        r"/@([A-Za-z0-9._-]{1,40})/video/(\\d{10,25})/?",
+        r"/@([A-Za-z0-9._-]{1,40})/video/(\d{10,25})/?",
         parsed.path,
         re.IGNORECASE,
     )
