@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from agent.discovery.termux_sources import (
+    _discover_tiktok_public_hashtag_feeds,
     discover_tiktok_hashtags,
     discover_youtube_metadata,
     extract_tiktok_candidates,
@@ -107,6 +108,61 @@ class TermuxMetadataParserTests(unittest.TestCase):
         self.assertTrue(FakeYDL.instances[0].options["skip_download"])
         self.assertEqual(FakeYDL.instances[0].options["extract_flat"], "in_playlist")
         self.assertEqual(attempts[0]["result"], "metadata_found")
+
+    def test_unknown_tiktok_hashtag_ytdlp_fallback_is_metadata_only_and_date_gated(self):
+        FakeYDL.instances = []
+        FakeYDL.info = {"entries": [{
+            "id": "7610592632179297558",
+            "webpage_url": "https://www.tiktok.com/@unknown_editor/video/7610592632179297558",
+            "title": "Fan edit",
+            "description": "#poppyplaytime",
+            "timestamp": 1791808200,
+            "view_count": 1234,
+            "like_count": 56,
+        }]}
+        found, attempts = _discover_tiktok_public_hashtag_feeds(
+            tags=("poppyplaytime",),
+            max_results=4,
+            sleep_seconds=0,
+            ydl_factory=FakeYDL,
+        )
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["author"], "unknown_editor")
+        self.assertEqual(found[0]["creator_trust_tier"], "unknown")
+        self.assertEqual(found[0]["method"], "termux_ytdlp_public_hashtag_feeds")
+        self.assertEqual(found[0]["discovery_origin"], "public_hashtag_feed")
+        self.assertTrue(found[0]["published_at"])
+        self.assertEqual(FakeYDL.instances[0].queries[0][0], "https://www.tiktok.com/tag/poppyplaytime")
+        self.assertEqual(FakeYDL.instances[0].queries[0][1], False)
+        self.assertTrue(FakeYDL.instances[0].options["skip_download"])
+        self.assertEqual(attempts[0]["new_unique"], 1)
+        self.assertEqual(attempts[0]["result"], "metadata_found")
+
+    def test_unknown_tiktok_hashtag_ytdlp_fallback_skips_undated_and_old_rows(self):
+        FakeYDL.instances = []
+        old_timestamp = int((datetime.now(timezone.utc) - timedelta(days=120)).timestamp())
+        FakeYDL.info = {"entries": [
+            {
+                "id": "7610592632179297558",
+                "webpage_url": "https://www.tiktok.com/@unknown_editor/video/7610592632179297558",
+                "title": "Poppy edit",
+                "timestamp": old_timestamp,
+            },
+            {
+                "id": "7610592632179297559",
+                "webpage_url": "https://www.tiktok.com/@unknown_editor/video/7610592632179297559",
+                "title": "Undated edit",
+            },
+        ]}
+        found, attempts = _discover_tiktok_public_hashtag_feeds(
+            tags=("poppyplaytime",),
+            max_results=4,
+            sleep_seconds=0,
+            ydl_factory=FakeYDL,
+        )
+        self.assertEqual(found, [])
+        self.assertEqual(attempts[0]["stale_or_undated_skipped"], 2)
+        self.assertEqual(attempts[0]["result"], "no_recent_public_hashtag_metadata")
 
     def test_tiktok_skips_stale_and_undated_profile_items(self):
         FakeYDL.instances = []
