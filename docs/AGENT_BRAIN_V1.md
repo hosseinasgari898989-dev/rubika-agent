@@ -30,7 +30,7 @@ It creates artifacts/termux_discovery.json with metadata only (no video download
 - Instagram discovery now runs on the phone against public hashtag pages using ordinary unauthenticated HTTPS; it does not use Apify, a paid API, cookies, login sessions, proxies or CAPTCHA/challenge bypasses.
 - The collector examines at most three hashtag pages and accepts at most two canonical video/Reel candidates per daily run. It extracts metadata only when the returned HTML exposes it; otherwise it reports zero/blocked rather than inventing candidates.
 - Instagram may still return a login wall or challenge to a phone. Parser tests prove the extractor handles fixture HTML, not that live discovery works on every phone/network. The first live run is required before treating this route as reliable.
-- The separate Apify adapter remains in the codebase as an optional future fallback, but the daily command does not call it and no Apify token is required.
+- No paid Apify adapter is part of the current daily flow. We will only evaluate a paid fallback if the live free-phone test fails and the owner chooses to consider it.
 
 ## What happens after the phone pushes a report
 The discovery workflow validates the schema and canonical host/ID relationship, merges the phone results with the existing identity history, and runs only the fallbacks still needed. The workflow's exit status is red if it cannot find the required five TikTok and five YouTube candidates; an HTTP 200 by itself is not success. The discovery report is uploaded as an artifact for inspection.
