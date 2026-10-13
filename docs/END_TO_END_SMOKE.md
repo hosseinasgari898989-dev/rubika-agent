@@ -3,7 +3,7 @@
 این آزمایش دستی است و در هر اجرا حداکثر یک ویدئو را انتخاب می‌کند. مسیر اجرا:
 گزارش `artifacts/termux_discovery.json` ← دانلود در GitHub Actions ← بررسی محتوای تصویری/صوتی با مغز Cloudflare AI ← تبدیل به MP4 عمودی 1080×1920 ← MEGA ← D1 ← ارسال به کانال روبیکا.
 
-تاریخ انتشار برای انتخاب نامزد شرط نیست. ویدئو فقط در صورت موفقیت دانلود، اعتبارسنجی رسانه و عبور از همهٔ بررسی‌های مغز ارسال می‌شود. این workflow فقط با `workflow_dispatch` اجرا می‌شود؛ با هر push خودکار ویدئو منتشر نمی‌کند.
+تاریخ انتشار برای انتخاب نامزد شرط نیست. ویدئو فقط در صورت موفقیت دانلود، اعتبارسنجی رسانه و عبور از همهٔ بررسی‌های مغز ارسال می‌شود. این workflow فقط وقتی اجرا می‌شود که فایل درخواست `artifacts/brain-e2e-request.json` روی شاخهٔ آزمایشی تغییر کند؛ push گزارش کشف به‌تنهایی ویدئو منتشر نمی‌کند.
 
 ## ۱. ساخت توکن مشترک
 
@@ -42,7 +42,10 @@ rm -f "$HOME/agent_api_token.txt"
 ```bash
 cd ~/rubika-agent-github
 git pull --ff-only origin agent-brain-mega-v1
-gh workflow run brain-e2e-dispatch.yml --ref agent-brain-mega-v1 -f platform=tiktok
+printf '{"platform":"tiktok","requested_at":"%s"}\\n' "$(date -u +%FT%TZ)" > artifacts/brain-e2e-request.json
+git add artifacts/brain-e2e-request.json
+git commit -m "Request one-item end-to-end test"
+git push origin agent-brain-mega-v1
 gh run list --workflow brain-e2e-dispatch.yml --branch agent-brain-mega-v1 --limit 1
 ```
 
