@@ -64,14 +64,17 @@ class _PostPageParser(HTMLParser):
         self._ignored = 0
         self._article_text: list[str] = []
         self._capture_depth = 0
-        self._capture_flags: list[bool] = []
-        self._tag_stack: list[str] = []
+        self._tag_stack: list[tuple[str, bool, bool]] = []
+        self._void_tags = {
+            "area", "base", "br", "col", "embed", "hr", "img", "input",
+            "link", "meta", "param", "source", "track", "wbr",
+        }
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key.lower(): value or "" for key, value in attrs}
         lower = tag.lower()
-        self._tag_stack.append(lower)
-        if lower in {"script", "style", "noscript", "nav", "footer", "header", "aside"}:
+        ignored_tag = lower in {"script", "style", "noscript", "nav", "footer", "header", "aside"}
+        if ignored_tag:
             self._ignored += 1
         if lower == "script":
             self._script_jsonld = values.get("type", "").lower() == "application/ld+json"
@@ -87,12 +90,20 @@ class _PostPageParser(HTMLParser):
             if raw:
                 kind = "video" if lower in {"video", "source", "iframe"} else ("audio" if lower == "audio" else "image")
                 self.media.append((kind, urljoin(self.base_url, raw)))
-        if lower in {"article", "main"} or any(
-            term in (values.get("class", "") + " " + values.get("id", "")).lower()
-            for term in ("article-body", "article-content", "news-content", "press-content", "post-content", "story-content", "rte")
-        ):
+        capture_container = (
+            lower in {"article", "main"}
+            or (
+                lower in {"div", "section"}
+                and any(
+                    term in (values.get("class", "") + " " + values.get("id", "")).lower()
+                    for term in ("article-body", "article-content", "news-content", "press-content", "post-content", "story-content", "rte")
+                )
+            )
+        )
+        if capture_container:
             self._capture_depth += 1
-        self._capture_flags.append(self._capture_depth > 0)
+        if lower not in self._void_tags:
+            self._tag_stack.append((lower, ignored_tag, capture_container))
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
@@ -101,7 +112,7 @@ class _PostPageParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self._script_jsonld:
             self._script_data.append(data)
-        if self._ignored == 0 and self._capture_flags and self._capture_flags[-1]:
+        if self._ignored == 0 and self._capture_depth > 0:
             text = re.sub(r"\s+", " ", data).strip()
             if text:
                 self._article_text.append(text)
@@ -112,14 +123,18 @@ class _PostPageParser(HTMLParser):
             self.jsonld_chunks.append("".join(self._script_data))
             self._script_jsonld = False
             self._script_data = []
-        if self._tag_stack:
-            popped = self._tag_stack.pop()
-            if popped in {"script", "style", "noscript", "nav", "footer", "header", "aside"}:
-                self._ignored = max(0, self._ignored - 1)
-        if lower in {"article", "main"} or (self._capture_depth > 0 and lower in {"div", "section"}):
-            self._capture_depth = max(0, self._capture_depth - 1)
-        if self._capture_flags:
-            self._capture_flags.pop()
+        # Pop the matching element and any malformed nested elements above it. Only
+        # decrement capture/ignore scopes for elements that actually opened them.
+        for index in range(len(self._tag_stack) - 1, -1, -1):
+            if self._tag_stack[index][0] == lower:
+                popped = self._tag_stack[index:]
+                del self._tag_stack[index:]
+                for _tag, ignored_tag, capture_container in reversed(popped):
+                    if ignored_tag:
+                        self._ignored = max(0, self._ignored - 1)
+                    if capture_container:
+                        self._capture_depth = max(0, self._capture_depth - 1)
+                break
 
 
 def _walk_json(value: Any):
