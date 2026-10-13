@@ -1,0 +1,533 @@
+"""Complete, read-only discovery for official Mob Entertainment media.
+
+Priority is Mob's newsroom; official YouTube and official Steam announcements are
+fallback sources. This module only returns posts with their real original caption
+and an actual image/video URL from that same post. It never downloads or publishes.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import unicodedata
+from datetime import datetime, timezone
+from html import unescape
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin, urlparse
+
+import requests
+
+from .mob_official import (
+    DEFAULT_CONFIG,
+    MAX_SOURCE_BODY_BYTES,
+    USER_AGENT,
+    _absolute_http_url,
+    _atom_entries,
+    _fetch_text,
+    _newsroom_entries,
+    _plain_text,
+    _timestamp,
+)
+
+STEAM_APP_ID = 1721470
+MAX_DISCOVERY_ITEMS = 25
+MAX_CAPTION_CHARS = 4500
+MAX_SOURCE_BYTES = 3 * 1024 * 1024
+OFFICIAL_YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "youtu.be"}
+STEAM_MEDIA_HOST_SUFFIXES = ("steamstatic.com", "akamaihd.net")
+
+
+def _host(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+
+
+def _is_host(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+class _PostPageParser(HTMLParser):
+    """Extract post-level metadata and embedded media, not generic homepage text."""
+
+    def __init__(self, base_url: str):
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.meta: dict[str, str] = {}
+        self.media: list[tuple[str, str]] = []
+        self.jsonld_chunks: list[str] = []
+        self._script_jsonld = False
+        self._script_data: list[str] = []
+        self._ignored = 0
+        self._article_text: list[str] = []
+        self._capture_depth = 0
+        self._capture_flags: list[bool] = []
+        self._tag_stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {key.lower(): value or "" for key, value in attrs}
+        lower = tag.lower()
+        self._tag_stack.append(lower)
+        if lower in {"script", "style", "noscript", "nav", "footer", "header", "aside"}:
+            self._ignored += 1
+        if lower == "script":
+            self._script_jsonld = values.get("type", "").lower() == "application/ld+json"
+            self._script_data = []
+        if lower == "meta":
+            key = (values.get("property") or values.get("name") or values.get("itemprop") or "").strip().lower()
+            value = values.get("content", "").strip()
+            if key and value and key not in self.meta:
+                self.meta[key] = value
+        if lower in {"img", "video", "source", "audio", "iframe"}:
+            attr = "poster" if lower == "video" and values.get("poster") else "src"
+            raw = values.get(attr) or values.get("data-src") or values.get("data-lazy-src") or ""
+            if raw:
+                kind = "video" if lower in {"video", "source", "iframe"} else ("audio" if lower == "audio" else "image")
+                self.media.append((kind, urljoin(self.base_url, raw)))
+        if lower in {"article", "main"} or any(
+            term in (values.get("class", "") + " " + values.get("id", "")).lower()
+            for term in ("article-body", "article-content", "news-content", "press-content", "post-content", "story-content", "rte")
+        ):
+            self._capture_depth += 1
+        self._capture_flags.append(self._capture_depth > 0)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self._script_jsonld:
+            self._script_data.append(data)
+        if self._ignored == 0 and self._capture_flags and self._capture_flags[-1]:
+            text = re.sub(r"\s+", " ", data).strip()
+            if text:
+                self._article_text.append(text)
+
+    def handle_endtag(self, tag: str) -> None:
+        lower = tag.lower()
+        if lower == "script" and self._script_jsonld:
+            self.jsonld_chunks.append("".join(self._script_data))
+            self._script_jsonld = False
+            self._script_data = []
+        if self._tag_stack:
+            popped = self._tag_stack.pop()
+            if popped in {"script", "style", "noscript", "nav", "footer", "header", "aside"}:
+                self._ignored = max(0, self._ignored - 1)
+        if lower in {"article", "main"} or (self._capture_depth > 0 and lower in {"div", "section"}):
+            self._capture_depth = max(0, self._capture_depth - 1)
+        if self._capture_flags:
+            self._capture_flags.pop()
+
+
+def _walk_json(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_json(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json(child)
+
+
+def _detail_from_page(body: str, page_url: str) -> dict[str, Any]:
+    parser = _PostPageParser(page_url)
+    parser.feed(body)
+    metadata = parser.meta
+    json_objects: list[dict[str, Any]] = []
+    for raw in parser.jsonld_chunks:
+        try:
+            json_objects.extend(item for item in _walk_json(json.loads(raw)) if isinstance(item, dict))
+        except (ValueError, TypeError):
+            continue
+
+    def meta_value(*keys: str) -> str:
+        for key in keys:
+            if metadata.get(key, "").strip():
+                return metadata[key].strip()
+        return ""
+
+    title = meta_value("og:title", "twitter:title", "headline")
+    caption = meta_value("og:description", "twitter:description", "description")
+    published = meta_value("article:published_time", "datepublished", "date")
+    for row in json_objects:
+        row_type = row.get("@type", "")
+        kinds = row_type if isinstance(row_type, list) else [row_type]
+        if any(str(kind).lower() in {"article", "newsarticle", "blogposting", "reportage"} for kind in kinds):
+            title = title or str(row.get("headline") or row.get("name") or "")
+            caption = caption or str(row.get("description") or row.get("articleBody") or "")
+            published = published or str(row.get("datePublished") or row.get("dateCreated") or "")
+    if not caption:
+        # A page's title or generic site description is not a caption. Only use the
+        # bounded article body if the DOM exposes an actual article/content section.
+        caption = " ".join(parser._article_text)
+    title = _plain_text(title, 1200)
+    caption = _plain_text(caption, MAX_CAPTION_CHARS)
+
+    image_url = meta_value("og:image:secure_url", "og:image", "twitter:image", "twitter:image:src")
+    video_url = meta_value("og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream")
+    if not image_url or not video_url:
+        for row in json_objects:
+            for key in ("image", "thumbnailUrl"):
+                value = row.get(key)
+                if not image_url and isinstance(value, str):
+                    image_url = value
+                elif not image_url and isinstance(value, dict):
+                    image_url = str(value.get("url") or "")
+                elif not image_url and isinstance(value, list) and value:
+                    first = value[0]
+                    image_url = str(first.get("url") if isinstance(first, dict) else first or "")
+            for key in ("contentUrl", "embedUrl"):
+                value = row.get("video")
+                if isinstance(value, dict):
+                    video_url = video_url or str(value.get(key) or "")
+                elif isinstance(value, str):
+                    video_url = video_url or value
+    image_url = _absolute_http_url(page_url, image_url) if image_url else None
+    video_url = _absolute_http_url(page_url, video_url) if video_url else None
+
+    # Real video sources/embeds inside the story are preferred over a thumbnail.
+    for kind, raw in parser.media:
+        candidate_url = _absolute_http_url(page_url, raw)
+        if not candidate_url:
+            continue
+        host = _host(candidate_url)
+        path = urlparse(candidate_url).path.lower()
+        if kind == "video" and (
+            path.endswith((".mp4", ".webm", ".mov", ".m4v", ".m3u8"))
+            or any(_is_host(host, h) for h in OFFICIAL_YOUTUBE_HOSTS)
+            or "vimeo.com" in host
+        ):
+            video_url = video_url or candidate_url
+        elif kind == "image" and not image_url and path.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            image_url = candidate_url
+
+    if video_url:
+        media_type, media_url = "video", video_url
+    elif image_url:
+        media_type, media_url = "image", image_url
+    else:
+        media_type, media_url = "unknown", None
+    return {
+        "title": title,
+        "original_caption": caption,
+        "caption": caption,
+        "published_at": _timestamp(published),
+        "media_type": media_type,
+        "media_url": media_url,
+        "canonical_url": page_url,
+    }
+
+
+def _make_item(
+    *,
+    source_platform: str,
+    source_name: str,
+    source_key: str,
+    canonical_url: str,
+    external_id: str,
+    title: str,
+    caption: str,
+    published_at: Any,
+    media_type: str,
+    media_url: str,
+    source_priority: int,
+) -> dict[str, Any] | None:
+    if not canonical_url.startswith("https://") or not external_id or not caption.strip() or not media_url:
+        return None
+    if media_type not in {"image", "video"}:
+        return None
+    clean_media = _absolute_http_url(canonical_url, media_url)
+    if not clean_media:
+        return None
+    return {
+        "platform": "mob_official",
+        "source_platform": source_platform,
+        "source_name": source_name,
+        "source_key": source_key,
+        "id": external_id[:120],
+        "external_id": external_id[:120],
+        "canonical_url": canonical_url,
+        "url": canonical_url,
+        "title": _plain_text(title, 1200),
+        "caption": _plain_text(caption, MAX_CAPTION_CHARS),
+        "original_caption": _plain_text(caption, MAX_CAPTION_CHARS),
+        "published_at": _timestamp(published_at),
+        "media_type": media_type,
+        "media_url": clean_media,
+        "thumbnail_url": None,
+        "official_source": True,
+        "method": "official_post_with_original_media",
+        "source_priority": source_priority,
+    }
+
+
+def _discover_newsroom(session: Any, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    source = next((row for row in sources if row.get("id") == "mob_newsroom"), None)
+    if not source or source.get("enabled") is not True:
+        return []
+    home = str(source.get("url") or "https://www.mobentertainment.com/")
+    body = _fetch_text(session, home)
+    cards = _newsroom_entries(body, source)
+    output: list[dict[str, Any]] = []
+    for card in cards[:MAX_DISCOVERY_ITEMS]:
+        article_url = str(card.get("canonical_url") or "")
+        host = _host(article_url)
+        if not (_is_host(host, "mobentertainment.com") or _is_host(host, "poppyplaytime.com")):
+            continue
+        try:
+            html = _fetch_text(session, article_url)
+            detail = _detail_from_page(html, article_url)
+        except Exception:
+            continue
+        external_id = urlparse(article_url).path.rstrip("/").rsplit("/", 1)[-1]
+        external_id = re.sub(r"[^A-Za-z0-9._-]", "-", external_id)[:100]
+        item = _make_item(
+            source_platform="website",
+            source_name="Mob Entertainment",
+            source_key="mobentertainment.com",
+            canonical_url=article_url,
+            external_id=external_id or hashlib.sha256(article_url.encode()).hexdigest()[:24],
+            title=detail["title"] or card.get("title") or "",
+            caption=detail["original_caption"],
+            published_at=detail["published_at"] or card.get("published_at"),
+            media_type=detail["media_type"],
+            media_url=detail["media_url"] or "",
+            source_priority=0,
+        )
+        if item:
+            output.append(item)
+    return output
+
+
+def _discover_youtube(session: Any, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    source = next((row for row in sources if row.get("id") == "mob_youtube"), None)
+    if not source or source.get("enabled") is not True:
+        return []
+    channel_id = str(source.get("channel_id") or "").strip()
+    if not re.fullmatch(r"UC[A-Za-z0-9_-]{20,30}", channel_id):
+        return []
+    feed_url = "https://www.youtube.com/feeds/videos.xml?channel_id=" + channel_id
+    feed_source = dict(source)
+    feed_source["url"] = feed_url
+    rows = _atom_entries(_fetch_text(session, feed_url), feed_source)
+    result: list[dict[str, Any]] = []
+    for row in rows[:MAX_DISCOVERY_ITEMS]:
+        url = str(row.get("canonical_url") or "")
+        external_id = str(row.get("id") or "").rsplit(":", 1)[-1]
+        host = _host(url)
+        if not (host == "www.youtube.com" or _is_host(host, "youtube.com")):
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", external_id):
+            continue
+        caption = str(row.get("original_caption") or row.get("caption") or "").strip()
+        item = _make_item(
+            source_platform="youtube",
+            source_name="Mob Entertainment YouTube",
+            source_key="youtube.com",
+            canonical_url=url,
+            external_id="yt-" + external_id,
+            title=str(row.get("title") or ""),
+            caption=caption,
+            published_at=row.get("published_at"),
+            media_type="video",
+            media_url=url,
+            source_priority=1,
+        )
+        if item:
+            result.append(item)
+    return result
+
+
+class _SteamContentParser(HTMLParser):
+    def __init__(self, base_url: str):
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.text_parts: list[str] = []
+        self.media: list[tuple[str, str]] = []
+        self._ignored = 0
+        self._tags: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {key.lower(): value or "" for key, value in attrs}
+        lower = tag.lower()
+        self._tags.append(lower)
+        if lower in {"script", "style", "noscript"}:
+            self._ignored += 1
+        if lower in {"img", "video", "source", "iframe"}:
+            raw = values.get("src") or values.get("data-src") or values.get("poster") or ""
+            if raw:
+                self.media.append(("video" if lower in {"video", "source", "iframe"} else "image", raw))
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._tags:
+            popped = self._tags.pop()
+            if popped in {"script", "style", "noscript"}:
+                self._ignored = max(0, self._ignored - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored == 0:
+            text = re.sub(r"\s+", " ", data).strip()
+            if text:
+                self.text_parts.append(text)
+
+
+def _steam_media_url(raw: str, canonical_url: str) -> str | None:
+    # Steam news HTML sometimes uses its documented clan-image placeholder.
+    match = re.match(r"^\{STEAM_CLAN_IMAGE\}/([0-9]+)/(.+)$", raw.strip())
+    if match:
+        raw = f"https://clan.cloudflare.steamstatic.com/images/{match.group(1)}/{match.group(2)}"
+    return _absolute_http_url(canonical_url, raw)
+
+
+def _discover_steam(session: Any, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    source = next((row for row in sources if row.get("id") == "steam_news"), None)
+    if not source or source.get("enabled") is not True:
+        return []
+    app_id = source.get("app_id", STEAM_APP_ID)
+    if str(app_id) != str(STEAM_APP_ID):
+        return []
+    endpoint = str(source.get("url") or "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/")
+    response = session.get(
+        endpoint,
+        params={
+            "appid": str(STEAM_APP_ID),
+            "count": str(MAX_DISCOVERY_ITEMS),
+            "maxlength": "0",
+            "feeds": "steam_community_announcements",
+        },
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        timeout=20,
+    )
+    if response.status_code != 200:
+        raise RuntimeError("steam_news_http_" + str(response.status_code))
+    payload = response.json()
+    rows = ((payload.get("appnews") or {}).get("newsitems") or []) if isinstance(payload, dict) else []
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        feed = str(row.get("feedname") or "").casefold()
+        # Do not label external press coverage/community chatter as developer news.
+        if feed and feed not in {"steam_community_announcements", "steam_community_announcement"}:
+            continue
+        canonical_url = str(row.get("url") or "")
+        host = _host(canonical_url)
+        if not (host == "steamcommunity.com" or _is_host(host, "steamcommunity.com")):
+            continue
+        parser = _SteamContentParser(canonical_url)
+        parser.feed(str(row.get("contents") or ""))
+        caption = _plain_text(" ".join(parser.text_parts), MAX_CAPTION_CHARS)
+        chosen_video = ""
+        chosen_image = ""
+        for kind, raw in parser.media:
+            clean = _steam_media_url(raw, canonical_url)
+            if not clean:
+                continue
+            host_media = _host(clean)
+            path = urlparse(clean).path.lower()
+            if kind == "video" and (path.endswith((".mp4", ".webm", ".mov", ".m3u8")) or "youtube.com" in host_media):
+                chosen_video = chosen_video or clean
+            elif kind == "image" and (
+                path.endswith((".jpg", ".jpeg", ".png", ".webp"))
+                or any(_is_host(host_media, suffix) for suffix in STEAM_MEDIA_HOST_SUFFIXES)
+            ):
+                chosen_image = chosen_image or clean
+        # A Steam news card without a post-level image/video or body is not publishable.
+        if not caption or not (chosen_video or chosen_image):
+            continue
+        published = row.get("date")
+        try:
+            published = datetime.fromtimestamp(int(published), tz=timezone.utc).isoformat()
+        except (ValueError, TypeError, OSError, OverflowError):
+            published = None
+        gid = str(row.get("gid") or "").strip()
+        if not re.fullmatch(r"[0-9]{5,30}", gid):
+            continue
+        item = _make_item(
+            source_platform="steam",
+            source_name="Poppy Playtime official Steam news",
+            source_key="steamcommunity.com",
+            canonical_url=canonical_url,
+            external_id="steam-" + gid,
+            title=str(row.get("title") or ""),
+            caption=caption,
+            published_at=published,
+            media_type="video" if chosen_video else "image",
+            media_url=chosen_video or chosen_image,
+            source_priority=2,
+        )
+        if item:
+            output.append(item)
+    return output
+
+
+def _fingerprint(item: dict[str, Any]) -> str:
+    raw = " ".join(
+        (str(item.get("title") or ""), str(item.get("original_caption") or ""))
+    ).casefold()
+    raw = unicodedata.normalize("NFKC", raw)
+    raw = re.sub(r"[^\w]+", " ", raw, flags=re.UNICODE)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest() if len(raw) >= 24 else ""
+
+
+def discover_complete_official_posts(
+    *,
+    config_path: str | Path = DEFAULT_CONFIG,
+    session: Any | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read official source feeds; no downloading, publishing or persistent writes."""
+    try:
+        config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], [{"source": "config", "result": "config_unavailable"}]
+    if not isinstance(config, dict) or config.get("version") != 1:
+        return [], [{"source": "config", "result": "config_invalid"}]
+    sources = config.get("official_sources", [])
+    if not isinstance(sources, list):
+        return [], [{"source": "config", "result": "sources_invalid"}]
+    client = session or requests.Session()
+    attempts: list[dict[str, Any]] = []
+    found: list[dict[str, Any]] = []
+    adapters = (
+        ("mob_newsroom", _discover_newsroom),
+        ("mob_youtube", _discover_youtube),
+        ("steam_news", _discover_steam),
+    )
+    for source_id, adapter in adapters:
+        try:
+            rows = adapter(client, sources)
+            found.extend(rows)
+            attempts.append({"source": source_id, "result": "ok" if rows else "no_complete_posts", "candidate_count": len(rows)})
+        except Exception as exc:
+            attempts.append({
+                "source": source_id,
+                "result": "source_error",
+                "error_code": re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "source_error",
+                "candidate_count": 0,
+            })
+
+    # Prefer the primary newsroom when the exact same post is syndicated elsewhere.
+    found.sort(
+        key=lambda row: (
+            int(row.get("source_priority", 9)),
+            -(int(datetime.fromisoformat(row["published_at"].replace("Z", "+00:00")).timestamp())
+              if row.get("published_at") else 0),
+        )
+    )
+    output: list[dict[str, Any]] = []
+    seen_ids: set[tuple[str, str]] = set()
+    seen_fingerprints: set[str] = set()
+    for row in found:
+        identity = (str(row.get("source_platform")), str(row.get("external_id")))
+        fingerprint = _fingerprint(row)
+        if identity in seen_ids or (fingerprint and fingerprint in seen_fingerprints):
+            continue
+        seen_ids.add(identity)
+        if fingerprint:
+            seen_fingerprints.add(fingerprint)
+        output.append(row)
+    return output, attempts
