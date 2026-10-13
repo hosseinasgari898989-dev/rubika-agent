@@ -33,6 +33,16 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             "title": "Poppy Playtime Short",
             "media_type": "video",
         }]
+        mob_official = [{
+            "platform": "mob_official",
+            "id": "youtube:abcdefghijk",
+            "url": "https://www.youtube.com/watch?v=abcdefghijk",
+            "canonical_url": "https://www.youtube.com/watch?v=abcdefghijk",
+            "title": "Official Mob trailer",
+            "source_platform": "youtube",
+            "official_source": True,
+            "media_type": "video",
+        }]
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "termux_discovery.json"
             with patch.object(
@@ -41,6 +51,8 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 daily_discovery, "discover_instagram_hashtags", return_value=(instagram, [])
             ) as instagram_search, patch.object(
                 daily_discovery, "discover_youtube_metadata", return_value=(youtube, [])
+            ), patch.object(
+                daily_discovery, "discover_mob_official", return_value=(mob_official, [])
             ):
                 report = daily_discovery.collect_daily_report(output_path=output)
 
@@ -48,7 +60,9 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             self.assertEqual(report["summary"]["tiktok_candidates"], 1)
             self.assertEqual(report["summary"]["youtube_candidates"], 1)
             self.assertEqual(report["summary"]["instagram_candidates"], 1)
+            self.assertEqual(report["summary"]["mob_official_candidates"], 1)
             self.assertEqual(report["summary"]["paid_providers_used"], [])
+            self.assertEqual(report["candidates"]["mob_official"][0]["source_platform"], "youtube")
             self.assertEqual(report["summary"]["tiktok_method"], "yt_dlp_owner_selected_profiles_plus_public_hashtag_pages")
             self.assertEqual(report["summary"]["instagram_method"], "public_search_index_bing_rss_ddg_fallback")
             self.assertFalse(report["summary"]["ready_to_publish"])
