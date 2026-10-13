@@ -13,11 +13,11 @@ _SAFE_UNKNOWN_POLICY: dict[str, Any] = {
     "trust_tier": "unknown",
     "known_source": False,
     "output_format": "square_1080x1080",
-    "require_visual_poppy_check": True,
-    "require_visual_edit_check": True,
-    "require_ai_quality_check": True,
+    "require_poppy_relevance_check": True,
+    "require_edit_signal_check": True,
+    "require_brain_quality_check": True,
     "minimum_source_short_side": 720,
-    "notes": "Unknown source: require full verification before publication.",
+    "notes": "Unknown source: require strict agent-brain metadata/technical checks and AI soundtrack-music confirmation.",
 }
 
 
