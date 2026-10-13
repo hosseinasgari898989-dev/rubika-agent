@@ -77,7 +77,7 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         self.assertEqual(rows[0]["original_caption"], "This is the original caption from the official article.")
         self.assertEqual(rows[0]["media_type"], "image")
         self.assertEqual(rows[0]["media_url"], "https://cdn.mobentertainment.com/news/chapter-five.jpg")
-        self.assertNotIn("thumbnail_url", rows[0], "a post thumbnail must not replace its original media")
+        self.assertIsNone(rows[0]["thumbnail_url"], "a post thumbnail must not replace its original media")
         self.assertEqual(rows[0]["published_at"], "2026-10-01T12:00:00+00:00")
         self.assertEqual(attempts[0]["result"], "ok")
 
