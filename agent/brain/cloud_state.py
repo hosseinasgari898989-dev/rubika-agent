@@ -113,7 +113,6 @@ class CloudState:
         )
         checks = result.get("checks")
         probabilities = result.get("probabilities")
-        required = ("has_music",)
         if not isinstance(checks, dict) or not isinstance(probabilities, dict):
             raise CloudStateError("control_api_moderation_checks_missing")
         required = ("has_music", "is_poppy_playtime", "is_edit")
