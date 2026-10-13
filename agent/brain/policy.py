@@ -221,13 +221,31 @@ def evaluate_edit_candidate(
         if moderation["has_music"] is False:
             reasons.append("music_not_detected")
         checks["music_detection_method"] = moderation.get("music_detection_method", "workers_ai_audio_check")
-    if "has_music" in missing:
-        reason = str(moderation.get("music_decision_reason") or "music_answer_missing")
-        safe_reason = re.sub(r"[^a-zA-Z0-9_-]", "", reason.lower())[:80]
-        checks["music_decision_reason"] = safe_reason or "music_answer_missing"
-        probability = moderation.get("music_probability")
-        if type(probability) in {int, float} and 0 <= probability <= 1:
-            checks["music_probability"] = float(probability)
+    # Preserve safe diagnostics so uncertainty is actionable rather than reported as a
+    # generic missing-field error. No media payloads or provider response bodies are stored.
+    for key in (
+        "music_probability", "music_decision_reason", "music_detection_method",
+        "music_model", "music_confidence", "music_check_uncertain", "recovery_diagnostics",
+    ):
+        value = moderation.get(key)
+        if key == "music_probability" and type(value) in {int, float} and 0 <= value <= 1:
+            checks[key] = float(value)
+        elif key in {"music_decision_reason", "music_detection_method", "music_model"} and isinstance(value, str):
+            checks[key] = re.sub(r"[^A-Za-z0-9_.@/-]", "", value)[:120]
+        elif key == "music_confidence" and type(value) in {int, float} and 0 <= value <= 1:
+            checks[key] = float(value)
+        elif key == "music_check_uncertain" and type(value) is bool:
+            checks[key] = value
+        elif key == "recovery_diagnostics" and isinstance(value, dict):
+            checks[key] = {
+                "attempts": max(0, min(2, int(value.get("attempts", 0) or 0))),
+                "recovered": value.get("recovered") is True,
+                "action": re.sub(r"[^A-Za-z0-9_-]", "", str(value.get("action", "")))[:80],
+                "error_codes": [
+                    re.sub(r"[^A-Za-z0-9_-]", "", str(code))[:80]
+                    for code in value.get("error_codes", [])[:3]
+                ] if isinstance(value.get("error_codes"), list) else [],
+            }
 
     requires_review = bool(missing)
     if reasons:
