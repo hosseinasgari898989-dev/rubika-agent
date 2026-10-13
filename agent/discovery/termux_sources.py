@@ -145,6 +145,21 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
+class _QuietYDLLogger:
+    """Suppress noisy extractor logs; outcomes are summarized in the JSON report."""
+    def debug(self, message: str) -> None:
+        return None
+
+    def info(self, message: str) -> None:
+        return None
+
+    def warning(self, message: str) -> None:
+        return None
+
+    def error(self, message: str) -> None:
+        return None
+
+
 def extract_tiktok_candidates(body: str, query: str = "") -> list[dict[str, Any]]:
     """Parse already-returned public HTML; it does not request individual video pages."""
     candidates: dict[str, dict[str, Any]] = {}
@@ -227,6 +242,7 @@ def discover_tiktok_profiles(
         "playlistend": max(10, min(50, max_results * 3)),
         "socket_timeout": max(5, min(30, int(timeout_seconds))),
         "extractor_retries": 0, "retries": 0,
+        "logger": _QuietYDLLogger(),
     }
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
@@ -422,6 +438,8 @@ def discover_youtube_metadata(
         "no_warnings": True,
         "ignoreerrors": True,
         "skip_download": True,
+        "extract_flat": True,
+        "logger": _QuietYDLLogger(),
         "socket_timeout": 15,
     }
     candidates: dict[str, dict[str, Any]] = {}
@@ -443,7 +461,7 @@ def discover_youtube_metadata(
             })
             continue
         entries = info.get("entries") if isinstance(info, dict) else None
-        added = stale_or_undated = 0
+        added = stale_or_undated = freshness_unverified = 0
         for entry in entries or []:
             if not isinstance(entry, dict):
                 continue
@@ -455,16 +473,20 @@ def discover_youtube_metadata(
             if duration is None or duration > 180 or duration <= 0:
                 continue
             published_at = _date_from_youtube_entry(entry)
+            if published_at:
+                try:
+                    parsed_date = datetime.fromisoformat(published_at)
+                    if parsed_date.tzinfo is None:
+                        parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+                    if parsed_date.astimezone(timezone.utc) < cutoff:
+                        stale_or_undated += 1
+                        continue
+                except ValueError:
+                    published_at = None
             if not published_at:
-                stale_or_undated += 1
-                continue
-            try:
-                if datetime.fromisoformat(published_at) < cutoff:
-                    stale_or_undated += 1
-                    continue
-            except ValueError:
-                stale_or_undated += 1
-                continue
+                # Flat search results often omit upload dates. Keep them as unverified
+                # candidates, but never treat them as publish-ready.
+                freshness_unverified += 1
             url = f"https://www.youtube.com/shorts/{video_id}"
             title = str(entry.get("title") or "")[:1200]
             description = str(entry.get("description") or "")[:4000]
@@ -479,6 +501,11 @@ def discover_youtube_metadata(
                 "author": str(entry.get("uploader") or entry.get("channel") or "")[:100],
                 "hashtags": hashtags,
                 "published_at": published_at,
+                "freshness_verified": bool(published_at),
+                "freshness_status": (
+                    "verified_within_window" if published_at
+                    else "date_unavailable_verify_before_publish"
+                ),
                 "duration_seconds": duration,
                 "view_count": _safe_int(entry.get("view_count")),
                 "like_count": _safe_int(entry.get("like_count")),
@@ -495,6 +522,7 @@ def discover_youtube_metadata(
             "parsed": len(entries) if isinstance(entries, list) else 0,
             "new_unique": added,
             "stale_or_undated_skipped": stale_or_undated,
+            "freshness_unverified": freshness_unverified,
             "result": "metadata_found" if added else "no_recent_eligible_short_metadata",
         })
     return list(candidates.values()), attempts
