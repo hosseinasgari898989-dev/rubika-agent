@@ -50,7 +50,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
     tiktok_candidates, tiktok_attempts = discover_tiktok_hashtags()
     print("2/3 Instagram: searching public web indexes for Reel links (metadata only)...", flush=True)
     instagram_candidates, instagram_attempts = discover_instagram_hashtags()
-    print("3/3 YouTube: flat Shorts search plus public channel-feed date checks (metadata only)...", flush=True)
+    print("3/3 YouTube: flat search plus public channel-feed/page date checks (metadata only)...", flush=True)
     youtube_candidates, youtube_attempts = discover_youtube_metadata()
 
     lists = {
@@ -87,6 +87,14 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
                 1 for row in normalized["youtube"]
                 if not row.get("freshness_verified", False)
             ),
+            "youtube_public_page_dates_verified": sum(
+                1 for row in normalized["youtube"]
+                if str(row.get("freshness_source", "")).startswith("public_video_page_")
+            ),
+            "youtube_channel_feed_dates_verified": sum(
+                1 for row in normalized["youtube"]
+                if row.get("freshness_source") == "public_channel_atom_feed"
+            ),
             "tiktok_method": "yt_dlp_public_creator_profiles",
             "instagram_method": "public_search_index_bing_rss_ddg_fallback",
             "youtube_method": "yt_dlp_flat_search_plus_public_channel_atom_feed",
@@ -106,6 +114,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "youtube_searches": 4,
             "youtube_max_age_days": 90,
             "youtube_channel_feeds_max": 10,
+            "youtube_public_page_checks_max": 10,
             "media_downloads": 0,
             "rubika_posts": 0,
         },
