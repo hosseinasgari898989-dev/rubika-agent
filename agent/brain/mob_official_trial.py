@@ -27,7 +27,7 @@ from agent.brain.mob_translation import format_mob_post
 from agent.brain.rubika_publisher import RubikaPublisher
 from agent.discovery.mob_official_complete import discover_complete_official_posts
 
-MAX_MEDIA_BYTES = 200 * 1024 * 1024
+MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_VIDEO_SECONDS = 600
 HTTP_TIMEOUT = (15, 45)
 USER_AGENT = "RubikaAgent-MobOfficialTrial/1.0"
@@ -376,7 +376,7 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
 
         result = _parse_send_response(response)
         status = result.get("status")
-        if status == "OK":
+        if isinstance(status, str) and status.upper() == "OK":
             data = result.get("data") if isinstance(result.get("data"), dict) else {}
             message_id = data.get("message_id") or result.get("message_id")
             try:
@@ -390,7 +390,9 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
             report["status"] = "published"
             report["publishing"] = True
             report["rubika_message_id_recorded"] = message_id is not None
-            media_path.unlink(missing_ok=True)
+            # Keep the published local copy. The existing cleanup policy requires
+            # age and durable sent-state checks before removing retained media.
+            report["media_retained_for_age_based_cleanup"] = True
         elif isinstance(status, str) and status:
             try:
                 cloud.record_attempt(item_id, 1, "failed", error_code="rubika_rejected_" + re.sub(r"[^A-Za-z0-9_-]", "", status.lower())[:40])
