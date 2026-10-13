@@ -1,8 +1,9 @@
-"""Public-video smoke test using a short-lived, self-hosted Cobalt API.
+"""Temporary media-download smoke test; never publishes anything.
 
-This runs on a temporary GitHub Actions runner. It tests exactly one URL per
-platform, validates the resulting media with ffprobe, never logs in or posts
-anything, and removes all downloaded files when the run ends.
+Cobalt is used for TikTok and Instagram, while YouTube is tested with a pinned
+yt-dlp CLI on the temporary GitHub Actions runner. No cookies, credentials, or
+browser profiles are supplied. Media is validated with ffprobe and deleted
+when the run ends.
 """
 from __future__ import annotations
 
@@ -65,6 +66,27 @@ def _classify_cobalt_error(payload: dict[str, Any]) -> str:
     if "service.unsupported" in code or "link.unsupported" in code:
         return "unsupported_url"
     return "cobalt_error"
+
+
+def _classify_ytdlp_error(message: str) -> str:
+    """Map downloader errors to safe labels without logging raw output."""
+    text = message.lower()
+    if any(term in text for term in (
+        "sign in", "login required", "confirm your age",
+        "confirm you're not a bot", "confirm you are not a bot",
+        "age-restricted", "authentication required",
+    )):
+        return "login_or_access_restricted"
+    if any(term in text for term in (
+        "private video", "video unavailable", "has been removed",
+        "this video is private",
+    )):
+        return "private_or_unavailable"
+    if any(term in text for term in ("429", "too many requests", "rate limit")):
+        return "rate_limited"
+    if any(term in text for term in ("max-filesize", "file is larger", "filesize exceeded")):
+        return "size_limit"
+    return "youtube_download_failed"
 
 
 def _allowed_download_url(download_url: str, api_url: str) -> bool:
@@ -168,6 +190,62 @@ def _download_stream(download_url: str, destination: Path) -> int:
     return total
 
 
+def _download_youtube(source_url: str, destination: Path) -> tuple[Path, int]:
+    """Download one public YouTube video without credentials or browser cookies."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    output_template = str(destination.with_suffix(".%(ext)s"))
+    executable = shutil.which("yt-dlp")
+    command = [executable] if executable else [sys.executable, "-m", "yt_dlp"]
+    command.extend([
+        "--ignore-config",
+        "--no-playlist",
+        "--no-progress",
+        "--no-warnings",
+        "--no-colors",
+        "--socket-timeout", "15",
+        "--retries", "1",
+        "--fragment-retries", "1",
+        "--max-filesize", "100M",
+        "--format", "best[ext=mp4][height<=720]/best[height<=720]/best",
+        "--merge-output-format", "mp4",
+        "--output", output_template,
+        "--",
+        source_url,
+    ])
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=MAX_DOWNLOAD_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise SmokeError("youtube_download_timeout") from None
+    except OSError:
+        raise SmokeError("yt_dlp_not_available") from None
+
+    if result.returncode != 0:
+        raise SmokeError(_classify_ytdlp_error((result.stderr or "") + "\n" + (result.stdout or "")))
+
+    candidates = sorted(
+        path for path in destination.parent.glob(destination.stem + ".*")
+        if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
+    )
+    if len(candidates) != 1:
+        raise SmokeError("youtube_output_missing_or_ambiguous")
+    media_path = candidates[0]
+    try:
+        size_bytes = media_path.stat().st_size
+    except OSError:
+        raise SmokeError("youtube_output_unreadable") from None
+    if size_bytes <= 0:
+        raise SmokeError("empty_download")
+    if size_bytes > MAX_FILE_BYTES:
+        raise SmokeError("size_limit")
+    return media_path, size_bytes
+
+
 def _probe_media(path: Path) -> dict[str, Any]:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
@@ -218,15 +296,21 @@ def test_one_platform(platform: str, source_url: str, api_url: str, root: Path) 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        response = _request_cobalt(api_url, source_url)
-        size_bytes = _download_stream(response["url"], destination)
-        media = _probe_media(destination)
+        if platform == "youtube":
+            media_path, size_bytes = _download_youtube(source_url, destination)
+            download_method = "yt-dlp"
+        else:
+            response = _request_cobalt(api_url, source_url)
+            size_bytes = _download_stream(response["url"], destination)
+            media_path = destination
+            download_method = "cobalt-" + str(response.get("status") or "unknown")
+        media = _probe_media(media_path)
         return {
             "platform": platform,
             "ok": True,
             "host": detail,
             "bytes": size_bytes,
-            "cobalt_status": response.get("status"),
+            "download_method": download_method,
             **media,
             "seconds": round(time.monotonic() - started, 2),
         }
@@ -244,7 +328,7 @@ def _write_summary(results: list[dict[str, Any]]) -> None:
     lines = [
         "## Rubika-Agent media download smoke test",
         "",
-        "The test starts a short-lived self-hosted Cobalt API inside the GitHub Actions runner.",
+        "The test uses temporary Cobalt for TikTok/Instagram and pinned yt-dlp for YouTube.",
         "No credentials/cookies are used, no Rubika message is sent, and temporary media is deleted.",
         "",
         "| Platform | Result | Size | Duration | Details |",

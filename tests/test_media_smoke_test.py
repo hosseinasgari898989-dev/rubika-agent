@@ -3,6 +3,7 @@ import unittest
 from agent.media_smoke_test import (
     _allowed_download_url,
     _classify_cobalt_error,
+    _classify_ytdlp_error,
     validate_public_video_url,
 )
 
@@ -44,6 +45,24 @@ class MediaSmokeTests(unittest.TestCase):
         self.assertEqual(
             _classify_cobalt_error({"error": {"code": "error.api.link.unsupported"}}),
             "unsupported_url",
+        )
+
+    def test_youtube_downloader_errors_are_classified_without_raw_output(self):
+        self.assertEqual(
+            _classify_ytdlp_error("ERROR: Sign in to confirm you're not a bot"),
+            "login_or_access_restricted",
+        )
+        self.assertEqual(
+            _classify_ytdlp_error("ERROR: This video is private"),
+            "private_or_unavailable",
+        )
+        self.assertEqual(
+            _classify_ytdlp_error("HTTP Error 429: Too Many Requests"),
+            "rate_limited",
+        )
+        self.assertEqual(
+            _classify_ytdlp_error("unexpected failure with URL"),
+            "youtube_download_failed",
         )
 
     def test_download_url_must_be_local_cobalt_or_https(self):
