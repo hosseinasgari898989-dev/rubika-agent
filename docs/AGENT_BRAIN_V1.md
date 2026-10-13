@@ -23,7 +23,9 @@
 - The Rubka adapter uses the tested constructor and methods. It does not import or publish on module import.
 
 ## What is still an adapter, not solved automatically
-- This version does not invent a TikTok/Instagram search engine. The current TikTok search regression remains a known issue.
+- Public indexed TikTok/Instagram search is best-effort: the last live diagnostic returned no canonical TikTok or Instagram links, even where search pages loaded. A successful workflow is not proof of discovery success; candidate counts and canonical-link evidence are the real result.
+- Instagram now has an optional official Graph API hashtag-search adapter. It requires an eligible Professional Instagram account, a linked Facebook Page, the needed Meta app permissions/review, and the `INSTAGRAM_GRAPH_ACCESS_TOKEN` plus `INSTAGRAM_GRAPH_USER_ID` GitHub Actions secrets. The API version defaults to `v26.0`; no credentials are stored in source or logged. If those prerequisites are unavailable, the adapter reports `not_configured` and does not send network requests.
+- TikTok's public Research API is restricted to approved qualifying researchers and research use; it is not treated as a general free search API for a content channel. Current public fallback endpoints returned access denials, challenge pages, or network/redirect failures. No CAPTCHA/login bypass is implemented.
 - Automatic visual/audio judgement needs a real classifier integration. Until then, candidates are fail-closed as needs_review.
 - The YouTube Termux downloader that previously succeeded must be identified and reused separately; a GitHub Actions download failure does not invalidate the phone-side method.
 - A durable state-write API to Cloudflare D1 and a full discovery-to-delivery workflow are separate integration steps. The current Worker production API remains read-only until those are deployed and authenticated.

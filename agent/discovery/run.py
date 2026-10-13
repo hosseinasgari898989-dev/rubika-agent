@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import v7
-from .instagram import discover_public_indexed_urls
+from .instagram import InstagramDiscovery, discover_official_hashtag_urls, discover_public_indexed_urls
 from .proxitok import ProxiTokDiscovery, discover_public_rss
 from .tavily import discover_social_urls
 
@@ -54,6 +55,14 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
 
     print("Discovery 3/3: public indexed Instagram post/Reel URLs.", flush=True)
     instagram = discover_public_indexed_urls()
+    for attempt in instagram.attempts:
+        print(
+            f"Instagram index {attempt.engine} query={attempt.query}: "
+            f"status={attempt.http_status if attempt.http_status is not None else 'network_error'}, "
+            f"canonical={attempt.canonical_count}, new={attempt.new_unique_count}, "
+            f"result={attempt.result}",
+            flush=True,
+        )
     for item in instagram.candidates:
         if item.external_id in seen["instagram"]:
             continue
@@ -68,6 +77,37 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
             "media_type": item.media_type,
         }
         seen["instagram"].add(item.external_id)
+
+    instagram_graph = InstagramDiscovery(candidates=(), attempts=())
+    if len(store["instagram"]) < 5:
+        print(
+            "Instagram official Graph API fallback: hashtag search for public media; "
+            "requires eligible Professional-account credentials.",
+            flush=True,
+        )
+        instagram_graph = discover_official_hashtag_urls(max_results=25)
+        for attempt in instagram_graph.attempts:
+            print(
+                f"Instagram Graph API query={attempt.query}: "
+                f"status={attempt.http_status if attempt.http_status is not None else 'not_requested'}, "
+                f"canonical={attempt.canonical_count}, new={attempt.new_unique_count}, "
+                f"result={attempt.result}",
+                flush=True,
+            )
+        for item in instagram_graph.candidates:
+            if item.external_id in seen["instagram"]:
+                continue
+            store["instagram"][item.external_id] = {
+                "platform": "instagram",
+                "id": item.external_id,
+                "url": item.canonical_url,
+                "title": "",
+                "post_type": item.post_type,
+                "method": item.method,
+                "query": item.query,
+                "media_type": item.media_type,
+            }
+            seen["instagram"].add(item.external_id)
 
     proxitok = ProxiTokDiscovery(candidates=(), attempts=())
     if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
@@ -138,7 +178,11 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
             for platform, count in REQUIRED_CORE_COUNTS.items()
         ),
         "ready_to_publish": False,
-        "tavily_configured": bool(__import__("os").getenv("TAVILY_API_KEY", "").strip()),
+        "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
+        "instagram_graph_api_configured": bool(
+            os.getenv("INSTAGRAM_GRAPH_ACCESS_TOKEN", "").strip()
+            and os.getenv("INSTAGRAM_GRAPH_USER_ID", "").strip()
+        ),
         "reason_not_publish_ready": "discovery_only; media validation and explicit content moderation are separate gates",
     }
     report = {
@@ -148,7 +192,7 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
         "summary": summary,
         "excluded_existing_ids": {key: len(value) for key, value in ignored.items()},
         "candidates": candidates,
-        "attempts": v7.ATTEMPTS + [item for item in instagram.report()["attempts"]] + [item for item in proxitok.report()["attempts"]] + [attempt for result in tavily_reports.values() for attempt in result["attempts"]],
+        "attempts": v7.ATTEMPTS + [item for item in instagram.report()["attempts"]] + [item for item in instagram_graph.report()["attempts"]] + [item for item in proxitok.report()["attempts"]] + [attempt for result in tavily_reports.values() for attempt in result["attempts"]],
     }
     path = Path(report_path)
     path.parent.mkdir(parents=True, exist_ok=True)
