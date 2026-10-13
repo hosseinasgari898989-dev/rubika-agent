@@ -129,11 +129,32 @@ class SourceRegistryTests(unittest.TestCase):
         registry = SourceRegistry.load("/definitely/missing/rubika-agent-registry.json")
         self.assertFalse(registry.check(self.candidate()).allowed)
 
-    def test_configured_repo_registry_starts_empty(self):
-        path = Path(__file__).resolve().parents[1] / "config" / "trusted_sources.json"
-        registry = SourceRegistry.load(path)
-        self.assertEqual(registry.sources, ())
-        self.assertEqual(registry.items, ())
+    def test_project_level_poppy_edit_permission_matches_platform_wildcard(self):
+        registry = SourceRegistry.load(
+            Path(__file__).resolve().parents[1] / "config" / "trusted_sources.json"
+        )
+        youtube = registry.check(self.candidate(source_key="new_creator"))
+        self.assertTrue(youtube.allowed)
+        self.assertEqual(youtube.reason, "explicit_source_permission")
+        self.assertEqual(youtube.basis, "explicit_permission")
+
+        tiktok = self.candidate(
+            platform="tiktok",
+            canonical_url="https://www.tiktok.com/@new_creator/video/7616247520657771796",
+            external_id="7616247520657771796",
+            source_key="new_creator",
+        )
+        self.assertTrue(registry.check(tiktok).allowed)
+
+    def test_project_permission_does_not_make_every_candidate_trusted(self):
+        registry = SourceRegistry.load(
+            Path(__file__).resolve().parents[1] / "config" / "trusted_sources.json"
+        )
+        self.assertNotIn(
+            "new_creator",
+            registry.authorized_source_keys("tiktok"),
+        )
+        self.assertIn("*", registry.authorized_source_keys("tiktok"))
 
 
 if __name__ == "__main__":
