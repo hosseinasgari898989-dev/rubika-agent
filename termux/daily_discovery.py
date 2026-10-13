@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from agent.discovery.mob_official import discover_mob_official
 from agent.discovery.termux_instagram import discover_instagram_hashtags
 from agent.discovery.termux_sources import discover_tiktok_hashtags, discover_youtube_metadata
 
@@ -57,13 +58,16 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
     )
     print("2/3 Instagram: searching public web indexes for Reel links (metadata only)...", flush=True)
     instagram_candidates, instagram_attempts = discover_instagram_hashtags()
-    print("3/3 YouTube: flat search plus public channel-feed/page date checks (metadata only)...", flush=True)
+    print("3/4 YouTube: flat search plus public channel-feed/page date checks (metadata only)...", flush=True)
     youtube_candidates, youtube_attempts = discover_youtube_metadata()
+    print("4/4 Mob Entertainment: checking official newsroom/blog/video profile metadata only...", flush=True)
+    mob_candidates, mob_attempts = discover_mob_official()
 
     lists = {
         "tiktok": tiktok_candidates,
         "instagram": instagram_candidates,
         "youtube": youtube_candidates,
+        "mob_official": mob_candidates,
     }
     normalized: dict[str, list[dict[str, Any]]] = {}
     for platform, rows in lists.items():
@@ -90,6 +94,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "tiktok_candidates": len(normalized["tiktok"]),
             "instagram_candidates": len(normalized["instagram"]),
             "youtube_candidates": len(normalized["youtube"]),
+            "mob_official_candidates": len(normalized["mob_official"]),
+            "mob_official_method": "official_newsroom_atom_and_public_profile_metadata",
             "youtube_freshness_unverified": sum(
                 1 for row in normalized["youtube"]
                 if not row.get("freshness_verified", False)
@@ -121,7 +127,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "ready_to_publish": False,
         },
         "candidates": normalized,
-        "attempts": [*tiktok_attempts, *instagram_attempts, *youtube_attempts],
+        "attempts": [*tiktok_attempts, *instagram_attempts, *youtube_attempts, *mob_attempts],
         "limits": {
             "instagram_max_candidates_per_run": 5,
             "instagram_search_queries": 3,
@@ -136,6 +142,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "youtube_max_age_days": 90,
             "youtube_channel_feeds_max": 10,
             "youtube_public_page_checks_max": 10,
+            "mob_official_max_sources": 6,
+            "mob_official_max_items_per_source": 25,
             "media_downloads": 0,
             "rubika_posts": 0,
         },
