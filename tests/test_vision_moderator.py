@@ -101,7 +101,7 @@ class CloudflareVideoModeratorTests(unittest.TestCase):
                 result = moderator(self.candidate(), video)
         self.assertTrue(result["sample_truncated"])
 
-    def test_low_confidence_withholds_all_decisions(self):
+    def test_low_aggregate_confidence_keeps_thresholded_answers_with_diagnostic(self):
         result_payload = {
             "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
             "insults_other_games": False, "high_effort": True, "has_music": True,
@@ -115,8 +115,9 @@ class CloudflareVideoModeratorTests(unittest.TestCase):
             )
             with patch("agent.brain.vision_moderator.subprocess.run", side_effect=self.fake_ffmpeg):
                 result = moderator(self.candidate(), video)
-        self.assertNotIn("poppy_relevant", result)
-        self.assertTrue(result["moderation_uncertain"])
+        self.assertTrue(result["poppy_relevant"])
+        self.assertTrue(result["aggregate_confidence_below_threshold"])
+        self.assertFalse(result["moderation_uncertain"])
 
     def test_unknown_music_answer_keeps_candidate_unapproved(self):
         result_payload = {
