@@ -84,6 +84,62 @@ class CloudState:
             raise CloudStateError("control_api_" + safe)
         return result
 
+    def moderate_music(
+        self,
+        audio_data_url: str,
+        *,
+        platform: str,
+    ) -> dict[str, Any]:
+        """Request an audio-only soundtrack decision; no visual questions are sent."""
+        if platform not in {"youtube", "tiktok", "instagram"}:
+            raise ValueError("invalid_music_platform")
+        if (
+            not isinstance(audio_data_url, str)
+            or not audio_data_url.startswith("data:audio/mpeg;base64,")
+        ):
+            raise ValueError("music_audio_data_url_required")
+        if len(audio_data_url) > 11_300_000:
+            raise ValueError("music_audio_size_invalid")
+        payload = {"audio": audio_data_url, "platform": platform}
+        result = self._request(
+            "POST",
+            "/api/brain/moderate-music",
+            payload,
+            max_body_bytes=12 * 1024 * 1024,
+        )
+        checks = result.get("checks")
+        probabilities = result.get("probabilities")
+        diagnostic = result.get("diagnostic")
+        if not isinstance(checks, dict) or not isinstance(probabilities, dict):
+            raise CloudStateError("control_api_music_checks_missing")
+
+        probability = probabilities.get("has_music")
+        if probability is not None and (
+            type(probability) not in {int, float} or not 0 <= probability <= 1
+        ):
+            raise CloudStateError("control_api_music_probability_invalid")
+        check = checks.get("has_music")
+        if check is not None and type(check) is not bool:
+            raise CloudStateError("control_api_music_check_invalid")
+        raw_reason = diagnostic.get("has_music") if isinstance(diagnostic, dict) else None
+        reason = re.sub(r"[^a-zA-Z0-9_-]", "", str(raw_reason or "music_diagnostic_missing").lower())[:80]
+        output: dict[str, Any] = {
+            "music_probability": float(probability) if probability is not None else None,
+            "music_decision_reason": reason or "music_diagnostic_missing",
+            "music_detection_method": "cloudflare_clef_omni_audio",
+            "music_model": str(result.get("model", ""))[:100],
+            "music_confidence": float(result.get("confidence", 0.0)),
+            "music_check_uncertain": type(check) is not bool,
+            "human_review_required": True,
+            "auto_approved": False,
+            "publishing": False,
+        }
+        if type(check) is bool:
+            output["has_music"] = check
+        return output
+
+    # Compatibility shim for older Python callers. The endpoint now accepts audio
+    # only; sending a video data URL is rejected instead of invoking visual checks.
     def moderate_video(
         self,
         video_data_url: str,
@@ -92,56 +148,10 @@ class CloudState:
         title: str = "",
         caption: str = "",
     ) -> dict[str, Any]:
-        """Request synchronized video+audio content signals; never auto-approves."""
-        if platform not in {"youtube", "tiktok", "instagram"}:
-            raise ValueError("invalid_vision_platform")
-        if not isinstance(video_data_url, str) or not video_data_url.startswith("data:video/mp4;base64,"):
-            raise ValueError("vision_video_data_url_required")
-        if len(video_data_url) > 22_400_000:
-            raise ValueError("vision_video_size_invalid")
-        payload = {
-            "video": video_data_url,
-            "platform": platform,
-            "title": title[:500],
-            "caption": caption[:1500],
-        }
-        result = self._request(
-            "POST",
-            "/api/brain/moderate-video",
-            payload,
-            max_body_bytes=23 * 1024 * 1024,
+        return self.moderate_music(
+            video_data_url,
+            platform=platform,
         )
-        checks = result.get("checks")
-        probabilities = result.get("probabilities")
-        if not isinstance(checks, dict) or not isinstance(probabilities, dict):
-            raise CloudStateError("control_api_moderation_checks_missing")
-        required = ("has_music", "is_poppy_playtime", "is_edit")
-        optional = ("high_quality_edit",)
-        output: dict[str, Any] = {
-            "vision_confidence": float(result.get("confidence", 0.0)),
-            "vision_model": str(result.get("model", ""))[:100],
-            "human_review_required": True,
-            "audio_review_required": checks.get("has_music") is None,
-            "moderation_uncertain": any(type(checks.get(key)) is not bool for key in required),
-            "moderation_missing_fields": [
-                key for key in (*required, *optional) if type(checks.get(key)) is not bool
-            ],
-            "quality_check_missing": type(checks.get("high_quality_edit")) is not bool,
-            "auto_approved": False,
-            "publishing": False,
-        }
-        for key in (*required, *optional):
-            check = checks.get(key)
-            probability = probabilities.get(key)
-            if probability is not None and (
-                not isinstance(probability, (int, float)) or not 0 <= probability <= 1
-            ):
-                raise CloudStateError("control_api_moderation_probability_invalid")
-            if type(check) is bool:
-                output[key] = check
-            elif check is not None:
-                raise CloudStateError("control_api_moderation_check_invalid")
-        return output
 
     def create_run(self, trigger_type: str = "manual", run_id: str | None = None) -> str:
         identifier = run_id or str(uuid.uuid4())
