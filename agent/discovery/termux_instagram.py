@@ -10,7 +10,7 @@ import html
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree as ET
 from html.parser import HTMLParser
@@ -473,6 +473,7 @@ def discover_instagram_public_search(
     *,
     tags: tuple[str, ...] = INSTAGRAM_TAGS,
     max_results: int = MAX_RESULTS,
+    max_age_days: int = 90,
     timeout_seconds: int = 12,
     sleep_seconds: float = 0.3,
     session: Any | None = None,
@@ -497,13 +498,28 @@ def discover_instagram_public_search(
         pass
 
     limit = max(1, min(int(max_results), 5))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(max_age_days)))
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
+    stale_or_undated = [0]
     ddg_blocked = False
 
     def add_candidate(shortcode: str, permalink: str, title: str, snippet: str,
                       tag: str, method: str, published_at: str | None) -> bool:
         if shortcode in candidates:
+            return False
+        if not published_at:
+            stale_or_undated[0] += 1
+            return False
+        try:
+            date_value = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            if date_value.tzinfo is None:
+                date_value = date_value.replace(tzinfo=timezone.utc)
+            if date_value.astimezone(timezone.utc) < cutoff:
+                stale_or_undated[0] += 1
+                return False
+        except (TypeError, ValueError, OverflowError):
+            stale_or_undated[0] += 1
             return False
         caption = _plain_search_text(snippet)[:4000]
         clean_title = _plain_search_text(title)[:1200] or caption[:1200]
@@ -588,6 +604,7 @@ def discover_instagram_public_search(
             "platform": "instagram", "query": "#" + tag, "engine": "bing_rss",
             "http_status": status,
             "new_unique": new_unique, "result": bing_result,
+            "stale_or_undated_skipped": stale_or_undated[0],
             "error_type": bing_error_type,
         })
 
