@@ -61,6 +61,41 @@ class CloudStateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             state.record_attempt("tiktok/123", 1, "sent")
 
+    def test_get_seen_index_reads_pages_and_normalizes_hashes(self):
+        state = CloudState("https://worker.example", TOKEN)
+        pages = iter([
+            {
+                "ok": True,
+                "items": [
+                    {"platform": "youtube", "external_id": "vkVFgmgLo1s", "media_sha256": "A" * 64},
+                    {"platform": "tiktok", "external_id": "7616247520657771796", "media_sha256": None},
+                ],
+            },
+            {
+                "ok": True,
+                "items": [
+                    {"platform": "instagram", "external_id": "AbCdEf_1234", "media_sha256": "b" * 64},
+                ],
+            },
+        ])
+        urls = []
+
+        def fake_open(request, timeout):
+            urls.append(request.full_url)
+            return io.BytesIO(json.dumps(next(pages)).encode("utf-8"))
+
+        with patch("urllib.request.urlopen", side_effect=fake_open):
+            index = state.get_seen_index(page_size=2)
+
+        self.assertEqual(index["ids"], {
+            "youtube:vkVFgmgLo1s",
+            "tiktok:7616247520657771796",
+            "instagram:AbCdEf_1234",
+        })
+        self.assertEqual(index["hashes"], {"a" * 64, "b" * 64})
+        self.assertTrue(urls[0].endswith("/api/brain/items/seen?limit=2&offset=0"))
+        self.assertTrue(urls[1].endswith("/api/brain/items/seen?limit=2&offset=2"))
+
     def test_http_failure_is_sanitized(self):
         state = CloudState("https://worker.example", TOKEN)
         error = __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
