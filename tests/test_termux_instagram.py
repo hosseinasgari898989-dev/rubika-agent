@@ -23,7 +23,48 @@ class FakeSession:
         return self.responses.pop(0)
 
 
+class FakeInstagramYDL:
+    instances = []
+    info = {}
+
+    def __init__(self, options):
+        self.options = options
+        self.queries = []
+        self.__class__.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def extract_info(self, query, download=False):
+        self.queries.append((query, download))
+        return self.__class__.info
+
+
 class TermuxInstagramTests(unittest.TestCase):
+    def test_default_discovery_uses_ytdlp_public_hashtag_metadata_only(self):
+        FakeInstagramYDL.instances = []
+        FakeInstagramYDL.info = {"entries": [{
+            "id": "AbCdEf_1234",
+            "webpage_url": "https://www.instagram.com/reel/AbCdEf_1234/",
+            "title": "Poppy Playtime Reel #poppyplaytime",
+            "duration": 22,
+            "timestamp": 1791808200,
+            "view_count": 1234,
+        }]}
+        found, attempts = discover_instagram_hashtags(
+            tags=("poppyplaytime",), max_results=5, sleep_seconds=0,
+            ydl_factory=FakeInstagramYDL,
+        )
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["id"], "AbCdEf_1234")
+        self.assertEqual(found[0]["method"], "termux_ytdlp_public_hashtag_extractor")
+        self.assertTrue(FakeInstagramYDL.instances[0].options["skip_download"])
+        self.assertEqual(FakeInstagramYDL.instances[0].queries[0][1], False)
+        self.assertEqual(attempts[0]["result"], "metadata_found")
+
     def test_parses_video_reel_and_rejects_static_image(self):
         payload = [
             {
