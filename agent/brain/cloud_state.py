@@ -117,8 +117,9 @@ class CloudState:
     def upsert_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/api/brain/items/upsert", item)
 
-    def upsert_staged(self, staged: Any) -> dict[str, Any]:
-        """Persist a StagedMedia record without approving it or publishing it."""
+    @staticmethod
+    def prepare_staged_payload(staged: Any) -> dict[str, Any]:
+        """Build the exact pending-review D1 payload without making a network call."""
         candidate = staged.candidate
         inspection = staged.inspection
         evaluation = staged.evaluation
@@ -146,7 +147,7 @@ class CloudState:
             for key in moderation_names
             if isinstance(evaluation.checks.get(key), bool)
         }
-        payload = {
+        return {
             "platform": candidate.platform,
             "source_key": candidate.source_key or candidate.platform + "_search",
             "external_id": candidate.external_id,
@@ -167,7 +168,10 @@ class CloudState:
             "original_caption": candidate.original_caption,
             "persian_translation": candidate.persian_translation,
         }
-        return self.upsert_item(payload)
+
+    def upsert_staged(self, staged: Any) -> dict[str, Any]:
+        """Persist staged metadata without approving it or publishing it."""
+        return self.upsert_item(self.prepare_staged_payload(staged))
 
     def record_attempt(
         self,
