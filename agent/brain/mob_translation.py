@@ -9,7 +9,7 @@ import re
 from typing import Any, Callable
 
 MAX_TRANSLATION_CHARS = 4500
-URL_RE = re.compile(r"(?:https?://|www\.)\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s]*)?", re.IGNORECASE)
+URL_RE = re.compile(r"(?:https?://|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?", re.IGNORECASE)
 
 
 def _strip_urls(value: str) -> str:
