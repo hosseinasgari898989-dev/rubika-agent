@@ -330,17 +330,17 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
             "moderation": None,
             "storage_key": None,
         }
+        report["caption"] = caption
+        if not publish:
+            report["status"] = "validated_preview"
+            report["publishing"] = False
+            _report(output_report, report)
+            return report
+
         try:
             cloud.upsert_item(payload)
         except Exception as exc:
             report["error"] = "cloud_item_record_failed_" + type(exc).__name__
-            _report(output_report, report)
-            return report
-
-        report["caption"] = caption
-        report["status"] = "validated_preview"
-        report["publishing"] = False
-        if not publish:
             _report(output_report, report)
             return report
 
