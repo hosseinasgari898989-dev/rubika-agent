@@ -20,6 +20,7 @@ on:
       - "tests/test_discovery_run.py"
       - "config/trusted_sources.json"
       - "tests/test_authorization.py"
+      - "tests/test_orchestrator.py"
       - "tests/test_agent_brain.py"
       - "tests/test_mega_storage.py"
       - "tests/test_ledger.py"
@@ -51,6 +52,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_agent_brain.py' -v
           python -m unittest discover -s tests -p 'test_authorization.py' -v
+          python -m unittest discover -s tests -p 'test_orchestrator.py' -v
           python -m unittest discover -s tests -p 'test_mega_storage.py' -v
           python -m unittest discover -s tests -p 'test_ledger.py' -v
           python -m unittest discover -s tests -p 'test_discovery_v7.py' -v
