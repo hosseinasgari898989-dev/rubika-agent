@@ -11,6 +11,7 @@ from .ledger import MegaLedger, new_state
 from .cloud_state import CloudState, CloudStateError
 from .relay_client import AuthorizedYouTubeRelay, RelayClientError
 from .authorization import SourceRegistry, SourceRegistryError, PermissionDecision
+from .orchestrator import StagingOrchestrator, StageJobResult, candidates_from_report
 
 __all__ = [
     "Candidate", "InspectionResult", "Evaluation",
@@ -20,4 +21,5 @@ __all__ = [
     "MegaLedger", "new_state", "CloudState", "CloudStateError",
     "AuthorizedYouTubeRelay", "RelayClientError",
     "SourceRegistry", "SourceRegistryError", "PermissionDecision",
+    "StagingOrchestrator", "StageJobResult", "candidates_from_report",
 ]
