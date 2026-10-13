@@ -81,10 +81,10 @@ def evaluate_edit_candidate(
         warnings.append("edit_style_not_proven_by_metadata")
 
     if inspection.ok and inspection.media_type == "video":
-        if not inspection.supports_square_1080:
-            reasons.append("source_cannot_produce_true_1080_square")
-        elif not inspection.is_square:
-            warnings.append("needs_square_1080_normalization")
+        if not inspection.supports_vertical_normalization:
+            reasons.append("source_below_minimum_normalization_resolution")
+        elif inspection.width != 1080 or inspection.height != 1920:
+            warnings.append("needs_vertical_1080x1920_normalization")
         if inspection.has_audio is False:
             warnings.append("no_audio_stream_detected_music_not_confirmed")
 
