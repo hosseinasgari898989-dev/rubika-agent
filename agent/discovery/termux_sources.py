@@ -10,6 +10,8 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from agent.source_policy import known_tiktok_profiles, resolve_source_policy
 from urllib.parse import unquote, urlparse
 from xml.etree import ElementTree as ET
 
@@ -17,18 +19,7 @@ import requests
 
 
 TIKTOK_TAGS = ("poppyplaytime", "huggywuggy", "catnap", "smilingcritters")
-TIKTOK_PROFILES = (
-    "dragonboyedits",
-    "s2gryder",
-    "prime_noxem.edits",
-    "poppy_playtime308",
-    "fame.yt.editx",
-    "imakeeditsthatarebad",
-    "prepecl",
-    "monster_9861",
-    "executor_edit",
-    "fanyedits8",
-)
+TIKTOK_PROFILES = known_tiktok_profiles()
 YOUTUBE_QUERIES = (
     "Poppy Playtime edit shorts",
     "Huggy Wuggy edit shorts",
@@ -119,8 +110,12 @@ def _tiktok_candidate(
     clean_id = str(video_id)
     clean_user = str(username).lstrip("@")
     text_tags = HASHTAG_RE.findall(title)
-    all_tags = list(dict.fromkeys([*(tags or []), *text_tags]))[:40]
+    query_text = str(query).strip()
+    query_tag = query_text.removeprefix("#")
+    query_tags = [query_tag] if query_text.startswith("#") and re.fullmatch(r"[A-Za-z0-9_]{2,64}", query_tag) else []
+    all_tags = list(dict.fromkeys([*(tags or []), *text_tags, *query_tags]))[:40]
     stats = stats if isinstance(stats, dict) else {}
+    source_policy = resolve_source_policy("tiktok", clean_user)
     return {
         "platform": "tiktok",
         "id": clean_id,
@@ -129,6 +124,8 @@ def _tiktok_candidate(
         "caption": str(title or "")[:4000],
         "author": clean_user[:100],
         "hashtags": all_tags,
+        "source_policy": source_policy,
+        "creator_trust_tier": source_policy.get("trust_tier", "unknown"),
         "published_at": _to_iso_timestamp(timestamp),
         "view_count": _safe_int(stats.get("playCount") or stats.get("viewCount")),
         "like_count": _safe_int(stats.get("diggCount") or stats.get("likeCount")),
@@ -228,9 +225,10 @@ def discover_tiktok_profiles(
     timeout_seconds: int = 15,
     sleep_seconds: float = 0.35,
     max_age_days: int = 90,
+    max_per_profile: int = 4,
     ydl_factory: Any | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Read recent public TikTok creator-feed metadata only."""
+    """Read recent public TikTok creator-feed metadata only, capped per creator."""
     if ydl_factory is None:
         try:
             import yt_dlp
@@ -257,6 +255,7 @@ def discover_tiktok_profiles(
         if len(candidates) >= max(1, max_results):
             break
         handle = str(raw_profile).strip().removeprefix("@")
+        source_policy = resolve_source_policy("tiktok", handle)
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", handle):
             attempts.append({"platform": "tiktok", "query": str(raw_profile)[:80], "result": "invalid_public_profile"})
             continue
@@ -285,7 +284,9 @@ def discover_tiktok_profiles(
             title = str(entry.get("title") or "")
             description = str(entry.get("description") or "")
             caption = (title + ("\n" + description if description else "")).strip()[:4000]
-            if not relevant.search(caption):
+            # Owner-selected profiles are trusted for broad quality. Still check
+            # Poppy Playtime and edit status from the actual video downstream.
+            if source_policy.get("trust_tier") != "owner_selected" and not relevant.search(caption):
                 continue
             timestamp = entry.get("timestamp") or entry.get("release_timestamp")
             published_at = _to_iso_timestamp(timestamp)
@@ -310,9 +311,13 @@ def discover_tiktok_profiles(
             row["url"] = f"https://www.tiktok.com/@{author}/video/{video_id}"
             row["method"] = "termux_ytdlp_public_creator_profiles"
             row["duration_seconds"] = _safe_int(entry.get("duration"))
+            row["source_policy"] = source_policy
+            row["creator_trust_tier"] = source_policy.get("trust_tier", "unknown")
             if video_id not in candidates:
                 candidates[video_id] = row
                 added += 1
+            if added >= max(1, min(int(max_per_profile), int(max_results))):
+                break
             if len(candidates) >= max(1, max_results):
                 break
         attempts.append({
@@ -334,13 +339,57 @@ def discover_tiktok_hashtags(
     sleep_seconds: float = 0.35,
     profiles: tuple[str, ...] = TIKTOK_PROFILES,
     ydl_factory: Any | None = None,
+    include_unknown_sources: bool = False,
+    known_source_max_results: int = 24,
+    unknown_source_max_results: int = 12,
+    max_per_profile: int = 4,
+    max_age_days: int = 90,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Use public creator feeds by default; injected sessions retain parser tests."""
+    """Collect known creator feeds and optionally discover unknown creators.
+
+    Unknown creators are discovered only via ordinary public hashtag pages. This
+    adapter never logs in or bypasses a challenge page.
+    """
     if session is None:
-        return discover_tiktok_profiles(
-            profiles=profiles, max_results=max_results, timeout_seconds=timeout_seconds,
-            sleep_seconds=sleep_seconds, ydl_factory=ydl_factory,
+        if not include_unknown_sources:
+            return discover_tiktok_profiles(
+                profiles=profiles, max_results=max_results, timeout_seconds=timeout_seconds,
+                sleep_seconds=sleep_seconds, max_age_days=max_age_days,
+                max_per_profile=max_per_profile, ydl_factory=ydl_factory,
+            )
+        known, known_attempts = discover_tiktok_profiles(
+            profiles=profiles,
+            max_results=max(1, min(int(known_source_max_results), int(max_results))),
+            timeout_seconds=timeout_seconds,
+            sleep_seconds=sleep_seconds,
+            max_age_days=max_age_days,
+            max_per_profile=max_per_profile,
+            ydl_factory=ydl_factory,
         )
+        remaining = min(
+            max(0, int(unknown_source_max_results)),
+            max(0, int(max_results) - len(known)),
+        )
+        if remaining <= 0:
+            return known, [*known_attempts, {
+                "platform": "tiktok", "method": "public_hashtag_pages",
+                "result": "unknown_source_budget_exhausted",
+            }]
+        unknown, unknown_attempts = discover_tiktok_hashtags(
+            session=requests.Session(),
+            tags=tags,
+            max_results=remaining,
+            timeout_seconds=timeout_seconds,
+            sleep_seconds=sleep_seconds,
+            max_age_days=max_age_days,
+        )
+        known_ids = {row.get("id") for row in known if isinstance(row, dict)}
+        combined = list(known)
+        combined.extend(
+            row for row in unknown
+            if isinstance(row, dict) and row.get("id") not in known_ids
+        )
+        return combined[:max(1, int(max_results))], [*known_attempts, *unknown_attempts]
     client = session
     try:
         client.headers.update({
@@ -356,6 +405,7 @@ def discover_tiktok_hashtags(
 
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(max_age_days)))
     for tag in tags:
         if len(candidates) >= max(1, max_results):
             break
@@ -380,9 +430,28 @@ def discover_tiktok_hashtags(
             continue
         rows = extract_tiktok_candidates(getattr(response, "text", "") or "", "#" + clean_tag)
         added = 0
+        publication_date_skipped = 0
         for row in rows:
             if row["id"] in candidates:
                 continue
+            published_at = row.get("published_at")
+            if not isinstance(published_at, str) or not published_at:
+                publication_date_skipped += 1
+                continue
+            try:
+                parsed_at = datetime.fromisoformat(published_at)
+                if parsed_at.tzinfo is None:
+                    parsed_at = parsed_at.replace(tzinfo=timezone.utc)
+                if parsed_at.astimezone(timezone.utc) < cutoff:
+                    publication_date_skipped += 1
+                    continue
+            except ValueError:
+                publication_date_skipped += 1
+                continue
+            policy = resolve_source_policy("tiktok", str(row.get("author") or ""))
+            row["source_policy"] = policy
+            row["creator_trust_tier"] = policy.get("trust_tier", "unknown")
+            row["discovery_origin"] = "public_hashtag_page"
             candidates[row["id"]] = row
             added += 1
             if len(candidates) >= max(1, max_results):
@@ -393,7 +462,8 @@ def discover_tiktok_hashtags(
             "http_status": status,
             "parsed": len(rows),
             "new_unique": added,
-            "result": "canonical_links_found" if added else "no_canonical_links",
+            "publication_date_unverified_or_old_skipped": publication_date_skipped,
+            "result": "canonical_links_found" if added else "no_recent_canonical_links",
         })
         time.sleep(max(0.0, sleep_seconds))
     return list(candidates.values()), attempts
