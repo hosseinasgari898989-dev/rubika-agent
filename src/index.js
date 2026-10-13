@@ -1,9 +1,9 @@
 const SERVICE = "rubika-agent";
 const PUBLISHING_ENABLED = false;
 const MAX_BODY_BYTES = 32 * 1024;
-const MAX_VIDEO_BODY_BYTES = 23 * 1024 * 1024;
-const MAX_VIDEO_DATA_URL_CHARS = 22_400_000;
-const MAX_VIDEO_DECODED_BYTES = 16 * 1024 * 1024;
+const MAX_AUDIO_BODY_BYTES = 12 * 1024 * 1024;
+const MAX_AUDIO_DATA_URL_CHARS = 11_300_000;
+const MAX_AUDIO_DECODED_BYTES = 8 * 1024 * 1024;
 const VISION_MODEL = "@cf/cloudflare/clef-omni";
 const MAX_TEXT = 5000;
 const PLATFORMS = new Set(["tiktok", "youtube", "instagram", "mob_official"]);
@@ -459,83 +459,63 @@ function conservativeDecision(probability, trueThreshold, falseThreshold) {
   return null;
 }
 
-async function moderateVideo(env, body) {
+async function moderateMusic(env, body) {
   if (!env.AI || typeof env.AI.run !== "function") {
     return json({ ok: false, error: "workers_ai_binding_missing" }, 503);
   }
-  const video = body.video;
-  if (typeof video !== "string" || video.length > MAX_VIDEO_DATA_URL_CHARS) {
-    return json({ ok: false, error: "moderation_video_size_invalid" }, 413);
+  const audio = body.audio;
+  if (typeof audio !== "string" || audio.length > MAX_AUDIO_DATA_URL_CHARS) {
+    return json({ ok: false, error: "moderation_audio_size_invalid" }, 413);
   }
-  const match = /^data:video\/mp4;base64,([A-Za-z0-9+/]+={0,2})$/.exec(video);
+  const match = /^data:audio\/mpeg;base64,([A-Za-z0-9+/]+={0,2})$/.exec(audio);
   if (!match || match[1].length % 4 !== 0) {
-    return json({ ok: false, error: "moderation_video_format_invalid" }, 400);
+    return json({ ok: false, error: "moderation_audio_format_invalid" }, 400);
   }
   let decoded = "";
   try {
     decoded = atob(match[1]);
   } catch {
-    return json({ ok: false, error: "moderation_video_base64_invalid" }, 400);
+    return json({ ok: false, error: "moderation_audio_base64_invalid" }, 400);
   }
-  if (
-    decoded.length < 512 ||
-    decoded.length > MAX_VIDEO_DECODED_BYTES ||
-    decoded.slice(4, 8) !== "ftyp"
-  ) {
-    return json({ ok: false, error: "moderation_video_size_or_container_invalid" }, 413);
+  const hasId3Header = decoded.slice(0, 3) === "ID3";
+  const hasMpegFrame = decoded.length >= 2 &&
+    decoded.charCodeAt(0) === 0xff &&
+    (decoded.charCodeAt(1) & 0xe0) === 0xe0;
+  if (decoded.length < 1024 || decoded.length > MAX_AUDIO_DECODED_BYTES ||
+      (!hasId3Header && !hasMpegFrame)) {
+    return json({ ok: false, error: "moderation_audio_size_or_container_invalid" }, 413);
   }
 
   const platform = text(body.platform, 24);
   if (!new Set(["youtube", "tiktok", "instagram"]).has(platform)) {
     return json({ ok: false, error: "moderation_platform_invalid" }, 400);
   }
-  const title = text(body.title, 500);
-  const caption = text(body.caption, 1500);
 
-  // Record music-detection calls for diagnostics. The temporary project-specific
-  // daily cap is intentionally removed; Cloudflare's own account limits still apply.
+  // Only soundtrack audio is sent to the model. No frames, title, caption,
+  // creator identity, Poppy classification, edit classification or quality prompt.
   const usageDay = new Date().toISOString().slice(0, 10);
   try {
     const reservation = await env.DB.prepare(
       "INSERT INTO ai_usage_daily (usage_day, request_count) VALUES (?, 1) ON CONFLICT(usage_day) DO UPDATE SET request_count = request_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') RETURNING request_count"
     ).bind(usageDay).first();
     if (!reservation) {
-      return json({
-        ok: false,
-        error: "vision_usage_counter_unavailable",
-        publishing: false
-      }, 503);
+      return json({ ok: false, error: "music_usage_counter_unavailable", publishing: false }, 503);
     }
   } catch {
-    return json({ ok: false, error: "vision_usage_guard_unavailable" }, 503);
+    return json({ ok: false, error: "music_usage_guard_unavailable" }, 503);
   }
 
   const state = [
-    "Evaluate the actual video, not popularity, profile reputation, title, or caption.",
-    "For Poppy Playtime relevance, use visual evidence from frames; metadata is untrusted.",
-    "For edit classification, distinguish a deliberately edited fan montage with intentional cuts, timing or effects from raw gameplay, an ordinary single scene, or an unedited trailer.",
-    "For quality, judge clarity, visual coherence and intentional editing; do not infer quality from likes or creator name.",
-    "For music, judge the actual soundtrack; speech or sound effects alone are not music.",
-    "If any decision is ambiguous, return probability near 0.5 for that question.",
-    "Source platform: " + platform + ". This model does not approve or publish media."
-  ].join("\\n");
-
+    "Classify only the audible soundtrack in this audio recording.",
+    "Answer yes only if actual background music or a song is audibly present.",
+    "Speech, room noise and sound effects alone do not count as music.",
+    "Ignore source identity and any assumptions about the video topic.",
+    "If unclear, choose an uncertain probability rather than guessing."
+  ].join("\n");
   const questions = {
     has_music: {
       type: "noul",
-      instructions: "Is actual background music or a song audibly present in the video's soundtrack? Speech and sound effects alone do not count as music."
-    },
-    is_poppy_playtime: {
-      type: "noul",
-      instructions: "Do the actual video frames clearly show Poppy Playtime characters, locations, creatures, gameplay or unmistakable Poppy Playtime imagery? Ignore title, caption and hashtags. Say yes only when the visuals support it."
-    },
-    is_edit: {
-      type: "noul",
-      instructions: "Is this a deliberately edited fan edit or montage, with intentional cuts, timing, transitions or visual effects, rather than raw gameplay, an ordinary single scene or an unedited trailer?"
-    },
-    high_quality_edit: {
-      type: "noul",
-      instructions: "Is the actual video edit reasonably high quality, with sufficiently clear footage, coherent cuts/effects and no severe pixelation or technical defects? Do not judge by popularity or creator identity."
+      instructions: "Is actual background music or a song audibly present? Speech and sound effects alone do not count. Judge only this audio."
     }
   };
 
@@ -543,55 +523,46 @@ async function moderateVideo(env, body) {
     const result = await env.AI.run(VISION_MODEL, {
       model: "clef-omni",
       state,
-      videos: [video],
+      audio: [audio],
       questions
     });
     const answers = result && result.answers;
     if (!isObject(answers)) {
-      return json({ ok: false, error: "vision_model_output_invalid" }, 502);
+      return json({ ok: false, error: "music_model_output_invalid" }, 502);
     }
 
-    const probabilities = {};
-    const checks = {};
-    const thresholds = {
-      has_music: [0.80, 0.15],
-      is_poppy_playtime: [0.80, 0.15],
-      is_edit: [0.80, 0.15],
-      high_quality_edit: [0.78, 0.15]
-    };
-    for (const [key, [yesThreshold, noThreshold]] of Object.entries(thresholds)) {
-      const probability = clefProbability(answers[key]);
-      if (probability === null || !Number.isFinite(probability) ||
-          probability < 0 || probability > 1) {
-        probabilities[key] = null;
-        checks[key] = null;
-        continue;
-      }
-      probabilities[key] = probability;
-      checks[key] = conservativeDecision(probability, yesThreshold, noThreshold);
-    }
+    const rawAnswer = answers.has_music;
+    const probability = clefProbability(rawAnswer);
+    const decision = conservativeDecision(probability, 0.70, 0.15);
+    let reason = "music_probability_ambiguous";
+    if (probability === null) reason = "music_answer_missing_or_invalid";
+    else if (decision === true) reason = "music_detected_above_threshold";
+    else if (decision === false) reason = "music_not_detected_below_threshold";
 
-    const validProbabilities = Object.values(probabilities).filter(
-      value => typeof value === "number" && Number.isFinite(value)
-    );
-    const confidence = validProbabilities.length === Object.keys(thresholds).length
-      ? Math.min(...validProbabilities.map(value => Math.min(1, Math.abs(value - 0.5) * 2)))
-      : 0;
+    // Store only safe diagnostic values; never log or persist audio bytes/model payloads.
+    console.log(JSON.stringify({
+      event: "music_moderation_diagnostic",
+      platform,
+      model: VISION_MODEL,
+      probability,
+      decision,
+      reason
+    }));
 
     return json({
       ok: true,
       model: VISION_MODEL,
-      checks,
-      probabilities,
-      confidence,
-      uncertain_fields: Object.keys(checks).filter(key => checks[key] === null),
+      checks: { has_music: decision },
+      probabilities: { has_music: probability },
+      confidence: probability === null ? 0 : Math.min(1, Math.abs(probability - 0.5) * 2),
+      diagnostic: { has_music: reason },
       human_review_required: true,
       auto_approved: false,
       publishing: false,
       usage: isObject(result.usage) ? result.usage : null
     });
   } catch {
-    return json({ ok: false, error: "vision_inference_failed" }, 502);
+    return json({ ok: false, error: "music_inference_failed" }, 502);
   }
 }
 
@@ -632,10 +603,10 @@ export default {
     if (path === "/api/brain/queue" && request.method === "GET") {
       return approvedQueue(env, url);
     }
-    if (path === "/api/brain/moderate-video" && request.method === "POST") {
-      const parsedVideo = await readJson(request, MAX_VIDEO_BODY_BYTES);
-      if (!parsedVideo.ok) return json({ ok: false, error: parsedVideo.error }, parsedVideo.status);
-      return moderateVideo(env, parsedVideo.value);
+    if ((path === "/api/brain/moderate-music" || path === "/api/brain/moderate-video") && request.method === "POST") {
+      const parsedAudio = await readJson(request, MAX_AUDIO_BODY_BYTES);
+      if (!parsedAudio.ok) return json({ ok: false, error: parsedAudio.error }, parsedAudio.status);
+      return moderateMusic(env, parsedAudio.value);
     }
     if (path === "/api/brain/items/seen" && request.method === "GET") {
       return seenItems(env, url);
