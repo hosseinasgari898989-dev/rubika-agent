@@ -81,6 +81,9 @@ class InstagramGraphAPITests(unittest.TestCase):
         ])
         self.assertEqual(len(session.calls), 2)
         self.assertTrue(all(call[1]["timeout"] == 10 for call in session.calls))
+        for _url, kwargs in session.calls:
+            self.assertEqual(kwargs["headers"]["Authorization"], "Bearer " + token)
+            self.assertNotIn("access_token", kwargs["params"])
         self.assertNotIn(token, repr(report.report()))
 
     def test_permission_error_is_redacted_and_stops_followup_queries(self):
@@ -99,6 +102,8 @@ class InstagramGraphAPITests(unittest.TestCase):
         self.assertEqual(report.candidates, ())
         self.assertEqual(report.attempts[0].result, "hashtag_search_http_403")
         self.assertNotIn(token, repr(report.report()))
+        self.assertEqual(session.calls[0][1]["headers"]["Authorization"], "Bearer " + token)
+        self.assertNotIn("access_token", session.calls[0][1]["params"])
 
 
 if __name__ == "__main__":
