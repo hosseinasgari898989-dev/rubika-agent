@@ -1,15 +1,15 @@
-"""Termux entry point: collect public metadata and optionally push it to the test branch.
+"""Termux entry point: discover metadata on the phone and push only the report.
 
-Run from the repository root with:
+Daily use:
     python -m termux.daily_discovery --push
 
-The command never downloads media and never publishes to Rubika.
+This command collects public metadata only. It does not download media, use paid APIs,
+log into social networks, bypass challenges, or publish to Rubika.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -17,30 +17,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.discovery.apify_instagram import discover_instagram_reels
+from agent.discovery.termux_instagram import discover_instagram_hashtags
 from agent.discovery.termux_sources import discover_tiktok_hashtags, discover_youtube_metadata
 
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_PATH = ROOT / "artifacts" / "termux_discovery.json"
-APIFY_STATE_PATH = Path.home() / ".local" / "state" / "rubika-agent" / "apify-instagram-state.json"
 TARGET_BRANCH = "agent-brain-mega-v1"
 EXPECTED_REPO_SUFFIX = "hosseinasgari898989-dev/rubika-agent"
-
-
-def load_apify_token() -> str:
-    """Read token from the environment or a private file; never print it."""
-    token = os.getenv("APIFY_API_TOKEN", "").strip()
-    if token:
-        return token
-    configured_path = os.getenv("APIFY_TOKEN_FILE", "").strip()
-    path = Path(configured_path).expanduser() if configured_path else (
-        Path.home() / ".config" / "rubika-agent" / "apify_token"
-    )
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
 
 
 def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
@@ -60,26 +44,19 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
-def collect_daily_report(
-    *,
-    apify_token: str | None = None,
-    output_path: str | Path = REPORT_PATH,
-    apify_state_path: str | Path = APIFY_STATE_PATH,
-) -> dict[str, Any]:
-    """Collect metadata from the phone's network, with no media download."""
+def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, Any]:
+    """Collect phone-side public metadata, dedupe by platform ID, and save JSON locally."""
+    print("1/3 TikTok: checking public hashtag pages (metadata only)...", flush=True)
     tiktok_candidates, tiktok_attempts = discover_tiktok_hashtags()
+    print("2/3 Instagram: checking a small number of public hashtag pages (metadata only)...", flush=True)
+    instagram_candidates, instagram_attempts = discover_instagram_hashtags()
+    print("3/3 YouTube: searching Shorts metadata with yt-dlp (no download)...", flush=True)
     youtube_candidates, youtube_attempts = discover_youtube_metadata()
-    instagram_report = discover_instagram_reels(
-        token=apify_token if apify_token is not None else load_apify_token(),
-        state_path=apify_state_path,
-        max_results=2,
-    )
 
-    # Keep one row per platform + stable ID. Invalid or missing IDs are never generated.
     lists = {
         "tiktok": tiktok_candidates,
+        "instagram": instagram_candidates,
         "youtube": youtube_candidates,
-        "instagram": instagram_report.get("candidates", []),
     }
     normalized: dict[str, list[dict[str, Any]]] = {}
     for platform, rows in lists.items():
@@ -88,13 +65,12 @@ def collect_daily_report(
         for row in rows:
             if not isinstance(row, dict) or row.get("platform") != platform:
                 continue
-            identity = row.get("id")
-            url = row.get("url")
-            if not isinstance(identity, str) or not identity or not isinstance(url, str):
+            item_id, url = row.get("id"), row.get("url")
+            if not isinstance(item_id, str) or not item_id or not isinstance(url, str):
                 continue
-            if identity in seen:
+            if item_id in seen:
                 continue
-            seen.add(identity)
+            seen.add(item_id)
             normalized[platform].append(row)
 
     now = datetime.now(timezone.utc)
@@ -105,23 +81,21 @@ def collect_daily_report(
         "mode": "metadata_only_no_download_no_publish",
         "summary": {
             "tiktok_candidates": len(normalized["tiktok"]),
-            "youtube_candidates": len(normalized["youtube"]),
             "instagram_candidates": len(normalized["instagram"]),
-            "instagram_apify_status": instagram_report.get("status", "unknown"),
+            "youtube_candidates": len(normalized["youtube"]),
+            "instagram_method": "unauthenticated_public_hashtag_pages",
+            "paid_providers_used": [],
             "ready_to_publish": False,
         },
         "candidates": normalized,
-        "attempts": [
-            *tiktok_attempts,
-            *youtube_attempts,
-            *instagram_report.get("attempts", []),
-        ],
-        "provider_reports": {
-            "instagram_apify": {
-                key: instagram_report.get(key)
-                for key in ("status", "message", "usage")
-                if key in instagram_report
-            }
+        "attempts": [*tiktok_attempts, *instagram_attempts, *youtube_attempts],
+        "limits": {
+            "instagram_max_candidates_per_run": 2,
+            "instagram_max_hashtag_pages": 3,
+            "tiktok_max_hashtag_pages": 4,
+            "youtube_searches": 4,
+            "media_downloads": 0,
+            "rubika_posts": 0,
         },
     }
     _atomic_json_write(Path(output_path), report)
@@ -135,12 +109,12 @@ def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
-        timeout=45,
+        timeout=60,
     )
 
 
 def push_report_to_experimental_branch(report_path: str | Path = REPORT_PATH) -> None:
-    """Push only the discovery report, and only when this checkout is on the test branch."""
+    """Push the report only, refusing main, other repositories, and unrelated staged files."""
     branch = _git(["branch", "--show-current"])
     if branch.returncode != 0 or branch.stdout.strip() != TARGET_BRANCH:
         raise RuntimeError("wrong_branch")
@@ -148,6 +122,7 @@ def push_report_to_experimental_branch(report_path: str | Path = REPORT_PATH) ->
     if remote.returncode != 0:
         raise RuntimeError("origin_missing")
     remote_url = remote.stdout.strip().lower().removesuffix(".git")
+    remote_url = remote_url.replace("git@github.com:", "https://github.com/")
     if EXPECTED_REPO_SUFFIX not in remote_url:
         raise RuntimeError("unexpected_origin")
 
@@ -155,6 +130,13 @@ def push_report_to_experimental_branch(report_path: str | Path = REPORT_PATH) ->
     added = _git(["add", "--", relative_path])
     if added.returncode != 0:
         raise RuntimeError("git_add_failed")
+
+    staged_all = _git(["diff", "--cached", "--name-only"])
+    if staged_all.returncode != 0:
+        raise RuntimeError("git_diff_failed")
+    staged_paths = {line.strip() for line in staged_all.stdout.splitlines() if line.strip()}
+    if staged_paths - {relative_path}:
+        raise RuntimeError("unrelated_changes_staged")
     staged = _git(["diff", "--cached", "--quiet", "--", relative_path])
     if staged.returncode == 0:
         print("GitHub: report has no changes; nothing to push.", flush=True)
@@ -168,7 +150,6 @@ def push_report_to_experimental_branch(report_path: str | Path = REPORT_PATH) ->
         raise RuntimeError("git_commit_failed")
     pushed = _git(["push", "origin", f"HEAD:refs/heads/{TARGET_BRANCH}"])
     if pushed.returncode != 0:
-        # Do not print raw git output because remote URLs could contain credentials.
         raise RuntimeError("git_push_failed")
     print(f"GitHub: metadata report pushed to {TARGET_BRANCH}.", flush=True)
 
@@ -178,9 +159,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--push",
         action="store_true",
-        help="commit the metadata report and push it to the experimental GitHub branch",
+        help="commit and push only artifacts/termux_discovery.json to the experimental branch",
     )
     args = parser.parse_args(argv)
+
     try:
         report = collect_daily_report()
     except Exception as exc:
@@ -195,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"GitHub push failed safely: {str(exc)}", file=sys.stderr, flush=True)
             return 3
-    print("Done: metadata only; no videos downloaded and nothing published to Rubika.", flush=True)
+    print("Done: metadata only. No video downloaded and nothing published to Rubika.", flush=True)
     return 0
 
 
