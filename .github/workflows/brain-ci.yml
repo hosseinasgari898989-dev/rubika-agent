@@ -54,8 +54,10 @@ jobs:
           python-version: "3.12"
       - name: Install project requirements
         run: python -m pip install --disable-pip-version-check -r requirements.txt
-      - name: Check syntax
-        run: python -m compileall -q agent relay termux
+      - name: Check Python and Termux shell syntax
+        run: |
+          python -m compileall -q agent relay termux
+          bash -n termux/bootstrap.sh termux/daily.sh
       - name: Run brain and storage unit tests
         run: |
           python -m unittest discover -s tests -p 'test_agent_brain.py' -v
