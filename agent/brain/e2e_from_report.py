@@ -27,6 +27,7 @@ from agent.brain.relay_client import AuthorizedYouTubeRelay
 from agent.brain.rubika_publisher import RubikaPublisher
 from agent.brain.vision_moderator import CloudflareVideoModerator
 from agent.storage.mega import MegaStorage
+from agent.brain.edit_caption import EDIT_CAPTION
 
 
 DEFAULT_CLOUD_API = "https://rubika-agent.h98609294.workers.dev"
@@ -254,7 +255,7 @@ def run_one(
         def send() -> Any:
             nonlocal last_response
             raw = publisher.send_media(
-                media_path, "video", caption=f"منبع: {platform.title()} | Poppy Playtime Edit"
+                media_path, "video", caption=EDIT_CAPTION
             )
             last_response = _response_dict(raw)
             return raw
