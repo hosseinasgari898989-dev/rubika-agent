@@ -474,7 +474,7 @@ async function moderateVideo(env, body) {
   if (typeof video !== "string" || video.length > MAX_VIDEO_DATA_URL_CHARS) {
     return json({ ok: false, error: "moderation_video_size_invalid" }, 413);
   }
-  const match = /^data:video\\/mp4;base64,([A-Za-z0-9+/]+={0,2})$/.exec(video);
+  const match = /^data:video\/mp4;base64,([A-Za-z0-9+/]+={0,2})$/.exec(video);
   if (!match || match[1].length % 4 !== 0) {
     return json({ ok: false, error: "moderation_video_format_invalid" }, 400);
   }
