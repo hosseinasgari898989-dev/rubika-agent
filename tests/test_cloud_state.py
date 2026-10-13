@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import unittest
@@ -159,7 +160,7 @@ class CloudStateTests(unittest.TestCase):
 
 
 
-    def test_moderate_frame_allows_bounded_image_payload_over_normal_json_limit(self):
+    def test_moderate_video_allows_bounded_video_payload_over_normal_json_limit(self):
         state = CloudState("https://worker.example", TOKEN)
         captured = {}
 
@@ -169,29 +170,34 @@ class CloudStateTests(unittest.TestCase):
             captured["auth"] = request.get_header("Authorization")
             return io.BytesIO(json.dumps({
                 "ok": True,
-                "model": "@cf/meta/llama-3.2-11b-vision-instruct",
+                "model": "@cf/cloudflare/clef-omni",
                 "checks": {
                     "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
-                    "insults_other_games": False, "high_effort": True,
+                    "insults_other_games": False, "high_effort": True, "has_music": True,
                 },
-                "confidence": 0.85,
-                "audio_review_required": True,
+                "probabilities": {
+                    "poppy_relevant": 0.98, "is_edit": 0.92, "insults_poppy": 0.03,
+                    "insults_other_games": 0.02, "high_effort": 0.89, "has_music": 0.96,
+                },
+                "confidence": 0.92,
                 "human_review_required": True,
                 "auto_approved": False,
                 "publishing": False,
             }).encode("utf-8"))
 
-        image = "data:image/jpeg;base64," + ("A" * 40000)
+        binary = b"\\x00\\x00\\x00\\x18ftypisom" + b"x" * 40000
+        video = "data:video/mp4;base64," + base64.b64encode(binary).decode("ascii")
         with patch("urllib.request.urlopen", side_effect=fake_open):
-            result = state.moderate_frame(
-                image, platform="youtube", title="Poppy edit", caption="#edit"
+            result = state.moderate_video(
+                video, platform="youtube", title="Poppy edit", caption="#edit"
             )
 
         self.assertTrue(result["poppy_relevant"])
+        self.assertTrue(result["has_music"])
         self.assertTrue(result["human_review_required"])
         self.assertFalse(result["auto_approved"])
         self.assertGreater(len(captured["body"]), 32 * 1024)
-        self.assertTrue(captured["url"].endswith("/api/brain/moderate-frame"))
+        self.assertTrue(captured["url"].endswith("/api/brain/moderate-video"))
         self.assertEqual(captured["auth"], "Bearer " + TOKEN)
 
 if __name__ == "__main__":
