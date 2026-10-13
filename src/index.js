@@ -395,7 +395,8 @@ async function addEvent(env, body) {
 }
 
 async function approvedQueue(env, url) {
-  const limit = boundedInt(url.searchParams.get("limit") || "25", 1, 100, 25);
+  const requested = Number(url.searchParams.get("limit") || "25");
+  const limit = Number.isInteger(requested) ? Math.min(100, Math.max(1, requested)) : 25;
   try {
     const result = await env.DB.prepare(
       "SELECT id, platform, source_key, external_id, canonical_url, title, caption, published_at, status, media_sha256, media_bytes, media_mime, media_type, source_tier, storage_key, validation_json, moderation_json, original_caption, persian_translation, discovered_at FROM items WHERE review_state = 'approved' AND status = 'ready' ORDER BY discovered_at ASC LIMIT ?"
