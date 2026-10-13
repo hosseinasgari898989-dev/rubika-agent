@@ -254,7 +254,7 @@ const read = async response => ({ status: response.status, body: await response.
     method: "POST", body: badApproval,
   }), state));
   assert.equal(response.status, 400);
-  assert.equal(response.body.error, "edit_approval_requires_all_content_checks");
+  assert.equal(response.body.error, "edit_approval_requires_music_check");
 }
 {
   const response = await read(await worker.fetch(request("/api/brain/events", {
@@ -283,14 +283,10 @@ function makeOmniAI() {
       assert.equal(input.model, "clef-omni");
       assert.equal(input.videos.length, 1);
       assert.equal(input.videos[0].startsWith("data:video/mp4;base64,"), true);
-      assert.equal(Object.keys(input.questions).length, 6);
+      assert.equal(Object.keys(input.questions).length, 1);
+      assert.deepEqual(Object.keys(input.questions), ["has_music"]);
       return {
         answers: {
-          poppy_relevant: { noul: 0.98 },
-          is_edit: { noul: 0.94 },
-          insults_poppy: { noul: 0.01 },
-          insults_other_games: { noul: 0.03 },
-          high_effort: { noul: 0.91 },
           has_music: { noul: 0.97 },
         },
         usage: { input_tokens: 9000 },
@@ -307,9 +303,8 @@ function makeOmniAI() {
   }), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.model, "@cf/cloudflare/clef-omni");
-  assert.equal(response.body.checks.poppy_relevant, true);
   assert.equal(response.body.checks.has_music, true);
-  assert.equal(response.body.checks.insults_poppy, false);
+  assert.deepEqual(Object.keys(response.body.checks), ["has_music"]);
   assert.equal(response.body.human_review_required, true);
   assert.equal(response.body.auto_approved, false);
   assert.equal(response.body.publishing, false);
