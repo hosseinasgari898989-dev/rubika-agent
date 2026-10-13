@@ -42,7 +42,7 @@ rm -f "$HOME/agent_api_token.txt"
 ```bash
 cd ~/rubika-agent-github
 git pull --ff-only origin agent-brain-mega-v1
-printf '{"platform":"tiktok","requested_at":"%s"}\\n' "$(date -u +%FT%TZ)" > artifacts/brain-e2e-request.json
+printf '{"platform":"tiktok","requested_at":"%s"}\n' "$(date -u +%FT%TZ)" > artifacts/brain-e2e-request.json
 git add artifacts/brain-e2e-request.json
 git commit -m "Request one-item end-to-end test"
 git push origin agent-brain-mega-v1
