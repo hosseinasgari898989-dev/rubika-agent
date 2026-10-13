@@ -62,8 +62,13 @@ def _safe_error(exc: Exception) -> str:
 
 def _matches_poppy_edit(candidate: Candidate) -> bool:
     text = candidate.searchable_text
-    relevance = ("poppy playtime", "poppyplaytime", "huggy wuggy", "huggywuggy",
-                 "catnap", "kissy missy", "mommy long legs", "dogday")
+    relevance = (
+        "poppy playtime", "poppyplaytime", "huggy wuggy", "huggywuggy",
+        "catnap", "kissy missy", "mommy long legs", "dogday",
+        "smiling critters", "smilingcritters", "nightmare critters",
+        "bobby bearhug", "craftycorn", "kickin chicken", "hoppy hopscotch",
+        "picky piggy", "bubba bubbaphant",
+    )
     return any(term in text for term in relevance)
 
 
