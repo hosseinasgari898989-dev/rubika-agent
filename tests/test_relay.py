@@ -99,30 +99,32 @@ class RelayAPIProtectionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_public_video_download_is_validated_and_temp_file_is_removed(self):
-        temp = tempfile.TemporaryDirectory(prefix="relay-test-")
-        folder = Path(temp.name)
-        media = folder / "youtube_vkVFgmgLo1s.mp4"
-        media.write_bytes(b"test-media-bytes" * 10000)
+        captured = {}
         metadata = {
             "duration_seconds": 12.5, "width": 1080, "height": 1080,
             "video_codec": "h264", "audio_codec": "aac", "has_audio": True,
-            "size_bytes": media.stat().st_size, "mime_type": "video/mp4",
+            "size_bytes": 170000, "mime_type": "video/mp4",
         }
-        try:
-            with patch.object(relay, "_download_and_probe", return_value=(media, metadata)):
-                response = self.client.post(
-                    "/v1/download",
-                    headers={"Authorization": "Bearer " + TOKEN},
-                    json=self.payload(),
-                )
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.headers["content-type"], "video/mp4")
-            self.assertEqual(response.headers["x-relay-publishing"], "disabled")
-            self.assertEqual(response.headers["x-media-width"], "1080")
-            self.assertEqual(len(response.content), media.stat().st_size)
-            self.assertFalse(folder.exists() and media.exists())
-        finally:
-            temp.cleanup()
+
+        def fake_download(url, video_id, work_dir):
+            captured["work_dir"] = work_dir
+            media = work_dir / f"youtube_{video_id}.mp4"
+            media.write_bytes(b"test-media-bytes" * 10000)
+            metadata["size_bytes"] = media.stat().st_size
+            return media, metadata
+
+        with patch.object(relay, "_download_and_probe", side_effect=fake_download):
+            response = self.client.post(
+                "/v1/download",
+                headers={"Authorization": "Bearer " + TOKEN},
+                json=self.payload(),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "video/mp4")
+        self.assertEqual(response.headers["x-relay-publishing"], "disabled")
+        self.assertEqual(response.headers["x-media-width"], "1080")
+        self.assertEqual(len(response.content), metadata["size_bytes"])
+        self.assertFalse(captured["work_dir"].exists())
 
     def test_downloader_error_does_not_expose_provider_details(self):
         with patch.object(
