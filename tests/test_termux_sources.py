@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from agent.discovery.termux_sources import (
     discover_tiktok_hashtags,
@@ -28,6 +29,22 @@ class FakeYDL:
     def extract_info(self, query, download=False):
         self.queries.append((query, download))
         return self.__class__.info
+
+
+class FakeFeedResponse:
+    def __init__(self, status_code, text):
+        self.status_code = status_code
+        self.text = text
+
+
+class FakeFeedSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.responses.pop(0)
 
 
 class TermuxMetadataParserTests(unittest.TestCase):
@@ -150,6 +167,74 @@ class TermuxMetadataParserTests(unittest.TestCase):
         self.assertEqual(attempts[0]["result"], "metadata_found")
         self.assertEqual(attempts[0]["stale_or_undated_skipped"], 1)
         self.assertEqual(attempts[0]["freshness_unverified"], 1)
+
+    def test_youtube_uses_public_channel_feed_to_verify_missing_date(self):
+        FakeYDL.instances = []
+        channel_id = "UC" + ("a" * 22)
+        FakeYDL.info = {"entries": [{
+            "id": "n38wy3o0DhY",
+            "title": "Undated public short",
+            "duration": 24,
+            "channel_id": channel_id,
+        }]}
+        published = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        atom_feed = (
+            '<feed xmlns="http://www.w3.org/2005/Atom" '
+            'xmlns:yt="http://www.youtube.com/xml/schemas/2015">'
+            "<entry><yt:videoId>n38wy3o0DhY</yt:videoId>"
+            f"<published>{published}</published></entry></feed>"
+        )
+        feed_session = FakeFeedSession([FakeFeedResponse(200, atom_feed)])
+
+        found, attempts = discover_youtube_metadata(
+            queries=("Poppy Playtime edit shorts",),
+            max_results=10,
+            ydl_factory=FakeYDL,
+            feed_session=feed_session,
+        )
+
+        self.assertEqual(len(found), 1)
+        self.assertTrue(found[0]["freshness_verified"])
+        self.assertEqual(found[0]["freshness_source"], "public_channel_atom_feed")
+        self.assertEqual(found[0]["freshness_status"], "verified_within_window")
+        self.assertEqual(found[0]["published_at"], datetime.fromisoformat(published).isoformat())
+        self.assertTrue(FakeYDL.instances[0].options["extract_flat"])
+        self.assertEqual(FakeYDL.instances[0].queries[0][1], False)
+        self.assertEqual(len(feed_session.calls), 1)
+        self.assertIn("feeds/videos.xml?channel_id=" + channel_id, feed_session.calls[0][0])
+        self.assertEqual(attempts[-1]["method"], "public_channel_atom_feed")
+        self.assertEqual(attempts[-1]["candidate_dates_enriched"], 1)
+        self.assertEqual(attempts[-1]["result"], "metadata_enriched")
+
+    def test_youtube_rejects_old_date_from_public_channel_feed(self):
+        FakeYDL.instances = []
+        channel_id = "UC" + ("b" * 22)
+        FakeYDL.info = {"entries": [{
+            "id": "n38wy3o0DhY",
+            "title": "Old public short",
+            "duration": 24,
+            "channel_id": channel_id,
+        }]}
+        published = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
+        atom_feed = (
+            '<feed xmlns="http://www.w3.org/2005/Atom" '
+            'xmlns:yt="http://www.youtube.com/xml/schemas/2015">'
+            "<entry><yt:videoId>n38wy3o0DhY</yt:videoId>"
+            f"<published>{published}</published></entry></feed>"
+        )
+        feed_session = FakeFeedSession([FakeFeedResponse(200, atom_feed)])
+
+        found, attempts = discover_youtube_metadata(
+            queries=("Poppy Playtime edit shorts",),
+            max_results=10,
+            ydl_factory=FakeYDL,
+            feed_session=feed_session,
+        )
+
+        self.assertEqual(found, [])
+        self.assertEqual(attempts[0]["stale_or_undated_skipped"], 1)
+        self.assertEqual(attempts[-1]["candidate_dates_enriched"], 0)
+        self.assertEqual(attempts[-1]["result"], "no_candidate_dates_matched")
 
     def test_missing_yt_dlp_reports_a_safe_status(self):
         def missing(_options):
