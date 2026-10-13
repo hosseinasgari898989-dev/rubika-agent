@@ -26,13 +26,11 @@ It creates artifacts/termux_discovery.json with metadata only (no video download
 - The Termux collector uses yt-dlp search with skip_download enabled and keeps eligible results with known durations up to 180 seconds.
 - It only submits metadata and Shorts URLs to the report. A GitHub runner download failure is not bypassed; the separate authorized-media relay remains a future download fallback.
 
-### Instagram and Apify
-- Instagram public-index discovery was repeatedly empty on the GitHub runner. The Termux collector does not depend on that old route: it can optionally call the Apify apify/instagram-hashtag-scraper Actor for metadata only.
-- Put the Apify token on the phone at ~/.config/rubika-agent/apify_token with file permissions readable only by your Termux user, or provide APIFY_API_TOKEN in the environment. Never put it into Git, a report, or a message.
-- The adapter reads Apify's monthly usage endpoint first. If usage cannot be verified, it does not start the Actor. It refuses new runs once account usage reaches the configurable default safety ceiling of $3.50, preserving at least $1.50 of the advertised $5 monthly Free-plan credit as a buffer.
-- Maximum: one attempted Actor run per UTC day per local state file, one hashtag, at most two Reels, and no media download. A failed or timed-out attempt still consumes the day's local allowance so rerunning cannot accidentally create a second paid run. The daily state lives under ~/.local/state/rubika-agent/, outside the repository.
-- Apify Free-plan credits reset with the account's billing cycle, not necessarily on the first day of a calendar month. Unused credits expire and do not roll over. This code is a conservative budget guard, not a guarantee that the Actor's charge can never change. Check the Apify billing page before enabling the integration; the guard fails closed.
-- Without a token, Instagram reports not_configured and makes no Apify requests.
+### Instagram (free phone-side path)
+- Instagram discovery now runs on the phone against public hashtag pages using ordinary unauthenticated HTTPS; it does not use Apify, a paid API, cookies, login sessions, proxies or CAPTCHA/challenge bypasses.
+- The collector examines at most three hashtag pages and accepts at most two canonical video/Reel candidates per daily run. It extracts metadata only when the returned HTML exposes it; otherwise it reports zero/blocked rather than inventing candidates.
+- Instagram may still return a login wall or challenge to a phone. Parser tests prove the extractor handles fixture HTML, not that live discovery works on every phone/network. The first live run is required before treating this route as reliable.
+- The separate Apify adapter remains in the codebase as an optional future fallback, but the daily command does not call it and no Apify token is required.
 
 ## What happens after the phone pushes a report
 The discovery workflow validates the schema and canonical host/ID relationship, merges the phone results with the existing identity history, and runs only the fallbacks still needed. The workflow's exit status is red if it cannot find the required five TikTok and five YouTube candidates; an HTTP 200 by itself is not success. The discovery report is uploaded as an artifact for inspection.
@@ -51,7 +49,7 @@ The discovery workflow validates the schema and canonical host/ID relationship, 
 
 ## Remaining gaps before hands-off publishing
 - The phone discovery route has parser tests, but real TikTok results still need a live test on the user's phone.
-- Instagram Apify requires the owner to create an account and store an API token privately on the phone. The adapter intentionally uses only two requested results daily and checks monthly usage before each run.
+- Free Instagram hashtag discovery still needs a live phone test; the platform may return a login wall/challenge or no canonical video metadata.
 - Automatic visual/audio judgement needs a real classifier integration. Until then, candidates are held as needs_review.
 - YouTube downloads from Termux need a user-side live test and later integration into the queue. Metadata collection alone is not download proof.
 - A full discovery -> permission check -> download -> inspect -> moderation -> MEGA/D1 -> delivery chain has not yet been validated end-to-end.
