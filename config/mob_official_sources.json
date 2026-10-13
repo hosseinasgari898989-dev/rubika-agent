@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "official_sources": [
+    {
+      "id": "mob_newsroom",
+      "kind": "html_newsroom",
+      "platform": "mob_official",
+      "source_platform": "website",
+      "source_name": "Mob Entertainment newsroom",
+      "url": "https://mobentertainment.com/",
+      "enabled": true
+    },
+    {
+      "id": "poppyplaytime_news",
+      "kind": "atom",
+      "platform": "mob_official",
+      "source_platform": "website",
+      "source_name": "Poppy Playtime official news",
+      "url": "https://poppyplaytime.com/blogs/news.atom",
+      "enabled": true
+    },
+    {
+      "id": "mob_youtube",
+      "kind": "youtube_atom",
+      "platform": "mob_official",
+      "source_platform": "youtube",
+      "source_name": "Mob Entertainment YouTube",
+      "channel_id": "UCXqV4yoyC_mmZye6VbKFPeQ",
+      "url": "https://www.youtube.com/channel/UCXqV4yoyC_mmZye6VbKFPeQ",
+      "enabled": true
+    },
+    {
+      "id": "mob_tiktok",
+      "kind": "yt_dlp_profile",
+      "platform": "mob_official",
+      "source_platform": "tiktok",
+      "source_name": "Mob Entertainment TikTok",
+      "url": "https://www.tiktok.com/@mob.entertainment",
+      "enabled": true
+    },
+    {
+      "id": "poppy_instagram",
+      "kind": "yt_dlp_profile",
+      "platform": "mob_official",
+      "source_platform": "instagram",
+      "source_name": "Poppy Playtime Instagram",
+      "url": "https://www.instagram.com/poppyplaytimeco/",
+      "enabled": true
+    },
+    {
+      "id": "mob_x",
+      "kind": "profile_reference",
+      "platform": "mob_official",
+      "source_platform": "x",
+      "source_name": "Mob Games Studios on X",
+      "url": "https://x.com/mobgamesstudios",
+      "enabled": true,
+      "note": "Official reference discovered from the Mob Entertainment website; profile timeline collection is deferred to an adapter that can verify timestamps."
+    }
+  ],
+  "dedupe": {
+    "prefer_earliest_verified_timestamp": true,
+    "caption_fingerprint": true,
+    "never_claim_first_source_without_comparable_timestamps": true
+  },
+  "publishing": {
+    "enabled": false,
+    "reason": "Discovery and translation must be verified before the new official-content lane is allowed to publish media automatically."
+  }
+}
