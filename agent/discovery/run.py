@@ -145,7 +145,7 @@ def run_discovery(
         if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
             v7.tiktok_from_search_engines(store, seen["tiktok"])
 
-    if not phone_report_loaded and len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
+    if not phone_report_loaded and not termux_only and len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
         print("YouTube fallback: yt-dlp metadata search only; download=False.", flush=True)
         v7.discover_youtube_ytdlp(store, seen["youtube"])
         if len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
@@ -159,7 +159,7 @@ def run_discovery(
         os.getenv("INSTAGRAM_GRAPH_ACCESS_TOKEN", "").strip()
         and os.getenv("INSTAGRAM_GRAPH_USER_ID", "").strip()
     )
-    if not phone_report_loaded and len(store["instagram"]) < 1 and graph_configured:
+    if not phone_report_loaded and not termux_only and len(store["instagram"]) < 1 and graph_configured:
         print("Instagram fallback: configured official Graph API metadata search.", flush=True)
         instagram_graph = discover_official_hashtag_urls(max_results=2)
         for item in instagram_graph.candidates:
@@ -177,7 +177,7 @@ def run_discovery(
                 "media_type": item.media_type,
             }
             seen["instagram"].add(item.external_id)
-    elif not phone_report_loaded and len(store["instagram"]) < 1 and os.getenv("ALLOW_LEGACY_INSTAGRAM_INDEX", "").lower() == "true":
+    elif not phone_report_loaded and not termux_only and len(store["instagram"]) < 1 and os.getenv("ALLOW_LEGACY_INSTAGRAM_INDEX", "").lower() == "true":
         print("Instagram index diagnostic explicitly enabled by ALLOW_LEGACY_INSTAGRAM_INDEX.", flush=True)
         instagram = discover_public_indexed_urls(max_results=5)
         for item in instagram.candidates:
@@ -199,7 +199,7 @@ def run_discovery(
         instagram = InstagramDiscovery(candidates=(), attempts=())
 
     proxitok = ProxiTokDiscovery(candidates=(), attempts=())
-    if not phone_report_loaded and len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
+    if not phone_report_loaded and not termux_only and len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
         print("TikTok fallback: public ProxiTok RSS feeds; no login or challenge bypass.", flush=True)
         proxitok = discover_public_rss()
         for item in proxitok.candidates:
@@ -218,7 +218,7 @@ def run_discovery(
 
     # Search-engine API use remains opt-in. No external API receives requests without a key.
     tavily_reports: dict[str, Any] = {}
-    if not phone_report_loaded and os.getenv("TAVILY_API_KEY", "").strip():
+    if not phone_report_loaded and not termux_only and os.getenv("TAVILY_API_KEY", "").strip():
         for platform in ("tiktok", "instagram"):
             target = REQUIRED_CORE_COUNTS["tiktok"] if platform == "tiktok" else 2
             if len(store[platform]) >= target:
