@@ -124,11 +124,12 @@ class MobTranslationTests(unittest.TestCase):
             "canonical_url": "https://mobentertainment.com/news/anniversary",
         }
         result = format_mob_post(item, translation_provider=lambda _: "پنج سال از فرار اولت از هاگی گذشته است.")
-        self.assertIn("Mob Entertainment پستی منتشر کرد و گفت:", result["caption"])
+        self.assertIn("🎮 ماب انترتینمنت پستی منتشر کرد و گفت:", result["caption"])
         self.assertIn("Five years since you first ran from Huggy", result["caption"])
-        self.assertIn("ترجمه متن:", result["caption"])
+        self.assertIn("📝 ترجمه فارسی:", result["caption"])
         self.assertIn("پنج سال از فرار اولت از هاگی گذشته است.", result["caption"])
-        self.assertIn("منبع اصلی: https://mobentertainment.com/news/anniversary", result["caption"])
+        self.assertNotIn("https://", result["caption"])
+        self.assertEqual(result["source_url"], "https://mobentertainment.com/news/anniversary")
         self.assertEqual(result["translation_status"], "translated")
 
     def test_no_caption_does_not_invent_a_quote_or_translation(self):
@@ -138,9 +139,9 @@ class MobTranslationTests(unittest.TestCase):
             "canonical_url": "https://mobentertainment.com/news/image",
         })
         self.assertEqual(result["translation_status"], "no_caption")
-        self.assertNotIn("ترجمه متن:", result["caption"])
+        self.assertNotIn("📝 ترجمه فارسی:", result["caption"])
         self.assertNotIn('""', result["caption"])
-        self.assertIn("Official image", result["caption"])
+        self.assertEqual(result["caption"], "")
 
     def test_translation_provider_errors_do_not_crash_formatting(self):
         def broken(_):
@@ -153,7 +154,24 @@ class MobTranslationTests(unittest.TestCase):
         }, translation_provider=broken)
         self.assertEqual(result["translation_status"], "unavailable")
         self.assertIn("A caption worth translating", result["caption"])
-        self.assertIn("منبع اصلی:", result["caption"])
+        self.assertNotIn("https://", result["caption"])
+        self.assertEqual(result["source_url"], "https://mobentertainment.com/news/a-post")
+
+
+    def test_urls_are_removed_from_original_and_translation_but_source_is_kept_as_metadata(self):
+        result = format_mob_post(
+            {
+                "original_caption": "Read more at https://example.com/news now",
+                "canonical_url": "https://mobentertainment.com/news/sample",
+            },
+            translation_provider=lambda _: "بیشتر بخوانید: https://example.com/fa",
+        )
+        self.assertEqual(result["translation_status"], "translated")
+        self.assertNotIn("http://", result["caption"])
+        self.assertNotIn("https://", result["caption"])
+        self.assertIn("🎮 ماب انترتینمنت پستی منتشر کرد و گفت:", result["caption"])
+        self.assertIn("📝 ترجمه فارسی:", result["caption"])
+        self.assertEqual(result["source_url"], "https://mobentertainment.com/news/sample")
 
     def test_translation_provider_factory_is_injectable(self):
         result = translate_to_persian(
