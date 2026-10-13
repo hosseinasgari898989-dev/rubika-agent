@@ -461,6 +461,78 @@ def _youtube_channel_feed_dates(
     return dates, "dates_found" if dates else "no_dates_in_feed"
 
 
+def _parse_public_video_date(raw_date: str) -> str | None:
+    """Normalize an ISO date/time read from the public video page."""
+    value = str(raw_date or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _youtube_public_page_date(video_id: str, session: Any) -> tuple[str | None, str]:
+    """Read public page date metadata only; never logs in or retries challenges."""
+    if not YOUTUBE_ID_RE.fullmatch(video_id):
+        return None, "invalid_video_id"
+    try:
+        response = session.get(
+            f"https://www.youtube.com/watch?v={video_id}",
+            timeout=8,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.8",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+    except requests.RequestException:
+        return None, "request_failed"
+
+    status = int(getattr(response, "status_code", 0))
+    if status != 200:
+        return None, f"http_{status}"
+
+    body = html.unescape(str(getattr(response, "text", "") or ""))
+    meta_tags = re.findall(r"<meta\b[^>]*>", body, flags=re.IGNORECASE)
+    for preferred_key in ("datePublished", "uploadDate"):
+        for tag in meta_tags:
+            itemprop = re.search(r"""\bitemprop\s*=\s*["']([^"']+)["']""", tag, re.IGNORECASE)
+            content = re.search(r"""\bcontent\s*=\s*["']([^"']+)["']""", tag, re.IGNORECASE)
+            if itemprop and content and itemprop.group(1).lower() == preferred_key.lower():
+                normalized = _parse_public_video_date(content.group(1))
+                if normalized:
+                    return normalized, f"public_video_page_{preferred_key}"
+
+    video_marker = re.search(
+        rf"""["']videoId["']\s*:\s*["']{re.escape(video_id)}["']""", body
+    )
+    if video_marker:
+        region = body[video_marker.start():video_marker.start() + 30000]
+        for key in ("publishDate", "datePublished", "uploadDate"):
+            match = re.search(
+                rf"""["']{key}["']\s*:\s*["']([^"']+)["']""",
+                region, flags=re.IGNORECASE,
+            )
+            if match:
+                normalized = _parse_public_video_date(match.group(1))
+                if normalized:
+                    return normalized, f"public_video_page_{key}"
+
+    if re.search(
+        r"sign in to confirm|confirm you.re not a bot|captcha|unusual traffic",
+        body, flags=re.IGNORECASE,
+    ):
+        return None, "page_challenge_or_signin"
+    return None, "date_missing"
+
+
 def discover_youtube_metadata(
     *,
     queries: tuple[str, ...] = YOUTUBE_QUERIES,
@@ -469,7 +541,9 @@ def discover_youtube_metadata(
     max_age_days: int = 90,
     ydl_factory: Any | None = None,
     feed_session: Any | None = None,
+    page_session: Any | None = None,
     max_feed_channels: int = 10,
+    max_page_checks: int = 10,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Search recent YouTube Shorts metadata; the download flag is never enabled."""
     if ydl_factory is None:
@@ -496,10 +570,15 @@ def discover_youtube_metadata(
     attempts: list[dict[str, Any]] = []
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(max_age_days)))
     active_feed_session = feed_session if feed_session is not None else requests.Session()
+    active_page_session = page_session if page_session is not None else requests.Session()
     feed_limit = max(0, min(10, int(max_feed_channels)))
+    page_limit = max(0, min(10, int(max_page_checks)))
     feed_cache: dict[str, dict[str, str]] = {}
     feed_results: list[str] = []
     feed_date_enrichments = 0
+    page_cache: dict[str, tuple[str | None, str]] = {}
+    page_results: list[str] = []
+    page_date_extractions = 0
     for query in queries:
         if len(candidates) >= max_results:
             break
@@ -541,6 +620,15 @@ def discover_youtube_metadata(
                 if feed_date:
                     published_at = feed_date
                     freshness_source = "public_channel_atom_feed"
+            if not published_at and video_id not in page_cache and len(page_cache) < page_limit:
+                page_date, page_result = _youtube_public_page_date(video_id, active_page_session)
+                page_cache[video_id] = (page_date, page_result)
+                page_results.append(page_result)
+            if not published_at:
+                page_date, page_result = page_cache.get(video_id, (None, "page_check_limit_reached"))
+                if page_date:
+                    published_at = page_date
+                    freshness_source = page_result
             if published_at:
                 try:
                     parsed_date = datetime.fromisoformat(published_at)
@@ -554,6 +642,8 @@ def discover_youtube_metadata(
                     freshness_source = ""
             if published_at and freshness_source == "public_channel_atom_feed":
                 feed_date_enrichments += 1
+            if published_at and freshness_source.startswith("public_video_page_"):
+                page_date_extractions += 1
             if not published_at:
                 # Flat search and public channel feeds can both omit the date.
                 # Keep such candidates unverified, never publish-ready.
@@ -570,6 +660,7 @@ def discover_youtube_metadata(
                 "title": title,
                 "caption": description,
                 "author": str(entry.get("uploader") or entry.get("channel") or "")[:100],
+                "channel_id": channel_id or None,
                 "hashtags": hashtags,
                 "published_at": published_at,
                 "freshness_verified": bool(published_at),
@@ -603,6 +694,20 @@ def discover_youtube_metadata(
             "method": "public_channel_atom_feed",
             "channels_checked": len(feed_results),
             "candidate_dates_enriched": feed_date_enrichments,
+            "status_counts": {
+                status: feed_results.count(status) for status in sorted(set(feed_results))
+            },
             "result": "metadata_enriched" if feed_date_enrichments else "no_candidate_dates_matched",
+        })
+    if page_results:
+        attempts.append({
+            "platform": "youtube",
+            "method": "public_video_page_metadata",
+            "pages_checked": len(page_results),
+            "page_dates_extracted": page_date_extractions,
+            "status_counts": {
+                status: page_results.count(status) for status in sorted(set(page_results))
+            },
+            "result": "metadata_enriched" if page_date_extractions else "no_public_page_dates_extracted",
         })
     return list(candidates.values()), attempts
