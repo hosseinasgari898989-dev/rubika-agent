@@ -40,7 +40,7 @@ class AuthorizedYouTubeRelay:
         self.base_url = base_url.rstrip("/")
         self.token = token.strip()
         self.timeout_seconds = timeout_seconds
-        self.max_bytes = min(max(1024 * 1024, int(max_bytes)), 45 * 1024 * 1024)
+        self.max_bytes = max(1024, min(int(max_bytes), 45 * 1024 * 1024))
         self.session = session or requests.Session()
 
     @staticmethod
@@ -74,6 +74,8 @@ class AuthorizedYouTubeRelay:
         folder.mkdir(parents=True, exist_ok=True)
         destination = folder / ("youtube_" + video_id + ".mp4")
         partial = destination.with_suffix(".mp4.part")
+        if destination.exists():
+            raise RelayClientError("destination_already_exists")
         if destination.resolve() == partial.resolve():
             raise RelayClientError("invalid_destination")
 
@@ -131,15 +133,18 @@ class AuthorizedYouTubeRelay:
         except requests.RequestException:
             partial.unlink(missing_ok=True)
             raise RelayClientError("relay_unreachable") from None
+        except OSError:
+            partial.unlink(missing_ok=True)
+            raise RelayClientError("local_write_failed") from None
 
         actual_hash = digest.hexdigest()
         if byte_count <= 50 * 1024:
             partial.unlink(missing_ok=True)
             raise RelayClientError("relay_file_too_small")
-        if declared_hash and not re.fullmatch(r"[a-f0-9]{64}", declared_hash):
+        if not re.fullmatch(r"[a-f0-9]{64}", declared_hash):
             partial.unlink(missing_ok=True)
             raise RelayClientError("relay_invalid_sha256_header")
-        if declared_hash and not __import__("hmac").compare_digest(actual_hash, declared_hash):
+        if not __import__("hmac").compare_digest(actual_hash, declared_hash):
             partial.unlink(missing_ok=True)
             raise RelayClientError("relay_sha256_mismatch")
         partial.replace(destination)
