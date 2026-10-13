@@ -1,4 +1,4 @@
-name: Discovery to Brain, MEGA/D1 and Rubika smoke test
+name: Discovery to Brain, MEGA/D1 and Rubika batch test
 
 on:
   push:
@@ -22,6 +22,8 @@ jobs:
       MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
       RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
       COBALT_API_URL: http://127.0.0.1:9000/
+      RELAY_BASE_URL: ${{ secrets.RELAY_BASE_URL }}
+      RELAY_API_TOKEN: ${{ secrets.RELAY_API_TOKEN }}
 
     steps:
       - name: Check required secrets without printing them
@@ -53,14 +55,11 @@ jobs:
               raise SystemExit("Discovery report missing; run the Termux collector first.")
           request = json.loads(request_path.read_text(encoding="utf-8"))
           platform = request.get("platform", "tiktok")
-          candidate_limit = request.get("candidate_limit", 1)
-          candidate_offset = request.get("candidate_offset", 0)
-          if platform not in {"tiktok", "instagram"}:
-              raise SystemExit("Requested platform must be tiktok or instagram for this smoke test.")
-          if type(candidate_limit) is not int or not 1 <= candidate_limit <= 5:
-              raise SystemExit("candidate_limit must be an integer from 1 to 5.")
-          if type(candidate_offset) is not int or not 0 <= candidate_offset <= 100:
-              raise SystemExit("candidate_offset must be an integer from 0 to 100.")
+          candidate_limit = request.get("candidate_limit", 4)
+          if platform not in {"tiktok", "youtube", "both"}:
+              raise SystemExit("platform must be tiktok, youtube, or both.")
+          if type(candidate_limit) is not int or not 1 <= candidate_limit <= 4:
+              raise SystemExit("candidate_limit must be an integer from 1 to 4.")
           report = json.loads(report_path.read_text(encoding="utf-8"))
           rows = report.get("candidates", {}).get(platform, [])
           if not isinstance(rows, list) or not rows:
@@ -68,10 +67,9 @@ jobs:
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
               env_file.write("PLATFORM=" + platform + "\n")
               env_file.write("CANDIDATE_LIMIT=" + str(candidate_limit) + "\n")
-              env_file.write("CANDIDATE_OFFSET=" + str(candidate_offset) + "\n")
           print(
               f"Discovery report OK: platform={platform}, candidates={len(rows)}, "
-              f"candidate_limit={candidate_limit}, candidate_offset={candidate_offset}"
+              f"daily_limit={candidate_limit}"
           )
           PY
 
@@ -153,13 +151,12 @@ jobs:
           mega-ls /Rubika-Agent >/dev/null
           echo "MEGA login and project folder verified."
 
-      - name: Run one real discovery-to-brain-to-Rubika item
+      - name: Run bounded discovery-to-brain-to-MEGA/D1-to-Rubika batch
         run: |
-          python -m agent.brain.e2e_from_report \
+          python -m agent.brain.e2e_batch_from_report \
             --report artifacts/termux_discovery.json \
             --platform "$PLATFORM" \
-            --candidate-limit "$CANDIDATE_LIMIT" \
-            --candidate-offset "$CANDIDATE_OFFSET" \
+            --daily-limit "$CANDIDATE_LIMIT" \
             --output-report artifacts/brain-e2e-report.json
 
       - name: Upload safe end-to-end report
