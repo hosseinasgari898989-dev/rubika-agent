@@ -84,51 +84,61 @@ class CloudState:
             raise CloudStateError("control_api_" + safe)
         return result
 
-    def moderate_frame(
+    def moderate_video(
         self,
-        image_data_url: str,
+        video_data_url: str,
         *,
         platform: str,
         title: str = "",
         caption: str = "",
     ) -> dict[str, Any]:
-        """Request a preliminary visual signal; the endpoint never auto-approves content."""
+        """Request synchronized video+audio content signals; never auto-approves."""
         if platform not in {"youtube", "tiktok", "instagram"}:
             raise ValueError("invalid_vision_platform")
-        if not isinstance(image_data_url, str) or not image_data_url.startswith(
-            ("data:image/jpeg;base64,", "data:image/png;base64,")
-        ):
-            raise ValueError("vision_image_data_url_required")
+        if not isinstance(video_data_url, str) or not video_data_url.startswith("data:video/mp4;base64,"):
+            raise ValueError("vision_video_data_url_required")
+        if len(video_data_url) > 22_400_000:
+            raise ValueError("vision_video_size_invalid")
         payload = {
-            "image": image_data_url,
+            "video": video_data_url,
             "platform": platform,
             "title": title[:500],
             "caption": caption[:1500],
         }
         result = self._request(
             "POST",
-            "/api/brain/moderate-frame",
+            "/api/brain/moderate-video",
             payload,
-            max_body_bytes=2 * 1024 * 1024,
+            max_body_bytes=23 * 1024 * 1024,
         )
         checks = result.get("checks")
-        if not isinstance(checks, dict):
-            raise CloudStateError("control_api_vision_checks_missing")
-        required = ("poppy_relevant", "is_edit", "insults_poppy", "insults_other_games", "high_effort")
-        if any(type(checks.get(key)) is not bool for key in required):
-            raise CloudStateError("control_api_vision_checks_invalid")
-        confidence = result.get("confidence")
-        if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
-            raise CloudStateError("control_api_vision_confidence_invalid")
-        return {
-            **{key: checks[key] for key in required},
-            "vision_confidence": float(confidence),
+        probabilities = result.get("probabilities")
+        required = (
+            "poppy_relevant", "is_edit", "insults_poppy",
+            "insults_other_games", "high_effort", "has_music",
+        )
+        if not isinstance(checks, dict) or not isinstance(probabilities, dict):
+            raise CloudStateError("control_api_moderation_checks_missing")
+        output: dict[str, Any] = {
+            "vision_confidence": float(result.get("confidence", 0.0)),
             "vision_model": str(result.get("model", ""))[:100],
-            "audio_review_required": result.get("audio_review_required") is True,
-            "human_review_required": result.get("human_review_required") is not False,
+            "human_review_required": True,
+            "audio_review_required": checks.get("has_music") is None,
             "auto_approved": False,
             "publishing": False,
         }
+        for key in required:
+            check = checks.get(key)
+            probability = probabilities.get(key)
+            if probability is not None and (
+                not isinstance(probability, (int, float)) or not 0 <= probability <= 1
+            ):
+                raise CloudStateError("control_api_moderation_probability_invalid")
+            if type(check) is bool:
+                output[key] = check
+            elif check is not None:
+                raise CloudStateError("control_api_moderation_check_invalid")
+        return output
 
     def create_run(self, trigger_type: str = "manual", run_id: str | None = None) -> str:
         identifier = run_id or str(uuid.uuid4())
