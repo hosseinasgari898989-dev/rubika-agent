@@ -268,33 +268,25 @@ const read = async response => ({ status: response.status, body: await response.
   }), env()));
   assert.equal(response.status, 200);
 }
-function sampleVideoDataUrl() {
+function sampleAudioDataUrl() {
   const bytes = Buffer.concat([
-    Buffer.from([0, 0, 0, 24]),
-    Buffer.from("ftypisom"),
-    Buffer.alloc(900, 7),
+    Buffer.from("ID3"),
+    Buffer.alloc(1400, 7),
   ]);
-  return "data:video/mp4;base64," + bytes.toString("base64");
+  return "data:audio/mpeg;base64," + bytes.toString("base64");
 }
 
-function makeOmniAI() {
+function makeOmniAI(probability = 0.97) {
   return {
     run: async (model, input) => {
       assert.equal(model, "@cf/cloudflare/clef-omni");
       assert.equal(input.model, "clef-omni");
-      assert.equal(input.videos.length, 1);
-      assert.equal(input.videos[0].startsWith("data:video/mp4;base64,"), true);
-      assert.equal(Object.keys(input.questions).length, 4);
-      assert.deepEqual(Object.keys(input.questions), [
-        "has_music", "is_poppy_playtime", "is_edit", "high_quality_edit",
-      ]);
+      assert.equal(input.audio.length, 1);
+      assert.equal(input.audio[0].startsWith("data:audio/mpeg;base64,"), true);
+      assert.equal("videos" in input, false);
+      assert.deepEqual(Object.keys(input.questions), ["has_music"]);
       return {
-        answers: {
-          has_music: { noul: 0.97 },
-          is_poppy_playtime: { noul: 0.99 },
-          is_edit: { noul: 0.95 },
-          high_quality_edit: { noul: 0.93 },
-        },
+        answers: { has_music: { noul: probability } },
         usage: { input_tokens: 9000 },
       };
     },
@@ -303,19 +295,17 @@ function makeOmniAI() {
 {
   const state = env();
   state.AI = makeOmniAI();
-  const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
+  const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
     method: "POST",
-    body: { video: sampleVideoDataUrl(), platform: "youtube", title: "Poppy Playtime edit", caption: "#edit" },
+    body: { audio: sampleAudioDataUrl(), platform: "youtube", title: "Poppy Playtime edit", caption: "#edit" },
   }), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.model, "@cf/cloudflare/clef-omni");
   assert.equal(response.body.checks.has_music, true);
-  assert.equal(response.body.checks.is_poppy_playtime, true);
-  assert.equal(response.body.checks.is_edit, true);
-  assert.equal(response.body.checks.high_quality_edit, true);
-  assert.deepEqual(Object.keys(response.body.checks), [
-    "has_music", "is_poppy_playtime", "is_edit", "high_quality_edit",
-  ]);
+  assert.equal(response.body.checks.has_music, true);
+  assert.equal(response.body.checks.has_music, true);
+  assert.equal(response.body.checks.has_music, true);
+  assert.deepEqual(Object.keys(response.body.checks), ["has_music"]);
   assert.equal(response.body.human_review_required, true);
   assert.equal(response.body.auto_approved, false);
   assert.equal(response.body.publishing, false);
@@ -324,22 +314,22 @@ function makeOmniAI() {
 {
   const state = env();
   state.AI = makeOmniAI();
-  const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
+  const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
     method: "POST",
-    body: { video: "data:text/html;base64," + Buffer.from("x".repeat(900)).toString("base64"), platform: "youtube" },
+    body: { audio: "data:text/html;base64," + Buffer.from("x".repeat(1400)).toString("base64"), platform: "youtube" },
   }), state));
   assert.equal(response.status, 400);
-  assert.equal(response.body.error, "moderation_video_format_invalid");
+  assert.equal(response.body.error, "moderation_audio_format_invalid");
   assert.equal(state.DB.aiUsageDaily.size, 0);
 }
 {
   const state = env();
   state.AI = { run: async () => { throw new Error("secret provider body"); } };
-  const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
-    method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" },
+  const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
+    method: "POST", body: { audio: sampleAudioDataUrl(), platform: "youtube" },
   }), state));
   assert.equal(response.status, 502);
-  assert.equal(response.body.error, "vision_inference_failed");
+  assert.equal(response.body.error, "music_inference_failed");
   assert.equal(JSON.stringify(response.body).includes("secret provider body"), false);
   assert.equal(state.DB.aiUsageDaily.size, 1);
 }
@@ -348,16 +338,16 @@ function makeOmniAI() {
   state.AI = makeOmniAI();
   // More than the former 10-request custom cap should now be allowed.
   for (let index = 0; index < 12; index++) {
-    const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
-      method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" },
+    const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
+      method: "POST", body: { audio: sampleAudioDataUrl(), platform: "youtube" },
     }), state));
     assert.equal(response.status, 200);
   }
   assert.equal(state.DB.aiUsageDaily.values().next().value, 12);
 }
 {
-  const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
-    method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" }, token: null,
+  const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
+    method: "POST", body: { audio: sampleAudioDataUrl(), platform: "youtube" }, token: null,
   }), env()));
   assert.equal(response.status, 401);
 }
