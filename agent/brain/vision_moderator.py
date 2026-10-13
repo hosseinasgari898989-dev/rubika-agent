@@ -118,25 +118,30 @@ class CloudflareVideoModerator:
         if not isinstance(confidence, (float, int)) or not 0 <= confidence <= 1:
             raise VisionModeratorError("vision_confidence_invalid")
 
-        # Workers AI answers only one question: is music audible in the clip?
-        required = ("has_music",)
-        # The Worker already applies conservative probability thresholds to each
-        # question separately. Keep every independently thresholded boolean;
-        # an aggregate confidence just below the separate threshold must not erase
-        # otherwise usable answers. Unknown answers remain unknown and prevent
-        # eligibility in evaluate_edit_candidate.
+        # The model returns independent, conservatively thresholded signals.
+        # Missing core fields stop eligibility; quality is required only for
+        # sources whose repository policy requests the extra quality gate.
+        core_fields = ("has_music", "is_poppy_playtime", "is_edit")
+        optional_fields = ("high_quality_edit",)
         known_answers = {
-            key: result[key] for key in required if type(result.get(key)) is bool
+            key: result[key]
+            for key in (*core_fields, *optional_fields)
+            if type(result.get(key)) is bool
         }
-        missing_answers = [
-            key for key in required if type(result.get(key)) is not bool
+        missing_core = [
+            key for key in core_fields if type(result.get(key)) is not bool
+        ]
+        missing_all = [
+            key for key in (*core_fields, *optional_fields)
+            if type(result.get(key)) is not bool
         ]
         return {
             **known_answers,
             "vision_confidence": float(confidence),
             "vision_model": str(result.get("vision_model", ""))[:100],
-            "moderation_uncertain": bool(missing_answers),
-            "moderation_missing_fields": missing_answers,
+            "moderation_uncertain": bool(missing_core),
+            "moderation_missing_fields": missing_all,
+            "quality_check_missing": type(result.get("high_quality_edit")) is not bool,
             "aggregate_confidence_below_threshold": confidence < self.minimum_confidence,
             "sample_truncated": truncated,
             "human_review_required": True,
