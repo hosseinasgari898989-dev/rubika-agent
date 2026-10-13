@@ -302,14 +302,25 @@ function makeOmniAI(probability = 0.97) {
   assert.equal(response.status, 200);
   assert.equal(response.body.model, "@cf/cloudflare/clef-omni");
   assert.equal(response.body.checks.has_music, true);
-  assert.equal(response.body.checks.has_music, true);
-  assert.equal(response.body.checks.has_music, true);
-  assert.equal(response.body.checks.has_music, true);
+  assert.equal(response.body.probabilities.has_music, 0.97);
+  assert.equal(response.body.diagnostic.has_music, "music_detected_above_threshold");
   assert.deepEqual(Object.keys(response.body.checks), ["has_music"]);
   assert.equal(response.body.human_review_required, true);
   assert.equal(response.body.auto_approved, false);
   assert.equal(response.body.publishing, false);
   assert.equal(state.DB.aiUsageDaily.size, 1);
+}
+{
+  const state = env();
+  state.AI = makeOmniAI(0.55);
+  const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
+    method: "POST",
+    body: { audio: sampleAudioDataUrl(), platform: "tiktok" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.checks.has_music, null);
+  assert.equal(response.body.probabilities.has_music, 0.55);
+  assert.equal(response.body.diagnostic.has_music, "music_probability_ambiguous");
 }
 {
   const state = env();
