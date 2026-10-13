@@ -107,12 +107,28 @@ def run_batch(
     ordered = _round_robin_candidates(candidates, platforms=platforms)
 
     unavailable: dict[str, str] = {}
+    unverified_youtube_count = 0
     if "youtube" in platforms and (
         not os.getenv("RELAY_BASE_URL", "").strip()
         or not os.getenv("RELAY_API_TOKEN", "").strip()
     ):
         unavailable["youtube"] = "youtube_relay_not_configured"
         ordered = [candidate for candidate in ordered if candidate.platform != "youtube"]
+    elif "youtube" in platforms:
+        verified_ordered: list[Candidate] = []
+        for candidate in ordered:
+            if candidate.platform != "youtube":
+                verified_ordered.append(candidate)
+                continue
+            identity = f"{candidate.platform}:{candidate.external_id}"
+            row = rows_by_identity.get(identity, {})
+            if row.get("freshness_verified") is True:
+                verified_ordered.append(candidate)
+            else:
+                unverified_youtube_count += 1
+        ordered = verified_ordered
+        if unverified_youtube_count:
+            unavailable["youtube"] = "publication_date_unverified"
 
     summary: dict[str, Any] = {
         "ok": True,
@@ -128,6 +144,7 @@ def run_batch(
         "failed_count": 0,
         "publishing": False,
         "unavailable_platforms": unavailable,
+        "unverified_youtube_candidates_skipped": unverified_youtube_count,
         "results": [],
     }
     attempted_ids: set[str] = set()
