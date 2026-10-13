@@ -154,7 +154,7 @@ class TikTokSourcePolicyTests(unittest.TestCase):
 
     def test_youtube_delivery_remains_paused_while_discovery_policy_stays_separate(self):
         self.assertFalse(delivery_enabled("youtube"))
-        self.assertFalse(delivery_enabled("tiktok"))
+        self.assertTrue(delivery_enabled("tiktok"))
 
 
 if __name__ == "__main__":
