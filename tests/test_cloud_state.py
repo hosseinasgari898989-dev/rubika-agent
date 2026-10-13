@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from agent.brain.cloud_state import CloudState, CloudStateError
+from agent.brain.recovery import call_with_bounded_retry, is_retryable_error
 from agent.brain.models import Candidate, Evaluation, InspectionResult
 from types import SimpleNamespace
 
@@ -15,6 +16,38 @@ TOKEN = "test-token-value-with-more-than-thirty-two-characters"
 
 
 class CloudStateTests(unittest.TestCase):
+    def test_brain_retries_only_allowlisted_transient_infrastructure_errors(self):
+        calls = []
+        sleeps = []
+
+        def operation():
+            calls.append(True)
+            if len(calls) == 1:
+                raise CloudStateError("control_api_unreachable")
+            return {"has_music": True}
+
+        value, receipt = call_with_bounded_retry(
+            operation, sleeper=lambda seconds: sleeps.append(seconds), sleep_seconds=0.25
+        )
+        self.assertEqual(value, {"has_music": True})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.25])
+        self.assertTrue(receipt["recovered"])
+        self.assertEqual(receipt["error_codes"], ["control_api_unreachable"])
+
+    def test_brain_never_retries_content_uncertainty_or_permission_errors(self):
+        class UncertainError(RuntimeError):
+            code = "music_probability_ambiguous"
+
+        self.assertFalse(is_retryable_error(UncertainError()))
+        calls = []
+        with self.assertRaises(UncertainError):
+            call_with_bounded_retry(
+                lambda: (calls.append(True), (_ for _ in ()).throw(UncertainError()))[1],
+                sleeper=lambda _seconds: self.fail("uncertain content must not be retried"),
+            )
+        self.assertEqual(len(calls), 1)
+
     def test_requires_https_and_long_token(self):
         with self.assertRaises(ValueError):
             CloudState("http://worker.example", TOKEN)
