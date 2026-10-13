@@ -43,27 +43,65 @@ def _has_any(text: str, terms: Iterable[str]) -> bool:
 
 
 def required_moderation_fields(candidate: Candidate) -> tuple[str, ...]:
-    """Signals required for this candidate according to trusted-source policy."""
-    policy = candidate.source_policy or {}
-    fields = ["has_music"]
-    if policy.get("require_visual_poppy_check") is True:
-        fields.append("is_poppy_playtime")
-    if policy.get("require_visual_edit_check") is True:
-        fields.append("is_edit")
-    if policy.get("require_ai_quality_check") is True:
-        fields.append("high_quality_edit")
-    return tuple(fields)
+    """Only soundtrack music is AI-moderated; all other checks are agent-brain rules."""
+    return ("has_music",)
+
+
+EDIT_SIGNAL_RE = re.compile(
+    r"(?<![a-z0-9])(?:edit|edits|edited|editing|aep|amv|montage|velocity|fanedit|sync)(?![a-z0-9])"
+)
+SUPPORTED_VIDEO_CODECS = frozenset({
+    "h264", "avc1", "hevc", "h265", "vp9", "av1", "mpeg4",
+})
+
+
+def _candidate_content_text(candidate: Candidate) -> str:
+    # Do not let a creator's username alone prove that a specific upload is relevant or an edit.
+    return _normalize_text(" ".join((
+        candidate.title, candidate.caption, " ".join(candidate.hashtags)
+    )))
+
+
+def _has_edit_signal(candidate: Candidate) -> bool:
+    return EDIT_SIGNAL_RE.search(_candidate_content_text(candidate)) is not None
+
+
+def _technical_quality_gate(inspection: InspectionResult, minimum_short_side: int) -> bool:
+    """Conservative non-AI quality proxy: readable resolution, valid codec, duration and size."""
+    if not inspection.ok or inspection.media_type != "video":
+        return False
+    if not inspection.width or not inspection.height:
+        return False
+    if min(inspection.width, inspection.height) < minimum_short_side:
+        return False
+    if not isinstance(inspection.duration_seconds, (int, float)):
+        return False
+    if not 3 <= inspection.duration_seconds <= 180:
+        return False
+    if inspection.size_bytes < 50_000:
+        return False
+    codec = str(inspection.video_codec or "").casefold()
+    if codec not in SUPPORTED_VIDEO_CODECS:
+        return False
+    return inspection.size_bytes / max(float(inspection.duration_seconds), 1.0) >= 10_000
 
 
 def precheck_edit_candidate(candidate: Candidate) -> tuple[str, ...]:
-    """Cheap metadata check before download; actual video signals are checked later."""
-    text = candidate.searchable_text
+    """Screen source metadata before download; never infer relevance from creator identity."""
+    content = _candidate_content_text(candidate)
+    policy = candidate.source_policy or {}
+    topic_required = policy.get("require_poppy_relevance_check") is True
     reasons: list[str] = []
-    visual_topic_check = bool((candidate.source_policy or {}).get("require_visual_poppy_check"))
-    if not _has_any(text, RELEVANCE_TERMS) and not visual_topic_check:
-        reasons.append("poppy_relevance_not_found_by_python")
-    if _has_any(text, NEGATIVE_TEXT_TERMS):
+    relevant = _has_any(content, RELEVANCE_TERMS)
+    if not relevant:
+        reasons.append(
+            "poppy_relevance_not_found_by_brain"
+            if topic_required else "poppy_relevance_not_found_by_python"
+        )
+    if _has_any(content, NEGATIVE_TEXT_TERMS):
         reasons.append("negative_or_insulting_text_signal")
+    if policy.get("require_edit_signal_check") is True and not _has_edit_signal(candidate):
+        reasons.append("edit_signal_not_found_by_brain")
     return tuple(dict.fromkeys(reasons))
 
 
@@ -86,15 +124,17 @@ def evaluate_edit_candidate(
     warnings: list[str] = []
     checks: dict[str, Any] = {}
 
-    text = candidate.searchable_text
-    metadata_relevant = _has_any(text, RELEVANCE_TERMS)
-    text_insult_signal = _has_any(text, NEGATIVE_TEXT_TERMS)
-    visual_topic_required = policy.get("require_visual_poppy_check") is True
-    visual_edit_required = policy.get("require_visual_edit_check") is True
-    quality_required = policy.get("require_ai_quality_check") is True
-    visual_poppy = moderation.get("is_poppy_playtime")
-    visual_edit = moderation.get("is_edit")
-    quality_ok = moderation.get("high_quality_edit")
+    content_text = _candidate_content_text(candidate)
+    metadata_relevant = _has_any(content_text, RELEVANCE_TERMS)
+    text_insult_signal = _has_any(content_text, NEGATIVE_TEXT_TERMS)
+    policy = candidate.source_policy or {}
+    topic_required = policy.get("require_poppy_relevance_check") is True
+    edit_required = policy.get("require_edit_signal_check") is True
+    quality_required = policy.get("require_brain_quality_check") is True
+    edit_signal = _has_edit_signal(candidate)
+    minimum_short_side = policy.get("minimum_source_short_side", 480)
+    if type(minimum_short_side) is not int or minimum_short_side < 1:
+        minimum_short_side = 720
 
     if candidate.platform not in {"youtube", "tiktok", "instagram"}:
         reasons.append("not_an_edit_source_platform")
@@ -118,34 +158,36 @@ def evaluate_edit_candidate(
     checks["policy_track"] = "owner_selected_creator" if trusted else "unknown_creator_full_review"
     checks["python_metadata_relevance"] = metadata_relevant
     checks["python_text_insult_signal"] = text_insult_signal
-    checks["visual_topic_check_required"] = visual_topic_required
-    checks["visual_edit_check_required"] = visual_edit_required
+    checks["topic_check_method"] = "agent_brain_public_metadata"
+    checks["edit_check_method"] = "agent_brain_edit_signal_rules"
+    checks["quality_check_method"] = "agent_brain_technical_quality" if quality_required else "not_required_by_source_policy"
+    checks["topic_check_required"] = topic_required
+    checks["edit_check_required"] = edit_required
     checks["quality_check_required"] = quality_required
     checks["output_format"] = policy.get("output_format", "square_1080x1080")
-    checks["text_scan_scope"] = "title_caption_hashtags_source_key"
+    checks["text_scan_scope"] = "title_caption_hashtags_only"
 
-    if not metadata_relevant and not visual_topic_required:
-        reasons.append("poppy_relevance_not_found_by_python")
+    if not metadata_relevant:
+        reasons.append(
+            "poppy_relevance_not_found_by_brain"
+            if topic_required else "poppy_relevance_not_found_by_python"
+        )
     if text_insult_signal:
         reasons.append("negative_or_insulting_text_signal")
-    if visual_topic_required and type(visual_poppy) is bool:
-        checks["is_poppy_playtime"] = visual_poppy
-        if not visual_poppy:
-            reasons.append("visual_content_not_poppy_playtime")
-    if visual_edit_required and type(visual_edit) is bool:
-        checks["is_edit"] = visual_edit
-        if not visual_edit:
-            reasons.append("visual_content_not_an_edit")
-    if quality_required and type(quality_ok) is bool:
+    if topic_required:
+        checks["is_poppy_playtime"] = metadata_relevant
+    if edit_required:
+        checks["is_edit"] = edit_signal
+        if not edit_signal:
+            reasons.append("edit_signal_not_found_by_brain")
+    if quality_required:
+        quality_ok = _technical_quality_gate(inspection, minimum_short_side)
         checks["high_quality_edit"] = quality_ok
         if not quality_ok:
-            reasons.append("visual_edit_quality_below_policy")
+            reasons.append("brain_technical_quality_check_failed")
 
     if inspection.ok and inspection.media_type == "video":
         width, height = inspection.width, inspection.height
-        minimum_short_side = policy.get("minimum_source_short_side", 480)
-        if type(minimum_short_side) is not int or minimum_short_side < 1:
-            minimum_short_side = 720
         if not width or not height or min(width, height) < minimum_short_side:
             reasons.append("source_below_policy_minimum_resolution")
         output_format = policy.get("output_format", "square_1080x1080")
@@ -179,12 +221,13 @@ def evaluate_edit_candidate(
         if moderation["has_music"] is False:
             reasons.append("music_not_detected")
         checks["music_detection_method"] = moderation.get("music_detection_method", "workers_ai_audio_check")
-    if visual_topic_required and type(visual_poppy) is not bool:
-        warnings.append("visual_poppy_classification_review_required")
-    if visual_edit_required and type(visual_edit) is not bool:
-        warnings.append("visual_edit_classification_review_required")
-    if quality_required and type(quality_ok) is not bool:
-        warnings.append("visual_quality_classification_review_required")
+    if "has_music" in missing:
+        reason = str(moderation.get("music_decision_reason") or "music_answer_missing")
+        safe_reason = re.sub(r"[^a-zA-Z0-9_-]", "", reason.lower())[:80]
+        checks["music_decision_reason"] = safe_reason or "music_answer_missing"
+        probability = moderation.get("music_probability")
+        if type(probability) in {int, float} and 0 <= probability <= 1:
+            checks["music_probability"] = float(probability)
 
     requires_review = bool(missing)
     if reasons:
