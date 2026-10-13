@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -15,6 +15,7 @@ from .inspector import inspect_media
 from .models import Candidate, Evaluation, InspectionResult
 from .normalizer import normalize_video_square_1080
 from .policy import evaluate_edit_candidate, precheck_edit_candidate
+from .recovery import call_with_bounded_retry, recovery_guidance, safe_error_code
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,10 @@ def stage_edit_batch(
             result.skipped.append({"item": identity, "reason": local_reasons[0]})
             continue
         original: Path | None = None
+        moderation: Mapping[str, Any] = {}
+        recovery_receipt: dict[str, Any] = {
+            "attempts": 0, "recovered": False, "error_codes": [], "action": "no_moderation_attempt"
+        }
         try:
             original = Path(download(candidate))
             first = inspector(original, "video")
@@ -130,7 +135,13 @@ def stage_edit_batch(
                     "music_detection_method": "python_no_audio_stream",
                 }
             else:
-                moderation = moderate(candidate, original)
+                moderation_value, recovery_receipt = call_with_bounded_retry(
+                    lambda: moderate(candidate, original),
+                    max_attempts=2,
+                    sleep_seconds=0.75,
+                )
+                moderation = dict(moderation_value or {})
+                moderation["recovery_diagnostics"] = recovery_receipt
             evaluation = evaluate_edit_candidate(
                 candidate, first,
                 seen_external_ids=seen_ids,
@@ -138,6 +149,14 @@ def stage_edit_batch(
                 trusted_source_keys=trusted_source_keys,
                 moderation=moderation,
             )
+            if recovery_receipt.get("recovered"):
+                updated_checks = dict(evaluation.checks)
+                updated_checks["moderation_recovery"] = recovery_receipt
+                evaluation = replace(
+                    evaluation,
+                    warnings=tuple(dict.fromkeys((*evaluation.warnings, "music_moderation_recovered_after_retry"))),
+                    checks=updated_checks,
+                )
             if not evaluation.eligible:
                 if evaluation.reasons:
                     reason = evaluation.reasons[0]
@@ -150,7 +169,21 @@ def stage_edit_batch(
                     )
                 else:
                     reason = "ineligible"
-                result.skipped.append({"item": identity, "reason": reason})
+                skipped_row: dict[str, Any] = {"item": identity, "reason": reason}
+                for key in (
+                    "music_probability", "music_decision_reason", "music_detection_method",
+                    "music_model", "music_confidence", "music_check_uncertain",
+                ):
+                    value = moderation.get(key)
+                    if value is not None:
+                        skipped_row[key] = str(value)[:120]
+                if recovery_receipt.get("attempts"):
+                    skipped_row["recovery_action"] = str(recovery_receipt.get("action", ""))[:80]
+                    skipped_row["recovery_attempts"] = str(recovery_receipt.get("attempts", 0))
+                    skipped_row["recovery_error_codes"] = ",".join(
+                        str(code)[:80] for code in recovery_receipt.get("error_codes", [])[:3]
+                    )
+                result.skipped.append(skipped_row)  # type: ignore[arg-type]
                 original.unlink(missing_ok=True)
                 continue
 
@@ -215,13 +248,20 @@ def stage_edit_batch(
         except Exception as exc:
             # Report only the downloader/adapter's safe machine error code when one
             # is provided; never expose response bodies, URLs, or credentials.
-            safe_code = getattr(exc, "code", None)
-            if not isinstance(safe_code, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", safe_code):
-                safe_code = type(exc).__name__
-            result.skipped.append({
+            safe_code = safe_error_code(exc)
+            row: dict[str, Any] = {
                 "item": identity,
                 "reason": "pipeline_error_" + safe_code,
-            })
+                "recovery_guidance": recovery_guidance(safe_code),
+            }
+            receipt = getattr(exc, "recovery_diagnostics", None)
+            if isinstance(receipt, dict):
+                row["recovery_action"] = str(receipt.get("action", ""))[:80]
+                row["recovery_attempts"] = str(receipt.get("attempts", 0))
+                row["recovery_error_codes"] = ",".join(
+                    str(code)[:80] for code in receipt.get("error_codes", [])[:3]
+                )
+            result.skipped.append(row)  # type: ignore[arg-type]
 
     result.status = "ready" if all(count == 0 for count in remaining.values()) else "partial"
     return result
