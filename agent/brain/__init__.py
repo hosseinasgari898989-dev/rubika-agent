@@ -13,7 +13,7 @@ from .relay_client import AuthorizedYouTubeRelay, RelayClientError
 from .authorization import SourceRegistry, SourceRegistryError, PermissionDecision
 from .orchestrator import StagingOrchestrator, StageJobResult, candidates_from_report
 from .official_stage import stage_official_media
-from .vision_moderator import CloudflareVisionModerator, VisionModeratorError
+from .vision_moderator import CloudflareVideoModerator, VisionModeratorError
 
 __all__ = [
     "Candidate", "InspectionResult", "Evaluation",
@@ -24,5 +24,5 @@ __all__ = [
     "AuthorizedYouTubeRelay", "RelayClientError",
     "SourceRegistry", "SourceRegistryError", "PermissionDecision",
     "StagingOrchestrator", "StageJobResult", "candidates_from_report",
-    "stage_official_media", "CloudflareVisionModerator", "VisionModeratorError",
+    "stage_official_media", "CloudflareVideoModerator", "VisionModeratorError",
 ]
