@@ -161,14 +161,17 @@ class MobTranslationTests(unittest.TestCase):
     def test_urls_are_removed_from_original_and_translation_but_source_is_kept_as_metadata(self):
         result = format_mob_post(
             {
-                "original_caption": "Read more at https://example.com/news now",
+                "original_caption": "Read more at https://example.com/news now or visit mobentertainment.com/news",
                 "canonical_url": "https://mobentertainment.com/news/sample",
             },
-            translation_provider=lambda _: "بیشتر بخوانید: https://example.com/fa",
+            translation_provider=lambda _: "بیشتر بخوانید: https://example.com/fa یا mobentertainment.com/fa",
         )
         self.assertEqual(result["translation_status"], "translated")
         self.assertNotIn("http://", result["caption"])
         self.assertNotIn("https://", result["caption"])
+        self.assertNotIn("www.", result["caption"])
+        self.assertNotIn("mobentertainment.com", result["caption"])
+        self.assertNotIn("example.com", result["caption"])
         self.assertIn("🎮 ماب انترتینمنت پستی منتشر کرد و گفت:", result["caption"])
         self.assertIn("📝 ترجمه فارسی:", result["caption"])
         self.assertEqual(result["source_url"], "https://mobentertainment.com/news/sample")
