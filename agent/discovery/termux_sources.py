@@ -300,7 +300,6 @@ def discover_youtube_metadata(
         "ignoreerrors": True,
         "skip_download": True,
         "extract_flat": True,
-        "noplaylist": True,
         "socket_timeout": 15,
     }
     candidates: dict[str, dict[str, Any]] = {}
