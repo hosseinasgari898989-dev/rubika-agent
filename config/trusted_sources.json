@@ -1,5 +1,6 @@
 {
   "version": 1,
   "sources": [],
-  "note": "Empty by design. Add only creator/channel accounts the owner has reviewed and trusts."
+  "items": [],
+  "note": "Empty by design: no third-party source or item can be downloaded until the owner records explicit reuse permission. permission_basis must be owner, explicit_permission, or license; enabled and permission_confirmed must both be true."
 }
