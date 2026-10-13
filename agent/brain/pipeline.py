@@ -35,14 +35,20 @@ class BatchResult:
     skipped: list[dict[str, str]] = field(default_factory=list)
 
     @property
-    def ready_to_publish(self) -> bool:
+    def ready_for_review(self) -> bool:
         if self.status != "ready":
             return False
         counts = {platform: 0 for platform in self.required_counts}
         for item in self.staged:
-            if item.candidate.platform in counts:
+            if item.candidate.platform in counts and item.evaluation.eligible:
                 counts[item.candidate.platform] += 1
         return counts == self.required_counts
+
+    @property
+    def ready_to_publish(self) -> bool:
+        # This branch never sends media to Rubika. Human review/approval and a
+        # separately enabled production publisher are required before publishing.
+        return False
 
 
 def _safe_component(value: str) -> str:
@@ -104,9 +110,11 @@ def stage_edit_batch(
                     "item": identity,
                     "reason": "media_validation_failed:" + ",".join(first.errors),
                 })
+                original.unlink(missing_ok=True)
                 continue
             if first.sha256 and first.sha256 in seen_digests:
                 result.skipped.append({"item": identity, "reason": "duplicate_file_hash"})
+                original.unlink(missing_ok=True)
                 continue
 
             moderation = moderate(candidate, original)
@@ -120,6 +128,7 @@ def stage_edit_batch(
             if not evaluation.eligible:
                 reason = evaluation.reasons[0] if evaluation.reasons else "needs_review"
                 result.skipped.append({"item": identity, "reason": reason})
+                original.unlink(missing_ok=True)
                 continue
 
             publish_path = original
@@ -134,6 +143,8 @@ def stage_edit_batch(
                 final_inspection = inspector(publish_path, "video")
                 if not final_inspection.ok or final_inspection.width != 1080 or final_inspection.height != 1080:
                     result.skipped.append({"item": identity, "reason": "normalized_output_invalid"})
+                    destination.unlink(missing_ok=True)
+                    original.unlink(missing_ok=True)
                     continue
 
             storage_key = storage.upload(publish_path, "staging") if storage is not None else None
