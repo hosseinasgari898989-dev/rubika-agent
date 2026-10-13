@@ -104,8 +104,7 @@ function canonicalUrlFor(platform, value) {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password ||
-      parsed.search || parsed.hash) return null;
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) return null;
   const host = parsed.hostname.toLowerCase();
   const hosts = {
     tiktok: ["tiktok.com"],
@@ -115,6 +114,28 @@ function canonicalUrlFor(platform, value) {
   };
   const allowed = hosts[platform] || [];
   if (!allowed.some(domain => host === domain || host.endsWith("." + domain))) return null;
+
+  if (platform === "youtube") {
+    // Only accept the single public video ID parameter; reject other parameters
+    // so signed/temporary URLs cannot be stored as canonical source URLs.
+    if (host === "youtu.be" || host.endsWith(".youtu.be")) {
+      if (parsed.search || !/^\/[A-Za-z0-9_-]{11}\/?$/.test(parsed.pathname)) return null;
+      const id = parsed.pathname.split("/").filter(Boolean)[0];
+      return "https://www.youtube.com/watch?v=" + id;
+    }
+    if (parsed.pathname === "/watch") {
+      if ([...parsed.searchParams.keys()].some(key => key !== "v") ||
+          [...parsed.searchParams.keys()].length !== 1) return null;
+      const id = parsed.searchParams.get("v") || "";
+      if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+      return "https://www.youtube.com/watch?v=" + id;
+    }
+    const shorts = /^\/shorts\/([A-Za-z0-9_-]{11})\/?$/.exec(parsed.pathname);
+    if (shorts && !parsed.search) return "https://www.youtube.com/shorts/" + shorts[1];
+    return null;
+  }
+
+  if (parsed.search) return null;
   return parsed.toString();
 }
 
