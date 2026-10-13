@@ -158,7 +158,7 @@ class CloudStateTests(unittest.TestCase):
 
 
 
-    def test_moderate_video_allows_bounded_video_payload_over_normal_json_limit(self):
+    def test_moderate_music_allows_bounded_audio_payload_over_normal_json_limit(self):
         state = CloudState("https://worker.example", TOKEN)
         captured = {}
 
@@ -172,17 +172,16 @@ class CloudStateTests(unittest.TestCase):
                 "checks": {"has_music": True},
                 "probabilities": {"has_music": 0.96},
                 "confidence": 0.92,
+                "diagnostic": {"has_music": "music_detected_above_threshold"},
                 "human_review_required": True,
                 "auto_approved": False,
                 "publishing": False,
             }).encode("utf-8"))
 
-        binary = b"\\x00\\x00\\x00\\x18ftypisom" + b"x" * 40000
-        video = "data:video/mp4;base64," + base64.b64encode(binary).decode("ascii")
+        binary = b"ID3" + b"x" * 40000
+        audio = "data:audio/mpeg;base64," + base64.b64encode(binary).decode("ascii")
         with patch("urllib.request.urlopen", side_effect=fake_open):
-            result = state.moderate_video(
-                video, platform="youtube", title="Poppy edit", caption="#edit"
-            )
+            result = state.moderate_music(audio, platform="youtube")
 
         self.assertTrue(result["has_music"])
         self.assertNotIn("poppy_relevant", result)
@@ -190,7 +189,8 @@ class CloudStateTests(unittest.TestCase):
         self.assertTrue(result["human_review_required"])
         self.assertFalse(result["auto_approved"])
         self.assertGreater(len(captured["body"]), 32 * 1024)
-        self.assertTrue(captured["url"].endswith("/api/brain/moderate-video"))
+        self.assertTrue(captured["body"].find(b"data:audio/mpeg;base64,") >= 0)
+        self.assertTrue(captured["url"].endswith("/api/brain/moderate-music"))
         self.assertEqual(captured["auth"], "Bearer " + TOKEN)
 
 if __name__ == "__main__":
