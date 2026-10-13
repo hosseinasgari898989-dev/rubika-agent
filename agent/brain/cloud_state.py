@@ -42,6 +42,8 @@ class CloudState:
         method: str,
         path: str,
         payload: Mapping[str, Any] | None = None,
+        *,
+        max_body_bytes: int = 32 * 1024,
     ) -> dict[str, Any]:
         if not path.startswith("/api/brain/"):
             raise ValueError("path_outside_brain_api")
@@ -49,7 +51,7 @@ class CloudState:
             raise ValueError("unsupported_method")
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            if len(body) > 32 * 1024:
+            if len(body) > max_body_bytes:
                 raise ValueError("request_too_large")
         else:
             body = None
@@ -81,6 +83,52 @@ class CloudState:
             safe = re.sub(r"[^a-zA-Z0-9_-]", "", str(code).lower())[:60] or "rejected"
             raise CloudStateError("control_api_" + safe)
         return result
+
+    def moderate_frame(
+        self,
+        image_data_url: str,
+        *,
+        platform: str,
+        title: str = "",
+        caption: str = "",
+    ) -> dict[str, Any]:
+        """Request a preliminary visual signal; the endpoint never auto-approves content."""
+        if platform not in {"youtube", "tiktok", "instagram"}:
+            raise ValueError("invalid_vision_platform")
+        if not isinstance(image_data_url, str) or not image_data_url.startswith(
+            ("data:image/jpeg;base64,", "data:image/png;base64,")
+        ):
+            raise ValueError("vision_image_data_url_required")
+        payload = {
+            "image": image_data_url,
+            "platform": platform,
+            "title": title[:500],
+            "caption": caption[:1500],
+        }
+        result = self._request(
+            "POST",
+            "/api/brain/moderate-frame",
+            payload,
+            max_body_bytes=2 * 1024 * 1024,
+        )
+        checks = result.get("checks")
+        if not isinstance(checks, dict):
+            raise CloudStateError("control_api_vision_checks_missing")
+        required = ("poppy_relevant", "is_edit", "insults_poppy", "insults_other_games", "high_effort")
+        if any(type(checks.get(key)) is not bool for key in required):
+            raise CloudStateError("control_api_vision_checks_invalid")
+        confidence = result.get("confidence")
+        if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+            raise CloudStateError("control_api_vision_confidence_invalid")
+        return {
+            **{key: checks[key] for key in required},
+            "vision_confidence": float(confidence),
+            "vision_model": str(result.get("model", ""))[:100],
+            "audio_review_required": result.get("audio_review_required") is True,
+            "human_review_required": result.get("human_review_required") is not False,
+            "auto_approved": False,
+            "publishing": False,
+        }
 
     def create_run(self, trigger_type: str = "manual", run_id: str | None = None) -> str:
         identifier = run_id or str(uuid.uuid4())
