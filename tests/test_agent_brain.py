@@ -218,7 +218,7 @@ class PipelineTests(unittest.TestCase):
                 raw = Path(path).read_bytes()
                 return InspectionResult(
                     True, "video", hashlib.sha256(raw).hexdigest(), len(raw), "video/mp4",
-                    1080, 1920, 3.0, True, "h264", "aac",
+                    1080, 1080, 3.0, True, "h264", "aac",
                 )
 
             result = stage_edit_batch(
@@ -264,7 +264,7 @@ class PipelineTests(unittest.TestCase):
                 raw = b"silent video"
                 return InspectionResult(
                     True, "video", hashlib.sha256(raw).hexdigest(), len(raw),
-                    "video/mp4", 1080, 1920, 3.0, False, "h264", None,
+                    "video/mp4", 1080, 1080, 3.0, False, "h264", None,
                 )
             result = stage_edit_batch(
                 [candidate], required_counts={"tiktok": 1},
@@ -286,7 +286,7 @@ class PipelineTests(unittest.TestCase):
                 raw = Path(path).read_bytes()
                 return InspectionResult(
                     True, "video", hashlib.sha256(raw).hexdigest(), len(raw), "video/mp4",
-                    1080, 1920, 3.0, True, "h264", "aac",
+                    1080, 1080, 3.0, True, "h264", "aac",
                 )
 
             result = stage_edit_batch(
@@ -377,6 +377,38 @@ class DeliveryStateMachineTests(unittest.TestCase):
 
 
 class NormalizerGuardTests(unittest.TestCase):
+    def test_720_square_source_can_be_upscaled_to_square_1080_without_cropping(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.mp4"
+            destination = Path(folder) / "delivery.mp4"
+            source.write_bytes(b"fake 720 square source")
+
+            source_info = InspectionResult(
+                True, "video", "a" * 64, 500_000, "video/mp4",
+                720, 720, 17.5, True, "h264", "aac",
+            )
+            output_info = InspectionResult(
+                True, "video", "b" * 64, 800_000, "video/mp4",
+                1080, 1080, 17.5, True, "h264", "aac",
+            )
+
+            def fake_inspect(path, kind=None, **kwargs):
+                return source_info if Path(path) == source else output_info
+
+            def fake_ffmpeg(command, **kwargs):
+                self.assertIn("pad=1080:1080:(ow-iw)/2:(oh-ih)/2:color=black", command)
+                self.assertIn("flags=lanczos", " ".join(command))
+                Path(command[-1]).write_bytes(b"fake normalized square output")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("agent.brain.normalizer.inspect_media", side_effect=fake_inspect):
+                with patch("agent.brain.normalizer.subprocess.run", side_effect=fake_ffmpeg):
+                    result = normalize_video_square_1080(source, destination)
+
+            self.assertEqual((result["width"], result["height"]), (1080, 1080))
+            self.assertFalse(result["source_native_1080"])
+            self.assertTrue(result["upscaled"])
+
     def test_normalizer_refuses_same_source_and_destination(self):
         with tempfile.TemporaryDirectory() as folder:
             file = Path(folder) / "video.mp4"

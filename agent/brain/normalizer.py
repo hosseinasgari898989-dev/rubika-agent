@@ -27,14 +27,14 @@ def normalize_video_square_1080(
     inspection = inspect_media(source_path, "video", ffprobe=ffprobe)
     if not inspection.ok:
         raise NormalizeError("source_invalid:" + ",".join(inspection.errors))
-    if not inspection.supports_square_1080:
-        raise NormalizeError("source_too_small_for_true_1080_square")
+    if not inspection.supports_square_normalization:
+        raise NormalizeError("source_below_minimum_square_normalization_resolution")
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(source_path), "-map", "0:v:0", "-map", "0:a?",
-        "-vf", "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080",
+        "-vf", "scale=1080:1080:force_original_aspect_ratio=decrease:flags=lanczos,pad=1080:1080:(ow-iw)/2:(oh-ih)/2:color=black",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", str(destination_path),
@@ -56,6 +56,16 @@ def normalize_video_square_1080(
         raise NormalizeError("normalized_output_validation_failed")
     return {
         "source_sha256": inspection.sha256,
+        "source_width": inspection.width,
+        "source_height": inspection.height,
+        "source_native_1080": bool(
+            inspection.width and inspection.height
+            and min(inspection.width, inspection.height) >= 1080
+        ),
+        "upscaled": bool(
+            inspection.width and inspection.height
+            and (inspection.width < 1080 or inspection.height < 1080)
+        ),
         "output_sha256": output.sha256,
         "output_bytes": output.size_bytes,
         "width": output.width,

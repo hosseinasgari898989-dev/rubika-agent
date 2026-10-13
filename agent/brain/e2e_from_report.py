@@ -102,7 +102,7 @@ def _find_staged_media(output_dir: Path, external_id: str) -> Path:
     ]
     normalized = [
         path for path in matching
-        if "vertical1080x1920" in path.name
+        if "square1080x1080" in path.name
     ]
     choices = normalized or matching
     if not choices:

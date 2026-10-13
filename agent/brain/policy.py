@@ -104,10 +104,10 @@ def evaluate_edit_candidate(
         reasons.append("negative_or_insulting_text_signal")
 
     if inspection.ok and inspection.media_type == "video":
-        if not inspection.supports_vertical_normalization:
-            reasons.append("source_below_minimum_normalization_resolution")
-        elif inspection.width != 1080 or inspection.height != 1920:
-            warnings.append("needs_vertical_1080x1920_normalization")
+        if not inspection.supports_square_normalization:
+            reasons.append("source_below_minimum_square_normalization_resolution")
+        elif inspection.width != 1080 or inspection.height != 1080:
+            warnings.append("needs_square_1080x1080_normalization")
         if inspection.has_audio is False:
             checks["has_music"] = False
             checks["music_detection_method"] = "python_no_audio_stream"

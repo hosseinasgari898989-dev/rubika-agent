@@ -73,6 +73,19 @@ class InspectionResult:
         )
 
     @property
+    def supports_square_normalization(self) -> bool:
+        """True when a video is large enough for a 1080x1080 delivery copy.
+
+        Sources from 480px on the shorter side may be upscaled; output dimensions
+        do not imply native 1080p detail.
+        """
+        return bool(
+            self.ok and self.media_type == "video"
+            and self.width and self.height
+            and min(self.width, self.height) >= 480
+        )
+
+    @property
     def supports_vertical_normalization(self) -> bool:
         """True when the source is large enough to create a 1080x1920 delivery copy."""
         return bool(
