@@ -122,21 +122,24 @@ class CloudflareVideoModerator:
             "poppy_relevant", "is_edit", "insults_poppy",
             "insults_other_games", "high_effort", "has_music",
         )
-        # If any dimension is uncertain, withhold all answers and require review.
-        # The policy then refuses to auto-stage this candidate.
-        if confidence < self.minimum_confidence or any(type(result.get(key)) is not bool for key in required):
-            return {
-                "vision_confidence": float(confidence),
-                "vision_model": str(result.get("vision_model", ""))[:100],
-                "moderation_uncertain": True,
-                "sample_truncated": truncated,
-                "human_review_required": True,
-            }
-
+        # The Worker already applies conservative probability thresholds to each
+        # question separately. Keep every independently thresholded boolean;
+        # an aggregate confidence just below the separate threshold must not erase
+        # otherwise usable answers. Unknown answers remain unknown and prevent
+        # eligibility in evaluate_edit_candidate.
+        known_answers = {
+            key: result[key] for key in required if type(result.get(key)) is bool
+        }
+        missing_answers = [
+            key for key in required if type(result.get(key)) is not bool
+        ]
         return {
-            **{key: result[key] for key in required},
+            **known_answers,
             "vision_confidence": float(confidence),
             "vision_model": str(result.get("vision_model", ""))[:100],
+            "moderation_uncertain": bool(missing_answers),
+            "moderation_missing_fields": missing_answers,
+            "aggregate_confidence_below_threshold": confidence < self.minimum_confidence,
             "sample_truncated": truncated,
             "human_review_required": True,
             "auto_approved": False,
