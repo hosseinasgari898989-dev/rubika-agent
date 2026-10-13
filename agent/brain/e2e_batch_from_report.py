@@ -16,6 +16,7 @@ from typing import Any
 from agent.brain.e2e_from_report import _matches_poppy_edit, _safe_error, run_one
 from agent.brain.models import Candidate
 from agent.brain.orchestrator import candidates_from_report
+from agent.source_policy import delivery_enabled
 
 
 PLATFORM_ORDER = ("tiktok", "youtube")
@@ -108,7 +109,17 @@ def run_batch(
 
     unavailable: dict[str, str] = {}
     unverified_youtube_count = 0
-    if "youtube" in platforms and (
+    if "youtube" in platforms and not delivery_enabled("youtube"):
+        unavailable["youtube"] = "youtube_delivery_paused_by_owner"
+        unverified_youtube_count = sum(
+            1 for candidate in ordered
+            if candidate.platform == "youtube"
+            and rows_by_identity.get(
+                f"{candidate.platform}:{candidate.external_id}", {}
+            ).get("freshness_verified") is not True
+        )
+        ordered = [candidate for candidate in ordered if candidate.platform != "youtube"]
+    elif "youtube" in platforms and (
         not os.getenv("RELAY_BASE_URL", "").strip()
         or not os.getenv("RELAY_API_TOKEN", "").strip()
     ):
