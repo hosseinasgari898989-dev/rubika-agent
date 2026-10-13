@@ -117,6 +117,7 @@ def run_discovery(
 
     phone_candidates, phone_generated_at, phone_status = _load_phone_report(phone_report_path)
     phone_report_loaded = phone_status == "loaded"
+    termux_only = os.getenv("TERMUX_ONLY", "").strip().lower() in {"1", "true", "yes"}
     phone_attempts: list[dict[str, Any]] = [{
         "platform": "multi",
         "method": "termux_phone_report",
@@ -132,11 +133,13 @@ def run_discovery(
             seen[platform].add(item_id)
 
     if phone_report_loaded:
-        print("Discovery: validated phone report loaded; avoiding repeat public-index searches.", flush=True)
+        print("Discovery: validated phone report loaded; using phone metadata only.", flush=True)
+    elif termux_only:
+        print(f"Discovery: TERMUX_ONLY is enabled but the phone report is {phone_status}; no hosted search will run.", flush=True)
     else:
-        print("Discovery: no valid phone report; using the existing metadata-only fallbacks.", flush=True)
+        print("Discovery: no valid phone report; using the legacy metadata-only fallbacks.", flush=True)
 
-    if not phone_report_loaded and len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
+    if not phone_report_loaded and not termux_only and len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
         print("TikTok fallback: legacy endpoints are attempted only when no phone report is available.", flush=True)
         v7.tiktok_from_tikwm(store, seen["tiktok"])
         if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
@@ -251,6 +254,8 @@ def run_discovery(
         "termux_report_loaded": phone_report_loaded,
         "termux_report_status": phone_status,
         "termux_report_generated_at": phone_generated_at,
+        "termux_only": termux_only,
+        "reason_phone_report_missing": "phone_report_missing_or_invalid" if termux_only and not phone_report_loaded else None,
         "ready_to_publish": False,
         "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
         "instagram_graph_api_configured": graph_configured,
