@@ -59,11 +59,11 @@
 آخرین وضعیت باید بر اساس این بخش جدید خوانده شود؛ بخش‌های قدیمی‌تر بالا بخشی از تاریخچهٔ قبلی‌اند.
 
 - اجرای واقعی تک‌ویدئویی موفق در GitHub Actions: run ID `38440837796`، وضعیت `sent` و شناسهٔ پیام روبیکا `1938707543966836875`.
-- آخرین تغییرات کد مرحلهٔ گروهی روی همان شاخهٔ آزمایشی هستند. آخرین تست CI که این تغییرات و تست‌های گروهی را در بر می‌گیرد، run ID `38445779356` و نتیجهٔ `success` است.
+- آخرین تغییرات کد مرحلهٔ گروهی روی همان شاخهٔ آزمایشی هستند. آخرین تست CI که گیت تاریخ انتشار YouTube را هم در بر می‌گیرد، run ID `38445960886` و نتیجهٔ `success` است.
 - `agent/brain/edit_caption.py` کپشن برندینگ ادیت را نگه می‌دارد؛ `agent/brain/e2e_from_report.py` از آن استفاده می‌کند.
 - `agent/brain/e2e_batch_from_report.py` برای اجرای تست گروهی ساخته شده است: می‌تواند TikTok و YouTube را نوبتی بررسی کند و در یک اجرای درخواست‌شده حداکثر ۴ مورد را برای دانلود/پردازش/انتشار امتحان کند. منبع فعلی آن همچنان آخرین `artifacts/termux_discovery.json` است؛ این هنوز صف پایدار چندروزه نیست.
 - Workflow در `.github/workflows/brain-e2e-dispatch.yml` حالا مقادیر `platform: both` و `candidate_limit: 1..4` را می‌پذیرد و با تغییر `artifacts/brain-e2e-request.json` اجرا می‌شود. فقط تغییر `termux_discovery.json` به‌تنهایی آن را اجرا نمی‌کند.
-- اگر `RELAY_BASE_URL` یا `RELAY_API_TOKEN` در GitHub Actions موجود نباشند، batch runner موارد YouTube را با علت `youtube_relay_not_configured` رد می‌کند و به TikTok ادامه می‌دهد. مقدار secretها را چاپ یا بررسی محتوایی نکن.
+- اگر `RELAY_BASE_URL` یا `RELAY_API_TOKEN` در GitHub Actions موجود نباشند، batch runner موارد YouTube را با علت `youtube_relay_not_configured` رد می‌کند و به TikTok ادامه می‌دهد. اگر تاریخ انتشار یک نامزد YouTube تأیید نشده باشد، به‌طور پیش‌فرض از انتشار آن صرف‌نظر می‌شود و علت `publication_date_unverified` ثبت می‌شود. مقدار secretها را چاپ یا بررسی محتوایی نکن.
 - فیلتر مرتبط‌بودن به Poppy Playtime اکنون عبارت‌هایی مثل `smiling critters`, `nightmare critters`, `craftycorn`, `bobby bearhug` و دیگر نام‌های شخصیت‌ها را هم دارد تا نتایج صرفاً به یک هشتگ مشهور محدود نباشند.
 - پس از ارسال قطعی، تحویل اکنون `storage.delete(storage_key)` را از طریق `delete_remote` صدا می‌زند؛ فایل رسانه‌ای راه‌دور MEGA فقط پس از موفقیت ارسال و پاک‌سازی نسخهٔ محلی حذف می‌شود. در نتیجهٔ ردشده یا نامطمئن، نسخهٔ راه‌دور حفظ می‌شود. رکورد ledger باقی می‌ماند.
 - وضعیت درخواست فعلی تا پیش از فرمان بعدی همچنان تک‌ویدئویی است. برای تست Batch باید request با `platform: both`, `candidate_limit: 4` و زمان جدید به شاخهٔ آزمایشی push شود.
