@@ -126,7 +126,17 @@ def stage_edit_batch(
                 moderation=moderation,
             )
             if not evaluation.eligible:
-                reason = evaluation.reasons[0] if evaluation.reasons else "needs_review"
+                if evaluation.reasons:
+                    reason = evaluation.reasons[0]
+                elif evaluation.requires_review:
+                    missing = evaluation.checks.get("moderation_fields_missing", [])
+                    reason = (
+                        "needs_review_missing_moderation_fields_"
+                        + "_".join(str(name) for name in missing)
+                        if missing else "needs_review"
+                    )
+                else:
+                    reason = "ineligible"
                 result.skipped.append({"item": identity, "reason": reason})
                 original.unlink(missing_ok=True)
                 continue
