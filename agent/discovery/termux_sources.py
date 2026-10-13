@@ -488,6 +488,7 @@ def discover_tiktok_hashtags(
     unknown_source_max_results: int = 12,
     max_per_profile: int = 4,
     max_age_days: int = 90,
+    search_session: Any | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Collect known creator feeds and optionally discover unknown creators.
 
@@ -545,6 +546,46 @@ def discover_tiktok_hashtags(
             row for row in unknown_html
             if isinstance(row, dict) and row.get("id") not in unknown_ids
         )
+
+        # Public hashtag endpoints returned no reusable metadata in several runs.
+        # Search indexes discover handles only; upload freshness is still verified
+        # from the public creator feed below (never from index dates or snippets).
+        search_index_attempts: list[dict[str, Any]] = []
+        indexed_profile_attempts: list[dict[str, Any]] = []
+        search_remaining = max(0, remaining - len(all_unknown))
+        if search_remaining:
+            from agent.discovery.tiktok_search_index import discover_tiktok_creator_handles
+
+            discovered_handles, search_index_attempts = discover_tiktok_creator_handles(
+                max_handles=min(24, max(4, search_remaining * 2)),
+                timeout_seconds=timeout_seconds,
+                sleep_seconds=sleep_seconds,
+                session=search_session,
+                known_profiles=profiles,
+            )
+            if discovered_handles:
+                indexed_rows, indexed_profile_attempts = discover_tiktok_profiles(
+                    profiles=tuple(discovered_handles),
+                    max_results=search_remaining,
+                    timeout_seconds=timeout_seconds,
+                    sleep_seconds=sleep_seconds,
+                    max_age_days=max_age_days,
+                    max_per_profile=max(1, min(2, search_remaining)),
+                    ydl_factory=ydl_factory,
+                )
+                for row in indexed_rows:
+                    row["method"] = "termux_ytdlp_public_search_index_creator_profiles"
+                    row["discovery_origin"] = "public_search_index"
+                for attempt in indexed_profile_attempts:
+                    attempt["discovery_origin"] = "public_search_index"
+                existing_unknown_ids = {
+                    row.get("id") for row in all_unknown if isinstance(row, dict)
+                }
+                all_unknown.extend(
+                    row for row in indexed_rows
+                    if isinstance(row, dict) and row.get("id") not in existing_unknown_ids
+                )
+
         known_ids = {row.get("id") for row in known if isinstance(row, dict)}
         combined = list(known)
         combined.extend(
@@ -553,6 +594,7 @@ def discover_tiktok_hashtags(
         )
         return combined[:max(1, int(max_results))], [
             *known_attempts, *unknown_feed_attempts, *unknown_html_attempts,
+            *search_index_attempts, *indexed_profile_attempts,
         ]
     client = session
     try:
