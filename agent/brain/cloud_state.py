@@ -219,6 +219,51 @@ class CloudState:
             "details": dict(details or {}),
         })
 
+    def get_seen_items(
+        self,
+        *,
+        platform: str | None = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        bounded_limit = min(500, max(1, int(limit)))
+        bounded_offset = min(1000000, max(0, int(offset)))
+        query = f"?limit={bounded_limit}&offset={bounded_offset}"
+        if platform is not None:
+            if platform not in {"tiktok", "youtube", "instagram", "mob_official", "music"}:
+                raise ValueError("invalid_platform_filter")
+            query += "&platform=" + urllib.parse.quote(platform, safe="")
+        return self._request("GET", "/api/brain/items/seen" + query)
+
+    def get_seen_index(self, *, page_size: int = 500, max_pages: int = 100) -> dict[str, set[str]]:
+        """Read persistent source IDs/hashes for dedupe. Never treats failed reads as an empty index."""
+        page_size = min(500, max(1, int(page_size)))
+        max_pages = min(1000, max(1, int(max_pages)))
+        ids: set[str] = set()
+        hashes: set[str] = set()
+        offset = 0
+        for _ in range(max_pages):
+            page = self.get_seen_items(limit=page_size, offset=offset)
+            items = page.get("items")
+            if not isinstance(items, list):
+                raise CloudStateError("control_api_invalid_seen_items")
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                platform = item.get("platform")
+                external_id = item.get("external_id")
+                if isinstance(platform, str) and isinstance(external_id, str) and external_id:
+                    ids.add(platform + ":" + external_id)
+                digest = item.get("media_sha256")
+                if isinstance(digest, str) and re.fullmatch(r"[a-fA-F0-9]{64}", digest):
+                    hashes.add(digest.lower())
+            returned = len(items)
+            offset += returned
+            if returned < page_size:
+                return {"ids": ids, "hashes": hashes}
+        # Refuse to report a complete index when the cap was reached.
+        raise CloudStateError("control_api_seen_index_page_limit")
+
     def get_approved_queue(self, limit: int = 25) -> list[dict[str, Any]]:
         bounded = min(100, max(1, int(limit)))
         response = self._request("GET", "/api/brain/queue?limit=" + str(bounded))
