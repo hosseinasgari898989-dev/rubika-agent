@@ -12,6 +12,7 @@ from typing import Any
 from . import v7
 from .instagram import discover_public_indexed_urls
 from .proxitok import ProxiTokDiscovery, discover_public_rss
+from .tavily import discover_social_urls
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,6 +94,39 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
             }
             seen["tiktok"].add(item.external_id)
 
+    # Optional official Search API fallback. Without TAVILY_API_KEY it performs
+    # no network requests and reports not_configured instead of guessing results.
+    tavily_reports = {}
+    for platform in ("tiktok", "instagram"):
+        current_target = REQUIRED_CORE_COUNTS["tiktok"] if platform == "tiktok" else 5
+        if len(store[platform]) >= current_target:
+            continue
+        result = discover_social_urls(platform, max_results=max(5, current_target), max_queries=2)
+        tavily_reports[platform] = result.report()
+        for attempt in result.attempts:
+            print(
+                f"Tavily {platform} query={attempt.query or '(none)'}: "
+                f"status={attempt.http_status if attempt.http_status is not None else 'not_requested'}, "
+                f"parsed={attempt.parsed_count}, new={attempt.new_unique_count}, "
+                f"credits={attempt.credits_used if attempt.credits_used is not None else 'unknown'}, "
+                f"result={attempt.result}",
+                flush=True,
+            )
+        for item in result.candidates:
+            if item.external_id in seen[platform]:
+                continue
+            store[platform][item.external_id] = {
+                "platform": item.platform,
+                "id": item.external_id,
+                "url": item.canonical_url,
+                "title": item.title,
+                "author": item.source_key,
+                "method": item.discovery_method,
+                "query": item.discovery_query,
+                "media_type": item.media_type,
+            }
+            seen[platform].add(item.external_id)
+
     candidates = {key: _unique_sorted(values) for key, values in store.items()}
     summary = {
         "tiktok_candidates": len(candidates["tiktok"]),
@@ -104,6 +138,7 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
             for platform, count in REQUIRED_CORE_COUNTS.items()
         ),
         "ready_to_publish": False,
+        "tavily_configured": bool(__import__("os").getenv("TAVILY_API_KEY", "").strip()),
         "reason_not_publish_ready": "discovery_only; media validation and explicit content moderation are separate gates",
     }
     report = {
@@ -113,7 +148,7 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
         "summary": summary,
         "excluded_existing_ids": {key: len(value) for key, value in ignored.items()},
         "candidates": candidates,
-        "attempts": v7.ATTEMPTS + [item for item in instagram.report()["attempts"]] + [item for item in proxitok.report()["attempts"]],
+        "attempts": v7.ATTEMPTS + [item for item in instagram.report()["attempts"]] + [item for item in proxitok.report()["attempts"]] + [attempt for result in tavily_reports.values() for attempt in result["attempts"]],
     }
     path = Path(report_path)
     path.parent.mkdir(parents=True, exist_ok=True)
