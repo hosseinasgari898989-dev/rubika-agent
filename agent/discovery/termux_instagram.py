@@ -438,7 +438,7 @@ def _search_result_instagram_reel(raw_url: str) -> tuple[str, str] | None:
 
 def _plain_search_text(value: str) -> str:
     cleaned = re.sub(r"<[^>]*>", " ", html.unescape(value or ""))
-    return re.sub(r"\\s+", " ", cleaned).strip()
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _rss_items(body: str) -> list[dict[str, str]]:
@@ -539,6 +539,8 @@ def discover_instagram_public_search(
         query = f"site:instagram.com/reel/ {terms}"
         new_unique = 0
         bing_result = "no_indexed_public_reels"
+        status: int | None = None
+        bing_error_type: str | None = None
         try:
             response = client.get(
                 "https://www.bing.com/search",
@@ -579,13 +581,13 @@ def discover_instagram_public_search(
                 if new_unique:
                     bing_result = "metadata_found"
         except requests.RequestException as exc:
-            status = None
             bing_result = "request_failed"
             bing_error_type = type(exc).__name__
         attempts.append({
             "platform": "instagram", "query": "#" + tag, "engine": "bing_rss",
-            "http_status": status if "status" in locals() else None,
+            "http_status": status,
             "new_unique": new_unique, "result": bing_result,
+            "error_type": bing_error_type,
         })
 
         # Try a second public search engine only when Bing returned no Reel URLs.
