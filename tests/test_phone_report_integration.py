@@ -62,6 +62,7 @@ class PhoneReportIntegrationTests(unittest.TestCase):
                      "INSTAGRAM_GRAPH_USER_ID": "",
                      "ALLOW_LEGACY_INSTAGRAM_INDEX": "",
                      "TAVILY_API_KEY": "",
+                     "TERMUX_ONLY": "true",
                  }, clear=False):
                 report = runner.run_discovery(report_path=output_path, phone_report_path=phone_path)
         self.assertTrue(report["summary"]["termux_report_loaded"])
@@ -69,6 +70,38 @@ class PhoneReportIntegrationTests(unittest.TestCase):
         self.assertEqual(report["summary"]["youtube_candidates"], 1)
         self.assertEqual(report["summary"]["instagram_candidates"], 1)
         self.assertFalse(report["summary"]["ready_to_publish"])
+        self.assertFalse(report["summary"]["core_search_target_met"])
+
+    def test_termux_only_missing_report_does_not_run_hosted_search(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with patch.object(v7, "known_ids", return_value={
+                "tiktok": set(), "youtube": set(), "instagram": set()
+            }), \
+                 patch.object(v7, "tiktok_from_tikwm", side_effect=AssertionError("hosted TikTok search must not run")), \
+                 patch.object(v7, "tiktok_from_search_engines", side_effect=AssertionError("hosted TikTok search must not run")), \
+                 patch.object(v7, "discover_youtube_ytdlp", side_effect=AssertionError("hosted YouTube search must not run")), \
+                 patch.object(v7, "discover_youtube_html", side_effect=AssertionError("hosted YouTube search must not run")), \
+                 patch.object(runner, "discover_public_indexed_urls", side_effect=AssertionError("hosted Instagram index must not run")), \
+                 patch.object(runner, "discover_official_hashtag_urls", side_effect=AssertionError("hosted Instagram API must not run")), \
+                 patch.object(runner, "discover_public_rss", side_effect=AssertionError("hosted RSS must not run")), \
+                 patch.object(runner, "discover_social_urls", side_effect=AssertionError("hosted search API must not run")), \
+                 patch.dict(os.environ, {
+                     "TERMUX_ONLY": "true",
+                     "TAVILY_API_KEY": "",
+                     "INSTAGRAM_GRAPH_ACCESS_TOKEN": "",
+                     "INSTAGRAM_GRAPH_USER_ID": "",
+                     "ALLOW_LEGACY_INSTAGRAM_INDEX": "",
+                 }, clear=False):
+                report = runner.run_discovery(
+                    report_path=root / "discovery.json",
+                    phone_report_path=root / "missing-phone-report.json",
+                )
+        self.assertFalse(report["summary"]["termux_report_loaded"])
+        self.assertEqual(report["summary"]["termux_report_status"], "not_found")
+        self.assertTrue(report["summary"]["termux_only"])
+        self.assertEqual(report["summary"]["tiktok_candidates"], 0)
+        self.assertEqual(report["summary"]["youtube_candidates"], 0)
         self.assertFalse(report["summary"]["core_search_target_met"])
 
     def test_rejects_noncanonical_or_mismatched_candidate_ids(self):
