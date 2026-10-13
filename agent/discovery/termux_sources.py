@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import unquote, urlparse
+from xml.etree import ElementTree as ET
 
 import requests
 
@@ -39,6 +40,7 @@ TIKTOK_URL_RE = re.compile(
     re.IGNORECASE,
 )
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+YOUTUBE_CHANNEL_ID_RE = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
 HASHTAG_RE = re.compile(r"(?<!\w)#([A-Za-z0-9_]{2,64})")
 
 
@@ -320,6 +322,14 @@ def discover_tiktok_profiles(
             "result": "metadata_found" if added else "no_recent_relevant_public_video_metadata",
         })
         time.sleep(max(0.0, sleep_seconds))
+    if feed_results:
+        attempts.append({
+            "platform": "youtube",
+            "method": "public_channel_atom_feed",
+            "channels_checked": len(feed_results),
+            "candidate_dates_enriched": feed_date_enrichments,
+            "result": "metadata_enriched" if feed_date_enrichments else "no_candidate_dates_matched",
+        })
     return list(candidates.values()), attempts
 
 
@@ -413,6 +423,52 @@ def _date_from_youtube_entry(entry: dict[str, Any]) -> str | None:
     return None
 
 
+def _youtube_channel_feed_dates(
+    channel_id: str,
+    session: Any,
+) -> tuple[dict[str, str], str]:
+    """Read publication timestamps from one public YouTube Atom feed."""
+    if not YOUTUBE_CHANNEL_ID_RE.fullmatch(channel_id):
+        return {}, "invalid_channel_id"
+    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    try:
+        response = session.get(
+            url,
+            timeout=10,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; MetadataDiscovery/1.0)",
+                "Accept": "application/atom+xml, application/xml;q=0.9, */*;q=0.1",
+            },
+        )
+    except requests.RequestException:
+        return {}, "request_failed"
+
+    status = int(getattr(response, "status_code", 0))
+    if status != 200:
+        return {}, f"http_{status}"
+    try:
+        root = ET.fromstring(getattr(response, "text", "") or "")
+    except ET.ParseError:
+        return {}, "invalid_xml"
+
+    atom = "{http://www.w3.org/2005/Atom}"
+    yt = "{http://www.youtube.com/xml/schemas/2015}"
+    dates: dict[str, str] = {}
+    for feed_entry in root.findall(f"{atom}entry"):
+        video_id = str(feed_entry.findtext(f"{yt}videoId") or "")
+        raw_date = str(feed_entry.findtext(f"{atom}published") or "").strip()
+        if not YOUTUBE_ID_RE.fullmatch(video_id) or not raw_date:
+            continue
+        try:
+            published = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        dates[video_id] = published.astimezone(timezone.utc).isoformat()
+    return dates, "dates_found" if dates else "no_dates_in_feed"
+
+
 def discover_youtube_metadata(
     *,
     queries: tuple[str, ...] = YOUTUBE_QUERIES,
@@ -420,6 +476,8 @@ def discover_youtube_metadata(
     max_results: int = 25,
     max_age_days: int = 90,
     ydl_factory: Any | None = None,
+    feed_session: Any | None = None,
+    max_feed_channels: int = 10,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Search recent YouTube Shorts metadata; the download flag is never enabled."""
     if ydl_factory is None:
@@ -445,6 +503,11 @@ def discover_youtube_metadata(
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(max_age_days)))
+    active_feed_session = feed_session if feed_session is not None else requests.Session()
+    feed_limit = max(0, min(10, int(max_feed_channels)))
+    feed_cache: dict[str, dict[str, str]] = {}
+    feed_results: list[str] = []
+    feed_date_enrichments = 0
     for query in queries:
         if len(candidates) >= max_results:
             break
@@ -473,6 +536,20 @@ def discover_youtube_metadata(
             if duration is None or duration > 180 or duration <= 0:
                 continue
             published_at = _date_from_youtube_entry(entry)
+            freshness_source = "yt_dlp_search_metadata" if published_at else ""
+            channel_id = str(entry.get("channel_id") or "")
+            if not published_at and YOUTUBE_CHANNEL_ID_RE.fullmatch(channel_id):
+                if channel_id not in feed_cache and len(feed_cache) < feed_limit:
+                    feed_dates, feed_result = _youtube_channel_feed_dates(
+                        channel_id, active_feed_session
+                    )
+                    feed_cache[channel_id] = feed_dates
+                    feed_results.append(feed_result)
+                feed_date = feed_cache.get(channel_id, {}).get(video_id)
+                if feed_date:
+                    published_at = feed_date
+                    freshness_source = "public_channel_atom_feed"
+                    feed_date_enrichments += 1
             if published_at:
                 try:
                     parsed_date = datetime.fromisoformat(published_at)
@@ -483,9 +560,10 @@ def discover_youtube_metadata(
                         continue
                 except ValueError:
                     published_at = None
+                    freshness_source = ""
             if not published_at:
-                # Flat search results often omit upload dates. Keep them as unverified
-                # candidates, but never treat them as publish-ready.
+                # Flat search and public channel feeds can both omit the date.
+                # Keep such candidates unverified, never publish-ready.
                 freshness_unverified += 1
             url = f"https://www.youtube.com/shorts/{video_id}"
             title = str(entry.get("title") or "")[:1200]
@@ -502,6 +580,7 @@ def discover_youtube_metadata(
                 "hashtags": hashtags,
                 "published_at": published_at,
                 "freshness_verified": bool(published_at),
+                "freshness_source": freshness_source or "unavailable",
                 "freshness_status": (
                     "verified_within_window" if published_at
                     else "date_unavailable_verify_before_publish"
