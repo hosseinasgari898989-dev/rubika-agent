@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from .inspector import inspect_media
 from .models import Candidate, Evaluation, InspectionResult
-from .normalizer import normalize_video_square_1080
+from .normalizer import normalize_video_vertical_1080x1920
 from .policy import evaluate_edit_candidate
 
 
@@ -69,7 +69,7 @@ def stage_edit_batch(
     storage: Any | None = None,
     persist_staged: Callable[[StagedMedia], None] | None = None,
     inspector: Callable[..., InspectionResult] = inspect_media,
-    normalizer: Callable[..., Mapping[str, object]] = normalize_video_square_1080,
+    normalizer: Callable[..., Mapping[str, object]] = normalize_video_vertical_1080x1920,
 ) -> BatchResult:
     """Stage a complete batch (default: five TikTok plus five YouTube items).
 
@@ -136,12 +136,12 @@ def stage_edit_batch(
             if first.width != 1080 or first.height != 1080:
                 destination = output / (
                     _safe_component(platform) + "-" +
-                    _safe_component(candidate.external_id) + "-square1080.mp4"
+                    _safe_component(candidate.external_id) + "-vertical1080x1920.mp4"
                 )
                 normalizer(original, destination)
                 publish_path = destination
                 final_inspection = inspector(publish_path, "video")
-                if not final_inspection.ok or final_inspection.width != 1080 or final_inspection.height != 1080:
+                if not final_inspection.ok or final_inspection.width != 1080 or final_inspection.height != 1920:
                     result.skipped.append({"item": identity, "reason": "normalized_output_invalid"})
                     destination.unlink(missing_ok=True)
                     original.unlink(missing_ok=True)
