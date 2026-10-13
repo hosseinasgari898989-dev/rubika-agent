@@ -1,18 +1,13 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Evidence-based candidate discovery ported from the user's saved v7 engine.
 
 This module only searches and reports canonical candidates. It does not download,
 moderate, or publish. A 200/202 response does not count as a result unless a valid
 canonical media URL or 11-character YouTube ID is extracted.
 """
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Rubika-Agent discovery engine v7 — discovery only; does not download or publish.
-
-Built from the user's saved discovery-engine architecture. It restores the earlier
-YouTube embedded-data search and TikTok URL normalization, fixes the proven regression of discarding usable HTTP 202 response bodies, broadens search
-queries, decodes common search-engine redirect wrappers, and records detailed source diagnostics.
-"""
 from __future__ import annotations
+
 import html as html_lib
 import base64
 import json
