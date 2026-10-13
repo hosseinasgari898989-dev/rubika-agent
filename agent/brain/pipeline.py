@@ -177,9 +177,14 @@ def stage_edit_batch(
                 seen_digests.add(final_inspection.sha256)
             remaining[platform] -= 1
         except Exception as exc:
+            # Report only the downloader/adapter's safe machine error code when one
+            # is provided; never expose response bodies, URLs, or credentials.
+            safe_code = getattr(exc, "code", None)
+            if not isinstance(safe_code, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", safe_code):
+                safe_code = type(exc).__name__
             result.skipped.append({
                 "item": identity,
-                "reason": "pipeline_error_" + type(exc).__name__,
+                "reason": "pipeline_error_" + safe_code,
             })
 
     result.status = "ready" if all(count == 0 for count in remaining.values()) else "partial"
