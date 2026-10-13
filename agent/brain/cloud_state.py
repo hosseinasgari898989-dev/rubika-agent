@@ -150,7 +150,7 @@ class CloudState:
             "platform": candidate.platform,
             "source_key": candidate.source_key or candidate.platform + "_search",
             "external_id": candidate.external_id,
-            "canonical_url": candidate.canonical_url.split("?", 1)[0].split("#", 1)[0],
+            "canonical_url": candidate.canonical_url,
             "title": candidate.title,
             "caption": staged.caption or candidate.caption,
             "published_at": candidate.published_at,
