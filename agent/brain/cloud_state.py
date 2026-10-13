@@ -117,6 +117,58 @@ class CloudState:
     def upsert_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/api/brain/items/upsert", item)
 
+    def upsert_staged(self, staged: Any) -> dict[str, Any]:
+        """Persist a StagedMedia record without approving it or publishing it."""
+        candidate = staged.candidate
+        inspection = staged.inspection
+        evaluation = staged.evaluation
+        validation = {
+            "ok": bool(inspection.ok),
+            "media_type": inspection.media_type,
+            "sha256": inspection.sha256,
+            "size_bytes": inspection.size_bytes,
+            "mime_type": inspection.mime_type,
+            "width": inspection.width,
+            "height": inspection.height,
+            "duration_seconds": inspection.duration_seconds,
+            "has_audio": inspection.has_audio,
+            "video_codec": inspection.video_codec,
+            "audio_codec": inspection.audio_codec,
+            "errors": list(inspection.errors),
+            "warnings": list(inspection.warnings),
+        }
+        moderation_names = (
+            "poppy_relevant", "is_edit", "insults_poppy",
+            "insults_other_games", "high_effort", "has_music",
+        )
+        moderation = {
+            key: evaluation.checks[key]
+            for key in moderation_names
+            if isinstance(evaluation.checks.get(key), bool)
+        }
+        payload = {
+            "platform": candidate.platform,
+            "source_key": candidate.source_key or candidate.platform + "_search",
+            "external_id": candidate.external_id,
+            "canonical_url": candidate.canonical_url.split("?", 1)[0].split("#", 1)[0],
+            "title": candidate.title,
+            "caption": staged.caption or candidate.caption,
+            "published_at": candidate.published_at,
+            "status": "ready",
+            "review_state": "pending",
+            "media_type": inspection.media_type,
+            "source_tier": candidate.source_tier,
+            "storage_key": staged.storage_key,
+            "media_sha256": inspection.sha256,
+            "media_bytes": inspection.size_bytes,
+            "media_mime": inspection.mime_type,
+            "validation": validation,
+            "moderation": moderation or None,
+            "original_caption": candidate.original_caption,
+            "persian_translation": candidate.persian_translation,
+        }
+        return self.upsert_item(payload)
+
     def record_attempt(
         self,
         item_id: str,
