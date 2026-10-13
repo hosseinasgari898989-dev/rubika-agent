@@ -259,4 +259,62 @@ const read = async response => ({ status: response.status, body: await response.
   }), env()));
   assert.equal(response.status, 200);
 }
-console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction.");
+{
+  const state = env();
+  state.AI = {
+    run: async (model, input) => {
+      assert.equal(model, "@cf/meta/llama-3.2-11b-vision-instruct");
+      assert.equal(input.image.startsWith("data:image/jpeg;base64,"), true);
+      assert.equal(input.messages.length, 2);
+      return {
+        response: JSON.stringify({
+          poppy_relevant: true, is_edit: true, insults_poppy: false,
+          insults_other_games: false, high_effort: true, confidence: 0.88,
+        }),
+      };
+    },
+  };
+  const image = "data:image/jpeg;base64," + Buffer.from("x".repeat(900)).toString("base64");
+  const response = await read(await worker.fetch(request("/api/brain/moderate-frame", {
+    method: "POST",
+    body: { image, platform: "youtube", title: "Poppy Playtime edit", caption: "#edit" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.checks.poppy_relevant, true);
+  assert.equal(response.body.confidence, 0.88);
+  assert.equal(response.body.audio_review_required, true);
+  assert.equal(response.body.human_review_required, true);
+  assert.equal(response.body.auto_approved, false);
+  assert.equal(response.body.publishing, false);
+}
+{
+  const state = env();
+  state.AI = { run: async () => { throw new Error("secret provider body"); } };
+  const image = "data:image/jpeg;base64," + Buffer.from("x".repeat(900)).toString("base64");
+  const response = await read(await worker.fetch(request("/api/brain/moderate-frame", {
+    method: "POST", body: { image, platform: "youtube" },
+  }), state));
+  assert.equal(response.status, 502);
+  assert.equal(response.body.error, "vision_inference_failed");
+  assert.equal(JSON.stringify(response.body).includes("secret provider body"), false);
+}
+{
+  const state = env();
+  state.AI = { run: async () => { throw new Error("should never run"); } };
+  const response = await read(await worker.fetch(request("/api/brain/moderate-frame", {
+    method: "POST",
+    body: { image: "data:text/html;base64," + Buffer.from("x".repeat(900)).toString("base64"), platform: "youtube" },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "vision_image_format_invalid");
+}
+{
+  const response = await read(await worker.fetch(request("/api/brain/moderate-frame", {
+    method: "POST",
+    body: { image: "data:image/jpeg;base64," + Buffer.from("x".repeat(900)).toString("base64"), platform: "youtube" },
+    token: null,
+  }), env()));
+  assert.equal(response.status, 401);
+}
+console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction, and guarded vision inference.");
