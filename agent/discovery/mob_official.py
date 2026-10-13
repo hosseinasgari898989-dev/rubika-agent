@@ -275,8 +275,10 @@ def _newsroom_entries(body: str, source: dict[str, Any]) -> list[dict[str, Any]]
             canonical_url=canonical,
             external_id=hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24],
             title=title,
-            caption=parser.meta.get("description") or parser.meta.get("og:description") or "",
-            published_at=parser.meta.get("article:published_time") or parser.meta.get("date"),
+            # These are cards from the homepage, not fetched article pages. Do not
+            # mislabel the homepage description or its page-level date as each post's caption/time.
+            caption="",
+            published_at=None,
             media_type="image" if image_url else "unknown",
             media_url=image_url,
             thumbnail_url=image_url,
