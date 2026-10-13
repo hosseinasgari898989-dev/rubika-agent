@@ -8,7 +8,7 @@ import html
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -16,7 +16,18 @@ import requests
 
 
 TIKTOK_TAGS = ("poppyplaytime", "huggywuggy", "catnap", "smilingcritters")
-TIKTOK_PROFILES = ("dragonboyedits", "s2gryder")
+TIKTOK_PROFILES = (
+    "dragonboyedits",
+    "s2gryder",
+    "prime_noxem.edits",
+    "poppy_playtime308",
+    "fame.yt.editx",
+    "imakeeditsthatarebad",
+    "prepecl",
+    "monster_9861",
+    "executor_edit",
+    "fanyedits8",
+)
 YOUTUBE_QUERIES = (
     "Poppy Playtime edit shorts",
     "Huggy Wuggy edit shorts",
@@ -199,9 +210,10 @@ def discover_tiktok_profiles(
     max_results: int = 25,
     timeout_seconds: int = 15,
     sleep_seconds: float = 0.35,
+    max_age_days: int = 90,
     ydl_factory: Any | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Read selected public TikTok creator feeds with yt-dlp, metadata only."""
+    """Read recent public TikTok creator-feed metadata only."""
     if ydl_factory is None:
         try:
             import yt_dlp
@@ -218,6 +230,7 @@ def discover_tiktok_profiles(
     }
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(max_age_days)))
     relevant = re.compile(
         r"poppy[\s_-]*playtime|poppyplaytime|huggy[\s_-]*wuggy|huggywuggy|"
         r"cat\s?nap|catnap|smiling[\s_-]*critters", re.IGNORECASE
@@ -238,7 +251,7 @@ def discover_tiktok_profiles(
         entries = info.get("entries") if isinstance(info, dict) else None
         if not isinstance(entries, list):
             entries = [info] if isinstance(info, dict) and info.get("id") else []
-        parsed = added = 0
+        parsed = added = stale_or_undated = 0
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
@@ -256,25 +269,39 @@ def discover_tiktok_profiles(
             caption = (title + ("\n" + description if description else "")).strip()[:4000]
             if not relevant.search(caption):
                 continue
+            timestamp = entry.get("timestamp") or entry.get("release_timestamp")
+            published_at = _to_iso_timestamp(timestamp)
+            if not published_at:
+                stale_or_undated += 1
+                continue
+            try:
+                if datetime.fromisoformat(published_at) < cutoff:
+                    stale_or_undated += 1
+                    continue
+            except ValueError:
+                stale_or_undated += 1
+                continue
             stats = {
                 "playCount": entry.get("view_count"), "diggCount": entry.get("like_count"),
                 "commentCount": entry.get("comment_count"), "shareCount": entry.get("repost_count"),
             }
             row = _tiktok_candidate(
                 video_id, author, title=caption, query="profile:@" + handle,
-                timestamp=entry.get("timestamp") or entry.get("release_timestamp"), stats=stats,
+                timestamp=timestamp, stats=stats,
             )
             row["url"] = f"https://www.tiktok.com/@{author}/video/{video_id}"
             row["method"] = "termux_ytdlp_public_creator_profiles"
             row["duration_seconds"] = _safe_int(entry.get("duration"))
-            candidates.setdefault(video_id, row)
-            added += 1
+            if video_id not in candidates:
+                candidates[video_id] = row
+                added += 1
             if len(candidates) >= max(1, max_results):
                 break
         attempts.append({
             "platform": "tiktok", "query": "@" + handle, "parsed": parsed,
             "new_unique": added,
-            "result": "metadata_found" if added else "no_relevant_public_video_metadata",
+            "stale_or_undated_skipped": stale_or_undated,
+            "result": "metadata_found" if added else "no_recent_relevant_public_video_metadata",
         })
         time.sleep(max(0.0, sleep_seconds))
     return list(candidates.values()), attempts
@@ -375,9 +402,10 @@ def discover_youtube_metadata(
     queries: tuple[str, ...] = YOUTUBE_QUERIES,
     per_query: int = 20,
     max_results: int = 25,
+    max_age_days: int = 90,
     ydl_factory: Any | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Use yt-dlp search metadata only. The download flag is never enabled."""
+    """Search recent YouTube Shorts metadata; the download flag is never enabled."""
     if ydl_factory is None:
         try:
             import yt_dlp
@@ -394,11 +422,11 @@ def discover_youtube_metadata(
         "no_warnings": True,
         "ignoreerrors": True,
         "skip_download": True,
-        "extract_flat": True,
         "socket_timeout": 15,
     }
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(max_age_days)))
     for query in queries:
         if len(candidates) >= max_results:
             break
@@ -415,7 +443,7 @@ def discover_youtube_metadata(
             })
             continue
         entries = info.get("entries") if isinstance(info, dict) else None
-        added = 0
+        added = stale_or_undated = 0
         for entry in entries or []:
             if not isinstance(entry, dict):
                 continue
@@ -425,6 +453,17 @@ def discover_youtube_metadata(
             duration = _safe_int(entry.get("duration"))
             # Unknown duration is not enough to classify a candidate as a Short.
             if duration is None or duration > 180 or duration <= 0:
+                continue
+            published_at = _date_from_youtube_entry(entry)
+            if not published_at:
+                stale_or_undated += 1
+                continue
+            try:
+                if datetime.fromisoformat(published_at) < cutoff:
+                    stale_or_undated += 1
+                    continue
+            except ValueError:
+                stale_or_undated += 1
                 continue
             url = f"https://www.youtube.com/shorts/{video_id}"
             title = str(entry.get("title") or "")[:1200]
@@ -439,7 +478,7 @@ def discover_youtube_metadata(
                 "caption": description,
                 "author": str(entry.get("uploader") or entry.get("channel") or "")[:100],
                 "hashtags": hashtags,
-                "published_at": _date_from_youtube_entry(entry),
+                "published_at": published_at,
                 "duration_seconds": duration,
                 "view_count": _safe_int(entry.get("view_count")),
                 "like_count": _safe_int(entry.get("like_count")),
@@ -455,6 +494,7 @@ def discover_youtube_metadata(
             "query": query,
             "parsed": len(entries) if isinstance(entries, list) else 0,
             "new_unique": added,
-            "result": "metadata_found" if added else "no_eligible_short_metadata",
+            "stale_or_undated_skipped": stale_or_undated,
+            "result": "metadata_found" if added else "no_recent_eligible_short_metadata",
         })
     return list(candidates.values()), attempts
