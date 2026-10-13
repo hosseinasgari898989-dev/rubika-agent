@@ -92,8 +92,9 @@ class ProxiTokRSSTests(unittest.TestCase):
         )
         self.assertIsInstance(report, ProxiTokDiscovery)
         self.assertEqual(len(report.candidates), 2)
-        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(len(session.calls), 2)
         self.assertTrue(session.calls[0][0].endswith("/tag/poppyplaytime/rss"))
+        self.assertTrue(session.calls[1][0].endswith("/tag/huggywuggy/rss"))
         self.assertEqual(report.attempts[0].result, "rss_parsed")
 
     def test_rejects_cross_host_redirects(self):
