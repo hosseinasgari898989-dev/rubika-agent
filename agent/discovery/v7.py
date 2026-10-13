@@ -363,10 +363,22 @@ def discover_youtube_ytdlp(existing: dict[str, dict[str, dict]], seen: set[str])
                     duration = float(duration) if duration is not None else None
                 except (TypeError, ValueError):
                     duration = None
+                # Preserve stable channel identity so only explicitly authorized sources
+                # can be handed to the download stage.
+                source_key = str(
+                    v.get("channel_id") or v.get("uploader_id") or
+                    v.get("channel") or v.get("uploader") or ""
+                ).strip()
                 # Shorts and edits only; allow videos <= 180 sec when duration is available.
                 if duration is not None and duration > 180:
                     continue
-                items.append({"id": vid, "url": f"https://www.youtube.com/watch?v={vid}", "title": title, "duration": duration})
+                items.append({
+                    "id": vid,
+                    "url": f"https://www.youtube.com/watch?v={vid}",
+                    "title": title,
+                    "duration": duration,
+                    "author": source_key,
+                })
             before = len(existing["youtube"])
             added = add_candidates(existing, "youtube", items, "yt-dlp ytsearch", query, seen)
             record("YouTube", "yt-dlp search", query, f"EXIT_{proc.returncode}_JSON_OK", len(items), f"added={added}; {proc.stderr[-180:] if proc.stderr else ''}")
