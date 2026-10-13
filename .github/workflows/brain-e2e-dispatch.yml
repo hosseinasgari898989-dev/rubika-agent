@@ -53,15 +53,26 @@ jobs:
               raise SystemExit("Discovery report missing; run the Termux collector first.")
           request = json.loads(request_path.read_text(encoding="utf-8"))
           platform = request.get("platform", "tiktok")
+          candidate_limit = request.get("candidate_limit", 1)
+          candidate_offset = request.get("candidate_offset", 0)
           if platform not in {"tiktok", "instagram"}:
               raise SystemExit("Requested platform must be tiktok or instagram for this smoke test.")
+          if type(candidate_limit) is not int or not 1 <= candidate_limit <= 5:
+              raise SystemExit("candidate_limit must be an integer from 1 to 5.")
+          if type(candidate_offset) is not int or not 0 <= candidate_offset <= 100:
+              raise SystemExit("candidate_offset must be an integer from 0 to 100.")
           report = json.loads(report_path.read_text(encoding="utf-8"))
           rows = report.get("candidates", {}).get(platform, [])
           if not isinstance(rows, list) or not rows:
               raise SystemExit("No candidates for the requested platform in the latest report.")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
               env_file.write("PLATFORM=" + platform + "\n")
-          print(f"Discovery report OK: platform={platform}, candidates={len(rows)}")
+              env_file.write("CANDIDATE_LIMIT=" + str(candidate_limit) + "\n")
+              env_file.write("CANDIDATE_OFFSET=" + str(candidate_offset) + "\n")
+          print(
+              f"Discovery report OK: platform={platform}, candidates={len(rows)}, "
+              f"candidate_limit={candidate_limit}, candidate_offset={candidate_offset}"
+          )
           PY
 
       - name: Set up Node.js
@@ -147,6 +158,8 @@ jobs:
           python -m agent.brain.e2e_from_report \
             --report artifacts/termux_discovery.json \
             --platform "$PLATFORM" \
+            --candidate-limit "$CANDIDATE_LIMIT" \
+            --candidate-offset "$CANDIDATE_OFFSET" \
             --output-report artifacts/brain-e2e-report.json
 
       - name: Upload safe end-to-end report
