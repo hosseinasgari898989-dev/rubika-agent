@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent.discovery.mob_official_complete import discover_complete_official_posts
+from agent.discovery.mob_official_complete import _fingerprints, discover_complete_official_posts
 
 
 class FakeResponse:
@@ -41,6 +41,16 @@ def config_file(folder, sources):
 
 
 class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
+    def test_same_long_caption_fingerprints_even_when_titles_differ(self):
+        caption = (
+            "Mob Entertainment announces an exciting new Poppy Playtime chapter with "
+            "a new location, new characters, a new story, and details for the community."
+        )
+        first = {"title": "Official chapter announcement", "original_caption": caption}
+        second = {"title": "A different syndicated title", "original_caption": caption}
+        self.assertTrue(_fingerprints(first).intersection(_fingerprints(second)))
+
+
     def test_newsroom_article_uses_real_caption_and_article_image(self):
         homepage = "https://www.mobentertainment.com/"
         article = "https://www.mobentertainment.com/news/poppy-playtime-chapter-five"
