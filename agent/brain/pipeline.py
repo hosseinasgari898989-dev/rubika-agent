@@ -162,11 +162,15 @@ def stage_edit_batch(
                     reason = evaluation.reasons[0]
                 elif evaluation.requires_review:
                     missing = evaluation.checks.get("moderation_fields_missing", [])
-                    reason = (
-                        "needs_review_missing_moderation_fields_"
-                        + "_".join(str(name) for name in missing)
-                        if missing else "needs_review"
-                    )
+                    if "has_music" in missing and moderation.get("music_decision_reason"):
+                        reason = str(moderation["music_decision_reason"])
+                        reason = re.sub(r"[^A-Za-z0-9_-]", "", reason)[:80] or "music_answer_missing"
+                    else:
+                        reason = (
+                            "needs_review_missing_moderation_fields_"
+                            + "_".join(str(name) for name in missing)
+                            if missing else "needs_review"
+                        )
                 else:
                     reason = "ineligible"
                 skipped_row: dict[str, Any] = {"item": identity, "reason": reason}
