@@ -11,15 +11,22 @@ import json
 import re
 import time
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from xml.etree import ElementTree as ET
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
 
 INSTAGRAM_TAGS = ("poppyplaytime", "huggywuggy", "catnap")
 MAX_RESULTS = 5
+SEARCH_TERMS = {
+    "poppyplaytime": '"Poppy Playtime" OR poppyplaytime',
+    "huggywuggy": '"Huggy Wuggy" OR huggywuggy',
+    "catnap": '"CatNap" "Poppy Playtime" OR "Smiling Critters"',
+}
 MEDIA_PATH_RE = re.compile(r"^/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$", re.IGNORECASE)
 CANONICAL_URL_RE = re.compile(
     r"(?:https?://)?(?:www[.])?instagram[.]com/(reel|p|tv)/([A-Za-z0-9_-]{5,20})",
@@ -361,20 +368,292 @@ def discover_instagram_ytdlp_tags(
     return list(candidates.values()), attempts
 
 
+class _SearchAnchorParser(HTMLParser):
+    """Collect anchors from ordinary public search-result HTML."""
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.anchors: list[dict[str, str]] = []
+        self._active: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.lower() != "a":
+            return
+        values = {str(key).lower(): str(value or "") for key, value in attrs}
+        href = values.get("href", "")
+        classes = values.get("class", "")
+        if not href or not (
+            "result__a" in classes or "instagram.com" in href or "/l/?" in href
+        ):
+            return
+        self._active = {"href": href, "text": []}
+
+    def handle_data(self, data: str) -> None:
+        if self._active is not None:
+            self._active["text"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._active is not None:
+            self.anchors.append({
+                "href": str(self._active["href"]),
+                "text": " ".join(self._active["text"]).strip(),
+            })
+            self._active = None
+
+
+def _search_result_instagram_reel(raw_url: str) -> tuple[str, str] | None:
+    """Accept only direct canonical Instagram Reel links from public search results."""
+    value = html.unescape(str(raw_url or "")).strip()
+    if not value:
+        return None
+    if value.startswith("//"):
+        value = "https:" + value
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host in {"duckduckgo.com", "www.duckduckgo.com"}:
+        query = parse_qs(parsed.query)
+        target = query.get("uddg", [""])[0]
+        if not target:
+            return None
+        value = target
+        try:
+            parsed = urlparse(value)
+        except ValueError:
+            return None
+        host = (parsed.hostname or "").lower()
+    if host not in {"instagram.com", "www.instagram.com"}:
+        return None
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    canonical = _canonical_media_url("https://www.instagram.com" + parsed.path)
+    if not canonical:
+        return None
+    kind, shortcode, permalink = canonical
+    if kind != "reel":
+        return None
+    return shortcode, permalink
+
+
+def _plain_search_text(value: str) -> str:
+    cleaned = re.sub(r"<[^>]*>", " ", html.unescape(value or ""))
+    return re.sub(r"\\s+", " ", cleaned).strip()
+
+
+def _rss_items(body: str) -> list[dict[str, str]]:
+    try:
+        root = ET.fromstring(body or "")
+    except ET.ParseError:
+        return []
+    found: list[dict[str, str]] = []
+    for item in root.iter():
+        if str(item.tag).rsplit("}", 1)[-1].lower() != "item":
+            continue
+        fields: dict[str, str] = {}
+        for child in list(item):
+            name = str(child.tag).rsplit("}", 1)[-1].lower()
+            fields[name] = "".join(child.itertext()).strip()
+        if fields:
+            found.append(fields)
+    return found
+
+
+def _search_item_published_at(value: str) -> str | None:
+    try:
+        parsed = parsedate_to_datetime(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def discover_instagram_public_search(
+    *,
+    tags: tuple[str, ...] = INSTAGRAM_TAGS,
+    max_results: int = MAX_RESULTS,
+    timeout_seconds: int = 12,
+    sleep_seconds: float = 0.3,
+    session: Any | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Find public Instagram Reels through ordinary web-search indexes, not Instagram scraping.
+
+    Bing's RSS search view is tried first. DuckDuckGo's public HTML search is a
+    fallback when a Bing query yields no canonical Reel. Search pages may be
+    blocked or omit indexed Reels; failures are reported rather than fabricated.
+    """
+    client = session or requests.Session()
+    try:
+        client.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.8",
+            "Accept": "application/rss+xml,application/xml,text/html;q=0.9,*/*;q=0.8",
+        })
+    except AttributeError:
+        pass
+
+    limit = max(1, min(int(max_results), 5))
+    candidates: dict[str, dict[str, Any]] = {}
+    attempts: list[dict[str, Any]] = []
+
+    def add_candidate(shortcode: str, permalink: str, title: str, snippet: str,
+                      tag: str, method: str, published_at: str | None) -> bool:
+        if shortcode in candidates:
+            return False
+        caption = _plain_search_text(snippet)[:4000]
+        clean_title = _plain_search_text(title)[:1200] or caption[:1200]
+        hashtags = re.findall(r"(?:^|[^A-Za-z0-9_])#([A-Za-z0-9_]{2,64})", caption)
+        candidates[shortcode] = {
+            "platform": "instagram",
+            "id": shortcode,
+            "url": permalink,
+            "title": clean_title,
+            "caption": caption,
+            "author": "",
+            "hashtags": list(dict.fromkeys([tag, *hashtags]))[:40],
+            "published_at": published_at,
+            "like_count": None,
+            "comment_count": None,
+            "view_count": None,
+            "duration_seconds": None,
+            "media_type": "video",
+            "method": method,
+            "query": "#" + tag,
+        }
+        return True
+
+    for raw_tag in tags:
+        if len(candidates) >= limit:
+            break
+        tag = str(raw_tag or "").strip().removeprefix("#").lower()
+        if not re.fullmatch(r"[a-z0-9_]{2,64}", tag):
+            attempts.append({
+                "platform": "instagram", "query": tag[:80], "result": "invalid_hashtag"
+            })
+            continue
+        terms = SEARCH_TERMS.get(tag, tag.replace("_", " "))
+        query = f"site:instagram.com/reel/ {terms}"
+        new_unique = 0
+        bing_result = "no_indexed_public_reels"
+        try:
+            response = client.get(
+                "https://www.bing.com/search",
+                params={"q": query, "format": "rss", "count": 10},
+                timeout=timeout_seconds,
+                allow_redirects=True,
+            )
+            status = int(getattr(response, "status_code", 0))
+            if status != 200:
+                bing_result = f"http_{status}"
+            else:
+                items = _rss_items(getattr(response, "text", "") or "")
+                if not items:
+                    bing_result = "invalid_or_empty_rss"
+                for item in items:
+                    direct = _search_result_instagram_reel(item.get("link", ""))
+                    if not direct:
+                        parser = _SearchAnchorParser()
+                        try:
+                            parser.feed(item.get("description", ""))
+                        except Exception:
+                            pass
+                        for anchor in parser.anchors:
+                            direct = _search_result_instagram_reel(anchor["href"])
+                            if direct:
+                                break
+                    if not direct:
+                        continue
+                    shortcode, permalink = direct
+                    title = item.get("title", "")
+                    snippet = item.get("description", "")
+                    published = _search_item_published_at(item.get("pubdate", ""))
+                    if add_candidate(shortcode, permalink, title, snippet, tag,
+                                     "termux_bing_rss_public_search", published):
+                        new_unique += 1
+                    if len(candidates) >= limit:
+                        break
+                if new_unique:
+                    bing_result = "metadata_found"
+        except requests.RequestException as exc:
+            status = None
+            bing_result = "request_failed"
+            bing_error_type = type(exc).__name__
+        attempts.append({
+            "platform": "instagram", "query": "#" + tag, "engine": "bing_rss",
+            "http_status": status if "status" in locals() else None,
+            "new_unique": new_unique, "result": bing_result,
+        })
+
+        # Try a second public search engine only when Bing returned no Reel URLs.
+        if new_unique == 0 and len(candidates) < limit:
+            ddg_result = "no_indexed_public_reels"
+            ddg_status = None
+            ddg_added = 0
+            try:
+                response = client.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": query},
+                    timeout=timeout_seconds,
+                    allow_redirects=True,
+                )
+                ddg_status = int(getattr(response, "status_code", 0))
+                if ddg_status != 200:
+                    ddg_result = f"http_{ddg_status}"
+                else:
+                    parser = _SearchAnchorParser()
+                    try:
+                        parser.feed(getattr(response, "text", "") or "")
+                    except Exception:
+                        pass
+                    for anchor in parser.anchors:
+                        direct = _search_result_instagram_reel(anchor["href"])
+                        if not direct:
+                            continue
+                        shortcode, permalink = direct
+                        if add_candidate(
+                            shortcode, permalink, anchor.get("text", ""),
+                            anchor.get("text", ""), tag,
+                            "termux_duckduckgo_public_search", None,
+                        ):
+                            ddg_added += 1
+                        if len(candidates) >= limit:
+                            break
+                    if ddg_added:
+                        ddg_result = "metadata_found"
+            except requests.RequestException as exc:
+                ddg_result = "request_failed"
+                attempts.append({
+                    "platform": "instagram", "query": "#" + tag, "engine": "duckduckgo_html",
+                    "result": ddg_result, "error_type": type(exc).__name__,
+                })
+            else:
+                attempts.append({
+                    "platform": "instagram", "query": "#" + tag, "engine": "duckduckgo_html",
+                    "http_status": ddg_status, "new_unique": ddg_added, "result": ddg_result,
+                })
+        if len(candidates) < limit:
+            time.sleep(max(0.0, sleep_seconds))
+    return list(candidates.values()), attempts
+
+
 def discover_instagram_hashtags(
     *,
     session: Any | None = None,
+    search_session: Any | None = None,
     tags: tuple[str, ...] = INSTAGRAM_TAGS,
     max_results: int = MAX_RESULTS,
     timeout_seconds: int = 12,
     sleep_seconds: float = 0.4,
-    ydl_factory: Any | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Use yt-dlp for public hashtag metadata by default; injected sessions test the HTML parser."""
+    """Use public search-index discovery by default; injected sessions test the HTML parser."""
     if session is None:
-        return discover_instagram_ytdlp_tags(
+        return discover_instagram_public_search(
             tags=tags, max_results=max_results, timeout_seconds=timeout_seconds,
-            sleep_seconds=sleep_seconds, ydl_factory=ydl_factory,
+            sleep_seconds=sleep_seconds, session=search_session,
         )
     client = session
     try:
