@@ -330,6 +330,150 @@ def discover_tiktok_profiles(
     return list(candidates.values()), attempts
 
 
+def _discover_tiktok_public_hashtag_feeds(
+    *,
+    tags: tuple[str, ...],
+    max_results: int,
+    timeout_seconds: int = 12,
+    sleep_seconds: float = 0.35,
+    max_age_days: int = 90,
+    ydl_factory: Any | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Metadata-only fallback for public TikTok hashtag feeds through yt-dlp.
+
+    This route does not download video bytes, sign in, bypass challenges or retry
+    access-denied responses. Unsupported/blocked feeds are recorded and skipped.
+    """
+    if max_results <= 0:
+        return [], []
+    if ydl_factory is None:
+        try:
+            import yt_dlp
+        except ImportError:
+            return [], [{
+                "platform": "tiktok", "method": "yt_dlp_public_hashtag_feeds",
+                "result": "yt_dlp_not_installed",
+            }]
+        ydl_factory = yt_dlp.YoutubeDL
+
+    options = {
+        "quiet": True, "no_warnings": True, "ignoreerrors": True,
+        "skip_download": True, "extract_flat": "in_playlist",
+        "playlistend": max(10, min(40, int(max_results) * 3)),
+        "socket_timeout": max(5, min(30, int(timeout_seconds))),
+        "extractor_retries": 0, "retries": 0,
+        "logger": _QuietYDLLogger(),
+    }
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(max_age_days)))
+    candidates: dict[str, dict[str, Any]] = {}
+    attempts: list[dict[str, Any]] = []
+
+    for raw_tag in tags:
+        if len(candidates) >= max_results:
+            break
+        tag = str(raw_tag).strip().removeprefix("#").lower()
+        if not re.fullmatch(r"[a-z0-9_]{2,64}", tag):
+            attempts.append({
+                "platform": "tiktok", "method": "yt_dlp_public_hashtag_feeds",
+                "query": str(raw_tag)[:80], "result": "invalid_hashtag",
+            })
+            continue
+        try:
+            with ydl_factory(options) as ydl:
+                info = ydl.extract_info(f"https://www.tiktok.com/tag/{tag}", download=False)
+        except Exception as exc:
+            attempts.append({
+                "platform": "tiktok", "method": "yt_dlp_public_hashtag_feeds",
+                "query": "#" + tag, "result": "public_hashtag_metadata_failed",
+                "error_type": type(exc).__name__,
+            })
+            continue
+
+        entries = info.get("entries") if isinstance(info, dict) else None
+        if not isinstance(entries, list):
+            entries = [info] if isinstance(info, dict) and info.get("id") else []
+        parsed = added = stale_or_undated = invalid_rows = 0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            parsed += 1
+            page_url = str(entry.get("webpage_url") or entry.get("original_url") or "")
+            url_match = TIKTOK_URL_RE.search(page_url)
+            video_id = str(entry.get("id") or (url_match.group(2) if url_match else ""))
+            if not re.fullmatch(r"\d{10,25}", video_id):
+                invalid_rows += 1
+                continue
+
+            raw_handle = (
+                url_match.group(1) if url_match else
+                entry.get("uploader_id") or entry.get("channel_id") or entry.get("unique_id")
+            )
+            handle = str(raw_handle or "").strip().lstrip("@")
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", handle):
+                invalid_rows += 1
+                continue
+
+            timestamp = entry.get("timestamp") or entry.get("release_timestamp")
+            published_at = _to_iso_timestamp(timestamp)
+            if not published_at:
+                upload_date = entry.get("upload_date")
+                if isinstance(upload_date, str) and re.fullmatch(r"\d{8}", upload_date):
+                    try:
+                        published_at = datetime.strptime(upload_date, "%Y%m%d").replace(
+                            tzinfo=timezone.utc
+                        ).isoformat()
+                    except ValueError:
+                        published_at = None
+            if not published_at:
+                stale_or_undated += 1
+                continue
+            try:
+                published_dt = datetime.fromisoformat(published_at)
+                if published_dt.tzinfo is None:
+                    published_dt = published_dt.replace(tzinfo=timezone.utc)
+                if published_dt.astimezone(timezone.utc) < cutoff:
+                    stale_or_undated += 1
+                    continue
+            except ValueError:
+                stale_or_undated += 1
+                continue
+
+            title = str(entry.get("title") or "")
+            description = str(entry.get("description") or "")
+            caption = (title + ("\n" + description if description else "")).strip()[:4000]
+            row = _tiktok_candidate(
+                video_id, handle, title=caption, query="#" + tag,
+                timestamp=timestamp, stats={
+                    "playCount": entry.get("view_count"),
+                    "diggCount": entry.get("like_count"),
+                    "commentCount": entry.get("comment_count"),
+                    "shareCount": entry.get("repost_count"),
+                }, tags=[tag],
+            )
+            row["published_at"] = published_at
+            row["url"] = f"https://www.tiktok.com/@{handle}/video/{video_id}"
+            row["source_policy"] = resolve_source_policy("tiktok", handle)
+            row["creator_trust_tier"] = row["source_policy"].get("trust_tier", "unknown")
+            row["method"] = "termux_ytdlp_public_hashtag_feeds"
+            row["discovery_origin"] = "public_hashtag_feed"
+            candidates.setdefault(video_id, row)
+            if video_id in candidates:
+                added = len(candidates)
+            if len(candidates) >= max_results:
+                break
+
+        attempts.append({
+            "platform": "tiktok", "method": "yt_dlp_public_hashtag_feeds",
+            "query": "#" + tag, "parsed": parsed,
+            "new_unique": min(added, len(candidates)),
+            "stale_or_undated_skipped": stale_or_undated,
+            "invalid_rows_skipped": invalid_rows,
+            "result": "metadata_found" if added else "no_recent_public_hashtag_metadata",
+        })
+        time.sleep(max(0.0, sleep_seconds))
+    return list(candidates.values())[:max_results], attempts
+
+
 def discover_tiktok_hashtags(
     *,
     session: Any | None = None,
@@ -375,21 +519,41 @@ def discover_tiktok_hashtags(
                 "platform": "tiktok", "method": "public_hashtag_pages",
                 "result": "unknown_source_budget_exhausted",
             }]
-        unknown, unknown_attempts = discover_tiktok_hashtags(
-            session=requests.Session(),
+        unknown_feed, unknown_feed_attempts = _discover_tiktok_public_hashtag_feeds(
             tags=tags,
             max_results=remaining,
             timeout_seconds=timeout_seconds,
             sleep_seconds=sleep_seconds,
             max_age_days=max_age_days,
+            ydl_factory=ydl_factory,
+        )
+        unknown_ids = {row.get("id") for row in unknown_feed if isinstance(row, dict)}
+        html_remaining = max(0, remaining - len(unknown_feed))
+        if html_remaining:
+            unknown_html, unknown_html_attempts = discover_tiktok_hashtags(
+                session=requests.Session(),
+                tags=tags,
+                max_results=html_remaining,
+                timeout_seconds=timeout_seconds,
+                sleep_seconds=sleep_seconds,
+                max_age_days=max_age_days,
+            )
+        else:
+            unknown_html, unknown_html_attempts = [], []
+        all_unknown = list(unknown_feed)
+        all_unknown.extend(
+            row for row in unknown_html
+            if isinstance(row, dict) and row.get("id") not in unknown_ids
         )
         known_ids = {row.get("id") for row in known if isinstance(row, dict)}
         combined = list(known)
         combined.extend(
-            row for row in unknown
+            row for row in all_unknown
             if isinstance(row, dict) and row.get("id") not in known_ids
         )
-        return combined[:max(1, int(max_results))], [*known_attempts, *unknown_attempts]
+        return combined[:max(1, int(max_results))], [
+            *known_attempts, *unknown_feed_attempts, *unknown_html_attempts,
+        ]
     client = session
     try:
         client.headers.update({
