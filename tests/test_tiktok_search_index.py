@@ -125,7 +125,13 @@ class TikTokSearchIndexTests(unittest.TestCase):
         <title>Poppy Playtime edit</title>
         <link>https://www.tiktok.com/@new_editor/video/7691234567890123457</link>
         </item></channel></rss>"""
-        search_session = FakeSearchSession([FakeResponse(200, rss)])
+        search_session = FakeSearchSession([
+            FakeResponse(200, rss),
+            FakeResponse(200, "<rss><channel></channel></rss>"),
+            FakeResponse(202, "public search temporarily unavailable"),
+            FakeResponse(200, "<rss><channel></channel></rss>"),
+            FakeResponse(200, "<rss><channel></channel></rss>"),
+        ])
         # Four public hashtag HTML pages return ordinary empty HTML in this test.
         empty_html_session = FakeSearchSession([
             FakeResponse(200, "<html>no embedded video data</html>") for _ in range(4)
