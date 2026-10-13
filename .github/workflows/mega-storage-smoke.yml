@@ -70,7 +70,8 @@ jobs:
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$local_file"
           expected_sha="$(sha256sum "$local_file" | awk '{print $1}')"
 
-          mega-mkdir -p "$remote_dir"
+          mega-ls "$remote_dir" >/dev/null
+          echo "Existing MEGA destination folder is accessible."
           mega-put "$local_file" "$remote_dir/"
           uploaded="true"
 
