@@ -127,9 +127,12 @@ class TermuxMetadataParserTests(unittest.TestCase):
         self.assertEqual(found[0]["view_count"], 12345)
         self.assertEqual(FakeYDL.instances[0].queries[0][1], False)
         self.assertTrue(FakeYDL.instances[0].options["skip_download"])
+        self.assertTrue(FakeYDL.instances[0].options["extract_flat"])
+        self.assertIn("logger", FakeYDL.instances[0].options)
+        self.assertTrue(found[0]["freshness_verified"])
         self.assertEqual(attempts[0]["result"], "metadata_found")
 
-    def test_youtube_rejects_undated_and_old_shorts(self):
+    def test_youtube_keeps_undated_flat_search_results_unverified_and_skips_old_dates(self):
         FakeYDL.instances = []
         FakeYDL.info = {"entries": [
             {"id": "vkVFgmgLo1s", "title": "old short", "duration": 40, "timestamp": 1775000000},
@@ -140,9 +143,13 @@ class TermuxMetadataParserTests(unittest.TestCase):
             max_results=10,
             ydl_factory=FakeYDL,
         )
-        self.assertEqual(found, [])
-        self.assertEqual(attempts[0]["result"], "no_recent_eligible_short_metadata")
-        self.assertEqual(attempts[0]["stale_or_undated_skipped"], 2)
+        self.assertEqual([row["id"] for row in found], ["n38wy3o0DhY"])
+        self.assertIsNone(found[0]["published_at"])
+        self.assertFalse(found[0]["freshness_verified"])
+        self.assertEqual(found[0]["freshness_status"], "date_unavailable_verify_before_publish")
+        self.assertEqual(attempts[0]["result"], "metadata_found")
+        self.assertEqual(attempts[0]["stale_or_undated_skipped"], 1)
+        self.assertEqual(attempts[0]["freshness_unverified"], 1)
 
     def test_missing_yt_dlp_reports_a_safe_status(self):
         def missing(_options):
