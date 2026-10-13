@@ -96,7 +96,7 @@ jobs:
           TIKTOK_URL: "https://www.tiktok.com/@fame.yt.editx/video/7610592632179297558"
           # Public Instagram video URL previously downloaded and validated by the smoke test.
           INSTAGRAM_URL: "https://www.instagram.com/p/CmCVWoIr9OH/"
-          RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
+          RUBIKA_CHANNEL_GUID: "c0EFohK0f3174377fb6fa422d3ccb230"
         run: |
           python - <<'PY'
           import hashlib, json, os, sys, tempfile
