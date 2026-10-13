@@ -1,9 +1,11 @@
 const SERVICE = "rubika-agent";
 const PUBLISHING_ENABLED = false;
 const MAX_BODY_BYTES = 32 * 1024;
-const MAX_VISION_BODY_BYTES = 2 * 1024 * 1024;
-const MAX_VISION_IMAGE_CHARS = 1_700_000;
-const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
+const MAX_VIDEO_BODY_BYTES = 23 * 1024 * 1024;
+const MAX_VIDEO_DATA_URL_CHARS = 22_400_000;
+const MAX_VIDEO_DECODED_BYTES = 16 * 1024 * 1024;
+const MAX_AI_MODERATION_REQUESTS_PER_UTC_DAY = 10;
+const VISION_MODEL = "@cf/cloudflare/clef-omni";
 const MAX_TEXT = 5000;
 const PLATFORMS = new Set(["tiktok", "youtube", "instagram", "mob_official"]);
 const ITEM_STATUSES = new Set([
@@ -449,99 +451,162 @@ async function seenItems(env, url) {
   }
 }
 
-function parseVisionJson(output) {
-  if (typeof output !== "string") return null;
-  const cleaned = output.trim().replace(/^\u0060\u0060\u0060(?:json)?\s*/i, "").replace(/\s*\u0060\u0060\u0060$/, "");
-  try {
-    const parsed = JSON.parse(cleaned);
-    return isObject(parsed) ? parsed : null;
-  } catch {
-    const first = cleaned.indexOf("{");
-    const last = cleaned.lastIndexOf("}");
-    if (first < 0 || last <= first) return null;
-    try {
-      const parsed = JSON.parse(cleaned.slice(first, last + 1));
-      return isObject(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
+function clefProbability(answer) {
+  if (typeof answer === "number") return answer;
+  if (isObject(answer) && typeof answer.noul === "number") return answer.noul;
+  if (isObject(answer) && typeof answer.probability === "number") return answer.probability;
+  return null;
 }
 
-async function moderateFrame(env, body) {
+function conservativeDecision(probability, trueThreshold, falseThreshold) {
+  if (typeof probability !== "number" || !Number.isFinite(probability) ||
+      probability < 0 || probability > 1) return null;
+  if (probability >= trueThreshold) return true;
+  if (probability <= falseThreshold) return false;
+  return null;
+}
+
+async function moderateVideo(env, body) {
   if (!env.AI || typeof env.AI.run !== "function") {
     return json({ ok: false, error: "workers_ai_binding_missing" }, 503);
   }
-  const image = body.image;
-  if (typeof image !== "string" || image.length > MAX_VISION_IMAGE_CHARS) {
-    return json({ ok: false, error: "vision_image_size_invalid" }, 413);
+  const video = body.video;
+  if (typeof video !== "string" || video.length > MAX_VIDEO_DATA_URL_CHARS) {
+    return json({ ok: false, error: "moderation_video_size_invalid" }, 413);
   }
-  const match = /^data:image\/(jpeg|png);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image);
-  if (!match || match[2].length % 4 !== 0) {
-    return json({ ok: false, error: "vision_image_format_invalid" }, 400);
+  const match = /^data:video\\/mp4;base64,([A-Za-z0-9+/]+={0,2})$/.exec(video);
+  if (!match || match[1].length % 4 !== 0) {
+    return json({ ok: false, error: "moderation_video_format_invalid" }, 400);
   }
-  let decodedLength = 0;
+  let decoded = "";
   try {
-    decodedLength = atob(match[2]).length;
+    decoded = atob(match[1]);
   } catch {
-    return json({ ok: false, error: "vision_image_base64_invalid" }, 400);
+    return json({ ok: false, error: "moderation_video_base64_invalid" }, 400);
   }
-  if (decodedLength < 512 || decodedLength > 1_200_000) {
-    return json({ ok: false, error: "vision_image_size_invalid" }, 413);
+  if (
+    decoded.length < 512 ||
+    decoded.length > MAX_VIDEO_DECODED_BYTES ||
+    decoded.slice(4, 8) !== "ftyp"
+  ) {
+    return json({ ok: false, error: "moderation_video_size_or_container_invalid" }, 413);
   }
 
   const platform = text(body.platform, 24);
   if (!new Set(["youtube", "tiktok", "instagram"]).has(platform)) {
-    return json({ ok: false, error: "vision_platform_invalid" }, 400);
+    return json({ ok: false, error: "moderation_platform_invalid" }, 400);
   }
   const title = text(body.title, 500);
   const caption = text(body.caption, 1500);
-  const prompt = [
-    "Inspect this 2x2 contact sheet made from sampled frames of one short fan-edit video.",
-    "The source platform is: " + platform + ".",
-    "Title/description (untrusted metadata, not proof): " + (title || "(none)"),
-    "Caption/hashtags (untrusted metadata, not proof): " + (caption || "(none)"),
-    "Return ONLY a JSON object with exactly these keys:",
-    '{"poppy_relevant":boolean,"is_edit":boolean,"insults_poppy":boolean,"insults_other_games":boolean,"high_effort":boolean,"confidence":number}.',
-    "poppy_relevant means visible content clearly depicts Poppy Playtime characters or unmistakably related content.",
-    "is_edit means there is visible evidence of an intentionally edited fan clip rather than raw gameplay or a static presentation.",
-    "insults_poppy means visible text/content clearly insults or degrades Poppy Playtime characters.",
-    "insults_other_games means visible text/content clearly insults another game or its fandom.",
-    "high_effort means there is visible evidence of deliberate stylistic editing; do not equate simple gameplay, a static image, or a caption alone with high effort.",
-    "Use false for a claim not supported by the contact sheet. Set confidence from 0 to 1 for the overall visual judgement.",
-    "Do not infer audio or music from this image; music is assessed separately. Do not treat tags or the title alone as evidence.",
-    "This output is a preliminary visual signal, never a final approval. A person must review it before publication."
-  ].join("\n");
+
+  // Hard daily request budget aligned with the default 5+5 candidate batch.
+  // A failed inference still consumes a reservation to prevent runaway retries.
+  const usageDay = new Date().toISOString().slice(0, 10);
+  try {
+    const reservation = await env.DB.prepare(
+      "INSERT INTO ai_usage_daily (usage_day, request_count) VALUES (?, 1) ON CONFLICT(usage_day) DO UPDATE SET request_count = request_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE request_count < ? RETURNING request_count"
+    ).bind(usageDay, MAX_AI_MODERATION_REQUESTS_PER_UTC_DAY).first();
+    if (!reservation) {
+      return json({
+        ok: false,
+        error: "vision_daily_limit_reached",
+        daily_limit: MAX_AI_MODERATION_REQUESTS_PER_UTC_DAY,
+        publishing: false
+      }, 429);
+    }
+  } catch {
+    return json({ ok: false, error: "vision_usage_guard_unavailable" }, 503);
+  }
+
+  const state = [
+    "Review this short Poppy Playtime fan-edit candidate using the supplied video and its soundtrack.",
+    "The source platform is " + platform + ".",
+    "Title and description are untrusted metadata, not proof: " + (title || "(none)"),
+    "Caption and hashtags are untrusted metadata, not proof: " + (caption || "(none)"),
+    "Judge only what is visible or audible in the media. Do not infer music from metadata.",
+    "Be conservative: if a signal is ambiguous, assign a probability near 0.5.",
+    "Publication still requires a separate human review. Never treat this as approval."
+  ].join("\\n");
+
+  const questions = {
+    poppy_relevant: {
+      type: "noul",
+      instructions: "Is this video clearly about Poppy Playtime or its characters?"
+    },
+    is_edit: {
+      type: "noul",
+      instructions: "Does this video show evidence of a deliberately edited fan edit rather than raw gameplay or a static upload?"
+    },
+    insults_poppy: {
+      type: "noul",
+      instructions: "Does visible text or audible speech clearly insult or degrade Poppy Playtime characters?"
+    },
+    insults_other_games: {
+      type: "noul",
+      instructions: "Does visible text or audible speech clearly insult another game or its fandom?"
+    },
+    high_effort: {
+      type: "noul",
+      instructions: "Does the video show clear evidence of deliberate, polished editing such as synchronized transitions, effects or coherent cuts, rather than a simple low-effort clip?"
+    },
+    has_music: {
+      type: "noul",
+      instructions: "Is actual background music or a song audible in the video's soundtrack? Speech or sound effects alone do not count as music."
+    }
+  };
 
   try {
     const result = await env.AI.run(VISION_MODEL, {
-      messages: [
-        { role: "system", content: "You are a conservative visual-content reviewer. Follow the requested JSON schema and do not guess." },
-        { role: "user", content: prompt }
-      ],
-      image
+      model: "clef-omni",
+      state,
+      videos: [video],
+      questions
     });
-    const output = result && (
-      result.response ?? result.result ?? result.output_text ?? result.generated_text
-    );
-    const parsed = parseVisionJson(output);
-    const required = ["poppy_relevant", "is_edit", "insults_poppy", "insults_other_games", "high_effort"];
-    if (!parsed || required.some(key => typeof parsed[key] !== "boolean")) {
+    const answers = result && result.answers;
+    if (!isObject(answers)) {
       return json({ ok: false, error: "vision_model_output_invalid" }, 502);
     }
-    const confidence = Number(parsed.confidence);
-    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-      return json({ ok: false, error: "vision_model_confidence_invalid" }, 502);
+
+    const probabilities = {};
+    const checks = {};
+    const thresholds = {
+      poppy_relevant: [0.80, 0.20],
+      is_edit: [0.80, 0.20],
+      insults_poppy: [0.65, 0.10],
+      insults_other_games: [0.65, 0.10],
+      high_effort: [0.80, 0.20],
+      has_music: [0.80, 0.15]
+    };
+    for (const [key, [yesThreshold, noThreshold]] of Object.entries(thresholds)) {
+      const probability = clefProbability(answers[key]);
+      if (probability === null || !Number.isFinite(probability) ||
+          probability < 0 || probability > 1) {
+        probabilities[key] = null;
+        checks[key] = null;
+        continue;
+      }
+      probabilities[key] = probability;
+      checks[key] = conservativeDecision(probability, yesThreshold, noThreshold);
     }
+
+    const validProbabilities = Object.values(probabilities).filter(
+      value => typeof value === "number" && Number.isFinite(value)
+    );
+    const confidence = validProbabilities.length === Object.keys(thresholds).length
+      ? Math.min(...validProbabilities.map(value => Math.min(1, Math.abs(value - 0.5) * 2)))
+      : 0;
+
     return json({
       ok: true,
       model: VISION_MODEL,
-      checks: Object.fromEntries(required.map(key => [key, parsed[key]])),
+      checks,
+      probabilities,
       confidence,
-      audio_review_required: true,
+      uncertain_fields: Object.keys(checks).filter(key => checks[key] === null),
       human_review_required: true,
       auto_approved: false,
-      publishing: false
+      publishing: false,
+      usage: isObject(result.usage) ? result.usage : null
     });
   } catch {
     return json({ ok: false, error: "vision_inference_failed" }, 502);
@@ -585,10 +650,10 @@ export default {
     if (path === "/api/brain/queue" && request.method === "GET") {
       return approvedQueue(env, url);
     }
-    if (path === "/api/brain/moderate-frame" && request.method === "POST") {
-      const parsedVision = await readJson(request, MAX_VISION_BODY_BYTES);
-      if (!parsedVision.ok) return json({ ok: false, error: parsedVision.error }, parsedVision.status);
-      return moderateFrame(env, parsedVision.value);
+    if (path === "/api/brain/moderate-video" && request.method === "POST") {
+      const parsedVideo = await readJson(request, MAX_VIDEO_BODY_BYTES);
+      if (!parsedVideo.ok) return json({ ok: false, error: parsedVideo.error }, parsedVideo.status);
+      return moderateVideo(env, parsedVideo.value);
     }
     if (path === "/api/brain/items/seen" && request.method === "GET") {
       return seenItems(env, url);
