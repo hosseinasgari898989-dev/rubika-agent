@@ -137,10 +137,7 @@ class CloudStateTests(unittest.TestCase):
         )
         evaluation = Evaluation(
             decision="eligible", score=100, requires_review=False,
-            checks={
-                "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
-                "insults_other_games": False, "high_effort": True, "has_music": True,
-            },
+            checks={"has_music": True},
         )
         staged = SimpleNamespace(
             candidate=candidate, inspection=inspection, evaluation=evaluation,
@@ -155,7 +152,8 @@ class CloudStateTests(unittest.TestCase):
         self.assertEqual(captured["review_state"], "pending")
         self.assertEqual(captured["status"], "ready")
         self.assertEqual(captured["media_sha256"], "a" * 64)
-        self.assertEqual(captured["moderation"]["high_effort"], True)
+        self.assertEqual(captured["moderation"]["has_music"], True)
+        self.assertNotIn("high_effort", captured["moderation"])
         self.assertEqual(captured["validation"]["ok"], True)
 
 
@@ -171,14 +169,8 @@ class CloudStateTests(unittest.TestCase):
             return io.BytesIO(json.dumps({
                 "ok": True,
                 "model": "@cf/cloudflare/clef-omni",
-                "checks": {
-                    "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
-                    "insults_other_games": False, "high_effort": True, "has_music": True,
-                },
-                "probabilities": {
-                    "poppy_relevant": 0.98, "is_edit": 0.92, "insults_poppy": 0.03,
-                    "insults_other_games": 0.02, "high_effort": 0.89, "has_music": 0.96,
-                },
+                "checks": {"has_music": True},
+                "probabilities": {"has_music": 0.96},
                 "confidence": 0.92,
                 "human_review_required": True,
                 "auto_approved": False,
@@ -192,8 +184,9 @@ class CloudStateTests(unittest.TestCase):
                 video, platform="youtube", title="Poppy edit", caption="#edit"
             )
 
-        self.assertTrue(result["poppy_relevant"])
         self.assertTrue(result["has_music"])
+        self.assertNotIn("poppy_relevant", result)
+        self.assertNotIn("high_effort", result)
         self.assertTrue(result["human_review_required"])
         self.assertFalse(result["auto_approved"])
         self.assertGreater(len(captured["body"]), 32 * 1024)
