@@ -8,6 +8,8 @@ on:
       - "agent/brain/**"
       - "agent/storage/**"
       - "agent/discovery/**"
+      - "tests/test_instagram_discovery.py"
+      - "tests/test_discovery_run.py"
       - "config/trusted_sources.json"
       - "tests/test_agent_brain.py"
       - "tests/test_mega_storage.py"
@@ -38,3 +40,5 @@ jobs:
           python -m unittest discover -s tests -p 'test_mega_storage.py' -v
           python -m unittest discover -s tests -p 'test_ledger.py' -v
           python -m unittest discover -s tests -p 'test_discovery_v7.py' -v
+          python -m unittest discover -s tests -p 'test_instagram_discovery.py' -v
+          python -m unittest discover -s tests -p 'test_discovery_run.py' -v
