@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from agent.brain.cloud_state import CloudState, CloudStateError
+from agent.brain.models import Candidate, Evaluation, InspectionResult
+from types import SimpleNamespace
 
 
 TOKEN = "test-token-value-with-more-than-thirty-two-characters"
@@ -78,6 +80,47 @@ class CloudStateTests(unittest.TestCase):
         state = CloudState("https://worker.example", TOKEN)
         with self.assertRaises(ValueError):
             state._request("POST", "/api/brain/events", {"details": {"large": "x" * 40000}})
+
+
+    def test_upsert_staged_preserves_canonical_youtube_id_and_never_approves(self):
+        state = CloudState("https://worker.example", TOKEN)
+        candidate = Candidate(
+            platform="youtube",
+            canonical_url="https://www.youtube.com/watch?v=vkVFgmgLo1s",
+            external_id="vkVFgmgLo1s",
+            title="Poppy Playtime edit",
+            caption="#PoppyPlaytime #edit",
+            source_key="@creator",
+            media_type="video",
+            source_tier="trusted",
+        )
+        inspection = InspectionResult(
+            ok=True, media_type="video", sha256="a" * 64, size_bytes=1000000,
+            mime_type="video/mp4", width=1080, height=1080,
+            duration_seconds=12.0, has_audio=True, video_codec="h264", audio_codec="aac",
+        )
+        evaluation = Evaluation(
+            decision="eligible", score=100, requires_review=False,
+            checks={
+                "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
+                "insults_other_games": False, "high_effort": True, "has_music": True,
+            },
+        )
+        staged = SimpleNamespace(
+            candidate=candidate, inspection=inspection, evaluation=evaluation,
+            storage_key="/Rubika-Agent/staging/youtube-vkVFgmgLo1s.mp4",
+            caption=candidate.caption,
+        )
+        captured = {}
+        state.upsert_item = lambda payload: (captured.update(payload) or {"ok": True})
+        result = state.upsert_staged(staged)
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured["canonical_url"], candidate.canonical_url)
+        self.assertEqual(captured["review_state"], "pending")
+        self.assertEqual(captured["status"], "ready")
+        self.assertEqual(captured["media_sha256"], "a" * 64)
+        self.assertEqual(captured["moderation"]["high_effort"], True)
+        self.assertEqual(captured["validation"]["ok"], True)
 
 
 if __name__ == "__main__":
