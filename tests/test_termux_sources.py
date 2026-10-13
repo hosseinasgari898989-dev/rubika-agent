@@ -91,6 +91,20 @@ class TermuxMetadataParserTests(unittest.TestCase):
         self.assertEqual(FakeYDL.instances[0].options["extract_flat"], "in_playlist")
         self.assertEqual(attempts[0]["result"], "metadata_found")
 
+    def test_tiktok_skips_stale_and_undated_profile_items(self):
+        FakeYDL.instances = []
+        FakeYDL.info = {"entries": [
+            {"id": "7610592632179297558", "title": "Poppy Playtime edit", "timestamp": 1775000000},
+            {"id": "7610592632179297559", "title": "Poppy Playtime edit"},
+        ]}
+        found, attempts = discover_tiktok_hashtags(
+            profiles=("example_creator",), max_results=5, sleep_seconds=0,
+            ydl_factory=FakeYDL,
+        )
+        self.assertEqual(found, [])
+        self.assertEqual(attempts[0]["result"], "no_recent_relevant_public_video_metadata")
+        self.assertEqual(attempts[0]["stale_or_undated_skipped"], 2)
+
     def test_youtube_search_is_metadata_only_and_keeps_only_short_duration(self):
         FakeYDL.instances = []
         FakeYDL.info = {"entries": [
@@ -114,6 +128,21 @@ class TermuxMetadataParserTests(unittest.TestCase):
         self.assertEqual(FakeYDL.instances[0].queries[0][1], False)
         self.assertTrue(FakeYDL.instances[0].options["skip_download"])
         self.assertEqual(attempts[0]["result"], "metadata_found")
+
+    def test_youtube_rejects_undated_and_old_shorts(self):
+        FakeYDL.instances = []
+        FakeYDL.info = {"entries": [
+            {"id": "vkVFgmgLo1s", "title": "old short", "duration": 40, "timestamp": 1775000000},
+            {"id": "n38wy3o0DhY", "title": "undated short", "duration": 24},
+        ]}
+        found, attempts = discover_youtube_metadata(
+            queries=("Poppy Playtime edit shorts",),
+            max_results=10,
+            ydl_factory=FakeYDL,
+        )
+        self.assertEqual(found, [])
+        self.assertEqual(attempts[0]["result"], "no_recent_eligible_short_metadata")
+        self.assertEqual(attempts[0]["stale_or_undated_skipped"], 2)
 
     def test_missing_yt_dlp_reports_a_safe_status(self):
         def missing(_options):
