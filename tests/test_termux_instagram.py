@@ -69,6 +69,31 @@ class TermuxInstagramTests(unittest.TestCase):
         self.assertIn("bing.com/search", session.calls[0][0])
         self.assertEqual(attempts[0]["result"], "metadata_found")
 
+    def test_public_search_rejects_old_or_undated_reels(self):
+        stale_rss = (
+            "<rss><channel><item>"
+            "<title>Old public Reel</title>"
+            "<link>https://www.instagram.com/reel/OldReel_12345/</link>"
+            "<description>Old Poppy Playtime Reel</description>"
+            "<pubDate>Mon, 16 Mar 2026 14:00:00 GMT</pubDate>"
+            "</item><item>"
+            "<title>Undated public Reel</title>"
+            "<link>https://www.instagram.com/reel/NoDate_123456/</link>"
+            "<description>Undated Poppy Playtime Reel</description>"
+            "</item></channel></rss>"
+        )
+        session = FakeSession([FakeResponse(200, stale_rss), FakeResponse(202, "challenge")])
+        found, attempts = discover_instagram_hashtags(
+            search_session=session,
+            tags=("poppyplaytime",),
+            max_results=5,
+            sleep_seconds=0,
+        )
+        self.assertEqual(found, [])
+        self.assertEqual(attempts[0]["stale_or_undated_skipped"], 2)
+        self.assertEqual(attempts[-1]["result"], "http_202")
+        self.assertEqual(len(session.calls), 2)
+
     def test_search_fallback_unwraps_duckduckgo_links_and_rejects_nonreels(self):
         rss = (
             "<rss><channel>"
@@ -79,9 +104,11 @@ class TermuxInstagramTests(unittest.TestCase):
             "</channel></rss>"
         )
         ddg = (
-            '<html><a class="result__a" href="https://duckduckgo.com/l/?uddg='
+            '<html><div class="result">'
+            '<span class="result__timestamp">2 days ago</span>'
+            '<a class="result__a" href="https://duckduckgo.com/l/?uddg='
             'https%3A%2F%2Fwww.instagram.com%2Freel%2FGoodReel_1234%2F">'
-            'Poppy Playtime Reel</a></html>'
+            'Poppy Playtime Reel</a></div></html>'
         )
         session = FakeSession([FakeResponse(200, rss), FakeResponse(200, ddg)])
         found, attempts = discover_instagram_hashtags(
