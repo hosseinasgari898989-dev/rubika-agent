@@ -11,6 +11,7 @@ from typing import Any
 
 from . import v7
 from .instagram import discover_public_indexed_urls
+from .proxitok import ProxiTokDiscovery, discover_public_rss
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,6 +68,24 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
         }
         seen["instagram"].add(item.external_id)
 
+    proxitok = ProxiTokDiscovery(candidates=(), attempts=())
+    if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
+        print("TikTok fallback: documented public ProxiTok RSS feeds; RSS metadata only.", flush=True)
+        proxitok = discover_public_rss()
+        for item in proxitok.candidates:
+            if item.external_id in seen["tiktok"]:
+                continue
+            store["tiktok"][item.external_id] = {
+                "platform": "tiktok",
+                "id": item.external_id,
+                "url": item.canonical_url,
+                "title": item.title,
+                "author": item.source_key,
+                "method": item.discovery_method,
+                "query": item.discovery_tag,
+            }
+            seen["tiktok"].add(item.external_id)
+
     candidates = {key: _unique_sorted(values) for key, values in store.items()}
     summary = {
         "tiktok_candidates": len(candidates["tiktok"]),
@@ -87,7 +106,7 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
         "summary": summary,
         "excluded_existing_ids": {key: len(value) for key, value in ignored.items()},
         "candidates": candidates,
-        "attempts": v7.ATTEMPTS + [item for item in instagram.report()["attempts"]],
+        "attempts": v7.ATTEMPTS + [item for item in instagram.report()["attempts"]] + [item for item in proxitok.report()["attempts"]],
     }
     path = Path(report_path)
     path.parent.mkdir(parents=True, exist_ok=True)
