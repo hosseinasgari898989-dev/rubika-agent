@@ -19,7 +19,7 @@ import requests
 
 
 INSTAGRAM_TAGS = ("poppyplaytime", "huggywuggy", "catnap")
-MAX_RESULTS = 2
+MAX_RESULTS = 5
 MEDIA_PATH_RE = re.compile(r"^/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$", re.IGNORECASE)
 CANONICAL_URL_RE = re.compile(
     r"(?:https?://)?(?:www[.])?instagram[.]com/(reel|p|tv)/([A-Za-z0-9_-]{5,20})",
@@ -257,6 +257,110 @@ def _json_media_rows(body: str, requested_tag: str) -> list[dict[str, Any]]:
     return list(candidates.values())
 
 
+def discover_instagram_ytdlp_tags(
+    *,
+    tags: tuple[str, ...] = INSTAGRAM_TAGS,
+    max_results: int = MAX_RESULTS,
+    timeout_seconds: int = 15,
+    sleep_seconds: float = 0.4,
+    ydl_factory: Any | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Best-effort public hashtag discovery with yt-dlp; never downloads media."""
+    if ydl_factory is None:
+        try:
+            import yt_dlp
+        except ImportError:
+            return [], [{"platform": "instagram", "result": "yt_dlp_not_installed"}]
+        ydl_factory = yt_dlp.YoutubeDL
+
+    limit = max(1, min(int(max_results), 5))
+    options = {
+        "quiet": True, "no_warnings": True, "ignoreerrors": True,
+        "skip_download": True, "extract_flat": "in_playlist", "playlistend": 30,
+        "socket_timeout": max(5, min(30, int(timeout_seconds))),
+        "extractor_retries": 0, "retries": 0,
+    }
+    candidates: dict[str, dict[str, Any]] = {}
+    attempts: list[dict[str, Any]] = []
+    for raw_tag in tags:
+        if len(candidates) >= limit:
+            break
+        tag = str(raw_tag or "").strip().removeprefix("#").lower()
+        if not re.fullmatch(r"[a-z0-9_]{2,64}", tag):
+            attempts.append({"platform": "instagram", "query": tag[:80], "result": "invalid_hashtag"})
+            continue
+        try:
+            with ydl_factory(options) as ydl:
+                info = ydl.extract_info(f"https://www.instagram.com/explore/tags/{tag}/", download=False)
+        except Exception as exc:
+            attempts.append({
+                "platform": "instagram", "query": "#" + tag,
+                "result": "metadata_search_failed", "error_type": type(exc).__name__,
+            })
+            continue
+        entries = info.get("entries") if isinstance(info, dict) else None
+        if not isinstance(entries, list):
+            entries = [info] if isinstance(info, dict) and info.get("id") else []
+        parsed = added = 0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            parsed += 1
+            raw_url = entry.get("webpage_url") or entry.get("original_url") or entry.get("url") or ""
+            if not isinstance(raw_url, str):
+                raw_url = ""
+            canonical = _canonical_media_url(raw_url)
+            if canonical:
+                kind, shortcode, permalink = canonical
+            else:
+                shortcode = str(entry.get("id") or entry.get("shortcode") or "")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", shortcode):
+                    continue
+                kind = ""
+                permalink = ""
+            media_kind = str(entry.get("media_type") or entry.get("type") or "").lower()
+            is_video = (
+                kind == "reel" or entry.get("is_video") is True
+                or media_kind in {"2", "video", "reel"}
+                or entry.get("duration") is not None
+                or str(entry.get("ext") or "").lower() in {"mp4", "mov", "m4v"}
+            )
+            if not is_video:
+                continue
+            if not permalink:
+                permalink = f"https://www.instagram.com/{'reel' if kind == 'reel' else 'p'}/{shortcode}/"
+            caption = str(entry.get("description") or entry.get("title") or "")[:4000]
+            tags_found = re.findall(r"(?:^|[^A-Za-z0-9_])#([A-Za-z0-9_]{2,64})", caption)
+            row = {
+                "platform": "instagram",
+                "id": shortcode,
+                "url": permalink,
+                "title": str(entry.get("title") or caption)[:1200],
+                "caption": caption,
+                "author": str(entry.get("uploader") or entry.get("channel") or "")[:100],
+                "hashtags": list(dict.fromkeys([tag, *tags_found]))[:40],
+                "published_at": _safe_date(entry.get("timestamp") or entry.get("release_timestamp")),
+                "like_count": _safe_int(entry.get("like_count")),
+                "comment_count": _safe_int(entry.get("comment_count")),
+                "view_count": _safe_int(entry.get("view_count")),
+                "duration_seconds": _safe_int(entry.get("duration")),
+                "media_type": "video",
+                "method": "termux_ytdlp_public_hashtag_extractor",
+                "query": "#" + tag,
+            }
+            candidates.setdefault(shortcode, row)
+            added += 1
+            if len(candidates) >= limit:
+                break
+        attempts.append({
+            "platform": "instagram", "query": "#" + tag, "parsed": parsed,
+            "new_unique": added,
+            "result": "metadata_found" if added else "no_eligible_public_video_metadata",
+        })
+        time.sleep(max(0.0, sleep_seconds))
+    return list(candidates.values()), attempts
+
+
 def discover_instagram_hashtags(
     *,
     session: Any | None = None,
@@ -264,9 +368,15 @@ def discover_instagram_hashtags(
     max_results: int = MAX_RESULTS,
     timeout_seconds: int = 12,
     sleep_seconds: float = 0.4,
+    ydl_factory: Any | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Attempt a small number of public hashtag pages once each; do not retry challenges."""
-    client = session or requests.Session()
+    """Use yt-dlp for public hashtag metadata by default; injected sessions test the HTML parser."""
+    if session is None:
+        return discover_instagram_ytdlp_tags(
+            tags=tags, max_results=max_results, timeout_seconds=timeout_seconds,
+            sleep_seconds=sleep_seconds, ydl_factory=ydl_factory,
+        )
+    client = session
     try:
         client.headers.update({
             "User-Agent": (
@@ -281,7 +391,7 @@ def discover_instagram_hashtags(
 
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
-    limit = max(1, min(int(max_results), 2))
+    limit = max(1, min(int(max_results), 5))
     for raw_tag in tags:
         if len(candidates) >= limit:
             break
