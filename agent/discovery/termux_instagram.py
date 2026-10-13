@@ -23,9 +23,9 @@ import requests
 INSTAGRAM_TAGS = ("poppyplaytime", "huggywuggy", "catnap")
 MAX_RESULTS = 5
 SEARCH_TERMS = {
-    "poppyplaytime": '"Poppy Playtime" OR poppyplaytime',
+    "poppyplaytime": '("Poppy Playtime" OR poppyplaytime)',
     "huggywuggy": '"Huggy Wuggy" OR huggywuggy',
-    "catnap": '"CatNap" "Poppy Playtime" OR "Smiling Critters"',
+    "catnap": '("CatNap" "Poppy Playtime" OR "Smiling Critters")',
 }
 MEDIA_PATH_RE = re.compile(r"^/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$", re.IGNORECASE)
 CANONICAL_URL_RE = re.compile(
@@ -591,7 +591,7 @@ def discover_instagram_public_search(
         })
 
         # Try a second public search engine only when Bing returned no Reel URLs.
-        if new_unique == 0 and len(candidates) < limit:
+        if new_unique == 0 and len(candidates) < limit and not ddg_blocked:
             ddg_result = "no_indexed_public_reels"
             ddg_status = None
             ddg_added = 0
