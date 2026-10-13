@@ -1,11 +1,10 @@
-"""Unified public-source candidate discovery; never downloads or publishes media."""
+"""Unified metadata discovery; never downloads or publishes media."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,7 +17,11 @@ from .tavily import discover_social_urls
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_PATH = ROOT / "artifacts" / "discovery_report.json"
+TERMUX_REPORT_PATH = ROOT / "artifacts" / "termux_discovery.json"
 REQUIRED_CORE_COUNTS = {"tiktok": 5, "youtube": 5}
+TIKTOK_URL_RE = re.compile(r"^https://www\.tiktok\.com/@([A-Za-z0-9._-]{1,40})/video/(\d{10,25})/?$")
+YOUTUBE_SHORT_URL_RE = re.compile(r"^https://(?:www\.)?youtube\.com/(?:shorts/|watch\?v=)([A-Za-z0-9_-]{11})/?$")
+INSTAGRAM_URL_RE = re.compile(r"^https://(?:www\.)?instagram\.com/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$")
 
 
 def _unique_sorted(items: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -28,8 +31,77 @@ def _unique_sorted(items: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     ))
 
 
-def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
-    """Search TikTok, YouTube and indexed public Instagram links and write evidence."""
+def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]], str | None, str]:
+    """Load and strictly validate the phone's metadata report, if present."""
+    report_path = Path(path)
+    if not report_path.exists():
+        return {"tiktok": [], "youtube": [], "instagram": []}, None, "not_found"
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"tiktok": [], "youtube": [], "instagram": []}, None, "unreadable"
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or payload.get("source") != "termux_phone"
+        or payload.get("mode") != "metadata_only_no_download_no_publish"
+        or not isinstance(payload.get("candidates"), dict)
+    ):
+        return {"tiktok": [], "youtube": [], "instagram": []}, None, "invalid_report"
+
+    accepted: dict[str, list[dict[str, Any]]] = {"tiktok": [], "youtube": [], "instagram": []}
+    for platform in accepted:
+        raw_rows = payload["candidates"].get(platform, [])
+        if not isinstance(raw_rows, list):
+            continue
+        seen_ids: set[str] = set()
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                continue
+            item_id = row.get("id")
+            raw_url = row.get("url")
+            if not isinstance(item_id, str) or not isinstance(raw_url, str):
+                continue
+            url = raw_url.strip()
+            canonical_id = ""
+            if platform == "tiktok":
+                match = TIKTOK_URL_RE.fullmatch(url)
+                if match:
+                    canonical_id = match.group(2)
+            elif platform == "youtube":
+                match = YOUTUBE_SHORT_URL_RE.fullmatch(url)
+                if match:
+                    canonical_id = match.group(1)
+            else:
+                match = INSTAGRAM_URL_RE.fullmatch(url)
+                if match and str(row.get("media_type") or "").lower() == "video":
+                    canonical_id = match.group(2)
+            if not canonical_id or canonical_id != item_id or item_id in seen_ids:
+                continue
+            safe = dict(row)
+            safe["platform"] = platform
+            safe["id"] = canonical_id
+            if platform == "youtube":
+                safe["url"] = f"https://www.youtube.com/shorts/{canonical_id}"
+            elif platform == "tiktok":
+                safe["url"] = f"https://www.tiktok.com/@{match.group(1)}/video/{canonical_id}"
+            else:
+                safe["url"] = f"https://www.instagram.com/{match.group(1).lower()}/{canonical_id}/"
+            safe["title"] = str(safe.get("title") or "")[:1200]
+            safe["caption"] = str(safe.get("caption") or "")[:4000]
+            safe["author"] = str(safe.get("author") or "")[:100]
+            safe["method"] = str(safe.get("method") or "termux_phone")[:80]
+            seen_ids.add(item_id)
+            accepted[platform].append(safe)
+    return accepted, str(payload.get("generated_at") or "") or None, "loaded"
+
+
+def run_discovery(
+    *,
+    report_path: str | Path = REPORT_PATH,
+    phone_report_path: str | Path = TERMUX_REPORT_PATH,
+) -> dict[str, Any]:
+    """Merge verified phone metadata with controlled fallbacks and write diagnostic evidence."""
     v7.ATTEMPTS.clear()
     ignored = v7.known_ids()
     store: dict[str, dict[str, dict[str, Any]]] = {
@@ -43,57 +115,50 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
         "instagram": set(ignored.get("instagram", set())),
     }
 
-    print("Discovery 1/3: TikTok search endpoints and canonical URL validation.", flush=True)
-    v7.tiktok_from_tikwm(store, seen["tiktok"])
-    if len(store["tiktok"]) < 10:
-        v7.tiktok_from_search_engines(store, seen["tiktok"])
+    phone_candidates, phone_generated_at, phone_status = _load_phone_report(phone_report_path)
+    phone_report_loaded = phone_status == "loaded"
+    phone_attempts: list[dict[str, Any]] = [{
+        "platform": "multi",
+        "method": "termux_phone_report",
+        "result": phone_status,
+        "generated_at": phone_generated_at,
+    }]
+    for platform, rows in phone_candidates.items():
+        for row in rows:
+            item_id = row["id"]
+            if item_id in seen[platform]:
+                continue
+            store[platform][item_id] = row
+            seen[platform].add(item_id)
 
-    print("Discovery 2/3: YouTube yt-dlp search; metadata only, no media download.", flush=True)
-    v7.discover_youtube_ytdlp(store, seen["youtube"])
-    if len(store["youtube"]) < 15:
-        v7.discover_youtube_html(store, seen["youtube"])
+    if phone_report_loaded:
+        print("Discovery: validated phone report loaded; avoiding repeat public-index searches.", flush=True)
+    else:
+        print("Discovery: no valid phone report; using the existing metadata-only fallbacks.", flush=True)
 
-    print("Discovery 3/3: public indexed Instagram post/Reel URLs.", flush=True)
-    instagram = discover_public_indexed_urls()
-    for attempt in instagram.attempts:
-        print(
-            f"Instagram index {attempt.engine} query={attempt.query}: "
-            f"status={attempt.http_status if attempt.http_status is not None else 'network_error'}, "
-            f"canonical={attempt.canonical_count}, new={attempt.new_unique_count}, "
-            f"result={attempt.result}",
-            flush=True,
-        )
-    for item in instagram.candidates:
-        if item.external_id in seen["instagram"]:
-            continue
-        store["instagram"][item.external_id] = {
-            "platform": "instagram",
-            "id": item.external_id,
-            "url": item.canonical_url,
-            "title": "",
-            "post_type": item.post_type,
-            "method": item.method,
-            "query": item.query,
-            "media_type": item.media_type,
-        }
-        seen["instagram"].add(item.external_id)
+    if not phone_report_loaded and len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
+        print("TikTok fallback: legacy endpoints are attempted only when no phone report is available.", flush=True)
+        v7.tiktok_from_tikwm(store, seen["tiktok"])
+        if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
+            v7.tiktok_from_search_engines(store, seen["tiktok"])
 
+    if len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
+        print("YouTube fallback: yt-dlp metadata search only; download=False.", flush=True)
+        v7.discover_youtube_ytdlp(store, seen["youtube"])
+        if len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
+            v7.discover_youtube_html(store, seen["youtube"])
+
+    # Do not repeatedly retry the known-unproductive public Instagram search-engine path.
+    # Only use the optional official API when it is configured, unless explicitly opting in
+    # to one legacy index diagnostic run for debugging.
     instagram_graph = InstagramDiscovery(candidates=(), attempts=())
-    if len(store["instagram"]) < 5:
-        print(
-            "Instagram official Graph API fallback: hashtag search for public media; "
-            "requires eligible Professional-account credentials.",
-            flush=True,
-        )
-        instagram_graph = discover_official_hashtag_urls(max_results=25)
-        for attempt in instagram_graph.attempts:
-            print(
-                f"Instagram Graph API query={attempt.query}: "
-                f"status={attempt.http_status if attempt.http_status is not None else 'not_requested'}, "
-                f"canonical={attempt.canonical_count}, new={attempt.new_unique_count}, "
-                f"result={attempt.result}",
-                flush=True,
-            )
+    graph_configured = bool(
+        os.getenv("INSTAGRAM_GRAPH_ACCESS_TOKEN", "").strip()
+        and os.getenv("INSTAGRAM_GRAPH_USER_ID", "").strip()
+    )
+    if len(store["instagram"]) < 1 and graph_configured:
+        print("Instagram fallback: configured official Graph API metadata search.", flush=True)
+        instagram_graph = discover_official_hashtag_urls(max_results=2)
         for item in instagram_graph.candidates:
             if item.external_id in seen["instagram"]:
                 continue
@@ -102,24 +167,38 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
                 "id": item.external_id,
                 "url": item.canonical_url,
                 "title": "",
+                "caption": "",
                 "post_type": item.post_type,
                 "method": item.method,
                 "query": item.query,
                 "media_type": item.media_type,
             }
             seen["instagram"].add(item.external_id)
+    elif len(store["instagram"]) < 1 and os.getenv("ALLOW_LEGACY_INSTAGRAM_INDEX", "").lower() == "true":
+        print("Instagram index diagnostic explicitly enabled by ALLOW_LEGACY_INSTAGRAM_INDEX.", flush=True)
+        instagram = discover_public_indexed_urls(max_results=5)
+        for item in instagram.candidates:
+            if item.external_id in seen["instagram"]:
+                continue
+            store["instagram"][item.external_id] = {
+                "platform": "instagram",
+                "id": item.external_id,
+                "url": item.canonical_url,
+                "title": "",
+                "caption": "",
+                "post_type": item.post_type,
+                "method": item.method,
+                "query": item.query,
+                "media_type": item.media_type,
+            }
+            seen["instagram"].add(item.external_id)
+    else:
+        instagram = InstagramDiscovery(candidates=(), attempts=())
 
     proxitok = ProxiTokDiscovery(candidates=(), attempts=())
-    if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
-        print("TikTok fallback: documented public ProxiTok RSS feeds; RSS metadata only.", flush=True)
+    if not phone_report_loaded and len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
+        print("TikTok fallback: public ProxiTok RSS feeds; no login or challenge bypass.", flush=True)
         proxitok = discover_public_rss()
-        for attempt in proxitok.attempts:
-            print(
-                f"ProxiTok RSS {attempt.instance} tag={attempt.tag}: "
-                f"status={attempt.status if attempt.status is not None else 'network_error'}, "
-                f"parsed={attempt.parsed_count}, new={attempt.added_count}, result={attempt.result}",
-                flush=True,
-            )
         for item in proxitok.candidates:
             if item.external_id in seen["tiktok"]:
                 continue
@@ -134,38 +213,30 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
             }
             seen["tiktok"].add(item.external_id)
 
-    # Optional official Search API fallback. Without TAVILY_API_KEY it performs
-    # no network requests and reports not_configured instead of guessing results.
-    tavily_reports = {}
-    for platform in ("tiktok", "instagram"):
-        current_target = REQUIRED_CORE_COUNTS["tiktok"] if platform == "tiktok" else 5
-        if len(store[platform]) >= current_target:
-            continue
-        result = discover_social_urls(platform, max_results=max(5, current_target), max_queries=2)
-        tavily_reports[platform] = result.report()
-        for attempt in result.attempts:
-            print(
-                f"Tavily {platform} query={attempt.query or '(none)'}: "
-                f"status={attempt.http_status if attempt.http_status is not None else 'not_requested'}, "
-                f"parsed={attempt.parsed_count}, new={attempt.new_unique_count}, "
-                f"credits={attempt.credits_used if attempt.credits_used is not None else 'unknown'}, "
-                f"result={attempt.result}",
-                flush=True,
-            )
-        for item in result.candidates:
-            if item.external_id in seen[platform]:
+    # Search-engine API use remains opt-in. No external API receives requests without a key.
+    tavily_reports: dict[str, Any] = {}
+    if not phone_report_loaded and os.getenv("TAVILY_API_KEY", "").strip():
+        for platform in ("tiktok", "instagram"):
+            target = REQUIRED_CORE_COUNTS["tiktok"] if platform == "tiktok" else 2
+            if len(store[platform]) >= target:
                 continue
-            store[platform][item.external_id] = {
-                "platform": item.platform,
-                "id": item.external_id,
-                "url": item.canonical_url,
-                "title": item.title,
-                "author": item.source_key,
-                "method": item.discovery_method,
-                "query": item.discovery_query,
-                "media_type": item.media_type,
-            }
-            seen[platform].add(item.external_id)
+            result = discover_social_urls(platform, max_results=target, max_queries=2)
+            tavily_reports[platform] = result.report()
+            for item in result.candidates:
+                if item.external_id in seen[platform]:
+                    continue
+                store[platform][item.external_id] = {
+                    "platform": item.platform,
+                    "id": item.external_id,
+                    "url": item.canonical_url,
+                    "title": item.title,
+                    "caption": "",
+                    "author": item.source_key,
+                    "method": item.discovery_method,
+                    "query": item.discovery_query,
+                    "media_type": item.media_type,
+                }
+                seen[platform].add(item.external_id)
 
     candidates = {key: _unique_sorted(values) for key, values in store.items()}
     summary = {
@@ -177,22 +248,36 @@ def run_discovery(*, report_path: str | Path = REPORT_PATH) -> dict[str, Any]:
             len(candidates[platform]) >= count
             for platform, count in REQUIRED_CORE_COUNTS.items()
         ),
+        "termux_report_loaded": phone_report_loaded,
+        "termux_report_status": phone_status,
+        "termux_report_generated_at": phone_generated_at,
         "ready_to_publish": False,
         "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
-        "instagram_graph_api_configured": bool(
-            os.getenv("INSTAGRAM_GRAPH_ACCESS_TOKEN", "").strip()
-            and os.getenv("INSTAGRAM_GRAPH_USER_ID", "").strip()
+        "instagram_graph_api_configured": graph_configured,
+        "reason_not_publish_ready": (
+            "metadata_only; downloading, duplicate-content inspection, reuse permission, "
+            "media moderation, complete-batch checks and explicit publish authorization are separate gates"
         ),
-        "reason_not_publish_ready": "discovery_only; media validation and explicit content moderation are separate gates",
     }
+    instagram_attempts = (
+        instagram.report()["attempts"] if "instagram" in locals()
+        else [{"engine": "Instagram public index", "result": "skipped_known_unproductive_path"}]
+    )
     report = {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "mode": "public_discovery_only_no_download_no_publish",
+        "mode": "metadata_only_no_download_no_publish",
         "summary": summary,
         "excluded_existing_ids": {key: len(value) for key, value in ignored.items()},
         "candidates": candidates,
-        "attempts": v7.ATTEMPTS + [item for item in instagram.report()["attempts"]] + [item for item in instagram_graph.report()["attempts"]] + [item for item in proxitok.report()["attempts"]] + [attempt for result in tavily_reports.values() for attempt in result["attempts"]],
+        "attempts": (
+            phone_attempts
+            + v7.ATTEMPTS
+            + instagram_attempts
+            + instagram_graph.report()["attempts"]
+            + proxitok.report()["attempts"]
+            + [attempt for result in tavily_reports.values() for attempt in result["attempts"]]
+        ),
     }
     path = Path(report_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,7 +300,6 @@ def self_test() -> int:
     )
     assert post and post[0]["post_type"] == "p"
     assert extract_instagram_urls("instagram.com/explore/tags/poppyplaytime/") == []
-    print("INSTAGRAM SELF-TEST OK: canonical posts/Reels only; navigation excluded.", flush=True)
     return 0
 
 
@@ -228,8 +312,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         return self_test()
     report = run_discovery()
-    # External sources may be empty/blocked. Preserve diagnostics and do not fake success.
-    return 0 if report.get("summary") else 1
+    # A green workflow must mean the required metadata targets really were found.
+    return 0 if report.get("summary", {}).get("core_search_target_met") else 2
 
 
 if __name__ == "__main__":
