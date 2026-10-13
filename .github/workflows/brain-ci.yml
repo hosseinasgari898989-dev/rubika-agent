@@ -6,6 +6,7 @@ on:
       - agent-brain-mega-v1
     paths:
       - "agent/brain/**"
+      - "tests/test_e2e_batch_from_report.py"
       - "src/index.js"
       - "wrangler.jsonc"
       - "migrations/**"
@@ -61,6 +62,7 @@ jobs:
       - name: Run brain and storage unit tests
         run: |
           python -m unittest discover -s tests -p 'test_agent_brain.py' -v
+          python -m unittest discover -s tests -p 'test_e2e_batch_from_report.py' -v
           python -m unittest discover -s tests -p 'test_authorization.py' -v
           python -m unittest discover -s tests -p 'test_orchestrator.py' -v
           python -m unittest discover -s tests -p 'test_official_stage.py' -v
