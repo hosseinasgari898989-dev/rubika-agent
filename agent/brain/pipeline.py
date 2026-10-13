@@ -133,7 +133,7 @@ def stage_edit_batch(
 
             publish_path = original
             final_inspection = first
-            if first.width != 1080 or first.height != 1080:
+            if first.width != 1080 or first.height != 1920:
                 destination = output / (
                     _safe_component(platform) + "-" +
                     _safe_component(candidate.external_id) + "-vertical1080x1920.mp4"
