@@ -74,10 +74,14 @@ def _select_candidates(
     platform: str,
     seen_ids: set[str],
     ledger_ids: set[str],
-    limit: int = 5,
+    limit: int = 1,
+    offset: int = 0,
 ) -> list[Candidate]:
     candidates = candidates_from_report(report_path)
-    selected = []
+    selected: list[Candidate] = []
+    eligible_index = 0
+    bounded_limit = max(1, min(int(limit), 5))
+    bounded_offset = max(0, min(int(offset), 100))
     for candidate in candidates:
         if candidate.platform != platform or not _matches_poppy_edit(candidate):
             continue
@@ -86,8 +90,12 @@ def _select_candidates(
             continue
         if identity in ledger_ids or candidate.external_id in ledger_ids:
             continue
+        if eligible_index < bounded_offset:
+            eligible_index += 1
+            continue
         selected.append(candidate)
-        if len(selected) >= max(1, min(limit, 10)):
+        eligible_index += 1
+        if len(selected) >= bounded_limit:
             break
     return selected
 
@@ -107,13 +115,24 @@ def _find_staged_media(output_dir: Path, external_id: str) -> Path:
     return sorted(choices)[0]
 
 
-def run_one(report_path: Path, platform: str, output_report: Path) -> dict[str, Any]:
+def run_one(
+    report_path: Path,
+    platform: str,
+    output_report: Path,
+    *,
+    candidate_limit: int = 1,
+    candidate_offset: int = 0,
+) -> dict[str, Any]:
     api_url = os.getenv("AGENT_API_BASE_URL", DEFAULT_CLOUD_API).strip()
     token = os.getenv("AGENT_API_TOKEN", "").strip()
     if not token:
         raise RuntimeError("missing_AGENT_API_TOKEN")
     if platform not in {"tiktok", "instagram", "youtube"}:
         raise RuntimeError("unsupported_platform")
+    if not 1 <= int(candidate_limit) <= 5:
+        raise RuntimeError("candidate_limit_out_of_range")
+    if not 0 <= int(candidate_offset) <= 100:
+        raise RuntimeError("candidate_offset_out_of_range")
 
     cloud = CloudState(api_url, token)
     storage = MegaStorage(root="/Rubika-Agent", timeout_seconds=180)
@@ -123,7 +142,14 @@ def run_one(report_path: Path, platform: str, output_report: Path) -> dict[str, 
     ledger_ids = set(initial_items) if isinstance(initial_items, dict) else set()
     seen = cloud.get_seen_index()
     seen_ids = set(seen.get("ids", set()))
-    candidates = _select_candidates(report_path, platform, seen_ids, ledger_ids)
+    candidates = _select_candidates(
+        report_path,
+        platform,
+        seen_ids,
+        ledger_ids,
+        limit=candidate_limit,
+        offset=candidate_offset,
+    )
     if not candidates:
         return {
             "ok": False,
@@ -304,11 +330,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, default=Path("artifacts/termux_discovery.json"))
     parser.add_argument("--platform", choices=("tiktok", "instagram", "youtube"), default="tiktok")
+    parser.add_argument("--candidate-limit", type=int, choices=range(1, 6), default=1)
+    parser.add_argument("--candidate-offset", type=int, choices=range(0, 101), default=0)
     parser.add_argument("--output-report", type=Path, default=Path("artifacts/brain-e2e-report.json"))
     args = parser.parse_args()
 
     try:
-        report = run_one(args.report, args.platform, args.output_report)
+        report = run_one(
+            args.report,
+            args.platform,
+            args.output_report,
+            candidate_limit=args.candidate_limit,
+            candidate_offset=args.candidate_offset,
+        )
     except Exception as exc:
         report = {
             "ok": False,
