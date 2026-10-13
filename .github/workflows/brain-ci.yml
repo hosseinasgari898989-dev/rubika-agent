@@ -6,6 +6,9 @@ on:
       - agent-brain-mega-v1
     paths:
       - "agent/brain/**"
+      - "agent/source_policy.py"
+      - "config/tiktok_source_policy.json"
+      - "tests/test_source_policy.py"
       - "tests/test_e2e_batch_from_report.py"
       - "src/index.js"
       - "wrangler.jsonc"
@@ -62,6 +65,7 @@ jobs:
       - name: Run brain and storage unit tests
         run: |
           python -m unittest discover -s tests -p 'test_agent_brain.py' -v
+          python -m unittest discover -s tests -p 'test_source_policy.py' -v
           python -m unittest discover -s tests -p 'test_e2e_batch_from_report.py' -v
           python -m unittest discover -s tests -p 'test_authorization.py' -v
           python -m unittest discover -s tests -p 'test_orchestrator.py' -v
