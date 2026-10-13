@@ -4,6 +4,7 @@ import json
 import unittest
 
 from agent.discovery.termux_sources import (
+    discover_tiktok_hashtags,
     discover_youtube_metadata,
     extract_tiktok_candidates,
 )
@@ -62,6 +63,33 @@ class TermuxMetadataParserTests(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]["author"], "creator")
         self.assertIsNone(found[0]["view_count"])
+
+    def test_tiktok_default_uses_public_creator_feeds_via_ytdlp_without_download(self):
+        FakeYDL.instances = []
+        FakeYDL.info = {"entries": [{
+            "id": "7610592632179297558",
+            "title": "Poppy Playtime edit #poppyplaytime",
+            "duration": 18,
+            "timestamp": 1791808200,
+            "view_count": 12345,
+            "like_count": 123,
+            "comment_count": 7,
+        }]}
+        found, attempts = discover_tiktok_hashtags(
+            profiles=("example_creator",), max_results=5, sleep_seconds=0,
+            ydl_factory=FakeYDL,
+        )
+        self.assertEqual(len(found), 1)
+        self.assertEqual(
+            found[0]["url"],
+            "https://www.tiktok.com/@example_creator/video/7610592632179297558",
+        )
+        self.assertEqual(found[0]["method"], "termux_ytdlp_public_creator_profiles")
+        self.assertEqual(found[0]["view_count"], 12345)
+        self.assertEqual(FakeYDL.instances[0].queries[0][1], False)
+        self.assertTrue(FakeYDL.instances[0].options["skip_download"])
+        self.assertEqual(FakeYDL.instances[0].options["extract_flat"], "in_playlist")
+        self.assertEqual(attempts[0]["result"], "metadata_found")
 
     def test_youtube_search_is_metadata_only_and_keeps_only_short_duration(self):
         FakeYDL.instances = []
