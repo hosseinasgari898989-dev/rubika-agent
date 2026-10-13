@@ -1,8 +1,9 @@
-"""Best-effort Instagram public hashtag-page metadata parser for Termux.
+"""Best-effort public Instagram Reel discovery for Termux.
 
-Uses ordinary unauthenticated HTTPS requests once per configured tag. It never logs
-in, uses cookies, bypasses challenges, downloads media, or calls a paid API. Instagram
-may return a login wall/challenge or no canonical media links; that is reported honestly.
+Uses public Bing RSS and DuckDuckGo search indexes by default, with an HTML parser
+available for explicit tests. It does not log in, use cookies, bypass challenges,
+download media, or call paid APIs. Only canonical Reel links with a verifiable recent
+date are accepted; blocked search or missing dates are reported instead of fabricated.
 """
 from __future__ import annotations
 
