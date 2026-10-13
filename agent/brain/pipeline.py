@@ -6,6 +6,7 @@ silently substitutes a guessed search result or auto-approves an unknown item.
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -153,9 +154,11 @@ def stage_edit_batch(
                 original.unlink(missing_ok=True)
                 continue
 
+            policy = candidate.source_policy or {}
+            output_format = policy.get("output_format", "square_1080x1080")
             publish_path = original
             final_inspection = first
-            if first.width != 1080 or first.height != 1080:
+            if output_format == "square_1080x1080" and (first.width != 1080 or first.height != 1080):
                 destination = output / (
                     _safe_component(platform) + "-" +
                     _safe_component(candidate.external_id) + "-square1080x1080.mp4"
@@ -168,6 +171,27 @@ def stage_edit_batch(
                     destination.unlink(missing_ok=True)
                     original.unlink(missing_ok=True)
                     continue
+            elif output_format == "preserve_source":
+                # Preserve the aspect ratio for sources whose owner policy says
+                # that 1:1 normalization is not required, while giving the file
+                # a stable ID-based name for report recovery and cleanup.
+                destination = output / (
+                    _safe_component(platform) + "-" +
+                    _safe_component(candidate.external_id) + "-preserved.mp4"
+                )
+                if original.resolve() != destination.resolve():
+                    shutil.copy2(original, destination)
+                publish_path = destination
+                final_inspection = inspector(publish_path, "video")
+                if not final_inspection.ok or final_inspection.media_type != "video":
+                    result.skipped.append({"item": identity, "reason": "preserved_output_invalid"})
+                    destination.unlink(missing_ok=True)
+                    original.unlink(missing_ok=True)
+                    continue
+            elif output_format != "square_1080x1080":
+                result.skipped.append({"item": identity, "reason": "unsupported_output_format_policy"})
+                original.unlink(missing_ok=True)
+                continue
 
             storage_key = storage.upload(publish_path, "staging") if storage is not None else None
             staged = StagedMedia(
