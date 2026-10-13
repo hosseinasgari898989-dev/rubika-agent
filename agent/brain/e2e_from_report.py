@@ -33,7 +33,9 @@ DEFAULT_CLOUD_API = "https://rubika-agent.h98609294.workers.dev"
 DEFAULT_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
 # Python performs metadata, duplicate and technical policy checks. The hosted
 # model is only responsible for music presence.
-APPROVAL_CHECKS = {"has_music": True}
+# The Python policy handles metadata relevance, known text red flags, duplicates,
+# and media validation. Workers AI is used only for the actual soundtrack check.
+REQUIRED_MUSIC_CHECKS = {"has_music": True}
 
 
 def _utc_now() -> str:
@@ -222,13 +224,13 @@ def run_one(
         moderation = payload.get("moderation")
         if not isinstance(moderation, dict) or any(
             moderation.get(name) is not expected
-            for name, expected in APPROVAL_CHECKS.items()
+            for name, expected in REQUIRED_MUSIC_CHECKS.items()
         ):
             return {
                 "ok": False, "status": "brain_checks_not_publishable",
                 "platform": platform, "item_id": item_id, "publishing": False,
                 "moderation": moderation,
-                "reason": "content_classifier_did_not_pass_every_required_check",
+                "reason": "music_detection_did_not_pass_required_check",
             }
 
         candidate_id = str(item.get("external_id"))
