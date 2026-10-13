@@ -31,14 +31,9 @@ from agent.storage.mega import MegaStorage
 
 DEFAULT_CLOUD_API = "https://rubika-agent.h98609294.workers.dev"
 DEFAULT_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
-APPROVAL_CHECKS = {
-    "poppy_relevant": True,
-    "is_edit": True,
-    "insults_poppy": False,
-    "insults_other_games": False,
-    "high_effort": True,
-    "has_music": True,
-}
+# Python performs metadata, duplicate and technical policy checks. The hosted
+# model is only responsible for music presence.
+APPROVAL_CHECKS = {"has_music": True}
 
 
 def _utc_now() -> str:

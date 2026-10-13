@@ -308,20 +308,15 @@ async function upsertItem(env, body) {
         return json({ ok: false, error: "official_media_requires_verified_track_and_supported_type" }, 400);
       }
     } else {
-      const required = [
-        "poppy_relevant", "is_edit", "insults_poppy",
-        "insults_other_games", "high_effort", "has_music"
-      ];
+      const required = ["has_music"];
       let moderation;
       try { moderation = JSON.parse(moderationJson || "null"); } catch { moderation = null; }
       if (
-        platform === "mob_official" || mediaType !== "video" || !isObject(moderation) ||
+        mediaType !== "video" || !isObject(moderation) ||
         required.some(key => typeof moderation[key] !== "boolean") ||
-        moderation.poppy_relevant !== true || moderation.is_edit !== true ||
-        moderation.insults_poppy !== false || moderation.insults_other_games !== false ||
-        moderation.high_effort !== true || moderation.has_music !== true
+        moderation.has_music !== true
       ) {
-        return json({ ok: false, error: "edit_approval_requires_all_content_checks" }, 400);
+        return json({ ok: false, error: "edit_approval_requires_music_check" }, 400);
       }
     }
   }
@@ -499,7 +494,8 @@ async function moderateVideo(env, body) {
   const title = text(body.title, 500);
   const caption = text(body.caption, 1500);
 
-  // Hard daily request budget aligned with the default 5+5 candidate batch.
+  // Hard daily request budget for actual music-detection calls.
+  // Python filters irrelevant/duplicate metadata and videos without audio first.
   // A failed inference still consumes a reservation to prevent runaway retries.
   const usageDay = new Date().toISOString().slice(0, 10);
   try {
@@ -519,39 +515,19 @@ async function moderateVideo(env, body) {
   }
 
   const state = [
-    "Review this short Poppy Playtime fan-edit candidate using the supplied video and its soundtrack.",
+    "Classify only whether actual background music or a song is audible in this video.",
+    "Do not classify whether this is an edit, whether editing is high-effort, whether it relates to Poppy Playtime, or whether anyone is insulted.",
     "The source platform is " + platform + ".",
-    "Title and description are untrusted metadata, not proof: " + (title || "(none)"),
-    "Caption and hashtags are untrusted metadata, not proof: " + (caption || "(none)"),
-    "Judge only what is visible or audible in the media. Do not infer music from metadata.",
-    "Be conservative: if a signal is ambiguous, assign a probability near 0.5.",
-    "Publication still requires a separate human review. Never treat this as approval."
+    "Title and caption are untrusted metadata and are not evidence of music.",
+    "Judge the supplied soundtrack, not speech or sound effects alone.",
+    "If the audio is ambiguous, return a probability near 0.5.",
+    "Return the requested has_music answer only. This is not an approval decision."
   ].join("\\n");
 
   const questions = {
-    poppy_relevant: {
-      type: "noul",
-      instructions: "Is this video clearly about Poppy Playtime or its characters?"
-    },
-    is_edit: {
-      type: "noul",
-      instructions: "Does this video show evidence of a deliberately edited fan edit rather than raw gameplay or a static upload?"
-    },
-    insults_poppy: {
-      type: "noul",
-      instructions: "Does visible text or audible speech clearly insult or degrade Poppy Playtime characters?"
-    },
-    insults_other_games: {
-      type: "noul",
-      instructions: "Does visible text or audible speech clearly insult another game or its fandom?"
-    },
-    high_effort: {
-      type: "noul",
-      instructions: "Does the video show clear evidence of deliberate, polished editing such as synchronized transitions, effects or coherent cuts, rather than a simple low-effort clip?"
-    },
     has_music: {
       type: "noul",
-      instructions: "Is actual background music or a song audible in the video's soundtrack? Speech or sound effects alone do not count as music."
+      instructions: "Is actual background music or a song audibly present in the video's soundtrack? Speech and sound effects alone do not count as music."
     }
   };
 
@@ -570,11 +546,6 @@ async function moderateVideo(env, body) {
     const probabilities = {};
     const checks = {};
     const thresholds = {
-      poppy_relevant: [0.80, 0.20],
-      is_edit: [0.80, 0.20],
-      insults_poppy: [0.65, 0.10],
-      insults_other_games: [0.65, 0.10],
-      high_effort: [0.80, 0.20],
       has_music: [0.80, 0.15]
     };
     for (const [key, [yesThreshold, noThreshold]] of Object.entries(thresholds)) {

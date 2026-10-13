@@ -1,7 +1,8 @@
-"""Fail-closed integration of discovery, reuse authorization, relay, MEGA and D1.
+"""Integrate discovery, Python-first policy, downloads, MEGA and D1.
 
-This staging job never publishes to Rubika. A real moderation adapter is mandatory;
-metadata alone cannot prove that a clip is high-effort, non-insulting, or has music.
+Python owns source relevance, known text-risk signals, deduplication and media
+validation. Workers AI is called only to detect audible music when a file has an
+audio stream. This staging orchestrator itself never publishes to Rubika.
 """
 from __future__ import annotations
 

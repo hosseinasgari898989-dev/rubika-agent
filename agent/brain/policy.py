@@ -1,11 +1,12 @@
-"""Conservative two-track media policy: third-party edits vs official Mob posts.
+"""Python-first policy for Poppy Playtime fan edits and official Mob posts.
 
-Text heuristics are only signals; visual/auditory judgements require an explicit
-moderation result. The default is fail-closed, never pretending that metadata
-can prove an edit is high-effort or non-insulting.
+Python handles relevance, known metadata-text risks, deduplication, technical media
+validation, and delivery state. Workers AI only answers whether music is audible;
+it does not judge edit quality or decide whether a video is an edit.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -14,26 +15,46 @@ from .models import Candidate, Evaluation, InspectionResult
 RELEVANCE_TERMS = (
     "poppy playtime", "poppyplaytime", "huggy wuggy", "huggywuggy",
     "catnap", "cat nap", "kissy missy", "mommy long legs",
-    "smiling critters", "dogday", "chapter 5", "chapter 4",
+    "smiling critters", "dogday", "prototype", "chapter 5", "chapter 4",
     "#poppyplaytime", "#huggywuggy", "#catnap",
+    "پاپی پلی تایم", "هاگی واگی", "کت نپ", "کیسی میسی",
 )
-EDIT_TERMS = (
-    "edit", "fan edit", "velocity", "amv", "capcut", "edit audio",
-    "transition", "sync edit", "phonk edit", "poppy edit",
-)
+
+# Deterministic phrase checks over title/caption/hashtags/source key only.
+# This is not OCR or speech recognition; those can be added as local Python stages.
 NEGATIVE_TEXT_TERMS = (
     "trash game", "worst game ever", "stupid game", "ugly character",
-    "بازی آشغال", "بازی مزخرف", "کاراکتر زشت", "شخصیت احمق",
-    "توهین", "افتضاح ترین بازی",
+    "this game sucks", "game is trash", "poppy playtime sucks",
+    "poppy playtime is trash", "huggy wuggy sucks", "catnap sucks",
+    "kissy missy sucks", "the game is garbage", "hate this game",
+    "بازی آشغال", "بازی مزخرف", "این بازی آشغاله", "این بازی مزخرفه",
+    "پاپی پلی تایم آشغاله", "پاپی پلی تایم مزخرفه",
+    "هاگی واگی زشته", "کت نپ زشته", "شخصیت احمق",
+    "افتضاح ترین بازی", "افتضاح‌ترین بازی",
 )
-REQUIRED_MODERATION_FIELDS = (
-    "poppy_relevant", "is_edit", "insults_poppy", "insults_other_games",
-    "high_effort", "has_music",
-)
+REQUIRED_MODERATION_FIELDS = ("has_music",)
+
+
+def _normalize_text(value: str) -> str:
+    value = value.casefold().replace("ي", "ی").replace("ك", "ک")
+    value = value.replace("\u200c", " ").replace("\u200f", " ").replace("\u200e", " ")
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def _has_any(text: str, terms: Iterable[str]) -> bool:
-    return any(term in text for term in terms)
+    normalized = _normalize_text(text)
+    return any(_normalize_text(term) in normalized for term in terms)
+
+
+def precheck_edit_candidate(candidate: Candidate) -> tuple[str, ...]:
+    """Cheap Python-only gate run before downloading or calling Workers AI."""
+    text = candidate.searchable_text
+    reasons: list[str] = []
+    if not _has_any(text, RELEVANCE_TERMS):
+        reasons.append("poppy_relevance_not_found_by_python")
+    if _has_any(text, NEGATIVE_TEXT_TERMS):
+        reasons.append("negative_or_insulting_text_signal")
+    return tuple(dict.fromkeys(reasons))
 
 
 def evaluate_edit_candidate(
@@ -52,6 +73,8 @@ def evaluate_edit_candidate(
     warnings: list[str] = []
     checks: dict[str, Any] = {}
     text = candidate.searchable_text
+    metadata_relevant = _has_any(text, RELEVANCE_TERMS)
+    text_insult_signal = _has_any(text, NEGATIVE_TEXT_TERMS)
 
     if candidate.platform not in {"youtube", "tiktok", "instagram"}:
         reasons.append("not_an_edit_source_platform")
@@ -62,23 +85,23 @@ def evaluate_edit_candidate(
     if not inspection.ok:
         reasons.append("media_validation_failed")
         reasons.extend(inspection.errors)
-    if candidate.external_id in seen_external_ids:
+    if candidate.external_id in seen_external_ids or f"{candidate.platform}:{candidate.external_id}" in seen_external_ids:
         reasons.append("duplicate_external_id")
-    if inspection.sha256 and inspection.sha256 in seen_hashes:
+    if inspection.sha256 and inspection.sha256.lower() in {value.lower() for value in seen_hashes}:
         reasons.append("duplicate_file_hash")
 
     trusted = bool(candidate.source_key and candidate.source_key in trusted_source_keys)
     checks["trusted_source"] = trusted
-    checks["policy_track"] = "trusted_edit" if trusted else "unknown_source_edit"
+    checks["policy_track"] = "trusted_poppy_fan_edit" if trusted else "poppy_fan_edit_candidate"
+    checks["content_category"] = "poppy_playtime_fan_edit" if metadata_relevant else "unclassified"
+    checks["python_metadata_relevance"] = metadata_relevant
+    checks["python_text_insult_signal"] = text_insult_signal
+    checks["text_scan_scope"] = "title_caption_hashtags_source_key"
 
-    if _has_any(text, NEGATIVE_TEXT_TERMS):
+    if not metadata_relevant:
+        reasons.append("poppy_relevance_not_found_by_python")
+    if text_insult_signal:
         reasons.append("negative_or_insulting_text_signal")
-    checks["metadata_relevance_signal"] = _has_any(text, RELEVANCE_TERMS)
-    checks["metadata_edit_signal"] = _has_any(text, EDIT_TERMS)
-    if not checks["metadata_relevance_signal"]:
-        warnings.append("poppy_relevance_not_proven_by_metadata")
-    if not checks["metadata_edit_signal"]:
-        warnings.append("edit_style_not_proven_by_metadata")
 
     if inspection.ok and inspection.media_type == "video":
         if not inspection.supports_vertical_normalization:
@@ -86,35 +109,25 @@ def evaluate_edit_candidate(
         elif inspection.width != 1080 or inspection.height != 1920:
             warnings.append("needs_vertical_1080x1920_normalization")
         if inspection.has_audio is False:
-            warnings.append("no_audio_stream_detected_music_not_confirmed")
+            checks["has_music"] = False
+            checks["music_detection_method"] = "python_no_audio_stream"
+            reasons.append("music_not_detected")
 
     moderation = moderation or {}
-    missing = [name for name in REQUIRED_MODERATION_FIELDS if not isinstance(moderation.get(name), bool)]
+    for name in REQUIRED_MODERATION_FIELDS:
+        value = moderation.get(name)
+        if type(value) is bool:
+            checks[name] = value
+    missing = [name for name in REQUIRED_MODERATION_FIELDS if type(moderation.get(name)) is not bool]
     checks["moderation_fields_missing"] = missing
     if missing:
-        warnings.append("content_review_required")
+        warnings.append("music_detection_review_required")
+    elif moderation["has_music"] is False:
+        reasons.append("music_not_detected")
+        checks["music_detection_method"] = moderation.get("music_detection_method", "workers_ai_audio_check")
     else:
-        for name in REQUIRED_MODERATION_FIELDS:
-            checks[name] = moderation[name]
-        if not moderation["poppy_relevant"]:
-            reasons.append("content_not_poppy_playtime")
-        if not moderation["is_edit"]:
-            reasons.append("not_an_edit")
-        if moderation["insults_poppy"]:
-            reasons.append("insults_poppy_character")
-        if moderation["insults_other_games"]:
-            reasons.append("insults_other_games_or_fandom")
-        if not moderation["high_effort"]:
-            reasons.append("low_effort_edit")
-        if not moderation["has_music"]:
-            warnings.append("music_not_detected")
+        checks["music_detection_method"] = moderation.get("music_detection_method", "workers_ai_audio_check")
 
-    # Trusted creators get a reduced metadata gate, not immunity from safety,
-    # duplication, file validation, aspect/resolution, or content-review gates.
-    if trusted:
-        warnings = [w for w in warnings if w not in {
-            "poppy_relevance_not_proven_by_metadata", "edit_style_not_proven_by_metadata"
-        }]
     requires_review = bool(missing)
     if reasons:
         decision = "rejected"

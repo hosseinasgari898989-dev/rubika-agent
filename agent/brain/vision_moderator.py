@@ -118,10 +118,8 @@ class CloudflareVideoModerator:
         if not isinstance(confidence, (float, int)) or not 0 <= confidence <= 1:
             raise VisionModeratorError("vision_confidence_invalid")
 
-        required = (
-            "poppy_relevant", "is_edit", "insults_poppy",
-            "insults_other_games", "high_effort", "has_music",
-        )
+        # Workers AI answers only one question: is music audible in the clip?
+        required = ("has_music",)
         # The Worker already applies conservative probability thresholds to each
         # question separately. Keep every independently thresholded boolean;
         # an aggregate confidence just below the separate threshold must not erase

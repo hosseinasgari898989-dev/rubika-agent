@@ -113,10 +113,7 @@ class CloudState:
         )
         checks = result.get("checks")
         probabilities = result.get("probabilities")
-        required = (
-            "poppy_relevant", "is_edit", "insults_poppy",
-            "insults_other_games", "high_effort", "has_music",
-        )
+        required = ("has_music",)
         if not isinstance(checks, dict) or not isinstance(probabilities, dict):
             raise CloudStateError("control_api_moderation_checks_missing")
         output: dict[str, Any] = {
@@ -196,10 +193,7 @@ class CloudState:
             "errors": list(inspection.errors),
             "warnings": list(inspection.warnings),
         }
-        moderation_names = (
-            "poppy_relevant", "is_edit", "insults_poppy",
-            "insults_other_games", "high_effort", "has_music",
-        )
+        moderation_names = ("has_music",)
         moderation = {
             key: evaluation.checks[key]
             for key in moderation_names

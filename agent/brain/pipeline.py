@@ -13,7 +13,7 @@ from typing import Any, Callable, Iterable, Mapping
 from .inspector import inspect_media
 from .models import Candidate, Evaluation, InspectionResult
 from .normalizer import normalize_video_vertical_1080x1920
-from .policy import evaluate_edit_candidate
+from .policy import evaluate_edit_candidate, precheck_edit_candidate
 
 
 @dataclass(frozen=True)
@@ -101,6 +101,10 @@ def stage_edit_batch(
         if identity in seen_ids or candidate.external_id in seen_ids:
             result.skipped.append({"item": identity, "reason": "duplicate_external_id"})
             continue
+        local_reasons = precheck_edit_candidate(candidate)
+        if local_reasons:
+            result.skipped.append({"item": identity, "reason": local_reasons[0]})
+            continue
         original: Path | None = None
         try:
             original = Path(download(candidate))
@@ -117,7 +121,15 @@ def stage_edit_batch(
                 original.unlink(missing_ok=True)
                 continue
 
-            moderation = moderate(candidate, original)
+            # A missing audio stream is a deterministic Python result; do not
+            # spend a Workers AI request on a video that cannot contain music.
+            if first.has_audio is False:
+                moderation = {
+                    "has_music": False,
+                    "music_detection_method": "python_no_audio_stream",
+                }
+            else:
+                moderation = moderate(candidate, original)
             evaluation = evaluate_edit_candidate(
                 candidate, first,
                 seen_external_ids=seen_ids,

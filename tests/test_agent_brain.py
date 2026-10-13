@@ -43,10 +43,7 @@ class BrainModelPolicyTests(unittest.TestCase):
         return InspectionResult(**values)
 
     def moderation(self, **changes):
-        values = dict(
-            poppy_relevant=True, is_edit=True, insults_poppy=False,
-            insults_other_games=False, high_effort=True, has_music=True,
-        )
+        values = {"has_music": True}
         values.update(changes)
         return values
 
@@ -54,7 +51,7 @@ class BrainModelPolicyTests(unittest.TestCase):
         result = evaluate_edit_candidate(self.candidate(), self.inspection())
         self.assertEqual(result.decision, "needs_review")
         self.assertTrue(result.requires_review)
-        self.assertIn("content_review_required", result.warnings)
+        self.assertIn("music_detection_review_required", result.warnings)
 
     def test_good_candidate_with_explicit_moderation_is_eligible(self):
         result = evaluate_edit_candidate(
@@ -85,17 +82,37 @@ class BrainModelPolicyTests(unittest.TestCase):
         )
         self.assertIn("negative_or_insulting_text_signal", result.reasons)
 
-    def test_content_moderation_rejects_insults_and_low_effort(self):
-        insult = evaluate_edit_candidate(
-            self.candidate(), self.inspection(),
-            moderation=self.moderation(insults_poppy=True),
+    def test_python_text_policy_rejects_known_insult_phrases(self):
+        result = evaluate_edit_candidate(
+            self.candidate(title="Poppy Playtime sucks - worst game ever"),
+            self.inspection(), moderation=self.moderation(),
         )
-        low_effort = evaluate_edit_candidate(
-            self.candidate(), self.inspection(),
-            moderation=self.moderation(high_effort=False),
+        self.assertIn("negative_or_insulting_text_signal", result.reasons)
+
+    def test_python_does_not_require_edit_detection_or_edit_quality_questions(self):
+        candidate = self.candidate(
+            title="Poppy Playtime character montage",
+            caption="Huggy Wuggy and Catnap",
         )
-        self.assertIn("insults_poppy_character", insult.reasons)
-        self.assertIn("low_effort_edit", low_effort.reasons)
+        result = evaluate_edit_candidate(
+            candidate, self.inspection(), moderation=self.moderation()
+        )
+        self.assertEqual(result.decision, "eligible")
+        self.assertNotIn("is_edit", result.checks)
+        self.assertNotIn("high_effort", result.checks)
+
+    def test_missing_poppy_metadata_is_rejected_locally(self):
+        result = evaluate_edit_candidate(
+            self.candidate(title="Unrelated gameplay", caption="#gaming"),
+            self.inspection(), moderation=self.moderation(),
+        )
+        self.assertIn("poppy_relevance_not_found_by_python", result.reasons)
+
+    def test_no_music_is_not_eligible(self):
+        result = evaluate_edit_candidate(
+            self.candidate(), self.inspection(), moderation=self.moderation(has_music=False)
+        )
+        self.assertIn("music_not_detected", result.reasons)
 
     def test_image_or_audio_does_not_enter_edit_video_track(self):
         candidate = self.candidate(media_type="image")
@@ -188,10 +205,7 @@ class PipelineTests(unittest.TestCase):
 
     @staticmethod
     def _moderation(_candidate, _path):
-        return {
-            "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
-            "insults_other_games": False, "high_effort": True, "has_music": True,
-        }
+        return {"has_music": True}
 
     def test_pipeline_requires_every_source_count_before_batch_is_ready(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -217,6 +231,49 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(result.ready_for_review)
             self.assertFalse(result.ready_to_publish)
             self.assertEqual(len(result.staged), 2)
+
+    def test_python_rejects_irrelevant_metadata_before_download(self):
+        with tempfile.TemporaryDirectory() as folder:
+            candidate = self._candidate("tiktok", "unrelated")
+            candidate = Candidate(
+                platform=candidate.platform,
+                canonical_url=candidate.canonical_url,
+                external_id=candidate.external_id,
+                title="Unrelated gameplay",
+                caption="#gaming",
+                source_key=candidate.source_key,
+                media_type="video",
+            )
+            result = stage_edit_batch(
+                [candidate], required_counts={"tiktok": 1},
+                download=lambda _candidate: self.fail("irrelevant candidate must not download"),
+                moderate=self._moderation,
+                output_dir=Path(folder) / "normalized",
+            )
+        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.skipped[0]["reason"], "poppy_relevance_not_found_by_python")
+
+    def test_pipeline_skips_music_model_when_video_has_no_audio(self):
+        with tempfile.TemporaryDirectory() as folder:
+            candidate = self._candidate("tiktok", "silent")
+            def download(_candidate):
+                path = Path(folder) / "silent.mp4"
+                path.write_bytes(b"silent video")
+                return path
+            def inspect(_path, _kind=None):
+                raw = b"silent video"
+                return InspectionResult(
+                    True, "video", hashlib.sha256(raw).hexdigest(), len(raw),
+                    "video/mp4", 1080, 1920, 3.0, False, "h264", None,
+                )
+            result = stage_edit_batch(
+                [candidate], required_counts={"tiktok": 1},
+                download=download,
+                moderate=lambda *_: self.fail("must not call AI without audio"),
+                output_dir=Path(folder) / "normalized",
+                inspector=inspect,
+            )
+        self.assertEqual(result.skipped[0]["reason"], "music_not_detected")
 
     def test_partial_batch_never_reports_ready(self):
         with tempfile.TemporaryDirectory() as folder:

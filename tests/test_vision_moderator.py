@@ -14,11 +14,6 @@ from agent.brain.vision_moderator import CloudflareVideoModerator, VisionModerat
 class FakeCloud:
     def __init__(self, result=None, error=None):
         self.result = result or {
-            "poppy_relevant": True,
-            "is_edit": True,
-            "insults_poppy": False,
-            "insults_other_games": False,
-            "high_effort": True,
             "has_music": True,
             "vision_confidence": 0.91,
             "vision_model": "@cf/cloudflare/clef-omni",
@@ -82,9 +77,11 @@ class CloudflareVideoModeratorTests(unittest.TestCase):
         self.assertIn("libx264", command)
         self.assertTrue(cloud.calls[0]["video_data_url"].startswith("data:video/mp4;base64,"))
         self.assertEqual(cloud.calls[0]["platform"], "youtube")
-        self.assertTrue(result["poppy_relevant"])
-        self.assertTrue(result["high_effort"])
         self.assertIs(result["has_music"], True)
+        self.assertEqual(
+            set(result).intersection({"poppy_relevant", "is_edit", "high_effort", "insults_poppy", "insults_other_games"}),
+            set(),
+        )
         self.assertFalse(result["sample_truncated"])
         self.assertTrue(result["human_review_required"])
         self.assertFalse(result["auto_approved"])
@@ -102,11 +99,7 @@ class CloudflareVideoModeratorTests(unittest.TestCase):
         self.assertTrue(result["sample_truncated"])
 
     def test_low_aggregate_confidence_keeps_thresholded_answers_with_diagnostic(self):
-        result_payload = {
-            "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
-            "insults_other_games": False, "high_effort": True, "has_music": True,
-            "vision_confidence": 0.42,
-        }
+        result_payload = {"has_music": True, "vision_confidence": 0.42}
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "source.mp4"
             video.write_bytes(b"placeholder source file")
@@ -115,16 +108,12 @@ class CloudflareVideoModeratorTests(unittest.TestCase):
             )
             with patch("agent.brain.vision_moderator.subprocess.run", side_effect=self.fake_ffmpeg):
                 result = moderator(self.candidate(), video)
-        self.assertTrue(result["poppy_relevant"])
         self.assertTrue(result["aggregate_confidence_below_threshold"])
         self.assertFalse(result["moderation_uncertain"])
+        self.assertEqual(set(result).intersection({"poppy_relevant", "is_edit", "high_effort"}), set())
 
     def test_unknown_music_answer_keeps_candidate_unapproved(self):
-        result_payload = {
-            "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
-            "insults_other_games": False, "high_effort": True,
-            "vision_confidence": 0.9,
-        }
+        result_payload = {"vision_confidence": 0.9}
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "source.mp4"
             video.write_bytes(b"placeholder source file")
