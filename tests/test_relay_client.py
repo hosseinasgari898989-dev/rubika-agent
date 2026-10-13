@@ -126,6 +126,27 @@ class RelayClientTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "relay_sha256_mismatch")
             self.assertEqual(list(Path(folder).iterdir()), [])
 
+    def test_existing_destination_is_never_overwritten(self):
+        client = AuthorizedYouTubeRelay("https://relay.example", TOKEN, session=FakeSession())
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "youtube_vkVFgmgLo1s.mp4"
+            destination.write_bytes(b"original")
+            with self.assertRaises(RelayClientError) as caught:
+                client.download(self.candidate(), folder, permission_confirmed=True)
+            self.assertEqual(caught.exception.code, "destination_already_exists")
+            self.assertEqual(destination.read_bytes(), b"original")
+
+    def test_missing_integrity_header_is_rejected_and_partial_deleted(self):
+        response = FakeResponse(headers={"Content-Type": "video/mp4"})
+        client = AuthorizedYouTubeRelay(
+            "https://relay.example", TOKEN, session=FakeSession(response)
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(RelayClientError) as caught:
+                client.download(self.candidate(), folder, permission_confirmed=True)
+            self.assertEqual(caught.exception.code, "relay_invalid_sha256_header")
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
     def test_non_mp4_and_http_error_responses_are_rejected(self):
         response = FakeResponse(status=422, headers={"Content-Type": "application/json"})
         client = AuthorizedYouTubeRelay(
