@@ -122,5 +122,22 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
         self.assertEqual(candidates["tiktok"], [])
 
 
+    def test_live_exit_code_is_failure_when_required_targets_are_missing(self):
+        with patch.object(
+            runner,
+            "run_discovery",
+            return_value={"summary": {"core_search_target_met": False}},
+        ):
+            self.assertEqual(runner.main(["--live"]), 2)
+
+    def test_live_exit_code_is_success_only_when_required_targets_are_met(self):
+        with patch.object(
+            runner,
+            "run_discovery",
+            return_value={"summary": {"core_search_target_met": True}},
+        ):
+            self.assertEqual(runner.main(["--live"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
