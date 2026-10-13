@@ -21,9 +21,8 @@ class FakeStatement {
   }
   async first() {
     if (this.sql.startsWith("INSERT INTO ai_usage_daily")) {
-      const [day, limit] = this.values;
+      const [day] = this.values;
       const current = this.db.aiUsageDaily.get(day) || 0;
-      if (current >= limit) return null;
       this.db.aiUsageDaily.set(day, current + 1);
       return { request_count: current + 1 };
     }
@@ -335,18 +334,14 @@ function makeOmniAI() {
 {
   const state = env();
   state.AI = makeOmniAI();
-  for (let index = 0; index < 10; index++) {
+  // More than the former 10-request custom cap should now be allowed.
+  for (let index = 0; index < 12; index++) {
     const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
       method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" },
     }), state));
     assert.equal(response.status, 200);
   }
-  const overLimit = await read(await worker.fetch(request("/api/brain/moderate-video", {
-    method: "POST", body: { video: sampleVideoDataUrl(), platform: "youtube" },
-  }), state));
-  assert.equal(overLimit.status, 429);
-  assert.equal(overLimit.body.error, "vision_daily_limit_reached");
-  assert.equal(state.DB.aiUsageDaily.values().next().value, 10);
+  assert.equal(state.DB.aiUsageDaily.values().next().value, 12);
 }
 {
   const response = await read(await worker.fetch(request("/api/brain/moderate-video", {
@@ -354,4 +349,4 @@ function makeOmniAI() {
   }), env()));
   assert.equal(response.status, 401);
 }
-console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction, Clef Omni video/audio moderation and daily cap.");
+console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction, Clef Omni music moderation and uncapped daily usage accounting.");
