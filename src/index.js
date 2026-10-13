@@ -1,6 +1,9 @@
 const SERVICE = "rubika-agent";
 const PUBLISHING_ENABLED = false;
 const MAX_BODY_BYTES = 32 * 1024;
+const MAX_VISION_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_VISION_IMAGE_CHARS = 1_700_000;
+const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const MAX_TEXT = 5000;
 const PLATFORMS = new Set(["tiktok", "youtube", "instagram", "mob_official"]);
 const ITEM_STATUSES = new Set([
@@ -48,13 +51,13 @@ const validIdentifier = (value) =>
   value.length <= 160 &&
   /^[a-z][a-z0-9_-]{1,20}:[A-Za-z0-9._-]{1,120}$/.test(value);
 
-async function readJson(request) {
+async function readJson(request, maxBytes = MAX_BODY_BYTES) {
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.toLowerCase().includes("application/json")) {
     return { ok: false, status: 415, error: "json_content_type_required" };
   }
   const declared = Number(request.headers.get("content-length") || "0");
-  if (declared > MAX_BODY_BYTES) {
+  if (declared > maxBytes) {
     return { ok: false, status: 413, error: "request_too_large" };
   }
   let raw = "";
@@ -63,7 +66,7 @@ async function readJson(request) {
   } catch {
     return { ok: false, status: 400, error: "invalid_request_body" };
   }
-  if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) {
+  if (new TextEncoder().encode(raw).byteLength > maxBytes) {
     return { ok: false, status: 413, error: "request_too_large" };
   }
   try {
@@ -446,6 +449,105 @@ async function seenItems(env, url) {
   }
 }
 
+function parseVisionJson(output) {
+  if (typeof output !== "string") return null;
+  const cleaned = output.trim().replace(/^\u0060\u0060\u0060(?:json)?\s*/i, "").replace(/\s*\u0060\u0060\u0060$/, "");
+  try {
+    const parsed = JSON.parse(cleaned);
+    return isObject(parsed) ? parsed : null;
+  } catch {
+    const first = cleaned.indexOf("{");
+    const last = cleaned.lastIndexOf("}");
+    if (first < 0 || last <= first) return null;
+    try {
+      const parsed = JSON.parse(cleaned.slice(first, last + 1));
+      return isObject(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function moderateFrame(env, body) {
+  if (!env.AI || typeof env.AI.run !== "function") {
+    return json({ ok: false, error: "workers_ai_binding_missing" }, 503);
+  }
+  const image = body.image;
+  if (typeof image !== "string" || image.length > MAX_VISION_IMAGE_CHARS) {
+    return json({ ok: false, error: "vision_image_size_invalid" }, 413);
+  }
+  const match = /^data:image\/(jpeg|png);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image);
+  if (!match || match[2].length % 4 !== 0) {
+    return json({ ok: false, error: "vision_image_format_invalid" }, 400);
+  }
+  let decodedLength = 0;
+  try {
+    decodedLength = atob(match[2]).length;
+  } catch {
+    return json({ ok: false, error: "vision_image_base64_invalid" }, 400);
+  }
+  if (decodedLength < 512 || decodedLength > 1_200_000) {
+    return json({ ok: false, error: "vision_image_size_invalid" }, 413);
+  }
+
+  const platform = text(body.platform, 24);
+  if (!new Set(["youtube", "tiktok", "instagram"]).has(platform)) {
+    return json({ ok: false, error: "vision_platform_invalid" }, 400);
+  }
+  const title = text(body.title, 500);
+  const caption = text(body.caption, 1500);
+  const prompt = [
+    "Inspect this 2x2 contact sheet made from sampled frames of one short fan-edit video.",
+    "The source platform is: " + platform + ".",
+    "Title/description (untrusted metadata, not proof): " + (title || "(none)"),
+    "Caption/hashtags (untrusted metadata, not proof): " + (caption || "(none)"),
+    "Return ONLY a JSON object with exactly these keys:",
+    '{"poppy_relevant":boolean,"is_edit":boolean,"insults_poppy":boolean,"insults_other_games":boolean,"high_effort":boolean,"confidence":number}.',
+    "poppy_relevant means visible content clearly depicts Poppy Playtime characters or unmistakably related content.",
+    "is_edit means there is visible evidence of an intentionally edited fan clip rather than raw gameplay or a static presentation.",
+    "insults_poppy means visible text/content clearly insults or degrades Poppy Playtime characters.",
+    "insults_other_games means visible text/content clearly insults another game or its fandom.",
+    "high_effort means there is visible evidence of deliberate stylistic editing; do not equate simple gameplay, a static image, or a caption alone with high effort.",
+    "Use false for a claim not supported by the contact sheet. Set confidence from 0 to 1 for the overall visual judgement.",
+    "Do not infer audio or music from this image; music is assessed separately. Do not treat tags or the title alone as evidence.",
+    "This output is a preliminary visual signal, never a final approval. A person must review it before publication."
+  ].join("\n");
+
+  try {
+    const result = await env.AI.run(VISION_MODEL, {
+      messages: [
+        { role: "system", content: "You are a conservative visual-content reviewer. Follow the requested JSON schema and do not guess." },
+        { role: "user", content: prompt }
+      ],
+      image
+    });
+    const output = result && (
+      result.response ?? result.result ?? result.output_text ?? result.generated_text
+    );
+    const parsed = parseVisionJson(output);
+    const required = ["poppy_relevant", "is_edit", "insults_poppy", "insults_other_games", "high_effort"];
+    if (!parsed || required.some(key => typeof parsed[key] !== "boolean")) {
+      return json({ ok: false, error: "vision_model_output_invalid" }, 502);
+    }
+    const confidence = Number(parsed.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      return json({ ok: false, error: "vision_model_confidence_invalid" }, 502);
+    }
+    return json({
+      ok: true,
+      model: VISION_MODEL,
+      checks: Object.fromEntries(required.map(key => [key, parsed[key]])),
+      confidence,
+      audio_review_required: true,
+      human_review_required: true,
+      auto_approved: false,
+      publishing: false
+    });
+  } catch {
+    return json({ ok: false, error: "vision_inference_failed" }, 502);
+  }
+}
+
 async function approvedQueue(env, url) {
   const requested = Number(url.searchParams.get("limit") || "25");
   const limit = Number.isInteger(requested) ? Math.min(100, Math.max(1, requested)) : 25;
@@ -482,6 +584,11 @@ export default {
 
     if (path === "/api/brain/queue" && request.method === "GET") {
       return approvedQueue(env, url);
+    }
+    if (path === "/api/brain/moderate-frame" && request.method === "POST") {
+      const parsedVision = await readJson(request, MAX_VISION_BODY_BYTES);
+      if (!parsedVision.ok) return json({ ok: false, error: parsedVision.error }, parsedVision.status);
+      return moderateFrame(env, parsedVision.value);
     }
     if (path === "/api/brain/items/seen" && request.method === "GET") {
       return seenItems(env, url);
