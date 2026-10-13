@@ -28,15 +28,13 @@ from agent.brain.rubika_publisher import RubikaPublisher
 from agent.brain.vision_moderator import CloudflareVideoModerator
 from agent.storage.mega import MegaStorage
 from agent.brain.edit_caption import EDIT_CAPTION
+from agent.source_policy import delivery_enabled
 
 
 DEFAULT_CLOUD_API = "https://rubika-agent.h98609294.workers.dev"
 DEFAULT_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
-# Python performs metadata, duplicate and technical policy checks. The hosted
-# model is only responsible for music presence.
-# The Python policy handles metadata relevance, known text red flags, duplicates,
-# and media validation. Workers AI is used only for the actual soundtrack check.
-REQUIRED_MUSIC_CHECKS = {"has_music": True}
+# Actual Poppy Playtime relevance/edit status and soundtrack must all pass the
+# candidate's repository-defined policy before any manual test publication.
 
 
 def _utc_now() -> str:
@@ -61,6 +59,11 @@ def _safe_error(exc: Exception) -> str:
 
 
 def _matches_poppy_edit(candidate: Candidate) -> bool:
+    policy = candidate.source_policy or {}
+    if policy.get("require_visual_poppy_check") is True:
+        # Searchable metadata is not reliable enough to reject a source before
+        # the visual classifier has a chance to inspect its actual frames.
+        return True
     text = candidate.searchable_text
     relevance = (
         "poppy playtime", "poppyplaytime", "huggy wuggy", "huggywuggy",
@@ -126,6 +129,8 @@ def run_one(
     candidate_limit: int = 1,
     candidate_offset: int = 0,
 ) -> dict[str, Any]:
+    if platform == "youtube" and not delivery_enabled("youtube"):
+        raise RuntimeError("youtube_delivery_paused_by_owner")
     api_url = os.getenv("AGENT_API_BASE_URL", DEFAULT_CLOUD_API).strip()
     token = os.getenv("AGENT_API_TOKEN", "").strip()
     if not token:
@@ -228,15 +233,28 @@ def run_one(
         item = item_map[item_id]
         payload = dict(item["cloud_payload"])
         moderation = payload.get("moderation")
+        staged_candidate = next(
+            (candidate for candidate in candidates
+             if candidate.external_id == str(item.get("external_id"))),
+            candidates[0],
+        )
+        policy = staged_candidate.source_policy or {}
+        required_checks = {"has_music": True}
+        if policy.get("require_visual_poppy_check") is True:
+            required_checks["is_poppy_playtime"] = True
+        if policy.get("require_visual_edit_check") is True:
+            required_checks["is_edit"] = True
+        if policy.get("require_ai_quality_check") is True:
+            required_checks["high_quality_edit"] = True
         if not isinstance(moderation, dict) or any(
             moderation.get(name) is not expected
-            for name, expected in REQUIRED_MUSIC_CHECKS.items()
+            for name, expected in required_checks.items()
         ):
             return {
                 "ok": False, "status": "brain_checks_not_publishable",
                 "platform": platform, "item_id": item_id, "publishing": False,
                 "moderation": moderation,
-                "reason": "music_detection_did_not_pass_required_check",
+                "reason": "required_visual_or_music_check_not_passed",
             }
 
         candidate_id = str(item.get("external_id"))
