@@ -24,7 +24,7 @@ INSTAGRAM_TAGS = ("poppyplaytime", "huggywuggy", "catnap")
 MAX_RESULTS = 5
 SEARCH_TERMS = {
     "poppyplaytime": '("Poppy Playtime" OR poppyplaytime)',
-    "huggywuggy": '"Huggy Wuggy" OR huggywuggy',
+    "huggywuggy": '("Huggy Wuggy" OR huggywuggy)',
     "catnap": '("CatNap" "Poppy Playtime" OR "Smiling Critters")',
 }
 MEDIA_PATH_RE = re.compile(r"^/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$", re.IGNORECASE)
@@ -499,6 +499,7 @@ def discover_instagram_public_search(
     limit = max(1, min(int(max_results), 5))
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
+    ddg_blocked = False
 
     def add_candidate(shortcode: str, permalink: str, title: str, snippet: str,
                       tag: str, method: str, published_at: str | None) -> bool:
@@ -605,6 +606,8 @@ def discover_instagram_public_search(
                 ddg_status = int(getattr(response, "status_code", 0))
                 if ddg_status != 200:
                     ddg_result = f"http_{ddg_status}"
+                    if ddg_status in {202, 401, 403, 429}:
+                        ddg_blocked = True
                 else:
                     parser = _SearchAnchorParser()
                     try:
