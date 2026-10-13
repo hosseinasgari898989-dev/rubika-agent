@@ -12,7 +12,7 @@
 ## سرویس Cloudflare (اکانت Hossein 3)
 - Worker: `rubika-agent`
 - D1: `rubika-agent-db`
-- Worker URL: `https://rubika-agent.amber-harbor-f617.workers.dev`
+- Worker URL: `https://rubika-agent.h98609294.workers.dev`
 - Health: `/health`
 - Status: `/api/status`
 
@@ -26,7 +26,7 @@
 - Root directory: ریشهٔ مخزن
 - Disable builds: خاموش
 
-فایل `wrangler.jsonc` از نام Worker، شناسهٔ اکانت Hossein 3 و D1 همین اکانت استفاده می‌کند.
+فایل `wrangler.jsonc` از نام Worker (`rubika-agent`)، شناسهٔ اکانت Hossein 3 و شناسهٔ D1 همین اکانت استفاده می‌کند. API سلامت و وضعیت در آدرس بالا بررسی شده و اتصال D1 تأیید شده است.
 
 Workers Builds می‌تواند API token مخصوص build را در Cloudflare ایجاد و مدیریت کند؛ برای استقرار مستقیم Cloudflare نیازی به قرار دادن توکن در GitHub Secrets نیست.
 
