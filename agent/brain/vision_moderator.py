@@ -1,19 +1,16 @@
-"""Conservative contact-sheet moderation through the authenticated Cloudflare AI endpoint.
+"""Cloudflare Clef-omni moderation for synchronized video and soundtrack.
 
-This model produces preliminary visual signals only. It cannot hear music, and its
-answers are not publication approval. Without an independent audio/music checker,
-the required has_music decision is deliberately omitted so the policy remains closed.
+A short, lower-resolution MP4 copy is sent to the authenticated Worker. This is a
+preliminary classifier only: D1 review_state stays pending and publishing remains
+disabled. Ambiguous model answers are omitted so the policy fails closed.
 """
 from __future__ import annotations
 
 import base64
-import io
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Mapping
-
-from PIL import Image, ImageDraw, ImageOps
+from typing import Any, Mapping
 
 from .inspector import inspect_media
 from .models import Candidate
@@ -25,110 +22,88 @@ class VisionModeratorError(RuntimeError):
         self.code = code
 
 
-FrameInspector = Callable[..., Any]
-AudioModerator = Callable[[Path], bool | None]
-
-
-class CloudflareVisionModerator:
-    """Extract a four-frame contact sheet and request preliminary visual moderation."""
+class CloudflareVideoModerator:
+    """Build a bounded MP4 sample and classify visuals plus its actual soundtrack."""
 
     def __init__(
         self,
         cloud: Any,
         *,
-        inspector: FrameInspector = inspect_media,
-        audio_moderator: AudioModerator | None = None,
+        inspector: Any = inspect_media,
+        maximum_seconds: int = 60,
+        maximum_bytes: int = 15 * 1024 * 1024,
         minimum_confidence: float = 0.70,
-        frame_timeout_seconds: int = 20,
+        ffmpeg_timeout_seconds: int = 90,
     ) -> None:
+        if not 1 <= maximum_seconds <= 60:
+            raise ValueError("maximum_seconds_out_of_range")
+        if not 1 * 1024 * 1024 <= maximum_bytes <= 15 * 1024 * 1024:
+            raise ValueError("maximum_bytes_out_of_range")
         if not 0 <= minimum_confidence <= 1:
             raise ValueError("minimum_confidence_out_of_range")
         self.cloud = cloud
         self.inspector = inspector
-        self.audio_moderator = audio_moderator
+        self.maximum_seconds = maximum_seconds
+        self.maximum_bytes = maximum_bytes
         self.minimum_confidence = minimum_confidence
-        self.frame_timeout_seconds = max(5, min(45, int(frame_timeout_seconds)))
+        self.ffmpeg_timeout_seconds = max(10, min(180, int(ffmpeg_timeout_seconds)))
 
-    @staticmethod
-    def _make_contact_sheet(frame_paths: list[Path]) -> bytes:
-        if len(frame_paths) < 2:
-            raise VisionModeratorError("too_few_video_frames")
-        tile_size = 480
-        sheet = Image.new("RGB", (tile_size * 2, tile_size * 2), "black")
-        draw = ImageDraw.Draw(sheet)
-        positions = ((0, 0), (tile_size, 0), (0, tile_size), (tile_size, tile_size))
-        loaded = 0
-        for index, frame_path in enumerate(frame_paths[:4]):
-            try:
-                with Image.open(frame_path) as opened:
-                    tile = ImageOps.fit(opened.convert("RGB"), (tile_size, tile_size))
-            except (OSError, ValueError):
-                continue
-            x, y = positions[index]
-            sheet.paste(tile, (x, y))
-            draw.rectangle((x, y, x + 138, y + 24), fill="black")
-            draw.text((x + 6, y + 5), f"Sample frame {index + 1}", fill="white")
-            loaded += 1
-        if loaded < 2:
-            raise VisionModeratorError("contact_sheet_frame_decode_failed")
-        output = io.BytesIO()
-        sheet.save(output, format="JPEG", quality=72, optimize=True)
-        result = output.getvalue()
-        if not 500 <= len(result) <= 1_200_000:
-            raise VisionModeratorError("contact_sheet_size_invalid")
-        return result
-
-    def _extract_frames(self, path: Path, duration: float, folder: Path) -> list[Path]:
-        frames: list[Path] = []
-        for index, fraction in enumerate((0.12, 0.36, 0.62, 0.88), start=1):
-            timestamp = max(0.0, min(duration - 0.05, duration * fraction))
-            destination = folder / f"frame-{index}.jpg"
-            command = [
-                "ffmpeg", "-nostdin", "-v", "error",
-                "-ss", f"{timestamp:.3f}", "-i", str(path),
-                "-frames:v", "1",
-                "-vf", "scale=480:480:force_original_aspect_ratio=decrease,"
-                       "pad=480:480:(ow-iw)/2:(oh-ih)/2",
-                "-q:v", "4", "-y", str(destination),
-            ]
-            try:
-                completed = subprocess.run(
-                    command, capture_output=True, text=True,
-                    timeout=self.frame_timeout_seconds, check=False,
-                )
-            except FileNotFoundError:
-                raise VisionModeratorError("ffmpeg_not_installed") from None
-            except subprocess.TimeoutExpired:
-                continue
-            except OSError:
-                raise VisionModeratorError("ffmpeg_execution_failed") from None
-            if completed.returncode == 0 and destination.is_file() and destination.stat().st_size:
-                frames.append(destination)
-        if len(frames) < 2:
-            raise VisionModeratorError("video_frame_extraction_failed")
-        return frames
+    def _prepare_video(self, source: Path, destination: Path) -> None:
+        command = [
+            "ffmpeg", "-nostdin", "-v", "error", "-i", str(source),
+            "-t", str(self.maximum_seconds),
+            "-map", "0:v:0", "-map", "0:a?",
+            "-vf", "scale='min(640,iw)':-2",
+            "-r", "24",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
+            "-maxrate", "1000k", "-bufsize", "2000k",
+            "-c:a", "aac", "-b:a", "64k", "-ac", "1",
+            "-movflags", "+faststart", "-sn", "-dn", "-y", str(destination),
+        ]
+        try:
+            completed = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=self.ffmpeg_timeout_seconds, check=False,
+            )
+        except FileNotFoundError:
+            raise VisionModeratorError("ffmpeg_not_installed") from None
+        except subprocess.TimeoutExpired:
+            raise VisionModeratorError("moderation_transcode_timeout") from None
+        except OSError:
+            raise VisionModeratorError("ffmpeg_execution_failed") from None
+        if completed.returncode != 0 or not destination.is_file():
+            raise VisionModeratorError("moderation_transcode_failed")
+        size = destination.stat().st_size
+        if size <= 50 * 1024:
+            raise VisionModeratorError("moderation_sample_too_small")
+        if size > self.maximum_bytes:
+            destination.unlink(missing_ok=True)
+            raise VisionModeratorError("moderation_sample_size_limit")
 
     def __call__(self, candidate: Candidate, media_path: str | Path) -> Mapping[str, Any]:
         if candidate.platform not in {"youtube", "tiktok", "instagram"}:
-            raise VisionModeratorError("unsupported_vision_platform")
-        path = Path(media_path)
-        if not path.is_file() or path.stat().st_size <= 0:
+            raise VisionModeratorError("unsupported_moderation_platform")
+        source = Path(media_path)
+        if not source.is_file() or source.stat().st_size <= 0:
             raise VisionModeratorError("media_file_missing_or_empty")
 
-        inspection = self.inspector(path, "video")
-        if not inspection.ok or inspection.media_type != "video":
+        source_info = self.inspector(source, "video")
+        if not source_info.ok or source_info.media_type != "video":
             raise VisionModeratorError("video_inspection_failed")
-        duration = inspection.duration_seconds
-        if not isinstance(duration, (float, int)) or duration <= 0:
+        if not isinstance(source_info.duration_seconds, (float, int)) or source_info.duration_seconds <= 0:
             raise VisionModeratorError("video_duration_unavailable")
+        truncated = float(source_info.duration_seconds) > self.maximum_seconds
 
-        with tempfile.TemporaryDirectory(prefix="rubika-agent-vision-") as temp:
-            frame_paths = self._extract_frames(path, float(duration), Path(temp))
-            sheet = self._make_contact_sheet(frame_paths)
-            image_data_url = "data:image/jpeg;base64," + base64.b64encode(sheet).decode("ascii")
+        with tempfile.TemporaryDirectory(prefix="rubika-agent-omni-") as temp:
+            sample_path = Path(temp) / "moderation-sample.mp4"
+            self._prepare_video(source, sample_path)
+            if sample_path.stat().st_size > self.maximum_bytes:
+                raise VisionModeratorError("moderation_sample_size_limit")
+            encoded = base64.b64encode(sample_path.read_bytes()).decode("ascii")
+            data_url = "data:video/mp4;base64," + encoded
             try:
-                result = self.cloud.moderate_frame(
-                    image_data_url,
+                result = self.cloud.moderate_video(
+                    data_url,
                     platform=candidate.platform,
                     title=candidate.title,
                     caption=candidate.caption,
@@ -143,31 +118,27 @@ class CloudflareVisionModerator:
         if not isinstance(confidence, (float, int)) or not 0 <= confidence <= 1:
             raise VisionModeratorError("vision_confidence_invalid")
 
-        moderation: dict[str, Any] = {
+        required = (
+            "poppy_relevant", "is_edit", "insults_poppy",
+            "insults_other_games", "high_effort", "has_music",
+        )
+        # If any dimension is uncertain, withhold all answers and require review.
+        # The policy then refuses to auto-stage this candidate.
+        if confidence < self.minimum_confidence or any(type(result.get(key)) is not bool for key in required):
+            return {
+                "vision_confidence": float(confidence),
+                "vision_model": str(result.get("vision_model", ""))[:100],
+                "moderation_uncertain": True,
+                "sample_truncated": truncated,
+                "human_review_required": True,
+            }
+
+        return {
+            **{key: result[key] for key in required},
             "vision_confidence": float(confidence),
             "vision_model": str(result.get("vision_model", ""))[:100],
+            "sample_truncated": truncated,
             "human_review_required": True,
-            "audio_review_required": True,
+            "auto_approved": False,
+            "publishing": False,
         }
-        required_visual = (
-            "poppy_relevant", "is_edit", "insults_poppy",
-            "insults_other_games", "high_effort",
-        )
-        # Low-confidence guesses are withheld, which keeps the downstream policy fail-closed.
-        if confidence >= self.minimum_confidence:
-            for key in required_visual:
-                if type(result.get(key)) is bool:
-                    moderation[key] = result[key]
-
-        if self.audio_moderator is not None:
-            try:
-                has_music = self.audio_moderator(path)
-            except Exception:
-                has_music = None
-            if type(has_music) is bool:
-                moderation["has_music"] = has_music
-                moderation["audio_review_required"] = False
-
-        # No is_edit/high_effort/music claims are fabricated if the model or audio
-        # checker does not provide the requested signal.
-        return moderation
