@@ -20,12 +20,9 @@ import requests
 
 INSTAGRAM_TAGS = ("poppyplaytime", "huggywuggy", "catnap")
 MAX_RESULTS = 2
-MEDIA_PATH_RE = re.compile(
-    r"^/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$",
-    re.IGNORECASE,
-)
+MEDIA_PATH_RE = re.compile(r"^/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$", re.IGNORECASE)
 CANONICAL_URL_RE = re.compile(
-    r"(?:https?:\\?/\\?/)?(?:www\\.)?instagram\\.com\\/(reel|p|tv)\\/([A-Za-z0-9_-]{5,20})",
+    r"(?:https?://)?(?:www[.] )?instagram[.]com/(reel|p|tv)/([A-Za-z0-9_-]{5,20})".replace("www[.] ", "www[.]"),
     re.IGNORECASE,
 )
 
@@ -34,9 +31,10 @@ class _MetaParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.meta: dict[str, str] = {}
-        self.jsonld: list[str] = []
-        self._in_jsonld = False
-        self._jsonld_parts: list[str] = []
+        self.json_scripts: list[tuple[str, str]] = []
+        self._script_type = ""
+        self._script_id = ""
+        self._script_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         values = {str(key).lower(): str(value or "") for key, value in attrs}
@@ -44,19 +42,25 @@ class _MetaParser(HTMLParser):
             key = values.get("property") or values.get("name") or values.get("itemprop")
             if key and values.get("content"):
                 self.meta.setdefault(key.lower(), values["content"])
-        if tag.lower() == "script" and values.get("type", "").lower() == "application/ld+json":
-            self._in_jsonld = True
-            self._jsonld_parts = []
+        if tag.lower() == "script":
+            self._script_type = values.get("type", "").lower()
+            self._script_id = values.get("id", "")
+            self._script_parts = []
 
     def handle_data(self, data: str) -> None:
-        if self._in_jsonld:
-            self._jsonld_parts.append(data)
+        if self._script_type:
+            self._script_parts.append(data)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == "script" and self._in_jsonld:
-            self.jsonld.append("".join(self._jsonld_parts))
-            self._jsonld_parts = []
-            self._in_jsonld = False
+        if tag.lower() == "script" and self._script_type:
+            self.json_scripts.append((self._script_type, self._script_id))
+            self.json_scripts[-1] = (
+                self._script_type + "|" + self._script_id,
+                "".join(self._script_parts),
+            )
+            self._script_type = ""
+            self._script_id = ""
+            self._script_parts = []
 
 
 def _safe_int(value: Any) -> int | None:
@@ -67,9 +71,9 @@ def _safe_int(value: Any) -> int | None:
 
 
 def _safe_date(value: Any) -> str | None:
-    if not isinstance(value, str) or not value.strip():
+    if value is None or not str(value).strip():
         return None
-    raw = value.strip()
+    raw = str(value).strip()
     try:
         numeric = float(raw)
         if numeric > 0:
@@ -111,8 +115,13 @@ def _walk_json(value: Any):
             yield from _walk_json(child)
 
 
-def _json_media_rows(body: str, page_meta: dict[str, str], requested_tag: str) -> list[dict[str, Any]]:
-    """Extract structured public media data when Instagram includes it in the page."""
+def _json_media_rows(body: str, requested_tag: str) -> list[dict[str, Any]]:
+    """Extract public video metadata only when the HTML exposes canonical media data."""
+    parser = _MetaParser()
+    try:
+        parser.feed(html.unescape(body or ""))
+    except Exception:
+        pass
     candidates: dict[str, dict[str, Any]] = {}
 
     def consume_object(obj: dict[str, Any]) -> None:
@@ -120,8 +129,9 @@ def _json_media_rows(body: str, page_meta: dict[str, str], requested_tag: str) -
         if not isinstance(raw_url, str):
             shortcode = obj.get("shortcode") or obj.get("code")
             if isinstance(shortcode, str) and re.fullmatch(r"[A-Za-z0-9_-]{5,20}", shortcode):
-                typename = str(obj.get("__typename") or obj.get("media_type") or "").lower()
-                kind = "reel" if "reel" in typename else ("p" if "media" in obj else "")
+                typename_value = obj.get("__typename") or obj.get("@type") or obj.get("media_type") or ""
+                typename_text = str(typename_value).lower()
+                kind = "reel" if "reel" in typename_text else ("p" if "video" in typename_text or "graphvideo" in typename_text else "")
                 if not kind:
                     return
                 raw_url = f"https://www.instagram.com/{kind}/{shortcode}/"
@@ -132,45 +142,45 @@ def _json_media_rows(body: str, page_meta: dict[str, str], requested_tag: str) -
         if not canonical:
             return
         path_kind, shortcode, permalink = canonical
-        typename = str(obj.get("__typename") or "").lower()
+        typename = str(obj.get("__typename") or obj.get("@type") or "").lower()
         media_type_value = obj.get("media_type")
         is_video = (
             path_kind == "reel"
             or "graphvideo" in typename
+            or "videoobject" in typename
             or str(media_type_value).lower() in {"2", "video", "reel"}
             or obj.get("is_video") is True
             or obj.get("video_duration") is not None
+            or obj.get("duration") is not None and "video" in typename
         )
-        # A /p/ URL is accepted only when the structured payload positively says video.
         if not is_video:
             return
 
-        caption = obj.get("caption")
+        caption = obj.get("caption") or obj.get("description") or obj.get("name") or ""
         if isinstance(caption, dict):
             caption = caption.get("text") or ""
         if not isinstance(caption, str):
             caption = ""
         if not caption:
-            caption = page_meta.get("og:description") or ""
-        owner = obj.get("owner") or obj.get("user") or {}
-        if isinstance(owner, dict):
-            username = owner.get("username") or owner.get("full_name") or ""
-        else:
-            username = ""
-        timestamp = obj.get("taken_at_timestamp") or obj.get("timestamp") or obj.get("datePublished")
-        stats = obj.get("edge_media_preview_like") or obj.get("likes") or {}
-        if isinstance(stats, dict):
-            likes = stats.get("count") or stats.get("likes_count")
-        else:
-            likes = stats
-        comments_data = obj.get("edge_media_to_comment") or obj.get("comments") or {}
-        if isinstance(comments_data, dict):
-            comments = comments_data.get("count") or comments_data.get("comments_count")
-        else:
-            comments = comments_data
+            caption = parser.meta.get("og:description") or parser.meta.get("description") or ""
 
-        tags = list(dict.fromkeys(re.findall(r"(?<!\\w)#([A-Za-z0-9_]{2,64})", caption)))[:40]
+        owner = obj.get("owner") or obj.get("user") or obj.get("author") or {}
+        if isinstance(owner, dict):
+            username = owner.get("username") or owner.get("name") or owner.get("full_name") or ""
+        else:
+            username = owner if isinstance(owner, str) else ""
+
+        timestamp = (
+            obj.get("taken_at_timestamp") or obj.get("timestamp")
+            or obj.get("datePublished") or obj.get("uploadDate")
+        )
+        stats = obj.get("edge_media_preview_like") or obj.get("likes") or {}
+        likes = stats.get("count") or stats.get("likes_count") if isinstance(stats, dict) else stats
+        comments_data = obj.get("edge_media_to_comment") or obj.get("comments") or {}
+        comments = comments_data.get("count") or comments_data.get("comments_count") if isinstance(comments_data, dict) else comments_data
+        tags = re.findall(r"(?:^|[^A-Za-z0-9_])#([A-Za-z0-9_]{2,64})", caption)
         tags = list(dict.fromkeys([requested_tag, *tags]))[:40]
+
         candidates.setdefault(shortcode, {
             "platform": "instagram",
             "id": shortcode,
@@ -179,7 +189,7 @@ def _json_media_rows(body: str, page_meta: dict[str, str], requested_tag: str) -
             "caption": caption[:4000],
             "author": str(username)[:100],
             "hashtags": tags,
-            "published_at": _safe_date(str(timestamp)) if timestamp is not None else None,
+            "published_at": _safe_date(timestamp),
             "like_count": _safe_int(likes),
             "comment_count": _safe_int(comments),
             "view_count": _safe_int(obj.get("video_view_count") or obj.get("videoViewCount")),
@@ -189,23 +199,22 @@ def _json_media_rows(body: str, page_meta: dict[str, str], requested_tag: str) -
             "query": "#" + requested_tag,
         })
 
-    # JSON-LD is easiest to read with a tolerant HTML parser; embedded script JSON is
-    # additionally scanned using the shortcode/permalink fields above.
-    parser = _MetaParser()
-    try:
-        parser.feed(html.unescape(body or ""))
-    except Exception:
-        pass
-    for script in parser.jsonld:
-        try:
-            value = json.loads(script)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        for obj in _walk_json(value):
-            if isinstance(obj, dict):
-                consume_object(obj)
+    for script_type_and_id, script_body in parser.json_scripts:
+        script_type, script_id = script_type_and_id.split("|", 1)
+        # Parse only known structured JSON script types; other HTML script bodies can
+        # contain executable code and are not evaluated.
+        if script_type == "application/ld+json" or script_id in {
+            "__UNIVERSAL_DATA_FOR_REHYDRATION__", "SIGI_STATE", "additionalData"
+        }:
+            try:
+                payload = json.loads(script_body)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for obj in _walk_json(payload):
+                if isinstance(obj, dict):
+                    consume_object(obj)
 
-    decoded = html.unescape(body or "")
+    decoded = html.unescape(body or "").replace("\\/", "/")
     for _ in range(3):
         expanded = unquote(decoded)
         if expanded == decoded:
@@ -215,15 +224,19 @@ def _json_media_rows(body: str, page_meta: dict[str, str], requested_tag: str) -
         kind, shortcode = match.group(1).lower(), match.group(2)
         url = f"https://www.instagram.com/{kind}/{shortcode}/"
         snippet = decoded[max(0, match.start() - 1200):match.end() + 3000]
-        typename = re.search(r'(?i)(?:__typename|media_type)[\\\\\"\\s:=]+(?:GraphVideo|2|video)', snippet)
-        is_video = kind == "reel" or bool(typename) or re.search(r'(?i)"is_video"\\s*:\\s*true', snippet)
+        video_marker = re.search(
+            r'(?i)(?:__typename|media_type)[" \t:=]+(?:GraphVideo|2|video)',
+            snippet,
+        )
+        is_video = kind == "reel" or bool(video_marker) or re.search(
+            r'(?i)"is_video" *: *true', snippet
+        ) is not None
         if not is_video:
             continue
-        # Use JSON-LD or nearby structured data where possible, with a conservative
-        # title fallback from page-level metadata if Instagram omitted per-item data.
         title = parser.meta.get("og:title") or parser.meta.get("twitter:title") or ""
         caption = parser.meta.get("og:description") or parser.meta.get("description") or ""
         if shortcode not in candidates:
+            tags = re.findall(r"(?:^|[^A-Za-z0-9_])#([A-Za-z0-9_]{2,64})", caption)
             candidates[shortcode] = {
                 "platform": "instagram",
                 "id": shortcode,
@@ -231,7 +244,7 @@ def _json_media_rows(body: str, page_meta: dict[str, str], requested_tag: str) -
                 "title": title[:1200],
                 "caption": caption[:4000],
                 "author": "",
-                "hashtags": list(dict.fromkeys([requested_tag, *re.findall(r"(?<!\\w)#([A-Za-z0-9_]{2,64})", caption)]))[:40],
+                "hashtags": list(dict.fromkeys([requested_tag, *tags]))[:40],
                 "published_at": _safe_date(parser.meta.get("article:published_time")),
                 "like_count": None,
                 "comment_count": None,
@@ -299,16 +312,14 @@ def discover_instagram_hashtags(
                 "http_status": status,
                 "result": f"http_{status}",
             })
-            # A single challenge/rate-limit response is a reason to stop this source for
-            # today's run rather than hammer the site or attempt to bypass the challenge.
             if status in {401, 403, 429}:
                 break
             continue
 
         body = getattr(response, "text", "") or ""
-        candidates_in_page = _json_media_rows(body, {}, tag)
+        rows = _json_media_rows(body, tag)
         added = 0
-        for row in candidates_in_page:
+        for row in rows:
             if row["id"] in candidates:
                 continue
             candidates[row["id"]] = row
@@ -316,17 +327,17 @@ def discover_instagram_hashtags(
             if len(candidates) >= limit:
                 break
         low = body.lower()
-        if any(phrase in low for phrase in ("login to instagram", "log in to instagram", "challenge_required", "accounts/login")) and not candidates_in_page:
-            result = "login_wall_or_challenge"
+        if any(phrase in low for phrase in ("login to instagram", "log in to instagram", "challenge_required", "accounts/login")) and not rows:
+            outcome = "login_wall_or_challenge"
         else:
-            result = "canonical_video_links_found" if added else "no_public_video_links"
+            outcome = "canonical_video_links_found" if added else "no_public_video_links"
         attempts.append({
             "platform": "instagram",
             "query": "#" + tag,
             "http_status": status,
-            "parsed": len(candidates_in_page),
+            "parsed": len(rows),
             "new_unique": added,
-            "result": result,
+            "result": outcome,
         })
         time.sleep(max(0.0, sleep_seconds))
     return list(candidates.values()), attempts
