@@ -344,6 +344,56 @@ class StagingOrchestrator:
         summary: str = "",
     ) -> StageJobResult:
         skipped_count = len(skipped)
+        error_counts: dict[str, int] = {}
+        recovery_attempts = 0
+        recovered_count = 0
+        for row in skipped:
+            reason = str(row.get("reason", ""))
+            safe_reason = "".join(char for char in reason if char.isalnum() or char in "_-")[:80]
+            if safe_reason:
+                error_counts[safe_reason] = error_counts.get(safe_reason, 0) + 1
+            raw_attempts = row.get("recovery_attempts", 0)
+            try:
+                recovery_attempts += max(0, min(2, int(raw_attempts)))
+            except (TypeError, ValueError):
+                pass
+            for code in str(row.get("recovery_error_codes", "")).split(",")[:3]:
+                code = "".join(char for char in code if char.isalnum() or char in "_-")[:80]
+                if code:
+                    error_counts[code] = error_counts.get(code, 0) + 1
+
+        # Include successful one-time recoveries recorded with staged ledger items.
+        if isinstance(ledger_state, dict):
+            items = ledger_state.get("items", {})
+            if isinstance(items, dict):
+                for item in items.values():
+                    payload = item.get("cloud_payload") if isinstance(item, dict) else None
+                    moderation = payload.get("moderation") if isinstance(payload, dict) else None
+                    receipt = moderation.get("recovery_diagnostics") if isinstance(moderation, dict) else None
+                    if isinstance(receipt, dict):
+                        try:
+                            recovery_attempts += max(0, min(2, int(receipt.get("attempts", 0) or 0)))
+                        except (TypeError, ValueError):
+                            pass
+                        if receipt.get("recovered") is True:
+                            recovered_count += 1
+                        codes = receipt.get("error_codes", [])
+                        if isinstance(codes, list):
+                            for code in codes[:3]:
+                                safe_code = "".join(char for char in str(code) if char.isalnum() or char in "_-")[:80]
+                                if safe_code:
+                                    error_counts[safe_code] = error_counts.get(safe_code, 0) + 1
+
+        recovery_summary = {
+            "automatic_recovery_attempts": recovery_attempts,
+            "successful_recoveries": recovered_count,
+            "unresolved_skips": skipped_count,
+            "top_error_codes": [
+                {"code": code, "count": count}
+                for code, count in sorted(error_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+            ],
+            "policy": "retry_only_transient_infrastructure_errors_once; never_bypass_content_or_permission_gates",
+        }
         if ledger_state is not None:
             try:
                 runs = ledger_state.get("runs", [])
@@ -369,6 +419,10 @@ class StagingOrchestrator:
                         "staged_count": staged_count,
                         "skipped_count": skipped_count,
                         "cloud_sync_errors": len(cloud_sync_errors),
+                        "recovery_attempts": recovery_summary["automatic_recovery_attempts"],
+                        "successful_recoveries": recovery_summary["successful_recoveries"],
+                        "unresolved_skips": recovery_summary["unresolved_skips"],
+                        "top_error_codes": recovery_summary["top_error_codes"],
                         "publishing": False,
                     },
                 )
@@ -398,6 +452,10 @@ class StagingOrchestrator:
                         "authorized_count": authorized_count,
                         "staged_count": staged_count,
                         "skipped_count": skipped_count,
+                        "recovery_attempts": recovery_summary["automatic_recovery_attempts"],
+                        "successful_recoveries": recovery_summary["successful_recoveries"],
+                        "unresolved_skips": recovery_summary["unresolved_skips"],
+                        "top_error_codes": recovery_summary["top_error_codes"],
                         "publishing": False,
                     },
                 )
@@ -416,6 +474,7 @@ class StagingOrchestrator:
             "staged_count": staged_count,
             "skipped": skipped,
             "cloud_sync_errors": cloud_sync_errors,
+            "diagnostics": {"recovery": recovery_summary},
             "publishing": False,
             "summary": summary,
         }
