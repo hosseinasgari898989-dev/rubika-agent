@@ -44,26 +44,56 @@ class FakeInstagramYDL:
 
 
 class TermuxInstagramTests(unittest.TestCase):
-    def test_default_discovery_uses_ytdlp_public_hashtag_metadata_only(self):
-        FakeInstagramYDL.instances = []
-        FakeInstagramYDL.info = {"entries": [{
-            "id": "AbCdEf_1234",
-            "webpage_url": "https://www.instagram.com/reel/AbCdEf_1234/",
-            "title": "Poppy Playtime Reel #poppyplaytime",
-            "duration": 22,
-            "timestamp": 1791808200,
-            "view_count": 1234,
-        }]}
+    def test_default_discovery_uses_public_search_index_and_reels_only(self):
+        rss = (
+            "<?xml version='1.0' encoding='UTF-8'?>"
+            "<rss><channel><item>"
+            "<title>Poppy Playtime edit</title>"
+            "<link>https://www.instagram.com/reel/AbCdEf_1234/</link>"
+            "<description>Public Poppy Playtime Reel #poppyplaytime</description>"
+            "<pubDate>Mon, 12 Oct 2026 14:00:00 GMT</pubDate>"
+            "</item></channel></rss>"
+        )
+        session = FakeSession([FakeResponse(200, rss)])
         found, attempts = discover_instagram_hashtags(
-            tags=("poppyplaytime",), max_results=5, sleep_seconds=0,
-            ydl_factory=FakeInstagramYDL,
+            search_session=session,
+            tags=("poppyplaytime",),
+            max_results=1,
+            sleep_seconds=0,
         )
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]["id"], "AbCdEf_1234")
-        self.assertEqual(found[0]["method"], "termux_ytdlp_public_hashtag_extractor")
-        self.assertTrue(FakeInstagramYDL.instances[0].options["skip_download"])
-        self.assertEqual(FakeInstagramYDL.instances[0].queries[0][1], False)
+        self.assertEqual(found[0]["method"], "termux_bing_rss_public_search")
+        self.assertEqual(found[0]["published_at"], "2026-10-12T14:00:00+00:00")
+        self.assertIn("instagram.com/reel/", found[0]["url"])
+        self.assertIn("bing.com/search", session.calls[0][0])
         self.assertEqual(attempts[0]["result"], "metadata_found")
+
+    def test_search_fallback_unwraps_duckduckgo_links_and_rejects_nonreels(self):
+        rss = (
+            "<rss><channel>"
+            "<item><title>Static post</title><link>"
+            "https://www.instagram.com/p/AbCdEf_1234/</link></item>"
+            "<item><title>Bad host</title><link>"
+            "https://evil.example/reel/BadHost_1234/</link></item>"
+            "</channel></rss>"
+        )
+        ddg = (
+            '<html><a class="result__a" href="https://duckduckgo.com/l/?uddg='
+            'https%3A%2F%2Fwww.instagram.com%2Freel%2FGoodReel_1234%2F">'
+            'Poppy Playtime Reel</a></html>'
+        )
+        session = FakeSession([FakeResponse(200, rss), FakeResponse(200, ddg)])
+        found, attempts = discover_instagram_hashtags(
+            search_session=session,
+            tags=("poppyplaytime",),
+            max_results=1,
+            sleep_seconds=0,
+        )
+        self.assertEqual([item["id"] for item in found], ["GoodReel_1234"])
+        self.assertEqual(found[0]["method"], "termux_duckduckgo_public_search")
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[-1]["result"], "metadata_found")
 
     def test_parses_video_reel_and_rejects_static_image(self):
         payload = [
