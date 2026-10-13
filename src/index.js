@@ -4,7 +4,6 @@ const MAX_BODY_BYTES = 32 * 1024;
 const MAX_VIDEO_BODY_BYTES = 23 * 1024 * 1024;
 const MAX_VIDEO_DATA_URL_CHARS = 22_400_000;
 const MAX_VIDEO_DECODED_BYTES = 16 * 1024 * 1024;
-const MAX_AI_MODERATION_REQUESTS_PER_UTC_DAY = 10;
 const VISION_MODEL = "@cf/cloudflare/clef-omni";
 const MAX_TEXT = 5000;
 const PLATFORMS = new Set(["tiktok", "youtube", "instagram", "mob_official"]);
@@ -494,21 +493,19 @@ async function moderateVideo(env, body) {
   const title = text(body.title, 500);
   const caption = text(body.caption, 1500);
 
-  // Hard daily request budget for actual music-detection calls.
-  // Python filters irrelevant/duplicate metadata and videos without audio first.
-  // A failed inference still consumes a reservation to prevent runaway retries.
+  // Record music-detection calls for diagnostics. The temporary project-specific
+  // daily cap is intentionally removed; Cloudflare's own account limits still apply.
   const usageDay = new Date().toISOString().slice(0, 10);
   try {
     const reservation = await env.DB.prepare(
-      "INSERT INTO ai_usage_daily (usage_day, request_count) VALUES (?, 1) ON CONFLICT(usage_day) DO UPDATE SET request_count = request_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE request_count < ? RETURNING request_count"
-    ).bind(usageDay, MAX_AI_MODERATION_REQUESTS_PER_UTC_DAY).first();
+      "INSERT INTO ai_usage_daily (usage_day, request_count) VALUES (?, 1) ON CONFLICT(usage_day) DO UPDATE SET request_count = request_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') RETURNING request_count"
+    ).bind(usageDay).first();
     if (!reservation) {
       return json({
         ok: false,
-        error: "vision_daily_limit_reached",
-        daily_limit: MAX_AI_MODERATION_REQUESTS_PER_UTC_DAY,
+        error: "vision_usage_counter_unavailable",
         publishing: false
-      }, 429);
+      }, 503);
     }
   } catch {
     return json({ ok: false, error: "vision_usage_guard_unavailable" }, 503);
