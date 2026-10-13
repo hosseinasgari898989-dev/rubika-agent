@@ -46,9 +46,9 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
 
 def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, Any]:
     """Collect phone-side public metadata, dedupe by platform ID, and save JSON locally."""
-    print("1/3 TikTok: checking public hashtag pages (metadata only)...", flush=True)
+    print("1/3 TikTok: checking selected public creator feeds with yt-dlp (metadata only)...", flush=True)
     tiktok_candidates, tiktok_attempts = discover_tiktok_hashtags()
-    print("2/3 Instagram: checking a small number of public hashtag pages (metadata only)...", flush=True)
+    print("2/3 Instagram: checking public hashtag metadata with yt-dlp (metadata only)...", flush=True)
     instagram_candidates, instagram_attempts = discover_instagram_hashtags()
     print("3/3 YouTube: searching Shorts metadata with yt-dlp (no download)...", flush=True)
     youtube_candidates, youtube_attempts = discover_youtube_metadata()
@@ -83,16 +83,18 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "tiktok_candidates": len(normalized["tiktok"]),
             "instagram_candidates": len(normalized["instagram"]),
             "youtube_candidates": len(normalized["youtube"]),
-            "instagram_method": "unauthenticated_public_hashtag_pages",
+            "tiktok_method": "yt_dlp_public_creator_profiles",
+            "instagram_method": "yt_dlp_public_hashtag_extractor",
             "paid_providers_used": [],
             "ready_to_publish": False,
         },
         "candidates": normalized,
         "attempts": [*tiktok_attempts, *instagram_attempts, *youtube_attempts],
         "limits": {
-            "instagram_max_candidates_per_run": 2,
+            "instagram_max_candidates_per_run": 5,
             "instagram_max_hashtag_pages": 3,
-            "tiktok_max_hashtag_pages": 4,
+            "tiktok_max_creator_profiles": 2,
+            "tiktok_max_results": 25,
             "youtube_searches": 4,
             "media_downloads": 0,
             "rubika_posts": 0,
