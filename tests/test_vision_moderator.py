@@ -6,11 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
-
 from agent.brain.inspector import InspectionResult
 from agent.brain.models import Candidate
-from agent.brain.vision_moderator import CloudflareVisionModerator, VisionModeratorError
+from agent.brain.vision_moderator import CloudflareVideoModerator, VisionModeratorError
 
 
 class FakeCloud:
@@ -21,19 +19,19 @@ class FakeCloud:
             "insults_poppy": False,
             "insults_other_games": False,
             "high_effort": True,
+            "has_music": True,
             "vision_confidence": 0.91,
-            "vision_model": "@cf/meta/llama-3.2-11b-vision-instruct",
+            "vision_model": "@cf/cloudflare/clef-omni",
             "human_review_required": True,
-            "audio_review_required": True,
             "auto_approved": False,
             "publishing": False,
         }
         self.error = error
         self.calls = []
 
-    def moderate_frame(self, image_data_url, *, platform, title="", caption=""):
+    def moderate_video(self, video_data_url, *, platform, title="", caption=""):
         self.calls.append({
-            "image_data_url": image_data_url,
+            "video_data_url": video_data_url,
             "platform": platform,
             "title": title,
             "caption": caption,
@@ -43,7 +41,7 @@ class FakeCloud:
         return dict(self.result)
 
 
-class VisionModeratorTests(unittest.TestCase):
+class CloudflareVideoModeratorTests(unittest.TestCase):
     def candidate(self):
         return Candidate(
             platform="youtube",
@@ -55,76 +53,91 @@ class VisionModeratorTests(unittest.TestCase):
             media_type="video",
         )
 
-    @staticmethod
-    def inspection(_path, _kind=None):
+    def inspection(self, _path, _kind=None, *, duration=10.0):
         return InspectionResult(
             ok=True, media_type="video", sha256="a" * 64,
             size_bytes=1000000, mime_type="video/mp4",
-            width=1920, height=1080, duration_seconds=10.0,
+            width=1920, height=1080, duration_seconds=duration,
             has_audio=True, video_codec="h264", audio_codec="aac",
         )
 
     @staticmethod
     def fake_ffmpeg(command, **kwargs):
         output = Path(command[-1])
-        Image.new("RGB", (480, 480), (80, 100, 120)).save(output, format="JPEG")
+        output.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"x" * 70000)
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    def test_builds_contact_sheet_and_returns_visual_signals_but_not_music(self):
+    def test_downsamples_full_video_and_uses_synchronized_video_audio_api(self):
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "source.mp4"
-            video.write_bytes(b"placeholder test file")
+            video.write_bytes(b"placeholder source file")
             cloud = FakeCloud()
-            moderator = CloudflareVisionModerator(
-                cloud, inspector=self.inspection, minimum_confidence=0.7
-            )
+            moderator = CloudflareVideoModerator(cloud, inspector=self.inspection)
             with patch("agent.brain.vision_moderator.subprocess.run", side_effect=self.fake_ffmpeg) as ffmpeg:
                 result = moderator(self.candidate(), video)
 
-        self.assertEqual(ffmpeg.call_count, 4)
-        self.assertTrue(cloud.calls[0]["image_data_url"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(ffmpeg.call_count, 1)
+        command = ffmpeg.call_args.args[0]
+        self.assertIn("0:a?", command)
+        self.assertIn("libx264", command)
+        self.assertTrue(cloud.calls[0]["video_data_url"].startswith("data:video/mp4;base64,"))
         self.assertEqual(cloud.calls[0]["platform"], "youtube")
         self.assertTrue(result["poppy_relevant"])
         self.assertTrue(result["high_effort"])
-        self.assertNotIn("has_music", result)
-        self.assertTrue(result["audio_review_required"])
+        self.assertIs(result["has_music"], True)
+        self.assertFalse(result["sample_truncated"])
         self.assertTrue(result["human_review_required"])
+        self.assertFalse(result["auto_approved"])
+        self.assertFalse(result["publishing"])
 
-    def test_injectable_audio_checker_can_supply_music_signal(self):
+    def test_videos_over_one_minute_are_marked_as_truncated(self):
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "source.mp4"
-            video.write_bytes(b"placeholder test file")
-            moderator = CloudflareVisionModerator(
-                FakeCloud(),
-                inspector=self.inspection,
-                audio_moderator=lambda _path: True,
+            video.write_bytes(b"placeholder source file")
+            moderator = CloudflareVideoModerator(
+                FakeCloud(), inspector=lambda path, kind=None: self.inspection(path, kind, duration=95.0)
             )
             with patch("agent.brain.vision_moderator.subprocess.run", side_effect=self.fake_ffmpeg):
                 result = moderator(self.candidate(), video)
-        self.assertIs(result["has_music"], True)
-        self.assertFalse(result["audio_review_required"])
+        self.assertTrue(result["sample_truncated"])
 
-    def test_low_confidence_withholds_visual_decisions(self):
-        model_result = {
+    def test_low_confidence_withholds_all_decisions(self):
+        result_payload = {
             "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
-            "insults_other_games": False, "high_effort": True, "vision_confidence": 0.42,
+            "insults_other_games": False, "high_effort": True, "has_music": True,
+            "vision_confidence": 0.42,
         }
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "source.mp4"
-            video.write_bytes(b"placeholder test file")
-            moderator = CloudflareVisionModerator(
-                FakeCloud(result=model_result), inspector=self.inspection, minimum_confidence=0.7
+            video.write_bytes(b"placeholder source file")
+            moderator = CloudflareVideoModerator(
+                FakeCloud(result=result_payload), inspector=self.inspection, minimum_confidence=0.7
             )
             with patch("agent.brain.vision_moderator.subprocess.run", side_effect=self.fake_ffmpeg):
                 result = moderator(self.candidate(), video)
         self.assertNotIn("poppy_relevant", result)
-        self.assertEqual(result["vision_confidence"], 0.42)
+        self.assertTrue(result["moderation_uncertain"])
+
+    def test_unknown_music_answer_keeps_candidate_unapproved(self):
+        result_payload = {
+            "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
+            "insults_other_games": False, "high_effort": True,
+            "vision_confidence": 0.9,
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "source.mp4"
+            video.write_bytes(b"placeholder source file")
+            moderator = CloudflareVideoModerator(FakeCloud(result=result_payload), inspector=self.inspection)
+            with patch("agent.brain.vision_moderator.subprocess.run", side_effect=self.fake_ffmpeg):
+                result = moderator(self.candidate(), video)
+        self.assertNotIn("has_music", result)
+        self.assertTrue(result["moderation_uncertain"])
 
     def test_missing_ffmpeg_fails_closed(self):
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "source.mp4"
-            video.write_bytes(b"placeholder test file")
-            moderator = CloudflareVisionModerator(FakeCloud(), inspector=self.inspection)
+            video.write_bytes(b"placeholder source file")
+            moderator = CloudflareVideoModerator(FakeCloud(), inspector=self.inspection)
             with patch(
                 "agent.brain.vision_moderator.subprocess.run",
                 side_effect=FileNotFoundError(),
@@ -133,17 +146,17 @@ class VisionModeratorTests(unittest.TestCase):
                     moderator(self.candidate(), video)
         self.assertEqual(caught.exception.code, "ffmpeg_not_installed")
 
-    def test_model_errors_do_not_create_approval(self):
+    def test_model_errors_are_sanitized(self):
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "source.mp4"
-            video.write_bytes(b"placeholder test file")
-            moderator = CloudflareVisionModerator(
-                FakeCloud(error=RuntimeError("private model response")), inspector=self.inspection
+            video.write_bytes(b"placeholder source file")
+            moderator = CloudflareVideoModerator(
+                FakeCloud(error=RuntimeError("private provider response")), inspector=self.inspection
             )
             with patch("agent.brain.vision_moderator.subprocess.run", side_effect=self.fake_ffmpeg):
                 with self.assertRaises(VisionModeratorError) as caught:
                     moderator(self.candidate(), video)
-        self.assertNotIn("private model response", str(caught.exception))
+        self.assertNotIn("private provider response", str(caught.exception))
 
 
 if __name__ == "__main__":
