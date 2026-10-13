@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain.delivery import deliver_with_retry
+from agent.brain.e2e_from_report import _select_candidates
 from agent.brain.inspector import inspect_media, sha256_file
 from agent.brain.models import Candidate, InspectionResult
 from agent.brain.normalizer import NormalizeError, normalize_video_square_1080
@@ -325,6 +326,30 @@ class NormalizerGuardTests(unittest.TestCase):
             file.write_bytes(b"not a real video")
             with self.assertRaises(NormalizeError):
                 normalize_video_square_1080(file, file)
+
+
+class E2ECandidateSelectionTests(unittest.TestCase):
+    def test_candidate_limit_and_offset_are_respected(self):
+        rows = [
+            {
+                "id": str(index),
+                "url": f"https://www.tiktok.com/@creator/video/{index}",
+                "title": f"Poppy Playtime fan edit {index}",
+                "caption": "#PoppyPlaytime #edit",
+                "author": "@creator",
+            }
+            for index in range(1, 4)
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            report = Path(folder) / "discovery.json"
+            report.write_text(
+                json.dumps({"candidates": {"tiktok": rows}}),
+                encoding="utf-8",
+            )
+            selected = _select_candidates(
+                report, "tiktok", set(), set(), limit=1, offset=1
+            )
+        self.assertEqual([candidate.external_id for candidate in selected], ["2"])
 
 
 if __name__ == "__main__":
