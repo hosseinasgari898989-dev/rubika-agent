@@ -215,6 +215,19 @@ class CloudState:
             for key in moderation_names
             if isinstance(evaluation.checks.get(key), bool)
         }
+        for key in (
+            "music_probability", "music_decision_reason", "music_detection_method",
+            "music_model", "music_confidence", "music_check_uncertain", "recovery_diagnostics",
+        ):
+            value = evaluation.checks.get(key)
+            if value is not None and (
+                key == "music_probability" and type(value) in {int, float}
+                or key == "music_confidence" and type(value) in {int, float}
+                or key == "music_check_uncertain" and type(value) is bool
+                or key in {"music_decision_reason", "music_detection_method", "music_model"} and isinstance(value, str)
+                or key == "recovery_diagnostics" and isinstance(value, dict)
+            ):
+                moderation[key] = value
         return {
             "platform": candidate.platform,
             "source_key": candidate.source_key or candidate.platform + "_search",
