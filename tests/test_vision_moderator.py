@@ -15,6 +15,9 @@ class FakeCloud:
     def __init__(self, result=None, error=None):
         self.result = result or {
             "has_music": True,
+            "is_poppy_playtime": True,
+            "is_edit": True,
+            "high_quality_edit": True,
             "vision_confidence": 0.91,
             "vision_model": "@cf/cloudflare/clef-omni",
             "human_review_required": True,
@@ -79,9 +82,12 @@ class CloudflareVideoModeratorTests(unittest.TestCase):
         self.assertEqual(cloud.calls[0]["platform"], "youtube")
         self.assertIs(result["has_music"], True)
         self.assertEqual(
-            set(result).intersection({"poppy_relevant", "is_edit", "high_effort", "insults_poppy", "insults_other_games"}),
+            set(result).intersection({"poppy_relevant", "high_effort", "insults_poppy", "insults_other_games"}),
             set(),
         )
+        self.assertIs(result["is_poppy_playtime"], True)
+        self.assertIs(result["is_edit"], True)
+        self.assertIs(result["high_quality_edit"], True)
         self.assertFalse(result["sample_truncated"])
         self.assertTrue(result["human_review_required"])
         self.assertFalse(result["auto_approved"])
@@ -99,7 +105,13 @@ class CloudflareVideoModeratorTests(unittest.TestCase):
         self.assertTrue(result["sample_truncated"])
 
     def test_low_aggregate_confidence_keeps_thresholded_answers_with_diagnostic(self):
-        result_payload = {"has_music": True, "vision_confidence": 0.42}
+        result_payload = {
+            "has_music": True,
+            "is_poppy_playtime": True,
+            "is_edit": True,
+            "high_quality_edit": True,
+            "vision_confidence": 0.42,
+        }
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "source.mp4"
             video.write_bytes(b"placeholder source file")
@@ -110,7 +122,9 @@ class CloudflareVideoModeratorTests(unittest.TestCase):
                 result = moderator(self.candidate(), video)
         self.assertTrue(result["aggregate_confidence_below_threshold"])
         self.assertFalse(result["moderation_uncertain"])
-        self.assertEqual(set(result).intersection({"poppy_relevant", "is_edit", "high_effort"}), set())
+        self.assertEqual(set(result).intersection({"poppy_relevant", "high_effort"}), set())
+        self.assertIs(result["is_poppy_playtime"], True)
+        self.assertIs(result["is_edit"], True)
 
     def test_unknown_music_answer_keeps_candidate_unapproved(self):
         result_payload = {"vision_confidence": 0.9}
