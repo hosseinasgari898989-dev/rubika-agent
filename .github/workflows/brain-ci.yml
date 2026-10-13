@@ -17,6 +17,7 @@ on:
       - "tests/test_relay.py"
       - "tests/test_relay_client.py"
       - "tests/test_instagram_discovery.py"
+      - "tests/test_tavily_discovery.py"
       - "tests/test_discovery_run.py"
       - "config/trusted_sources.json"
       - "tests/test_authorization.py"
@@ -60,6 +61,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_ledger.py' -v
           python -m unittest discover -s tests -p 'test_discovery_v7.py' -v
           python -m unittest discover -s tests -p 'test_instagram_discovery.py' -v
+          python -m unittest discover -s tests -p 'test_tavily_discovery.py' -v
           python -m unittest discover -s tests -p 'test_discovery_run.py' -v
           python -m unittest discover -s tests -p 'test_cloud_state.py' -v
           python -m unittest discover -s tests -p 'test_vision_moderator.py' -v
