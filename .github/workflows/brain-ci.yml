@@ -12,6 +12,7 @@ on:
       - "agent/storage/**"
       - "agent/discovery/**"
       - "termux/**"
+      - "termux/**"
       - "relay/**"
       - "render.yaml"
       - "requirements.txt"
@@ -24,6 +25,10 @@ on:
       - "tests/test_termux_daily_discovery.py"
       - "tests/test_tavily_discovery.py"
       - "tests/test_discovery_run.py"
+      - "tests/test_termux_sources.py"
+      - "tests/test_termux_instagram.py"
+      - "tests/test_termux_daily_discovery.py"
+      - "tests/test_phone_report_integration.py"
       - "config/trusted_sources.json"
       - "tests/test_authorization.py"
       - "tests/test_orchestrator.py"
@@ -72,6 +77,10 @@ jobs:
           python -m unittest discover -s tests -p 'test_termux_daily_discovery.py' -v
           python -m unittest discover -s tests -p 'test_tavily_discovery.py' -v
           python -m unittest discover -s tests -p 'test_discovery_run.py' -v
+          python -m unittest discover -s tests -p 'test_termux_sources.py' -v
+          python -m unittest discover -s tests -p 'test_termux_instagram.py' -v
+          python -m unittest discover -s tests -p 'test_termux_daily_discovery.py' -v
+          python -m unittest discover -s tests -p 'test_phone_report_integration.py' -v
           python -m unittest discover -s tests -p 'test_cloud_state.py' -v
           python -m unittest discover -s tests -p 'test_vision_moderator.py' -v
           python -m unittest discover -s tests -p 'test_migrations.py' -v
