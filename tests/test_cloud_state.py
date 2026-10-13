@@ -158,5 +158,41 @@ class CloudStateTests(unittest.TestCase):
         self.assertEqual(captured["validation"]["ok"], True)
 
 
+
+    def test_moderate_frame_allows_bounded_image_payload_over_normal_json_limit(self):
+        state = CloudState("https://worker.example", TOKEN)
+        captured = {}
+
+        def fake_open(request, timeout):
+            captured["url"] = request.full_url
+            captured["body"] = request.data
+            captured["auth"] = request.get_header("Authorization")
+            return io.BytesIO(json.dumps({
+                "ok": True,
+                "model": "@cf/meta/llama-3.2-11b-vision-instruct",
+                "checks": {
+                    "poppy_relevant": True, "is_edit": True, "insults_poppy": False,
+                    "insults_other_games": False, "high_effort": True,
+                },
+                "confidence": 0.85,
+                "audio_review_required": True,
+                "human_review_required": True,
+                "auto_approved": False,
+                "publishing": False,
+            }).encode("utf-8"))
+
+        image = "data:image/jpeg;base64," + ("A" * 40000)
+        with patch("urllib.request.urlopen", side_effect=fake_open):
+            result = state.moderate_frame(
+                image, platform="youtube", title="Poppy edit", caption="#edit"
+            )
+
+        self.assertTrue(result["poppy_relevant"])
+        self.assertTrue(result["human_review_required"])
+        self.assertFalse(result["auto_approved"])
+        self.assertGreater(len(captured["body"]), 32 * 1024)
+        self.assertTrue(captured["url"].endswith("/api/brain/moderate-frame"))
+        self.assertEqual(captured["auth"], "Bearer " + TOKEN)
+
 if __name__ == "__main__":
     unittest.main()
