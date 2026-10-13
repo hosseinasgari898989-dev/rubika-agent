@@ -228,7 +228,7 @@ class PipelineTests(unittest.TestCase):
                 raw = Path(path).read_bytes()
                 return InspectionResult(
                     True, "video", hashlib.sha256(raw).hexdigest(), len(raw), "video/mp4",
-                    1080, 1080, 3.0, True, "h264", "aac",
+                    1080, 1920, 3.0, True, "h264", "aac",
                 )
 
             result = stage_edit_batch(
