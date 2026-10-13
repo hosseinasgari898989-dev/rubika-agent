@@ -242,8 +242,8 @@ def discover_official_hashtag_urls(
                     "user_id": user_id,
                     "q": tag,
                     "fields": "id,name",
-                    "access_token": token,
                 },
+                headers={"Authorization": f"Bearer {token}"},
                 timeout=timeout_seconds,
             )
         except requests.RequestException:
@@ -291,8 +291,8 @@ def discover_official_hashtag_urls(
                     "user_id": user_id,
                     "fields": "id,caption,media_type,permalink,timestamp",
                     "limit": 50,
-                    "access_token": token,
                 },
+                headers={"Authorization": f"Bearer {token}"},
                 timeout=timeout_seconds,
             )
         except requests.RequestException:
