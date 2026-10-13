@@ -268,7 +268,11 @@ async function upsertItem(env, body) {
   const reviewState = text(body.review_state, 20) || "pending";
   const mediaType = text(body.media_type, 20) || "video";
   const sourceTier = text(body.source_tier, 20) || "unknown";
+  const upsertStatuses = new Set(["discovered", "filtered", "queued", "downloading", "ready"]);
   if (!ITEM_STATUSES.has(statusValue)) return json({ ok: false, error: "invalid_item_status" }, 400);
+  if (!upsertStatuses.has(statusValue)) {
+    return json({ ok: false, error: "delivery_status_requires_attempt_api" }, 400);
+  }
   if (!REVIEW_STATES.has(reviewState)) return json({ ok: false, error: "invalid_review_state" }, 400);
   if (!MEDIA_TYPES.has(mediaType)) return json({ ok: false, error: "invalid_media_type" }, 400);
   if (!SOURCE_TIERS.has(sourceTier)) return json({ ok: false, error: "invalid_source_tier" }, 400);
