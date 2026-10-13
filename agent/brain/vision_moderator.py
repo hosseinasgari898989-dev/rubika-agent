@@ -1,8 +1,7 @@
-"""Cloudflare Clef-omni moderation for synchronized video and soundtrack.
+"""Audio-only music moderation through the authenticated Cloudflare Worker.
 
-A short, lower-resolution MP4 copy is sent to the authenticated Worker. This is a
-preliminary classifier only: D1 review_state stays pending and publishing remains
-disabled. Ambiguous model answers are omitted so the policy fails closed.
+The agent brain, not AI, performs metadata relevance/edit checks and technical
+quality validation. This adapter sends a bounded MP3 soundtrack sample only.
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ class VisionModeratorError(RuntimeError):
 
 
 class CloudflareVideoModerator:
-    """Build a bounded MP4 sample and classify visuals plus its actual soundtrack."""
+    """Legacy class name retained; the model sees soundtrack audio only."""
 
     def __init__(
         self,
@@ -31,13 +30,13 @@ class CloudflareVideoModerator:
         *,
         inspector: Any = inspect_media,
         maximum_seconds: int = 60,
-        maximum_bytes: int = 15 * 1024 * 1024,
+        maximum_bytes: int = 8 * 1024 * 1024,
         minimum_confidence: float = 0.70,
         ffmpeg_timeout_seconds: int = 90,
     ) -> None:
         if not 1 <= maximum_seconds <= 60:
             raise ValueError("maximum_seconds_out_of_range")
-        if not 1 * 1024 * 1024 <= maximum_bytes <= 15 * 1024 * 1024:
+        if not 64 * 1024 <= maximum_bytes <= 8 * 1024 * 1024:
             raise ValueError("maximum_bytes_out_of_range")
         if not 0 <= minimum_confidence <= 1:
             raise ValueError("minimum_confidence_out_of_range")
@@ -45,20 +44,19 @@ class CloudflareVideoModerator:
         self.inspector = inspector
         self.maximum_seconds = maximum_seconds
         self.maximum_bytes = maximum_bytes
+        # Kept for constructor compatibility/diagnostics; the Worker owns the
+        # authoritative music decision threshold.
         self.minimum_confidence = minimum_confidence
         self.ffmpeg_timeout_seconds = max(10, min(180, int(ffmpeg_timeout_seconds)))
 
-    def _prepare_video(self, source: Path, destination: Path) -> None:
+    def _prepare_audio(self, source: Path, destination: Path) -> None:
         command = [
             "ffmpeg", "-nostdin", "-v", "error", "-i", str(source),
             "-t", str(self.maximum_seconds),
-            "-map", "0:v:0", "-map", "0:a?",
-            "-vf", "scale='min(640,iw)':-2",
-            "-r", "24",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
-            "-maxrate", "1000k", "-bufsize", "2000k",
-            "-c:a", "aac", "-b:a", "64k", "-ac", "1",
-            "-movflags", "+faststart", "-sn", "-dn", "-y", str(destination),
+            "-map", "0:a:0", "-vn",
+            "-ac", "1", "-ar", "16000",
+            "-c:a", "libmp3lame", "-b:a", "48k",
+            "-f", "mp3", "-y", str(destination),
         ]
         try:
             completed = subprocess.run(
@@ -68,17 +66,18 @@ class CloudflareVideoModerator:
         except FileNotFoundError:
             raise VisionModeratorError("ffmpeg_not_installed") from None
         except subprocess.TimeoutExpired:
-            raise VisionModeratorError("moderation_transcode_timeout") from None
+            raise VisionModeratorError("music_transcode_timeout") from None
         except OSError:
             raise VisionModeratorError("ffmpeg_execution_failed") from None
         if completed.returncode != 0 or not destination.is_file():
-            raise VisionModeratorError("moderation_transcode_failed")
+            raise VisionModeratorError("music_transcode_failed")
         size = destination.stat().st_size
-        if size <= 50 * 1024:
-            raise VisionModeratorError("moderation_sample_too_small")
+        if size < 1024:
+            destination.unlink(missing_ok=True)
+            raise VisionModeratorError("music_sample_too_small")
         if size > self.maximum_bytes:
             destination.unlink(missing_ok=True)
-            raise VisionModeratorError("moderation_sample_size_limit")
+            raise VisionModeratorError("music_sample_size_limit")
 
     def __call__(self, candidate: Candidate, media_path: str | Path) -> Mapping[str, Any]:
         if candidate.platform not in {"youtube", "tiktok", "instagram"}:
@@ -92,59 +91,51 @@ class CloudflareVideoModerator:
             raise VisionModeratorError("video_inspection_failed")
         if not isinstance(source_info.duration_seconds, (float, int)) or source_info.duration_seconds <= 0:
             raise VisionModeratorError("video_duration_unavailable")
-        truncated = float(source_info.duration_seconds) > self.maximum_seconds
+        if source_info.has_audio is False:
+            return {
+                "has_music": False,
+                "music_probability": 0.0,
+                "music_decision_reason": "source_has_no_audio_stream",
+                "music_detection_method": "python_no_audio_stream",
+                "music_check_uncertain": False,
+                "human_review_required": True,
+                "auto_approved": False,
+                "publishing": False,
+            }
 
-        with tempfile.TemporaryDirectory(prefix="rubika-agent-omni-") as temp:
-            sample_path = Path(temp) / "moderation-sample.mp4"
-            self._prepare_video(source, sample_path)
-            if sample_path.stat().st_size > self.maximum_bytes:
-                raise VisionModeratorError("moderation_sample_size_limit")
+        with tempfile.TemporaryDirectory(prefix="rubika-agent-music-") as temp:
+            sample_path = Path(temp) / "soundtrack.mp3"
+            self._prepare_audio(source, sample_path)
             encoded = base64.b64encode(sample_path.read_bytes()).decode("ascii")
-            data_url = "data:video/mp4;base64," + encoded
+            data_url = "data:audio/mpeg;base64," + encoded
             try:
-                result = self.cloud.moderate_video(
+                result = self.cloud.moderate_music(
                     data_url,
                     platform=candidate.platform,
-                    title=candidate.title,
-                    caption=candidate.caption,
                 )
             except Exception as exc:
-                code = getattr(exc, "code", "vision_api_" + type(exc).__name__)
+                code = getattr(exc, "code", "music_api_" + type(exc).__name__)
                 raise VisionModeratorError(str(code)) from None
 
         if not isinstance(result, Mapping):
-            raise VisionModeratorError("vision_api_invalid_response")
-        confidence = result.get("vision_confidence")
-        if not isinstance(confidence, (float, int)) or not 0 <= confidence <= 1:
-            raise VisionModeratorError("vision_confidence_invalid")
+            raise VisionModeratorError("music_api_invalid_response")
+        probability = result.get("music_probability")
+        if probability is not None and (
+            type(probability) not in {int, float} or not 0 <= probability <= 1
+        ):
+            raise VisionModeratorError("music_probability_invalid")
 
-        # The model returns independent, conservatively thresholded signals.
-        # Missing core fields stop eligibility; quality is required only for
-        # sources whose repository policy requests the extra quality gate.
-        core_fields = ("has_music", "is_poppy_playtime", "is_edit")
-        optional_fields = ("high_quality_edit",)
-        known_answers = {
-            key: result[key]
-            for key in (*core_fields, *optional_fields)
-            if type(result.get(key)) is bool
-        }
-        missing_core = [
-            key for key in core_fields if type(result.get(key)) is not bool
-        ]
-        missing_all = [
-            key for key in (*core_fields, *optional_fields)
-            if type(result.get(key)) is not bool
-        ]
-        return {
-            **known_answers,
-            "vision_confidence": float(confidence),
-            "vision_model": str(result.get("vision_model", ""))[:100],
-            "moderation_uncertain": bool(missing_core),
-            "moderation_missing_fields": missing_all,
-            "quality_check_missing": type(result.get("high_quality_edit")) is not bool,
-            "aggregate_confidence_below_threshold": confidence < self.minimum_confidence,
-            "sample_truncated": truncated,
+        output: dict[str, Any] = {
+            "music_probability": float(probability) if probability is not None else None,
+            "music_decision_reason": str(result.get("music_decision_reason", "music_diagnostic_missing"))[:80],
+            "music_detection_method": str(result.get("music_detection_method", "cloudflare_clef_omni_audio"))[:80],
+            "music_model": str(result.get("music_model", ""))[:100],
+            "music_confidence": float(result.get("music_confidence", 0.0)),
+            "music_check_uncertain": type(result.get("has_music")) is not bool,
             "human_review_required": True,
             "auto_approved": False,
             "publishing": False,
         }
+        if type(result.get("has_music")) is bool:
+            output["has_music"] = result["has_music"]
+        return output
