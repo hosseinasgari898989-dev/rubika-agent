@@ -173,8 +173,10 @@ const read = async response => ({ status: response.status, body: await response.
 {
   const state = env();
   const goodModeration = {
-    poppy_relevant: true, is_edit: true, insults_poppy: false,
-    insults_other_games: false, high_effort: true, has_music: true,
+    is_poppy_playtime: true,
+    is_edit: true,
+    high_quality_edit: true,
+    has_music: true,
   };
   const base = {
     platform: "tiktok", external_id: "7616247520657771796",
@@ -253,7 +255,7 @@ const read = async response => ({ status: response.status, body: await response.
     method: "POST", body: badApproval,
   }), state));
   assert.equal(response.status, 400);
-  assert.equal(response.body.error, "edit_approval_requires_music_check");
+  assert.equal(response.body.error, "edit_approval_requires_visual_content_and_music_checks");
 }
 {
   const response = await read(await worker.fetch(request("/api/brain/events", {
@@ -282,11 +284,16 @@ function makeOmniAI() {
       assert.equal(input.model, "clef-omni");
       assert.equal(input.videos.length, 1);
       assert.equal(input.videos[0].startsWith("data:video/mp4;base64,"), true);
-      assert.equal(Object.keys(input.questions).length, 1);
-      assert.deepEqual(Object.keys(input.questions), ["has_music"]);
+      assert.equal(Object.keys(input.questions).length, 4);
+      assert.deepEqual(Object.keys(input.questions), [
+        "has_music", "is_poppy_playtime", "is_edit", "high_quality_edit",
+      ]);
       return {
         answers: {
           has_music: { noul: 0.97 },
+          is_poppy_playtime: { noul: 0.99 },
+          is_edit: { noul: 0.95 },
+          high_quality_edit: { noul: 0.93 },
         },
         usage: { input_tokens: 9000 },
       };
@@ -303,7 +310,12 @@ function makeOmniAI() {
   assert.equal(response.status, 200);
   assert.equal(response.body.model, "@cf/cloudflare/clef-omni");
   assert.equal(response.body.checks.has_music, true);
-  assert.deepEqual(Object.keys(response.body.checks), ["has_music"]);
+  assert.equal(response.body.checks.is_poppy_playtime, true);
+  assert.equal(response.body.checks.is_edit, true);
+  assert.equal(response.body.checks.high_quality_edit, true);
+  assert.deepEqual(Object.keys(response.body.checks), [
+    "has_music", "is_poppy_playtime", "is_edit", "high_quality_edit",
+  ]);
   assert.equal(response.body.human_review_required, true);
   assert.equal(response.body.auto_approved, false);
   assert.equal(response.body.publishing, false);
