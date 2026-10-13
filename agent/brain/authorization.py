@@ -145,7 +145,7 @@ class SourceRegistry:
                 return PermissionDecision(False, "item_permission_not_confirmed")
 
         for source in self.sources:
-            if source.platform == candidate.platform and source.source_key == candidate.source_key:
+            if source.platform == candidate.platform and source.source_key in {candidate.source_key, "*"}:
                 if source.enabled and source.permission_confirmed and source.permission_basis in PERMISSION_BASES:
                     return PermissionDecision(True, "explicit_source_permission", source.permission_basis)
                 return PermissionDecision(False, "source_permission_not_confirmed")
