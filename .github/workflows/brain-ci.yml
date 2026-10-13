@@ -25,6 +25,7 @@ on:
       - "tests/test_instagram_discovery.py"
       - "tests/test_instagram_graph_api.py"
       - "tests/test_termux_sources.py"
+      - "tests/test_tiktok_search_index.py"
       - "tests/test_termux_instagram.py"
       - "tests/test_termux_daily_discovery.py"
       - "tests/test_phone_report_integration.py"
@@ -76,6 +77,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_instagram_discovery.py' -v
           python -m unittest discover -s tests -p 'test_instagram_graph_api.py' -v
           python -m unittest discover -s tests -p 'test_termux_sources.py' -v
+          python -m unittest discover -s tests -p 'test_tiktok_search_index.py' -v
           python -m unittest discover -s tests -p 'test_termux_instagram.py' -v
           python -m unittest discover -s tests -p 'test_termux_daily_discovery.py' -v
           python -m unittest discover -s tests -p 'test_phone_report_integration.py' -v
