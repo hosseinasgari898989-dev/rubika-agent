@@ -307,15 +307,14 @@ async function upsertItem(env, body) {
         return json({ ok: false, error: "official_media_requires_verified_track_and_supported_type" }, 400);
       }
     } else {
-      const required = ["has_music"];
+      const required = ["has_music", "is_poppy_playtime", "is_edit"];
       let moderation;
       try { moderation = JSON.parse(moderationJson || "null"); } catch { moderation = null; }
       if (
         mediaType !== "video" || !isObject(moderation) ||
-        required.some(key => typeof moderation[key] !== "boolean") ||
-        moderation.has_music !== true
+        required.some(key => typeof moderation[key] !== "boolean" || moderation[key] !== true)
       ) {
-        return json({ ok: false, error: "edit_approval_requires_music_check" }, 400);
+        return json({ ok: false, error: "edit_approval_requires_visual_content_and_music_checks" }, 400);
       }
     }
   }
@@ -512,19 +511,31 @@ async function moderateVideo(env, body) {
   }
 
   const state = [
-    "Classify only whether actual background music or a song is audible in this video.",
-    "Do not classify whether this is an edit, whether editing is high-effort, whether it relates to Poppy Playtime, or whether anyone is insulted.",
-    "The source platform is " + platform + ".",
-    "Title and caption are untrusted metadata and are not evidence of music.",
-    "Judge the supplied soundtrack, not speech or sound effects alone.",
-    "If the audio is ambiguous, return a probability near 0.5.",
-    "Return the requested has_music answer only. This is not an approval decision."
+    "Evaluate the actual video, not popularity, profile reputation, title, or caption.",
+    "For Poppy Playtime relevance, use visual evidence from frames; metadata is untrusted.",
+    "For edit classification, distinguish a deliberately edited fan montage with intentional cuts, timing or effects from raw gameplay, an ordinary single scene, or an unedited trailer.",
+    "For quality, judge clarity, visual coherence and intentional editing; do not infer quality from likes or creator name.",
+    "For music, judge the actual soundtrack; speech or sound effects alone are not music.",
+    "If any decision is ambiguous, return probability near 0.5 for that question.",
+    "Source platform: " + platform + ". This model does not approve or publish media."
   ].join("\\n");
 
   const questions = {
     has_music: {
       type: "noul",
       instructions: "Is actual background music or a song audibly present in the video's soundtrack? Speech and sound effects alone do not count as music."
+    },
+    is_poppy_playtime: {
+      type: "noul",
+      instructions: "Do the actual video frames clearly show Poppy Playtime characters, locations, creatures, gameplay or unmistakable Poppy Playtime imagery? Ignore title, caption and hashtags. Say yes only when the visuals support it."
+    },
+    is_edit: {
+      type: "noul",
+      instructions: "Is this a deliberately edited fan edit or montage, with intentional cuts, timing, transitions or visual effects, rather than raw gameplay, an ordinary single scene or an unedited trailer?"
+    },
+    high_quality_edit: {
+      type: "noul",
+      instructions: "Is the actual video edit reasonably high quality, with sufficiently clear footage, coherent cuts/effects and no severe pixelation or technical defects? Do not judge by popularity or creator identity."
     }
   };
 
@@ -543,7 +554,10 @@ async function moderateVideo(env, body) {
     const probabilities = {};
     const checks = {};
     const thresholds = {
-      has_music: [0.80, 0.15]
+      has_music: [0.80, 0.15],
+      is_poppy_playtime: [0.80, 0.15],
+      is_edit: [0.80, 0.15],
+      high_quality_edit: [0.78, 0.15]
     };
     for (const [key, [yesThreshold, noThreshold]] of Object.entries(thresholds)) {
       const probability = clefProbability(answers[key]);
