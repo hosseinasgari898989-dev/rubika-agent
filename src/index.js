@@ -114,14 +114,17 @@ function canonicalUrlFor(platform, value) {
     tiktok: ["tiktok.com"],
     youtube: ["youtube.com", "youtu.be"],
     instagram: ["instagram.com"],
-    mob_official: ["mobentertainment.com", "poppyplaytime.com", "steamcommunity.com"]
+    mob_official: ["mobentertainment.com", "poppyplaytime.com", "steamcommunity.com", "youtube.com", "youtu.be"]
   };
   const allowed = hosts[platform] || [];
   if (!allowed.some(domain => host === domain || host.endsWith("." + domain))) return null;
 
-  if (platform === "youtube") {
-    // Only accept the single public video ID parameter; reject other parameters
-    // so signed/temporary URLs cannot be stored as canonical source URLs.
+  if (platform === "youtube" || (
+    platform === "mob_official" &&
+    (host === "youtu.be" || host.endsWith(".youtu.be") || host === "youtube.com" || host.endsWith(".youtube.com"))
+  )) {
+    // For official Mob YouTube posts, allow canonical public video URLs only.
+    // Temporary/signature parameters and all other query keys are rejected.
     if (host === "youtu.be" || host.endsWith(".youtu.be")) {
       if (parsed.search || !/^\/[A-Za-z0-9_-]{11}\/?$/.test(parsed.pathname)) return null;
       const id = parsed.pathname.split("/").filter(Boolean)[0];
