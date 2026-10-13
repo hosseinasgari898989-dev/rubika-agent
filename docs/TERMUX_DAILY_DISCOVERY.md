@@ -1,15 +1,15 @@
 # جمع‌آوری روزانهٔ اطلاعات از Termux
 
 ## این مرحله چه می‌کند؟
-گوشی از صفحات عمومی TikTok و Instagram و جست‌وجوی metadata-only در YouTube اطلاعات قابل‌دسترسی و URL استاندارد را جمع می‌کند. سپس فقط گزارش JSON را به شاخهٔ آزمایشی GitHub می‌فرستد. در این مرحله **هیچ ویدیویی دانلود نمی‌شود و چیزی در روبیکا منتشر نمی‌شود**.
+گوشی با yt-dlp فید عمومی چند حساب انتخاب‌شده در TikTok، هشتگ‌های عمومی Instagram و جست‌وجوی YouTube Shorts را در حالت metadata-only بررسی می‌کند. سپس فقط گزارش JSON را به شاخهٔ آزمایشی GitHub می‌فرستد. در این مرحله **هیچ ویدیویی دانلود نمی‌شود و چیزی در روبیکا منتشر نمی‌شود**.
 
 هیچ Apify، سرویس پولی، کلید API پولی، کوکی ورود، پروکسی یا روش دورزدن challenge در مسیر روزانه استفاده نمی‌شود.
 
-- TikTok: حداکثر ۴ صفحهٔ عمومی هشتگ؛ شناسه و URL به‌علاوهٔ کپشن، تاریخ و آمار اگر در HTML در دسترس باشند.
-- Instagram: حداکثر ۳ صفحهٔ عمومی هشتگ و حداکثر ۲ Reel. اگر صفحه دیوار ورود/challenge یا HTML بدون داده برگرداند، صفر نتیجه ثبت می‌شود؛ نتیجهٔ ساختگی تولید نمی‌شود.
+- TikTok: فید عمومی دو حساب منتخب با yt-dlp؛ فقط اطلاعات متنی/آماری قابل‌دسترسی ثبت می‌شود و رسانه دانلود نمی‌شود.
+- Instagram: جست‌وجوی هشتگ عمومی با yt-dlp و سقف ۵ ویدئو. ممکن است صفحه دادهٔ ویدئویی ندهد یا درخواست محدود شود؛ در این حالت گزارش شکست ثبت می‌شود و نتیجهٔ ساختگی تولید نمی‌شود.
 - YouTube: چهار جست‌وجوی yt-dlp در حالت metadata-only؛ شناسه، URL، عنوان، کانال، مدت، تاریخ و آمار در صورت دسترس‌بودن.
 
-این محدودیت‌ها تعداد درخواست‌های خود برنامه را کاهش می‌دهند اما سهمیهٔ نامحدود ایجاد نمی‌کنند؛ پلتفرم‌ها همچنان می‌توانند درخواست‌ها را محدود کنند. اجرای روی گوشی با runner ابری فرق دارد، ولی تضمین نمی‌کند که TikTok یا Instagram حتماً نتیجه بدهند. روش جدید Instagram باید در اولین اجرای زنده آزمایش شود؛ اگر آن هم به challenge خورد، همان راه را پشت‌سرهم تکرار نمی‌کنیم.
+این محدودیت‌ها تعداد درخواست‌های خود برنامه را کاهش می‌دهند اما سهمیهٔ نامحدود ایجاد نمی‌کنند؛ پلتفرم‌ها همچنان می‌توانند درخواست‌ها را محدود کنند. اجرای روی گوشی با runner ابری فرق دارد، ولی تضمین نمی‌کند که TikTok یا Instagram حتماً نتیجه بدهند. روش yt-dlp برای TikTok و Instagram نیز تضمین همیشگی ندارد؛ اگر پلتفرم نتیجه ندهد، گزارش همان شکست را ثبت می‌کند و چیزی را به‌زور دور نمی‌زند.
 
 ## راه‌اندازی یک‌باره
 
@@ -17,9 +17,9 @@
 در Termux:
     pkg update
     pkg install -y git python gh ffmpeg
-    cd ~/rubika-agent
+    cd ~/rubika-agent-github
     git fetch origin
-    git switch agent-brain-mega-v1 || git switch --track origin/agent-brain-mega-v1
+    git switch agent-brain-mega-v1
     git pull --ff-only origin agent-brain-mega-v1
     bash termux/bootstrap.sh
 
@@ -27,8 +27,8 @@
 در Termux:
     pkg update
     pkg install -y git python gh ffmpeg
-    git clone --branch agent-brain-mega-v1 https://github.com/hosseinasgari898989-dev/rubika-agent.git ~/rubika-agent
-    cd ~/rubika-agent
+    git clone --branch agent-brain-mega-v1 https://github.com/hosseinasgari898989-dev/rubika-agent.git ~/rubika-agent-github
+    cd ~/rubika-agent-github
     bash termux/bootstrap.sh
 
 اسکریپت نصب فقط یک محیط مجازی .venv و دو وابستگی لازم برای کشف metadata را آماده می‌کند؛ به نصب همهٔ وابستگی‌های backend نیاز نیست. این مسیر به توکن Apify یا رمز/کوکی Instagram نیاز ندارد.
