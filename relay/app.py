@@ -201,6 +201,65 @@ def _download_and_probe(url: str, video_id: str, work_dir: Path) -> tuple[Path, 
     if duration > MAX_DURATION_SECONDS:
         raise RelayError("video_duration_limit", 413)
 
+    has_audio = audio is not None
+    output_path = media_path
+    if media_path.suffix.lower() != ".mp4" or video_codec != "h264" or (has_audio and audio_codec != "aac"):
+        output_path = work_dir / f"youtube_{video_id}_h264.mp4"
+        encode_command = [
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(media_path), "-map", "0:v:0", "-map", "0:a?",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
+            "-movflags", "+faststart", str(output_path),
+        ]
+        try:
+            encoded = subprocess.run(
+                encode_command,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+                cwd=work_dir,
+            )
+        except subprocess.TimeoutExpired:
+            raise RelayError("video_transcode_timeout", 504) from None
+        except (FileNotFoundError, OSError):
+            raise RelayError("video_transcoder_unavailable", 503) from None
+        if encoded.returncode != 0 or not output_path.is_file():
+            raise RelayError("video_transcode_failed", 422)
+        if output_path.stat().st_size <= 50 * 1024:
+            raise RelayError("transcoded_file_too_small", 422)
+        if output_path.stat().st_size > MAX_MEDIA_BYTES:
+            raise RelayError("transcoded_file_too_large", 413)
+        try:
+            output_probe = subprocess.run(
+                [
+                    "ffprobe", "-v", "error", "-show_entries",
+                    "format=duration:stream=codec_type,codec_name,width,height",
+                    "-of", "json", str(output_path),
+                ],
+                capture_output=True, text=True, timeout=FFPROBE_TIMEOUT_SECONDS, check=False,
+            )
+            output_info = json.loads(output_probe.stdout) if output_probe.returncode == 0 else {}
+            output_streams = output_info.get("streams") or []
+            output_video = next((s for s in output_streams if s.get("codec_type") == "video"), None)
+            output_audio = next((s for s in output_streams if s.get("codec_type") == "audio"), None)
+            if not output_video or output_video.get("codec_name") != "h264":
+                raise RelayError("transcoded_video_validation_failed", 422)
+            if output_audio and output_audio.get("codec_name") != "aac":
+                raise RelayError("transcoded_audio_validation_failed", 422)
+            media_path = output_path
+            video_codec = str(output_video.get("codec_name") or "h264")
+            audio_codec = str(output_audio.get("codec_name") or "aac") if output_audio else ""
+            width = int(output_video.get("width") or width)
+            height = int(output_video.get("height") or height)
+            audio = output_audio
+            duration = float((output_info.get("format") or {}).get("duration") or duration)
+        except RelayError:
+            raise
+        except (ValueError, TypeError, json.JSONDecodeError, subprocess.TimeoutExpired):
+            raise RelayError("transcoded_media_validation_failed", 422) from None
+
     return media_path, {
         "duration_seconds": round(duration, 3),
         "width": width,
@@ -209,7 +268,7 @@ def _download_and_probe(url: str, video_id: str, work_dir: Path) -> tuple[Path, 
         "audio_codec": audio_codec or None,
         "has_audio": audio is not None,
         "size_bytes": media_path.stat().st_size,
-        "mime_type": "video/mp4" if media_path.suffix.lower() == ".mp4" else None,
+        "mime_type": "video/mp4",
     }
 
 
