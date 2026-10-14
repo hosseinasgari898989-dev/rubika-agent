@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "mode": "preview",
-  "requested_at": "2026-10-14T00:11:29.131Z",
-  "request_id": "mob-official-preview-cloudflare-ai",
-  "reason": "Test the authenticated Cloudflare AI Persian-translation route plus the official Mob source/media validation. Do not publish to Rubika."
+  "requested_at": "2026-10-14T00:14:55.513Z",
+  "request_id": "mob-official-preview-natural-persian",
+  "reason": "Verify the improved natural Persian translation prompt and the real post image. This preview must not publish to Rubika."
 }
