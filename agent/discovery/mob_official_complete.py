@@ -64,6 +64,9 @@ class _PostPageParser(HTMLParser):
         self._script_data: list[str] = []
         self._ignored = 0
         self._article_text: list[str] = []
+        self.article_paragraphs: list[str] = []
+        self._in_article_paragraph = False
+        self._paragraph_parts: list[str] = []
         self._capture_depth = 0
         self._tag_stack: list[tuple[str, bool, bool]] = []
         self._void_tags = {
@@ -107,6 +110,9 @@ class _PostPageParser(HTMLParser):
         )
         if capture_container:
             self._capture_depth += 1
+        if lower == "p" and self._capture_depth > 0:
+            self._in_article_paragraph = True
+            self._paragraph_parts = []
         if lower not in self._void_tags:
             self._tag_stack.append((lower, ignored_tag, capture_container))
 
@@ -121,9 +127,17 @@ class _PostPageParser(HTMLParser):
             text = re.sub(r"\s+", " ", data).strip()
             if text:
                 self._article_text.append(text)
+                if self._in_article_paragraph:
+                    self._paragraph_parts.append(text)
 
     def handle_endtag(self, tag: str) -> None:
         lower = tag.lower()
+        if lower == "p" and self._in_article_paragraph:
+            paragraph = re.sub(r"\s+", " ", " ".join(self._paragraph_parts)).strip()
+            if paragraph:
+                self.article_paragraphs.append(paragraph)
+            self._paragraph_parts = []
+            self._in_article_paragraph = False
         if lower == "script" and self._script_jsonld:
             self.jsonld_chunks.append("".join(self._script_data))
             self._script_jsonld = False
@@ -171,18 +185,30 @@ def _detail_from_page(body: str, page_url: str) -> dict[str, Any]:
 
     title = meta_value("og:title", "twitter:title", "headline")
     caption = meta_value("og:description", "twitter:description", "description")
+    article_body_fallback = ""
     published = meta_value("article:published_time", "datepublished", "date")
     for row in json_objects:
         row_type = row.get("@type", "")
         kinds = row_type if isinstance(row_type, list) else [row_type]
         if any(str(kind).lower() in {"article", "newsarticle", "blogposting", "reportage"} for kind in kinds):
             title = title or str(row.get("headline") or row.get("name") or "")
-            caption = caption or str(row.get("description") or row.get("articleBody") or "")
+            caption = caption or str(row.get("description") or "")
+            article_body_fallback = article_body_fallback or str(row.get("articleBody") or "")
             published = published or str(row.get("datePublished") or row.get("dateCreated") or "")
+
+    # If the page has no explicit caption/description, use the first genuine
+    # article paragraph as the source excerpt. Do not stuff the whole press release
+    # and its boilerplate into a social-media caption or invent new text.
+    normalized_title = _plain_text(title, 1200).casefold()
     if not caption:
-        # A page's title or generic site description is not a caption. Only use the
-        # bounded article body if the DOM exposes an actual article/content section.
-        caption = " ".join(parser._article_text)
+        for paragraph in parser.article_paragraphs:
+            clean_paragraph = _plain_text(paragraph, MAX_CAPTION_CHARS)
+            if len(clean_paragraph) < 40 or clean_paragraph.casefold() == normalized_title:
+                continue
+            caption = clean_paragraph
+            break
+    if not caption:
+        caption = article_body_fallback or " ".join(parser._article_text)
     title = _plain_text(title, 1200)
     caption = _plain_text(caption, MAX_CAPTION_CHARS)
 
