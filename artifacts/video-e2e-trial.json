@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "source": "controlled_video_e2e_trial",
+  "generated_at": "2026-10-14T18:34:00Z",
+  "mode": "test_channel_only_single_candidate",
+  "summary": {
+    "tiktok_candidates": 1,
+    "youtube_candidates": 0,
+    "instagram_candidates": 0,
+    "paid_providers_used": [],
+    "ready_to_publish": false
+  },
+  "candidates": {
+    "tiktok": [
+      {
+        "id": "7696217798850186516",
+        "url": "https://www.tiktok.com/@smyxae/video/7696217798850186516",
+        "title": "Yesterday was the anniversary of the release of Poppy Playtime !!🥲 #poppyplaytime #poppyplaytimeedit #poppyplaytimeprototype #poppyplaytimecatnap #smyxae",
+        "caption": "Yesterday was the anniversary of the release of Poppy Playtime !!🥲 #poppyplaytime #poppyplaytimeedit #poppyplaytimeprototype #poppyplaytimecatnap #smyxae",
+        "author": "smyxae",
+        "source_key": "smyxae",
+        "hashtags": [
+          "poppyplaytime",
+          "poppyplaytimeedit",
+          "poppyplaytimeprototype",
+          "poppyplaytimecatnap",
+          "smyxae"
+        ],
+        "media_type": "video",
+        "published_at": "2026-10-13T18:15:49+00:00",
+        "duration_seconds": 24,
+        "method": "termux_ytdlp_public_creator_profiles",
+        "freshness_verified": true,
+        "freshness_source": "source_metadata"
+      }
+    ],
+    "youtube": [],
+    "instagram": []
+  },
+  "attempts": []
+}
