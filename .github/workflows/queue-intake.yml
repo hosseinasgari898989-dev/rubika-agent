@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: rubika-agent-queue-intake
@@ -46,11 +47,45 @@ jobs:
           fi
           python -m agent.brain.queue_intake --report artifacts/termux_discovery.json
 
+      - name: Start the daily queue worker now
+        id: dispatch_daily
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          response_code="$(curl --silent --show-error --output "$RUNNER_TEMP/dispatch-response.json" --write-out '%{http_code}' \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Content-Type: application/json" \
+            --data '{"ref":"main"}' \
+            "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/workflows/automation-daily-queue.yml/dispatches")"
+          if [[ "$response_code" != "204" ]]; then
+            echo "::warning::Queue was saved, but immediate processing dispatch returned HTTP $response_code. The daily schedule will continue to process the backlog."
+            exit 1
+          fi
+          echo "The saved queue was dispatched to the daily processor; the persistent UTC-day cap still limits sending to four successful edits."
+
+      - name: Notify owner if immediate processing dispatch failed
+        if: steps.dispatch_daily.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify \
+            --event workflow_failed \
+            --workflow "Queue intake: immediate dispatch" \
+            --reason "daily_queue_dispatch_failed"
+
       - name: Notify owner if intake failed
         if: failure()
         continue-on-error: true
         run: |
-          python -m agent.brain.owner_notify             --event workflow_failed             --workflow "Queue intake"             --reason "queue_intake_failed"
+          python -m agent.brain.owner_notify \
+            --event workflow_failed \
+            --workflow "Queue intake" \
+            --reason "queue_intake_failed"
 
       - name: Upload intake report
         if: always()
