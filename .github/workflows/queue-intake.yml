@@ -1,11 +1,8 @@
 name: Add Termux discoveries to persistent queue
 
 on:
-  push:
-    branches:
-      - agent-brain-mega-v1
-    paths:
-      - "artifacts/termux_discovery.json"
+  # Manual recovery only: the scheduled collector already performs one capped intake.
+  workflow_dispatch:
 
 permissions:
   contents: read
