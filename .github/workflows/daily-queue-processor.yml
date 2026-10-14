@@ -143,8 +143,7 @@ jobs:
               result=$?
               echo "::warning::Storage cleanup did not fully complete (exit $result). Unknown, failed, and uncertain items remain protected."
               if [ ! -f artifacts/storage-cleanup-report.json ]; then
-                printf '{"ok":false,"status":"failed_closed","deleted_count":0}
-' > artifacts/storage-cleanup-report.json
+                printf '%s\n' '{"ok":false,"status":"failed_closed","deleted_count":0}' > artifacts/storage-cleanup-report.json
               fi
             }
 
