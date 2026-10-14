@@ -50,10 +50,12 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
     print("1/2 TikTok: checking owner-selected profiles and public hashtag pages (metadata only)...", flush=True)
     tiktok_candidates, tiktok_attempts = discover_tiktok_hashtags(
         include_unknown_sources=True,
-        max_results=36,
-        known_source_max_results=24,
+        # Keep enough metadata candidates per creator to replenish the next batch
+        # when recent IDs are already in D1; still metadata-only, never media bytes.
+        max_results=60,
+        known_source_max_results=48,
         unknown_source_max_results=12,
-        max_per_profile=4,
+        max_per_profile=8,
         max_age_days=90,
     )
     print("2/2 Mob Entertainment: checking official newsroom, YouTube, Steam and X (metadata only)...", flush=True)
@@ -135,10 +137,10 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         "attempts": [*tiktok_attempts, *mob_attempts, lifecycle_attempt],
         "limits": {
             "tiktok_max_creator_profiles": 6,
-            "tiktok_max_per_known_profile": 4,
+            "tiktok_max_per_known_profile": 8,
             "tiktok_unknown_source_max_candidates": 12,
             "tiktok_max_age_days": 90,
-            "tiktok_max_results": 36,
+            "tiktok_max_results": 60,
             "mob_x_max_candidates_per_run": 12,
             "mob_official_source_lanes": ["website", "youtube", "steam", "x"],
             "mob_x_source_handle": "@mobgamesstudios",
