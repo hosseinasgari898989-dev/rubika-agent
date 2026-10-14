@@ -353,12 +353,18 @@ class CloudState:
         return self._request("GET", "/api/brain/items/seen" + query)
 
     def get_seen_index(self, *, page_size: int = 500, max_pages: int = 100) -> dict[str, set[str]]:
-        """Read persistent source IDs/hashes for dedupe. Never treats failed reads as an empty index."""
+        """Return delivery-blocking IDs/hashes, not every historical metadata row.
+
+        Discovered, ready, or definitely-failed records may still be recoverable.
+        Only sent, uncertain, and currently-sending records block a new delivery.
+        A missing status preserves legacy behavior for older compatible Worker APIs.
+        """
         page_size = min(500, max(1, int(page_size)))
         max_pages = min(1000, max(1, int(max_pages)))
         ids: set[str] = set()
         hashes: set[str] = set()
         offset = 0
+        blocking_statuses = {"sent", "uncertain", "sending"}
         for _ in range(max_pages):
             page = self.get_seen_items(limit=page_size, offset=offset)
             items = page.get("items")
@@ -367,12 +373,23 @@ class CloudState:
             for item in items:
                 if not isinstance(item, dict):
                     continue
+                status = item.get("status")
+                blocks_delivery = status in blocking_statuses or status is None
                 platform = item.get("platform")
                 external_id = item.get("external_id")
-                if isinstance(platform, str) and isinstance(external_id, str) and external_id:
+                if (
+                    blocks_delivery
+                    and isinstance(platform, str)
+                    and isinstance(external_id, str)
+                    and external_id
+                ):
                     ids.add(platform + ":" + external_id)
                 digest = item.get("media_sha256")
-                if isinstance(digest, str) and re.fullmatch(r"[a-fA-F0-9]{64}", digest):
+                if (
+                    blocks_delivery
+                    and isinstance(digest, str)
+                    and re.fullmatch(r"[a-fA-F0-9]{64}", digest)
+                ):
                     hashes.add(digest.lower())
             returned = len(items)
             offset += returned
