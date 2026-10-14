@@ -206,6 +206,46 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertFalse(report["ok"])
 
+    def test_uncertain_delivery_stops_run_before_attempting_another_video(self):
+        cloud = FakeCloud()
+        calls = []
+
+        def fake_run_one(report_path, platform, output_report, **kwargs):
+            payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
+            row = payload["candidates"][platform][0]
+            calls.append(row["id"])
+            if len(calls) == 1:
+                return {
+                    "ok": False,
+                    "status": "uncertain",
+                    "reason": "delivery_receipt_missing",
+                    "delivery": {"status": "uncertain"},
+                }
+            return {
+                "ok": True,
+                "status": "sent",
+                "platform": platform,
+                "external_id": row["id"],
+                "title": row["title"],
+            }
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(daily_limit=1, max_attempts=20)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(report["attempted_count"], 1)
+        self.assertEqual(report["sent_count"], 0)
+        self.assertEqual(report["failed_count"], 1)
+        self.assertEqual(report["results"][0]["status"], "uncertain")
+        self.assertEqual(cloud.items[0]["status"], "uncertain")
+        self.assertEqual(cloud.items[1]["status"], "queued")
+        self.assertFalse(report["ok"])
+
     def test_paused_youtube_item_remains_queued_for_later(self):
         cloud = FakeCloud()
         cloud.items = [make_item("youtube", "abcdefghijk", "YouTube must remain queued")]
