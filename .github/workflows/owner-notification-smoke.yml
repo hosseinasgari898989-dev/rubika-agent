@@ -1,0 +1,102 @@
+name: Private owner notification smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send-one-private-test-message:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    env:
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+    steps:
+      - name: Test Rubika bot access and send one private message only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+
+          token = os.environ.get("RUBIKA_TOKEN", "").strip()
+          owner_id = os.environ.get("RUBIKA_OWNER_CHAT_ID", "").strip()
+          base = "https://botapi.rubika.ir/v3"
+          message = "✅ تست خصوصی اعلان Rubika-Agent انجام شد. این فقط یک پیام آزمایشی است؛ هیچ پستی منتشر نشده است."
+
+          def safe_status(payload):
+              return re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("status") or "unknown"))[:60]
+
+          def call(method, payload):
+              request = urllib.request.Request(
+                  f"{base}/{token}/{method}",
+                  data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      body = json.loads(response.read().decode("utf-8"))
+                      return response.status, body if isinstance(body, dict) else {}
+              except urllib.error.HTTPError as exc:
+                  # Never log request URLs or raw response bodies, because the URL contains the token.
+                  try:
+                      data = json.loads(exc.read().decode("utf-8"))
+                  except Exception:
+                      data = {}
+                  return exc.code, data if isinstance(data, dict) else {}
+              except Exception as exc:
+                  print(json.dumps({
+                      "ok": False, "stage": method,
+                      "error_type": type(exc).__name__,
+                      "details": "request_failed; token and URL omitted",
+                      "publishing": False,
+                  }))
+                  sys.exit(2)
+
+          if not token or not owner_id:
+              print(json.dumps({
+                  "ok": False, "stage": "configuration",
+                  "token_present": bool(token),
+                  "owner_id_present": bool(owner_id),
+                  "publishing": False,
+              }))
+              sys.exit(2)
+
+          http_status, me = call("getMe", {})
+          bot_status = safe_status(me)
+          if http_status != 200 or bot_status != "OK":
+              print(json.dumps({
+                  "ok": False, "stage": "getMe",
+                  "http_status": http_status, "api_status": bot_status,
+                  "publishing": False,
+              }))
+              sys.exit(1)
+
+          http_status, result = call("sendMessage", {"chat_id": owner_id, "text": message})
+          api_status = safe_status(result)
+          if http_status == 200 and api_status == "OK":
+              print(json.dumps({
+                  "ok": True, "stage": "sendMessage",
+                  "api_status": api_status,
+                  "private_test_message_sent": True,
+                  "publishing": False,
+              }))
+              sys.exit(0)
+
+          print(json.dumps({
+              "ok": False, "stage": "sendMessage",
+              "http_status": http_status,
+              "api_status": api_status,
+              "private_test_message_sent": False,
+              "publishing": False,
+          }))
+          sys.exit(1)
+          PY
