@@ -26,9 +26,10 @@
 - Error hints recommend no destructive or publication action, even for uncertain delivery.
 
 ## Tasks
-- [ ] Verify and fix fair intake tests on the active branch.
-- [ ] Extend the scheduled job summary with only newly enqueued URLs and rerun the real Termux workflow.
-- [ ] Add Worker tests first for safe error input, atomic daily cap, allowlist validation, and fail-closed AI fallback.
-- [ ] Implement the bounded AI Worker route and D1 event logging without adding any publishing/download/delete capability.
-- [ ] Add the Python client/CLI and invoke it only when a workflow stage has failed.
-- [ ] Run the complete Python test suite, Worker API tests, and the live scheduled metadata-only workflow; verify the deployed Worker separately before describing runtime availability.
+- [x] Verify and fix fair intake tests on the active branch.
+- [x] Extend the scheduled job summary with only newly enqueued URLs and rerun the real Termux workflow.
+- [x] Add Worker tests for safe error input, atomic daily cap, allowlist validation, fail-closed fallback, and fenced model JSON.
+- [x] Implement and deploy the bounded AI Worker route and D1 event logging without adding publishing/download/delete capability.
+- [x] Add the Python client/CLI and invoke it only when a workflow stage has failed.
+- [x] Run the complete Python test suite, Worker API tests, the live scheduled metadata-only workflow, and verify deployed Worker route/bindings.
+- [ ] Run one post-fix live Workers AI inference after the UTC daily four-call reservation limit resets; earlier CI failures consumed all four slots before the tolerant JSON parser was deployed.
