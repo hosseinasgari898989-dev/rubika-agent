@@ -1,16 +1,7 @@
 name: Mob Entertainment official-source test-channel trial
 
 on:
-  push:
-    branches:
-      - agent-brain-mega-v1
-    paths:
-      - "artifacts/termux_discovery.json"
-      - "config/mob_official_sources.json"
-      - "agent/discovery/termux_mob_x.py"
-      - "agent/discovery/mob_official_complete.py"
-      - "agent/brain/mob_official_trial.py"
-      - ".github/workflows/mob-official-trial.yml"
+  # Manual test lane only. A routine five-hour metadata report must never trigger a post.
   workflow_dispatch:
 
 permissions:
