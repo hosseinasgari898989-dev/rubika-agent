@@ -117,10 +117,19 @@ function canonicalUrlFor(platform, value) {
     tiktok: ["tiktok.com"],
     youtube: ["youtube.com", "youtu.be"],
     instagram: ["instagram.com"],
-    mob_official: ["mobentertainment.com", "poppyplaytime.com", "steamcommunity.com", "youtube.com", "youtu.be"]
+    mob_official: ["mobentertainment.com", "poppyplaytime.com", "steamcommunity.com", "youtube.com", "youtu.be", "x.com"]
   };
   const allowed = hosts[platform] || [];
   if (!allowed.some(domain => host === domain || host.endsWith("." + domain))) return null;
+
+  if (platform === "mob_official" && (host === "x.com" || host.endsWith(".x.com"))) {
+    // Only canonical status URLs from Mob's exact official handle are accepted.
+    // Do not allow arbitrary X users, search parameters, or third-party subdomains.
+    if (!["x.com", "www.x.com"].includes(host) || parsed.search) return null;
+    const match = /^\\/mobgamesstudios\\/status\\/([0-9]{15,22})\\/?$/.exec(parsed.pathname);
+    if (!match) return null;
+    return "https://x.com/mobgamesstudios/status/" + match[1];
+  }
 
   if (platform === "youtube" || (
     platform === "mob_official" &&
