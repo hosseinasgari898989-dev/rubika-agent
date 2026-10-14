@@ -177,6 +177,23 @@ class CloudStateTests(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer " + TOKEN)
         self.assertIn("text", captured["payload"])
 
+
+    def test_translate_official_rejects_mixed_cyrillic_output(self):
+        state = CloudState("https://worker.example", TOKEN)
+
+        def fake_open(request, timeout):
+            return io.BytesIO(json.dumps({
+                "ok": True,
+                "translation": "به عمق بازی بروید, еще اسرارآمیزتر.",
+                "publishing": False,
+            }).encode("utf-8"))
+
+        with patch("urllib.request.urlopen", side_effect=fake_open):
+            with self.assertRaises(CloudStateError) as caught:
+                state.translate_official("Explore the depths of the game.")
+
+        self.assertEqual(caught.exception.code, "control_api_translation_wrong_script")
+
     def test_translate_official_rejects_too_long_text_before_network(self):
         state = CloudState("https://worker.example", TOKEN)
         with patch("urllib.request.urlopen") as opener:
