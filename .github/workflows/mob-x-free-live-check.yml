@@ -125,11 +125,105 @@ jobs:
           }, ensure_ascii=False, sort_keys=True))
           PY
 
+      - name: Probe free public X profile endpoint (read-only; no media or publishing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import requests
+
+          report = {
+              "mode": "read_only_profile_discovery_probe",
+              "source": "unifapi_public_x_profile",
+              "handle": "mobgamesstudios",
+              "paid_api_credits_used": 0,
+              "cookies_used": False,
+              "media_downloads": 0,
+              "rubika_posts": 0,
+          }
+          url = "https://unifapi.com/tools/x/profile"
+          try:
+              response = requests.get(
+                  url,
+                  params={"handle": "mobgamesstudios"},
+                  headers={"User-Agent": "Rubika-Agent-public-metadata-probe/1.0", "Accept": "application/json"},
+                  timeout=12,
+                  allow_redirects=True,
+              )
+              report["http_status"] = response.status_code
+              report["content_type"] = response.headers.get("content-type", "")[:100]
+              report["final_host"] = (requests.utils.urlparse(response.url).hostname or "")[:120]
+              try:
+                  payload = response.json()
+              except (ValueError, json.JSONDecodeError):
+                  payload = None
+                  report["json_parse"] = "failed"
+                  report["body_prefix"] = response.text[:120].replace("\\n", " ")
+              if isinstance(payload, dict):
+                  report["json_parse"] = "ok"
+                  report["top_level_keys"] = sorted(str(key)[:80] for key in payload.keys())[:40]
+                  collections = []
+
+                  def inspect(node, path="$", depth=0):
+                      if depth > 3:
+                          return
+                      if isinstance(node, dict):
+                          for key, value in list(node.items())[:60]:
+                              child_path = f"{path}.{str(key)[:60]}"
+                              if isinstance(value, list):
+                                  dict_rows = [row for row in value[:5] if isinstance(row, dict)]
+                                  if dict_rows:
+                                      collections.append({
+                                          "path": child_path,
+                                          "row_count_reported": len(value),
+                                          "sample_keys": sorted(str(k)[:80] for k in dict_rows[0].keys())[:40],
+                                      })
+                                  inspect(value, child_path, depth + 1)
+                              elif isinstance(value, dict):
+                                  inspect(value, child_path, depth + 1)
+                      elif isinstance(node, list):
+                          for index, value in enumerate(node[:3]):
+                              if isinstance(value, (dict, list)):
+                                  inspect(value, f"{path}[{index}]", depth + 1)
+
+                  inspect(payload)
+                  report["collections"] = collections[:20]
+                  for key in ("items", "posts", "tweets", "results", "data"):
+                      value = payload.get(key)
+                      if isinstance(value, list) and value and isinstance(value[0], dict):
+                          row = value[0]
+                          report["sample_candidate"] = {
+                              "container": key,
+                              "id": str(row.get("id") or row.get("post_id") or row.get("tweet_id") or "")[:80],
+                              "url": str(row.get("url") or row.get("permalink") or "")[:240],
+                              "author": str(row.get("author") or row.get("username") or row.get("handle") or "")[:120],
+                              "timestamp": str(row.get("created_at") or row.get("timestamp") or row.get("date") or "")[:100],
+                              "text_prefix": str(row.get("text") or row.get("full_text") or row.get("content") or row.get("caption") or "")[:160],
+                          }
+                          break
+                  err = payload.get("error")
+                  if isinstance(err, dict):
+                      report["service_error_type"] = str(err.get("type") or "")[:100]
+                      report["service_error"] = str(err.get("message") or "")[:160]
+                  elif isinstance(err, str):
+                      report["service_error"] = err[:160]
+              else:
+                  report.setdefault("json_parse", "not_a_json_object")
+          except requests.RequestException as exc:
+              report["request_error_type"] = type(exc).__name__
+          Path("artifacts/mob-x-unifapi-probe.json").parent.mkdir(parents=True, exist_ok=True)
+          Path("artifacts/mob-x-unifapi-probe.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8"
+          )
+          print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+          PY
+
       - name: Upload live-check metadata
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mob-x-free-live-check
-          path: artifacts/mob-x-free-live-check.json
-          if-no-files-found: warn
+          path: |\n            artifacts/mob-x-free-live-check.json\n            artifacts/mob-x-unifapi-probe.json\n          if-no-files-found: warn
           retention-days: 7
