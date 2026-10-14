@@ -130,6 +130,28 @@ class CloudStateTests(unittest.TestCase):
         self.assertTrue(urls[0].endswith("/api/brain/items/seen?limit=2&offset=0"))
         self.assertTrue(urls[1].endswith("/api/brain/items/seen?limit=2&offset=2"))
 
+    def test_seen_index_allows_recovery_of_nonterminal_items(self):
+        state = CloudState("https://worker.example", TOKEN)
+        rows = [
+            {"platform": "tiktok", "external_id": "seen1", "status": "discovered", "media_sha256": "a" * 64},
+            {"platform": "tiktok", "external_id": "seen2", "status": "ready", "media_sha256": "b" * 64},
+            {"platform": "tiktok", "external_id": "seen3", "status": "failed", "media_sha256": "c" * 64},
+            {"platform": "tiktok", "external_id": "sent1", "status": "sent", "media_sha256": "d" * 64},
+            {"platform": "tiktok", "external_id": "uncertain1", "status": "uncertain", "media_sha256": "e" * 64},
+            {"platform": "tiktok", "external_id": "sending1", "status": "sending", "media_sha256": "f" * 64},
+        ]
+
+        def fake_open(request, timeout):
+            return io.BytesIO(json.dumps({"ok": True, "items": rows}).encode("utf-8"))
+
+        with patch("urllib.request.urlopen", side_effect=fake_open):
+            index = state.get_seen_index(page_size=10)
+
+        self.assertEqual(index["ids"], {
+            "tiktok:sent1", "tiktok:uncertain1", "tiktok:sending1",
+        })
+        self.assertEqual(index["hashes"], {"d" * 64, "e" * 64, "f" * 64})
+
     def test_http_failure_is_sanitized(self):
         state = CloudState("https://worker.example", TOKEN)
         error = __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
