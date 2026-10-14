@@ -14,14 +14,13 @@ from typing import Any
 from agent.brain.cloud_state import CloudState
 from agent.brain.e2e_from_report import run_one
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
-from agent.source_policy import delivery_enabled
 from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
 
 
 DAILY_SUCCESS_LIMIT = 4
 MAX_CANDIDATE_ATTEMPTS = 20
 QUEUE_READ_LIMIT = 100
-PLATFORMS = ("tiktok", "youtube", "instagram")
+PLATFORMS = ("tiktok",)
 
 
 def _utc_now() -> str:
