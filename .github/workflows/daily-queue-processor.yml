@@ -142,9 +142,11 @@ jobs:
       - name: Process the D1 backlog with a one-success test-channel cap
         id: queue_worker
         run: |
+          # A clear failed/skipped video does not consume the one-post daily quota:
+          # keep trying other queued URLs, with a hard cap of 20 candidate attempts.
           python -m agent.brain.queue_worker \
             --daily-limit 1 \
-            --max-attempts 3 \
+            --max-attempts 20 \
             --report artifacts/automation-daily-report.json
 
       - name: Safely reclaim stale confirmed-sent media
