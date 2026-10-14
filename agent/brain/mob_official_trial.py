@@ -694,7 +694,13 @@ def run_trial(
             try:
                 downloaded, candidate_validation = download_and_validate(item, candidate_dir)
             except Exception as exc:
-                error_code = "media_" + (re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "download_failed")
+                if isinstance(exc, RuntimeError):
+                    safe_detail = re.sub(r"[^A-Za-z0-9_-]", "", str(exc))[:80]
+                else:
+                    safe_detail = ""
+                error_code = "media_" + (
+                    safe_detail or re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "download_failed"
+                )
                 media_failures.append({
                     "source_platform": str(item.get("source_platform") or "unknown")[:30],
                     "external_id": external_id[:120],
