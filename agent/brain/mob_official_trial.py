@@ -460,14 +460,16 @@ def run_trial(
         _report(output_report, report)
         return report
 
-    selected = None
-    formatted = None
+    ready_candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
     unseen_candidate_count = 0
     report["candidate_evaluations"] = []
     for item in candidates:
         external_id = str(item.get("external_id") or "")
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
-            report["candidate_evaluations"].append({"source_platform": item.get("source_platform"), "result": "invalid_external_id"})
+            report["candidate_evaluations"].append({
+                "source_platform": item.get("source_platform"),
+                "result": "invalid_external_id",
+            })
             continue
         identity = "mob_official:" + external_id
         if identity in seen["ids"] or external_id in seen["ids"]:
@@ -504,13 +506,10 @@ def run_trial(
             "original_caption_chars": len(original),
             "persian_translation_chars": len(translated),
         })
-        if result != "ready":
-            continue
-        selected = item
-        formatted = candidate_formatted
-        break
+        if result == "ready":
+            ready_candidates.append((item, candidate_formatted))
 
-    if selected is None or formatted is None:
+    if not ready_candidates:
         if unseen_candidate_count == 0:
             report["status"] = "nothing_new"
             report["error"] = "all_complete_official_posts_already_known"
@@ -520,42 +519,98 @@ def run_trial(
         _report(output_report, report)
         return report
 
-    report["selected"] = {
-        "source": selected.get("source_name"),
-        "source_platform": selected.get("source_platform"),
-        "external_id": selected.get("external_id"),
-        "title": selected.get("title"),
-        "published_at": selected.get("published_at"),
-        "media_type": selected.get("media_type"),
-    }
-
-    original_caption = str(formatted.get("original_caption") or "")
-    persian_translation = str(formatted.get("persian_translation") or "")
-    report["translation"] = {
-        "original_caption_available": bool(original_caption.strip()),
-        "original_caption_chars": len(original_caption),
-        "translation_status": str(formatted.get("translation_status") or "unknown"),
-        "persian_translation_available": bool(persian_translation.strip()),
-        "persian_translation_chars": len(persian_translation),
-    }
-    caption = str(formatted["caption"])
-
     output_dir.mkdir(parents=True, exist_ok=True)
+    selected: dict[str, Any] | None = None
+    formatted: dict[str, Any] | None = None
     media_path: Path | None = None
+    validation: dict[str, Any] | None = None
+    media_failures: list[dict[str, str]] = []
     try:
-        media_path, validation = download_and_validate(selected, output_dir)
+        # A bad or temporarily unreachable video must not block another valid official
+        # post. Each candidate gets an isolated directory so a partial download can
+        # never be mistaken for a later candidate's media.
+        for index, (item, candidate_formatted) in enumerate(ready_candidates[:12], start=1):
+            external_id = str(item.get("external_id") or "")
+            safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", external_id)[:80] or f"candidate-{index}"
+            candidate_dir = output_dir / f".candidate-{index:02d}-{safe_id}"
+            shutil.rmtree(candidate_dir, ignore_errors=True)
+            candidate_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                downloaded, candidate_validation = download_and_validate(item, candidate_dir)
+            except Exception as exc:
+                error_code = "media_" + (re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "download_failed")
+                media_failures.append({
+                    "source_platform": str(item.get("source_platform") or "unknown")[:30],
+                    "external_id": external_id[:120],
+                    "error": error_code,
+                })
+                for evaluation in report["candidate_evaluations"]:
+                    if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
+                        evaluation["result"] = error_code
+                        break
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+                continue
+
+            if candidate_validation["sha256"] in seen["hashes"]:
+                for evaluation in report["candidate_evaluations"]:
+                    if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
+                        evaluation["result"] = "duplicate_media_hash"
+                        break
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+                continue
+
+            final_path = output_dir / (
+                f"official_{safe_id}_{candidate_validation['sha256'][:10]}{downloaded.suffix.lower()}"
+            )
+            if final_path.exists():
+                final_path.unlink()
+            downloaded.replace(final_path)
+            shutil.rmtree(candidate_dir, ignore_errors=True)
+            selected = item
+            formatted = candidate_formatted
+            media_path = final_path
+            validation = candidate_validation
+            for evaluation in report["candidate_evaluations"]:
+                if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
+                    evaluation["result"] = "selected_media_validated"
+                    break
+            break
+
+        if selected is None or formatted is None or media_path is None or validation is None:
+            report["media_candidate_failures"] = media_failures[:12]
+            if media_failures:
+                report["status"] = "failed"
+                report["error"] = "no_official_candidate_media_validated"
+            else:
+                report["status"] = "nothing_new"
+                report["error"] = "all_unseen_official_posts_had_known_media"
+            _report(output_report, report)
+            return report
+
+        report["selected"] = {
+            "source": selected.get("source_name"),
+            "source_platform": selected.get("source_platform"),
+            "external_id": selected.get("external_id"),
+            "title": selected.get("title"),
+            "published_at": selected.get("published_at"),
+            "media_type": selected.get("media_type"),
+        }
+        original_caption = str(formatted.get("original_caption") or "")
+        persian_translation = str(formatted.get("persian_translation") or "")
+        report["translation"] = {
+            "original_caption_available": bool(original_caption.strip()),
+            "original_caption_chars": len(original_caption),
+            "translation_status": str(formatted.get("translation_status") or "unknown"),
+            "persian_translation_available": bool(persian_translation.strip()),
+            "persian_translation_chars": len(persian_translation),
+        }
         report["media"] = {
             "file_name": media_path.name,
             "size_bytes": media_path.stat().st_size,
             "sha256": validation["sha256"],
             "validation": validation,
         }
-        if validation["sha256"] in seen["hashes"]:
-            media_path.unlink(missing_ok=True)
-            report["status"] = "duplicate_media"
-            report["error"] = "media_hash_already_known"
-            _report(output_report, report)
-            return report
+        caption = str(formatted["caption"])
 
         payload = {
             "platform": "mob_official",
