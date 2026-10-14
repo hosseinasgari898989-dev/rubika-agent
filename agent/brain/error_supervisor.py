@@ -181,14 +181,17 @@ def recommend_error(
             attempt_count=safe_attempts,
             counts=safe_counts,
         )
-        if _valid_cloud_response(remote, event_code=safe_event):
+        if _valid_cloud_response(remote, event_code=safe_event) and remote.get("source") == "workers_ai":
             return {
                 "ok": True,
-                "source": remote["source"],
+                "source": "workers_ai",
                 "recommendation": dict(remote["recommendation"]),
                 "applied": False,
                 "daily_ai_limit": 4,
             }
+        # Prefer the repository's current deterministic rules over a possibly
+        # older deterministic fallback bundled on the deployed Worker.
+
     except Exception:
         # Do not copy exceptions/provider bodies, headers or request inputs into logs.
         pass
