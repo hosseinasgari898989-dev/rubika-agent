@@ -376,3 +376,62 @@ class CloudState:
         response = self._request("GET", "/api/brain/queue?limit=" + str(bounded))
         items = response.get("items")
         return items if isinstance(items, list) else []
+
+    def enqueue_automation_items(self, items: list[Mapping[str, Any]]) -> dict[str, int]:
+        """Add public metadata to the durable D1 queue in bounded request chunks."""
+        inserted = duplicate = invalid = received = 0
+        for offset in range(0, len(items), 12):
+            chunk = [dict(item) for item in items[offset:offset + 12]]
+            response = self._request("POST", "/api/brain/automation-queue", {"items": chunk})
+            inserted += int(response.get("inserted_count") or 0)
+            duplicate += int(response.get("duplicate_count") or 0)
+            invalid += int(response.get("invalid_count") or 0)
+            received += int(response.get("received_count") or 0)
+        return {
+            "received_count": received,
+            "inserted_count": inserted,
+            "duplicate_count": duplicate,
+            "invalid_count": invalid,
+        }
+
+    def get_automation_queue(
+        self, *, status: str = "queued", limit: int = 100, offset: int = 0
+    ) -> dict[str, Any]:
+        if status not in {"queued", "processing", "sent", "failed", "uncertain", "skipped"}:
+            raise ValueError("invalid_automation_queue_status")
+        bounded_limit = min(100, max(1, int(limit)))
+        bounded_offset = min(1000000, max(0, int(offset)))
+        response = self._request(
+            "GET",
+            f"/api/brain/automation-queue?status={status}&limit={bounded_limit}&offset={bounded_offset}",
+        )
+        if not isinstance(response.get("items"), list):
+            raise CloudStateError("control_api_invalid_automation_queue")
+        return response
+
+    def get_automation_queue_summary(self) -> dict[str, int]:
+        response = self._request("GET", "/api/brain/automation-queue?summary=1")
+        counts = response.get("counts")
+        if not isinstance(counts, dict):
+            raise CloudStateError("control_api_invalid_automation_queue_summary")
+        result = {}
+        for key in ("queued", "processing", "sent", "failed", "uncertain", "skipped"):
+            value = counts.get(key, 0)
+            if type(value) is not int or value < 0:
+                raise CloudStateError("control_api_invalid_automation_queue_count")
+            result[key] = value
+        return result
+
+    def update_automation_queue_item(
+        self, item_id: str, status: str, *, error_code: str | None = None
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"(?:tiktok|youtube|instagram):[A-Za-z0-9._-]{1,120}", item_id):
+            raise ValueError("invalid_automation_queue_id")
+        if status not in {"queued", "processing", "sent", "failed", "uncertain", "skipped"}:
+            raise ValueError("invalid_automation_queue_status")
+        escaped = urllib.parse.quote(item_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/brain/automation-queue/{escaped}/state",
+            {"status": status, "error_code": error_code},
+        )
