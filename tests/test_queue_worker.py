@@ -96,6 +96,44 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(report["results"][0]["status"], "staging_failed")
         self.assertEqual(sum(1 for result in report["results"] if result["status"] == "sent"), 4)
 
+    def test_failure_report_preserves_sanitized_staging_diagnostics(self):
+        def fake_run_one(*args, **kwargs):
+            return {
+                "ok": False,
+                "status": "staging_failed",
+                "reason": "cloud_sync_failed",
+                "failure_details": [
+                    {"item": "tiktok:12345", "reason": "download_timeout"},
+                    {"item": "bad/path?token=hidden", "reason": "media_validation_failed"},
+                ],
+                "cloud_sync_errors": [
+                    "tiktok:12345:control_api_http_500_item_upsert_failed",
+                    "provider response contained https://private.invalid/?token=hidden",
+                ],
+                "stage": {"found_count": 1, "authorized_count": 1, "staged_count": 0},
+                "provider_body": "secret token must not appear",
+            }
+
+        with (
+            patch.object(queue_worker, "CloudState", FakeCloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(daily_limit=1, max_attempts=1)
+
+        result = report["results"][0]
+        self.assertEqual(result["reason"], "cloud_sync_failed")
+        self.assertEqual(result["failure_details"][0]["reason"], "download_timeout")
+        self.assertEqual(result["cloud_sync_errors"][0], "tiktok:12345:control_api_http_500_item_upsert_failed")
+        self.assertEqual(result["cloud_sync_errors"][1], "cloud_sync_error")
+        self.assertEqual(result["found_count"], 1)
+        self.assertEqual(result["authorized_count"], 1)
+        self.assertEqual(result["staged_count"], 0)
+        self.assertNotIn("provider_body", result)
+        self.assertNotIn("private.invalid", json.dumps(result))
+        self.assertNotIn("hidden", json.dumps(result))
+
     def test_stops_after_four_successes_were_already_recorded_today(self):
         cloud = FakeCloud()
         for item in cloud.items[:4]:
