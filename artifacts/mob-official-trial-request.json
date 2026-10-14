@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "mode": "preview",
-  "requested_at": "2026-10-14T00:22:06.622Z",
-  "request_id": "mob-official-preview-script-safe",
-  "reason": "Retry one official Mob post after adding strict Persian-script validation and a safe translation fallback. Preview only; no Rubika publish."
+  "requested_at": "2026-10-14T00:24:47.668Z",
+  "request_id": "mob-official-youtube-fallback-preview",
+  "reason": "Recheck the one-post official Mob preview and verify the newly added official YouTube channel metadata fallback. Preview only; no Rubika publish."
 }
