@@ -1,4 +1,4 @@
-"""Scheduled persistent queue worker: publish up to four successful edits per day."""
+"""Scheduled persistent queue worker; default quota is one successful edit per UTC day."""
 from __future__ import annotations
 
 import argparse
@@ -332,6 +332,11 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                 report["errors"].append({
                     "platform": platform, "external_id": external_id, "error": "delivery_uncertain",
                 })
+                result_entry["halt_reason"] = "delivery_uncertain_requires_receipt_reconciliation"
+                report["results"].append(result_entry)
+                # The send may have reached Rubika despite the missing receipt. Never
+                # risk a second post in this run or treat uncertainty as a normal failure.
+                break
             elif status == "no_candidate":
                 cloud.update_automation_queue_item(queue_id, "skipped", error_code="already_seen_or_unavailable")
                 report["skipped_count"] += 1
