@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "mode": "preview",
-  "requested_at": "2026-10-14T00:27:07.671Z",
-  "request_id": "mob-official-preview-natural-translation",
-  "reason": "Validate the new natural Persian translation example in the live Cloudflare Worker, plus official image/media. Preview only; no Rubika publish."
+  "mode": "publish",
+  "requested_at": "2026-10-14T07:55:27.000703+00:00",
+  "request_id": "mob-official-termux-20261014075527",
+  "reason": "First explicitly confirmed one-post official Mob publication test."
 }
