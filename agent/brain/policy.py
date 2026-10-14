@@ -50,6 +50,12 @@ def required_moderation_fields(candidate: Candidate) -> tuple[str, ...]:
 EDIT_SIGNAL_RE = re.compile(
     r"(?<![a-z0-9])(?:edit|edits|edited|editing|aep|amv|montage|velocity|fanedit|sync)(?![a-z0-9])"
 )
+# Some valid edit evidence is a compound hashtag (for example #poppyplaytimeedit).
+# Match the recognized editing term only at the end of a hashtag, so unrelated
+# tags containing the letters "edit" internally do not become false positives.
+EDIT_HASHTAG_RE = re.compile(
+    r"(?<![a-z0-9])#[a-z0-9_]*(?:edits?|aep|amv|montage|velocity|fanedit|sync)(?=$|[\\s#])"
+)
 SUPPORTED_VIDEO_CODECS = frozenset({
     "h264", "avc1", "hevc", "h265", "vp9", "av1", "mpeg4",
 })
@@ -63,7 +69,11 @@ def _candidate_content_text(candidate: Candidate) -> str:
 
 
 def _has_edit_signal(candidate: Candidate) -> bool:
-    return EDIT_SIGNAL_RE.search(_candidate_content_text(candidate)) is not None
+    content = _candidate_content_text(candidate)
+    return (
+        EDIT_SIGNAL_RE.search(content) is not None
+        or EDIT_HASHTAG_RE.search(content) is not None
+    )
 
 
 def _technical_quality_gate(inspection: InspectionResult, minimum_short_side: int) -> bool:
