@@ -18,11 +18,19 @@ class WorkflowSafetyTests(unittest.TestCase):
         # Merely changing the request file must not launch downloads or publication.
         self.assertNotIn("\n  push:\n", workflow)
 
-    def test_official_news_discovery_does_not_enable_publishing(self):
+    def test_official_news_publishing_is_locked_to_test_channel_only(self):
         config = json.loads((ROOT / "config" / "mob_official_sources.json").read_text(encoding="utf-8"))
         policy = json.loads((ROOT / "config" / "agent_lifecycle.json").read_text(encoding="utf-8"))
-        self.assertFalse(config["publishing"]["enabled"])
+        publishing = config["publishing"]
+        self.assertTrue(publishing["enabled"])
+        self.assertEqual(publishing["mode"], "test_channel_only")
+        self.assertEqual(publishing["target_channel_guid"], "c0EFohK0f3174377fb6fa422d3ccb230")
+        self.assertEqual(publishing["max_posts_per_run"], 1)
+        self.assertFalse(publishing["production_enabled"])
         self.assertEqual(policy["mode"], "test")
+        workflow = (ROOT / ".github" / "workflows" / "mob-official-trial.yml").read_text(encoding="utf-8")
+        self.assertIn("--publish-test-channel", workflow)
+        self.assertIn("RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230", workflow)
         enabled = {
             row["id"] for row in config.get("official_sources", [])
             if row.get("enabled") is True
