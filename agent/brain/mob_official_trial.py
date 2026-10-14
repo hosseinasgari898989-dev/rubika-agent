@@ -287,7 +287,11 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
         _report(output_report, report)
         return report
     caption = str(formatted["caption"])
-    if re.search(r"https?://|www\.", caption, flags=re.IGNORECASE):
+    if re.search(
+        r"https?://|www\.|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?",
+        caption,
+        flags=re.IGNORECASE,
+    ):
         report["error"] = "caption_contains_url"
         _report(output_report, report)
         return report
