@@ -199,6 +199,22 @@ def _download_direct(
         session.close()
 
 
+class _QuietYtDlpLogger:
+    """Keep extractor/challenge details out of workflow logs; reports use safe error codes."""
+
+    def debug(self, _message: str) -> None:
+        pass
+
+    def info(self, _message: str) -> None:
+        pass
+
+    def warning(self, _message: str) -> None:
+        pass
+
+    def error(self, _message: str) -> None:
+        pass
+
+
 def _download_video_page(url: str, output_dir: Path) -> Path:
     if not _safe_public_url(url) or not _youtube_or_vimeo(url):
         raise RuntimeError("video_page_host_not_allowed")
@@ -210,6 +226,7 @@ def _download_video_page(url: str, output_dir: Path) -> Path:
     options = {
         "quiet": True,
         "no_warnings": True,
+        "logger": _QuietYtDlpLogger(),
         "noplaylist": True,
         "ignoreerrors": False,
         "socket_timeout": 20,
