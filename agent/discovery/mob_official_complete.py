@@ -823,10 +823,30 @@ def discover_all_official_posts(
         session=session,
     )
 
+    seed_urls: tuple[str, ...] = ()
     try:
-        # Import locally to keep the three-source adapters independently testable.
+        config_payload = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        configured_sources = config_payload.get("official_sources", []) if isinstance(config_payload, dict) else []
+        x_source = next((
+            row for row in configured_sources
+            if isinstance(row, dict) and row.get("id") == "mob_x" and row.get("enabled") is True
+        ), {})
+        raw_seed_urls = x_source.get("seed_urls", []) if isinstance(x_source, dict) else []
+        if isinstance(raw_seed_urls, list):
+            seed_urls = tuple(
+                value.strip() for value in raw_seed_urls
+                if isinstance(value, str) and value.strip().startswith("https://")
+            )
+    except (OSError, json.JSONDecodeError):
+        seed_urls = ()
+
+    try:
+        # Import locally to keep the official adapters independently testable.
         from .termux_mob_x import discover_mob_x_posts
-        x_rows, x_attempts = discover_mob_x_posts(max_results=max(1, min(int(max_results), 25)))
+        x_rows, x_attempts = discover_mob_x_posts(
+            max_results=max(1, min(int(max_results), 25)),
+            seed_urls=seed_urls,
+        )
     except Exception as exc:
         x_rows = []
         x_attempts = [{
@@ -836,7 +856,9 @@ def discover_all_official_posts(
             "candidate_count": 0,
         }]
 
-    source_priority = {"website": 0, "youtube": 1, "steam": 2, "x": 3}
+    # X follows the primary newsroom but comes before YouTube/Steam so it cannot
+    # be squeezed out of the bounded report when those feeds return many older posts.
+    source_priority = {"website": 0, "x": 1, "youtube": 2, "steam": 3}
     combined = [
         row for row in [*complete_rows, *x_rows]
         if isinstance(row, dict)
@@ -884,8 +906,8 @@ def discover_all_official_posts(
         seen_fingerprints.update(fingerprints)
         output.append(row)
 
-    # Keep the requested source precedence: newsroom first, then official
-    # YouTube and Steam, and X as a final fallback. Recency orders posts within a lane.
+    # Newest verified post first within each lane; reserve room for X before
+    # applying the global limit, then backfill from healthy fallback sources.
     output.sort(
         key=lambda row: (
             int(row.get("source_priority", source_priority.get(str(row.get("source_platform") or ""), 9))),
@@ -894,11 +916,40 @@ def discover_all_official_posts(
             str(row.get("external_id") or row.get("id") or ""),
         )
     )
+    limit = max(1, min(int(max_results), 25))
+    lane_quotas = {"website": 1, "x": 5, "youtube": 4, "steam": 2}
+    lane_counts: dict[str, int] = {}
+    selected: list[dict[str, Any]] = []
+    selected_keys: set[tuple[str, str]] = set()
+    for row in output:
+        lane = str(row.get("source_platform") or "")
+        if lane_counts.get(lane, 0) >= lane_quotas.get(lane, 0):
+            continue
+        key = (lane, str(row.get("external_id") or row.get("id") or ""))
+        selected.append(row)
+        selected_keys.add(key)
+        lane_counts[lane] = lane_counts.get(lane, 0) + 1
+        if len(selected) >= limit:
+            break
+    if len(selected) < limit:
+        for row in output:
+            lane = str(row.get("source_platform") or "")
+            key = (lane, str(row.get("external_id") or row.get("id") or ""))
+            if key in selected_keys:
+                continue
+            selected.append(row)
+            selected_keys.add(key)
+            lane_counts[lane] = lane_counts.get(lane, 0) + 1
+            if len(selected) >= limit:
+                break
+
     attempts = [*x_attempts, *complete_attempts]
     attempts.append({
         "source": "official_source_merge",
-        "result": "ok" if output else "no_complete_official_posts",
-        "candidate_count": len(output),
-        "enabled_lanes": ["website", "youtube", "steam", "x"],
+        "result": "ok" if selected else "no_complete_official_posts",
+        "candidate_count": len(selected),
+        "lane_counts": lane_counts,
+        "reserved_lane_quotas": lane_quotas,
+        "enabled_lanes": ["website", "x", "youtube", "steam"],
     })
-    return output[:max(1, min(int(max_results), 25))], attempts
+    return selected, attempts
