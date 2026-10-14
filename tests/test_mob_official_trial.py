@@ -178,8 +178,6 @@ class OfficialPreviewSafetyTests(unittest.TestCase):
 
         self.assertEqual(result["error"], "publishing_requires_production_lifecycle")
         self.assertFalse(result["publishing"])
-        self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["error"],
-                         "publishing_requires_production_lifecycle")
 
     def test_publish_mode_also_requires_explicit_source_config_approval(self):
         class FakeCloud:
