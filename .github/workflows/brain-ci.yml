@@ -7,6 +7,9 @@ on:
     paths:
       - "agent/brain/**"
       - "agent/source_policy.py"
+      - "agent/lifecycle.py"
+      - "config/agent_lifecycle.json"
+      - "config/mob_official_sources.json"
       - "config/tiktok_source_policy.json"
       - "tests/test_source_policy.py"
       - "tests/test_e2e_batch_from_report.py"
@@ -25,6 +28,8 @@ on:
       - "tests/test_instagram_discovery.py"
       - "tests/test_instagram_graph_api.py"
       - "tests/test_termux_sources.py"
+      - "tests/test_termux_mob_x.py"
+      - "tests/test_lifecycle.py"
       - "tests/test_tiktok_search_index.py"
       - "tests/test_termux_instagram.py"
       - "tests/test_termux_daily_discovery.py"
@@ -90,6 +95,8 @@ jobs:
           python -m unittest discover -s tests -p 'test_tiktok_search_index.py' -v
           python -m unittest discover -s tests -p 'test_termux_instagram.py' -v
           python -m unittest discover -s tests -p 'test_termux_daily_discovery.py' -v
+          python -m unittest discover -s tests -p 'test_termux_mob_x.py' -v
+          python -m unittest discover -s tests -p 'test_lifecycle.py' -v
           python -m unittest discover -s tests -p 'test_phone_report_integration.py' -v
           python -m unittest discover -s tests -p 'test_tavily_discovery.py' -v
           python -m unittest discover -s tests -p 'test_discovery_run.py' -v
