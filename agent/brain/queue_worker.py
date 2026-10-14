@@ -31,6 +31,50 @@ def _safe_code(value: Any) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value or "unknown_error"))[:80] or "unknown_error"
 
 
+def _safe_failure_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
+    """Preserve actionable, sanitized staging detail without copying provider payloads."""
+    diagnostics: dict[str, Any] = {}
+
+    raw_details = result.get("failure_details")
+    details: list[dict[str, str]] = []
+    if isinstance(raw_details, (list, tuple)):
+        for row in raw_details[:8]:
+            if not isinstance(row, dict):
+                continue
+            item = re.sub(r"[^A-Za-z0-9._:-]", "", str(row.get("item") or "unknown"))[:140]
+            reason = re.sub(r"[^A-Za-z0-9_.,:-]", "", str(row.get("reason") or "unknown_error"))[:180]
+            if reason:
+                details.append({"item": item or "unknown", "reason": reason})
+    if details:
+        diagnostics["failure_details"] = details
+
+    raw_sync_errors = result.get("cloud_sync_errors")
+    sync_errors: list[str] = []
+    if isinstance(raw_sync_errors, (list, tuple)):
+        for raw in raw_sync_errors[:5]:
+            value = str(raw or "")
+            match = re.fullmatch(
+                r"([A-Za-z0-9_-]{1,24}):([A-Za-z0-9._-]{1,120}):([A-Za-z][A-Za-z0-9_-]{0,79})",
+                value,
+            )
+            sync_errors.append(":".join(match.groups()) if match else "cloud_sync_error")
+    if sync_errors:
+        diagnostics["cloud_sync_errors"] = sync_errors
+
+    reuse_error = result.get("previous_staged_copy_rejected")
+    if isinstance(reuse_error, str) and reuse_error:
+        diagnostics["previous_staged_copy_rejected"] = _safe_code(reuse_error)
+
+    stage_detail = result.get("stage")
+    if isinstance(stage_detail, dict):
+        for key in ("found_count", "authorized_count", "staged_count"):
+            value = stage_detail.get(key)
+            if type(value) is int and value >= 0:
+                diagnostics[key] = value
+
+    return diagnostics
+
+
 def _single_candidate_report(item: dict[str, Any], destination: Path) -> Path:
     platform = str(item["platform"])
     metadata: dict[str, Any] = {}
@@ -251,6 +295,8 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                 "status": status,
                 "reason": _safe_code(result.get("reason") or result.get("error") or status),
             }
+            # Preserve useful failure detail without copying provider bodies or local paths.
+            result_entry.update(_safe_failure_diagnostics(result))
             if status == "sent" and result.get("ok") is True:
                 try:
                     cloud.update_automation_queue_item(queue_id, "sent")
