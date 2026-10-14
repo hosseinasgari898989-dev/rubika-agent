@@ -17,9 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.discovery.mob_official import discover_mob_official
-from agent.discovery.termux_instagram import discover_instagram_hashtags
-from agent.discovery.termux_sources import discover_tiktok_hashtags, discover_youtube_metadata
+from agent.discovery.termux_mob_x import discover_mob_x_posts
+from agent.discovery.termux_sources import discover_tiktok_hashtags
+from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,8 +46,8 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
 
 
 def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, Any]:
-    """Collect phone-side public metadata, dedupe by platform ID, and save JSON locally."""
-    print("1/3 TikTok: checking six owner-selected profiles plus public hashtag pages (metadata only)...", flush=True)
+    """Collect TikTok edit metadata and official Mob X posts without downloads or publishing."""
+    print("1/2 TikTok: checking owner-selected profiles and public hashtag pages (metadata only)...", flush=True)
     tiktok_candidates, tiktok_attempts = discover_tiktok_hashtags(
         include_unknown_sources=True,
         max_results=36,
@@ -56,17 +56,28 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         max_per_profile=4,
         max_age_days=90,
     )
-    print("2/3 Instagram: searching public web indexes for Reel links (metadata only)...", flush=True)
-    instagram_candidates, instagram_attempts = discover_instagram_hashtags()
-    print("3/4 YouTube: flat search plus public channel-feed/page date checks (metadata only)...", flush=True)
-    youtube_candidates, youtube_attempts = discover_youtube_metadata()
-    print("4/4 Mob Entertainment: checking official newsroom/blog/video profile metadata only...", flush=True)
-    mob_candidates, mob_attempts = discover_mob_official()
+    print("2/2 Mob Entertainment X: searching public indexes and verifying official post media (metadata only)...", flush=True)
+    mob_candidates, mob_attempts = discover_mob_x_posts(max_results=12)
+
+    lifecycle_policy = load_lifecycle_policy()
+    tiktok_before = len(tiktok_candidates)
+    mob_before = len(mob_candidates)
+    tiktok_candidates, stale_tiktok = filter_candidates_by_birth(
+        tiktok_candidates, policy=lifecycle_policy
+    )
+    mob_candidates, stale_mob = filter_candidates_by_birth(
+        mob_candidates, policy=lifecycle_policy
+    )
+    lifecycle_attempt = {
+        "source": "agent_lifecycle",
+        "mode": lifecycle_policy["mode"],
+        "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+        "tiktok_rejected": len(stale_tiktok),
+        "mob_official_rejected": len(stale_mob),
+    }
 
     lists = {
         "tiktok": tiktok_candidates,
-        "instagram": instagram_candidates,
-        "youtube": youtube_candidates,
         "mob_official": mob_candidates,
     }
     normalized: dict[str, list[dict[str, Any]]] = {}
@@ -76,7 +87,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         for row in rows:
             if not isinstance(row, dict) or row.get("platform") != platform:
                 continue
-            item_id, url = row.get("id"), row.get("url")
+            item_id = row.get("id") or row.get("external_id")
+            url = row.get("url") or row.get("canonical_url")
             if not isinstance(item_id, str) or not item_id or not isinstance(url, str):
                 continue
             if item_id in seen:
@@ -90,24 +102,18 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         "generated_at": now.isoformat(),
         "source": "termux_phone",
         "mode": "metadata_only_no_download_no_publish",
+        "lifecycle": {
+            "mode": lifecycle_policy["mode"],
+            "born_at": lifecycle_policy["born_at"],
+            "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+        },
         "summary": {
             "tiktok_candidates": len(normalized["tiktok"]),
-            "instagram_candidates": len(normalized["instagram"]),
-            "youtube_candidates": len(normalized["youtube"]),
             "mob_official_candidates": len(normalized["mob_official"]),
-            "mob_official_method": "official_newsroom_atom_and_public_profile_metadata",
-            "youtube_freshness_unverified": sum(
-                1 for row in normalized["youtube"]
-                if not row.get("freshness_verified", False)
-            ),
-            "youtube_public_page_dates_verified": sum(
-                1 for row in normalized["youtube"]
-                if str(row.get("freshness_source", "")).startswith("public_video_page_")
-            ),
-            "youtube_channel_feed_dates_verified": sum(
-                1 for row in normalized["youtube"]
-                if row.get("freshness_source") == "public_channel_atom_feed"
-            ),
+            "mob_official_source": "@mobgamesstudios",
+            "mob_official_method": "free_public_search_index_plus_x_syndication",
+            "mob_official_birth_cutoff_rejected": len(stale_mob),
+            "tiktok_birth_cutoff_rejected": len(stale_tiktok),
             "tiktok_known_source_candidates": sum(
                 1 for row in normalized["tiktok"]
                 if isinstance(row.get("source_policy"), dict)
@@ -121,36 +127,29 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
                 )
             ),
             "tiktok_method": "yt_dlp_owner_selected_profiles_plus_public_hashtag_pages",
-            "instagram_method": "public_search_index_bing_rss_ddg_fallback",
-            "youtube_method": "yt_dlp_flat_search_plus_public_channel_atom_feed",
+            "agent_lifecycle_mode": lifecycle_policy["mode"],
             "paid_providers_used": [],
             "ready_to_publish": False,
         },
         "candidates": normalized,
-        "attempts": [*tiktok_attempts, *instagram_attempts, *youtube_attempts, *mob_attempts],
+        "attempts": [*tiktok_attempts, *mob_attempts, lifecycle_attempt],
         "limits": {
-            "instagram_max_candidates_per_run": 5,
-            "instagram_search_queries": 3,
-            "instagram_search_engines": 2,
-            "instagram_max_age_days": 90,
             "tiktok_max_creator_profiles": 6,
             "tiktok_max_per_known_profile": 4,
             "tiktok_unknown_source_max_candidates": 12,
             "tiktok_max_age_days": 90,
             "tiktok_max_results": 36,
-            "youtube_searches": 4,
-            "youtube_max_age_days": 90,
-            "youtube_channel_feeds_max": 10,
-            "youtube_public_page_checks_max": 10,
-            "mob_official_max_sources": 6,
-            "mob_official_max_items_per_source": 25,
+            "mob_x_max_candidates_per_run": 12,
+            "mob_x_search_engines": 2,
+            "mob_x_source_handle": "@mobgamesstudios",
+            "mob_x_api_credits_used": 0,
+            "birth_cutoff_active_only_in_production_mode": True,
             "media_downloads": 0,
             "rubika_posts": 0,
         },
     }
     _atomic_json_write(Path(output_path), report)
     return report
-
 
 def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
