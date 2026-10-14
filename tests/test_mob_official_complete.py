@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent.discovery.mob_official_complete import _detail_from_page, _discover_youtube, _fingerprints, discover_complete_official_posts
+from agent.discovery.mob_official_complete import _detail_from_page, _discover_youtube, _fingerprints, discover_all_official_posts, discover_complete_official_posts
 
 
 class FakeResponse:
@@ -337,6 +337,71 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         self.assertEqual(rows[0]["media_type"], "image")
         self.assertEqual(rows[0]["media_url"], "https://clan.cloudflare.steamstatic.com/images/12345/update.jpg")
         self.assertIn("Official update caption.", rows[0]["original_caption"])
+
+
+    def test_combined_sources_dedupe_crossposts_and_return_newest_verified_post_first(self):
+        shared = (
+            "Mob Entertainment announces an official Poppy Playtime update for the "
+            "community with new details about the upcoming chapter and its characters."
+        )
+        website = {
+            "platform": "mob_official",
+            "source_platform": "website",
+            "source_name": "Mob Entertainment",
+            "source_priority": 0,
+            "official_source": True,
+            "id": "chapter-announcement",
+            "external_id": "chapter-announcement",
+            "canonical_url": "https://www.mobentertainment.com/news/chapter",
+            "original_caption": shared,
+            "caption": shared,
+            "published_at": "2026-10-13T12:00:00+00:00",
+            "media_type": "image",
+            "media_url": "https://cdn.mobentertainment.com/news/chapter.jpg",
+        }
+        duplicate_x = {
+            "platform": "mob_official",
+            "source_platform": "x",
+            "source_name": "Mob Entertainment on X",
+            "source_priority": 3,
+            "official_source": True,
+            "id": "x-1734258130186559716",
+            "external_id": "x-1734258130186559716",
+            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "original_caption": shared,
+            "caption": shared,
+            "author": "@mobgamesstudios",
+            "published_at": "2026-10-14T12:00:00+00:00",
+            "media_type": "image",
+            "media_url": "https://pbs.twimg.com/media/chapter.jpg",
+        }
+        latest_x = {
+            **duplicate_x,
+            "id": "x-1734258130186559717",
+            "external_id": "x-1734258130186559717",
+            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559717",
+            "original_caption": "A different verified official announcement with a fresh media attachment.",
+            "caption": "A different verified official announcement with a fresh media attachment.",
+            "published_at": "2026-10-14T13:00:00+00:00",
+            "media_url": "https://pbs.twimg.com/media/latest.jpg",
+        }
+        with (
+            patch(
+                "agent.discovery.mob_official_complete.discover_complete_official_posts",
+                return_value=([website], [{"source": "mob_newsroom", "result": "ok"}]),
+            ),
+            patch(
+                "agent.discovery.termux_mob_x.discover_mob_x_posts",
+                return_value=([duplicate_x, latest_x], [{"source": "mob_x", "result": "ok"}]),
+            ),
+        ):
+            rows, attempts = discover_all_official_posts(max_results=12)
+
+        self.assertEqual([row["external_id"] for row in rows], [
+            "x-1734258130186559717",
+            "chapter-announcement",
+        ])
+        self.assertIn("official_source_merge", [row.get("source") for row in attempts])
 
 
 if __name__ == "__main__":
