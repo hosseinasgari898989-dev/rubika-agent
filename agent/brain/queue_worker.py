@@ -15,6 +15,7 @@ from agent.brain.cloud_state import CloudState
 from agent.brain.e2e_from_report import run_one
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
 from agent.source_policy import delivery_enabled
+from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
 
 
 DAILY_SUCCESS_LIMIT = 4
@@ -106,6 +107,7 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
     if not 1 <= max_attempts <= 100:
         raise ValueError("max_attempts_out_of_range")
 
+    lifecycle_policy = load_lifecycle_policy()
     cloud = CloudState(
         os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
         token=os.getenv("AGENT_API_TOKEN", ""),
@@ -115,6 +117,9 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
         "ok": True,
         "status": "running",
         "started_at": _utc_now(),
+        "lifecycle_mode": lifecycle_policy["mode"],
+        "agent_born_at": lifecycle_policy["born_at"],
+        "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
         "daily_success_limit": daily_limit,
         "max_candidate_attempts": max_attempts,
         "attempted_count": 0,
@@ -160,8 +165,26 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
             platform = str(item.get("platform") or "")
             external_id = str(item.get("external_id") or "")
             queue_id = str(item.get("id") or "")
-            if platform not in PLATFORMS or not external_id or not queue_id:
+            if not external_id or not queue_id:
                 report["skipped_count"] += 1
+                continue
+
+            # Enforce the launch timestamp again at the last possible point before staging.
+            # This also protects old queued records that were inserted before production.
+            allowed_by_birth, birth_reason = candidate_passes_birth_cutoff(
+                item, policy=lifecycle_policy
+            )
+            if not allowed_by_birth:
+                try:
+                    cloud.update_automation_queue_item(queue_id, "processing")
+                    cloud.update_automation_queue_item(queue_id, "skipped", error_code=birth_reason)
+                except Exception:
+                    report["ok"] = False
+                report["skipped_count"] += 1
+                report["results"].append({
+                    "platform": platform, "external_id": external_id,
+                    "status": "skipped", "reason": birth_reason,
+                })
                 continue
 
             # A stale/unverified YouTube row is not allowed to become a publish attempt.
@@ -174,17 +197,22 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                     "reason": "youtube_freshness_unverified",
                 })
                 continue
-            if platform == "youtube" and (
-                not delivery_enabled("youtube")
-                or not os.getenv("RELAY_BASE_URL", "").strip()
-                or not os.getenv("RELAY_API_TOKEN", "").strip()
-            ):
-                # Keep the row queued for a later day when the required relay is available.
-                report["errors"].append({
-                    "platform": platform,
-                    "external_id": external_id,
-                    "error": "youtube_relay_not_configured_or_delivery_paused",
+            if platform in {"youtube", "instagram"}:
+                # These paths are paused; official Mob posts use a separate X-only workflow.
+                try:
+                    cloud.update_automation_queue_item(queue_id, "processing")
+                    cloud.update_automation_queue_item(queue_id, "skipped", error_code="platform_paused")
+                except Exception:
+                    report["ok"] = False
+                report["skipped_count"] += 1
+                report["results"].append({
+                    "platform": platform, "external_id": external_id,
+                    "status": "skipped", "reason": "platform_paused",
                 })
+                continue
+
+            if platform not in PLATFORMS:
+                report["skipped_count"] += 1
                 continue
 
             try:
