@@ -51,6 +51,7 @@ on:
       - "tests/test_rubika_publisher.py"
       - "tests/test_queue_intake.py"
       - "tests/test_queue_worker.py"
+      - "tests/test_workflow_safety.py"
       - ".github/workflows/queue-intake.yml"
       - "tests/test_vision_moderator.py"
       - "tests/worker.test.mjs"
@@ -109,6 +110,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_vision_moderator.py' -v
           python -m unittest discover -s tests -p 'test_migrations.py' -v
           python -m unittest discover -s tests -p 'test_proxitok_discovery.py' -v
+          python -m unittest discover -s tests -p 'test_workflow_safety.py' -v
           python -m unittest discover -s tests -p 'test_relay.py' -v
           python -m unittest discover -s tests -p 'test_relay_client.py' -v
           node tests/worker.test.mjs
