@@ -38,6 +38,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate secrets and lock publishing to the test channel
+        id: validate_secrets
         shell: bash
         run: |
           set -euo pipefail
@@ -61,6 +62,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install project dependencies and media validator
+        id: install_dependencies
         run: |
           python -m pip install --disable-pip-version-check -r requirements.txt
           sudo apt-get update
@@ -68,6 +70,7 @@ jobs:
           ffprobe -version | head -n 1
 
       - name: Discover fresh Mob X posts, translate, validate, and publish at most one to the test channel
+        id: publish_trial
         # This workflow discovers current public X posts at run time; it must never use a stale Termux candidate snapshot. It only publishes posts whose verified source platform is X, and it never falls back to the website, YouTube or Steam if X has no fresh eligible post.
         shell: bash
         run: |
@@ -78,6 +81,44 @@ jobs:
             --source-platform x \
             --report artifacts/mob-official-test-publish-report.json \
             --output-dir artifacts/mob-official-test-publish-media
+
+      - name: Get safe AI diagnosis for official-news trial failure
+        if: failure()
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+        shell: bash
+        run: |
+          set +e
+          event_code="official_news_failed"
+          stage="official_news"
+          error_code="mob_official_trial_failed"
+          if [[ "${{ steps.validate_secrets.outcome }}" == "failure" ]]; then error_code="test_channel_guard_failed"; fi
+          if [[ "${{ steps.install_dependencies.outcome }}" == "failure" ]]; then error_code="dependency_install_failed"; fi
+          python -m agent.brain.error_supervisor \
+            --event-code "$event_code" \
+            --stage "$stage" \
+            --error-code "$error_code" \
+            --output-report "$RUNNER_TEMP/ai-supervisor.json" \
+            > "$RUNNER_TEMP/ai-supervisor-output.json"
+          advisor_status=$?
+          if [[ "$advisor_status" -ne 0 || ! -s "$RUNNER_TEMP/ai-supervisor-output.json" ]]; then
+            echo "AI advisor unavailable; the original official-news failure remains authoritative." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - "$RUNNER_TEMP/ai-supervisor-output.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          recommendation = result.get("recommendation", {})
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\\n### AI error advisor (advice only)\\n")
+              summary.write(f"- Source: {result.get('source', 'local_fallback')}\\n")
+              summary.write(f"- Recommendation: {recommendation.get('action', 'human_review')}\\n")
+              summary.write(f"- Reason code: {recommendation.get('reason_code', 'unknown_error')}\\n")
+              summary.write(f"- Next step: {recommendation.get('next_step_code', 'review_error_code_and_recent_logs')}\\n")
+              summary.write("- Applied automatically: no\\n")
+          PY
 
       - name: Upload official test-channel result and retained media
         if: always()
