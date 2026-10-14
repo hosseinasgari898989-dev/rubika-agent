@@ -250,18 +250,62 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
         return report
 
     selected = None
+    formatted = None
+    unseen_candidate_count = 0
+    report["candidate_evaluations"] = []
     for item in candidates:
         external_id = str(item.get("external_id") or "")
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
+            report["candidate_evaluations"].append({"source_platform": item.get("source_platform"), "result": "invalid_external_id"})
             continue
         identity = "mob_official:" + external_id
         if identity in seen["ids"] or external_id in seen["ids"]:
             continue
+        unseen_candidate_count += 1
+
+        candidate_formatted = format_mob_post(
+            {
+                "source_name": "ماب انترتینمنت",
+                "original_caption": item.get("original_caption"),
+                "canonical_url": item.get("canonical_url"),
+                "title": item.get("title"),
+            }
+        )
+        original = str(candidate_formatted.get("original_caption") or "")
+        translated = str(candidate_formatted.get("persian_translation") or "")
+        outgoing = str(candidate_formatted.get("caption") or "")
+        if not original.strip():
+            result = "original_caption_unavailable"
+        elif candidate_formatted.get("translation_status") != "translated" or not translated.strip():
+            result = "persian_translation_unavailable"
+        elif re.search(
+            r"https?://|www\.|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?",
+            outgoing,
+            flags=re.IGNORECASE,
+        ):
+            result = "caption_contains_url"
+        else:
+            result = "ready"
+        report["candidate_evaluations"].append({
+            "source_platform": item.get("source_platform"),
+            "external_id": external_id,
+            "result": result,
+            "original_caption_chars": len(original),
+            "persian_translation_chars": len(translated),
+        })
+        if result != "ready":
+            continue
         selected = item
+        formatted = candidate_formatted
         break
-    if selected is None:
-        report["status"] = "nothing_new"
-        report["error"] = "all_complete_official_posts_already_known"
+
+    if selected is None or formatted is None:
+        if unseen_candidate_count == 0:
+            report["status"] = "nothing_new"
+            report["error"] = "all_complete_official_posts_already_known"
+        else:
+            report["status"] = "failed"
+            report["error"] = "no_new_official_post_had_a_verified_translation_and_link_free_caption"
         _report(output_report, report)
         return report
 
@@ -274,14 +318,6 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
         "media_type": selected.get("media_type"),
     }
 
-    formatted = format_mob_post(
-        {
-            "source_name": "ماب انترتینمنت",
-            "original_caption": selected.get("original_caption"),
-            "canonical_url": selected.get("canonical_url"),
-            "title": selected.get("title"),
-        }
-    )
     original_caption = str(formatted.get("original_caption") or "")
     persian_translation = str(formatted.get("persian_translation") or "")
     report["translation"] = {
@@ -291,23 +327,7 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
         "persian_translation_available": bool(persian_translation.strip()),
         "persian_translation_chars": len(persian_translation),
     }
-    if not original_caption.strip():
-        report["error"] = "original_caption_unavailable"
-        _report(output_report, report)
-        return report
-    if formatted["translation_status"] != "translated" or not persian_translation.strip():
-        report["error"] = "persian_translation_unavailable"
-        _report(output_report, report)
-        return report
     caption = str(formatted["caption"])
-    if re.search(
-        r"https?://|www\.|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?",
-        caption,
-        flags=re.IGNORECASE,
-    ):
-        report["error"] = "caption_contains_url"
-        _report(output_report, report)
-        return report
 
     output_dir.mkdir(parents=True, exist_ok=True)
     media_path: Path | None = None
