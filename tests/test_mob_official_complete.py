@@ -4,8 +4,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from agent.discovery.mob_official_complete import _detail_from_page, _fingerprints, discover_complete_official_posts
+from agent.discovery.mob_official_complete import _detail_from_page, _discover_youtube, _fingerprints, discover_complete_official_posts
 
 
 class FakeResponse:
@@ -164,6 +165,59 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         detail = _detail_from_page(html, "https://mobentertainment.com/news/example-video")
         self.assertEqual(detail["media_type"], "video")
         self.assertEqual(detail["media_url"], "https://www.youtube.com/embed/fAXzLmsbrd8")
+
+
+    def test_youtube_atom_404_falls_back_to_verified_channel_metadata(self):
+        channel_id = "UCXqV4yoyC_mmZye6VbKFPeQ"
+        channel_url = "https://www.youtube.com/channel/" + channel_id + "/videos"
+        video_url = "https://www.youtube.com/watch?v=abcdefghijk"
+
+        class FakeYoutubeDL:
+            def __init__(self, options):
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def extract_info(self, url, download=False):
+                if url == channel_url:
+                    return {"entries": [{"id": "abcdefghijk", "title": "Official Mob trailer"}]}
+                if url == video_url:
+                    return {
+                        "id": "abcdefghijk",
+                        "title": "Official Mob trailer",
+                        "description": "The genuine official Mob video description, with the details of this announcement.",
+                        "timestamp": 1791200000,
+                        "webpage_url": video_url,
+                    }
+                raise AssertionError("Unexpected YouTube URL")
+
+        source = {
+            "id": "mob_youtube",
+            "enabled": True,
+            "kind": "youtube_atom",
+            "source_name": "Mob Entertainment YouTube",
+            "source_platform": "youtube",
+            "channel_id": channel_id,
+            "url": "https://www.youtube.com/channel/" + channel_id,
+        }
+
+        # The Atom request is unavailable; the fallback must use the same verified
+        # channel and retrieve the video description, not reuse a thumbnail.
+        with patch("yt_dlp.YoutubeDL", FakeYoutubeDL):
+            rows = _discover_youtube(FakeSession({}), [source])
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source_platform"], "youtube")
+        self.assertEqual(rows[0]["media_type"], "video")
+        self.assertEqual(rows[0]["media_url"], video_url)
+        self.assertEqual(
+            rows[0]["original_caption"],
+            "The genuine official Mob video description, with the details of this announcement.",
+        )
 
     def test_youtube_fallback_uses_the_video_post_not_its_thumbnail(self):
         homepage = "https://www.mobentertainment.com/"
