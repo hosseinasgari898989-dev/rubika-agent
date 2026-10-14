@@ -469,6 +469,8 @@ def discover_mob_x_posts(
             skipped[result] = skipped.get(result, 0) + 1
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
+    # Prefer the newest verified source post, not whichever result Bing ranked first.
+    output.sort(key=lambda row: str(row.get("published_at") or ""), reverse=True)
     attempts.append({
         "source": "mob_x",
         "engine": "public_syndication",
