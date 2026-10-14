@@ -41,15 +41,44 @@ TikTok end-to-end test also verified:
 - The batch workflow was cancelled after the attempt started; there is no confirmed receipt or Rubika message ID. Delivery could have happened or not.
 - It was deliberately marked `uncertain` under a guarded D1 update to prevent duplicate publishing. Reconcile manually before any retry.
 
-## Current Mob X discovery limitation
+## Previous Mob X discovery limitation (before follow-up below; superseded)
 - `config/mob_official_sources.json` uses seeded URLs as fallback. The three recently sent seeds above should be treated as already sent; D1 dedupe is expected to protect them.
 - One candidate was skipped because it exposed no actual media; another was skipped because its image was only 190×148.
 - Free search from GitHub Actions is unreliable (Bing indexed no useful posts; TwStalker mirrors returned 403; DuckDuckGo returned 202 challenge). Do not claim fully autonomous future X profile crawling is solved.
 - Next research task: find a reliable free/public way to discover newer Mob Entertainment X posts without a paid API, verify author/caption/timestamp/original media, and preserve source-lane filtering and D1 dedupe.
 - Do not use thumbnails/profile pictures as substitutes for missing original post media.
 
-## Suggested next steps
+## Original suggested next steps (superseded by follow-up below)
 1. Resume by inspecting the current branch head and the workflows/config before changing anything; this checkpoint was added after the recorded code baseline.
 2. Work on the free X-discovery source in a non-publishing discovery/test path first.
 3. Keep tests green and avoid a trigger commit to discovery artifacts unless intentionally running the one-post test-channel workflow.
 4. Keep all explanations in Persian and concise; user prefers beginner-friendly, step-by-step guidance.
+
+
+## Follow-up checkpoint — 2026-10-14, after public X profile integration
+
+### Latest code and checks
+- Branch head at code milestone: `41c200698428fbd2a7e751354523e2855c84c734` — `Discover recent Mob X posts from public profile metadata`.
+- Files changed atomically: `agent/discovery/termux_mob_x.py` and `tests/test_termux_mob_x.py`.
+- New source: unauthenticated read-only request to `https://unifapi.com/tools/x/profile?handle=mobgamesstudios`. It is only an ID-discovery source. Candidates still pass `cdn.syndication.twimg.com/tweet-result` checks for the exact Mob handle, canonical post ID, real caption, timestamp, and supported original media. Third-party caption/author/timestamp/media values are not trusted.
+- New unit test ensures unrelated profile text/author values are ignored and an off-handle X URL is rejected.
+- Brain CI passed: https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38624376266
+- Live read-only discovery passed: https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38624376177
+- One-post test-channel trial passed: https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38624376039
+- The live-check showed 10 public profile rows; the first three IDs were confirmed via X syndication. The broader discovery run found 6 X posts with usable official metadata. This improves discovery today but is not a guarantee the third-party endpoint will remain available; retain the existing fallback sources.
+- Do not alter `artifacts/termux_discovery.json` to test this path. It was not changed.
+
+### Newly verified publishing receipt
+- Workflow: https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38624376039 — completed `success`.
+- Artifact report: `status=published`, `publishing=true`, `rubika_message_id_recorded=true`, `error=null`; one item maximum, approved test channel only.
+- Published X item: `x-2108957995074011326` — “Lily Lovebraids spotted at New York Comic Con!! Lovely cosplay by Coco!”
+- Media validated: JPEG, 768×1024, 199427 bytes; original caption was available and Persian translation succeeded.
+- Direct read-only query of D1 `rubika-agent-db` verified both `items.status=sent` and `delivery_attempts.status=sent`, with matching Rubika message ID `1939893090988836875`; `sent_at=2026-10-14T19:32:45.301Z`. This is a confirmed receipt.
+- The candidate `x-2110158933356847501` was not published in that run because Persian translation was unavailable. Do not mark it sent based on discovery alone.
+- Other source lanes were filtered out for publishing despite being read by the merge; actual trial was explicitly restricted to X.
+
+### Safety state unchanged
+- Only authorized destination: `c0EFohK0f3174377fb6fa422d3ccb230`.
+- Production/main-channel publishing remains disabled; limit stays at one post per trial run.
+- TikTok `tiktok:7694421166508838165` remains `uncertain`; do not automatically retry.
+- Next step: monitor ongoing free-source reliability and improve fallback resilience if the profile endpoint is unavailable. Any code change to `agent/discovery/termux_mob_x.py` triggers Brain CI, the read-only live check, and the one-post test-channel trial; prepare tests before a single atomic push.
