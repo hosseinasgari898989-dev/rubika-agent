@@ -15,6 +15,7 @@ import shutil
 import socket
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -32,6 +33,49 @@ MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_VIDEO_SECONDS = 600
 HTTP_TIMEOUT = (15, 45)
 USER_AGENT = "RubikaAgent-MobOfficialTrial/1.0"
+
+PREVIEW_MAX_AGE_DAYS = 90
+
+
+def preview_freshness_rejection(
+    candidate: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    max_age_days: int = PREVIEW_MAX_AGE_DAYS,
+) -> str | None:
+    """Keep old or undated items out of test previews; production has a stricter birth cutoff."""
+    if max_age_days < 1:
+        return "preview_age_policy_invalid"
+    raw = candidate.get("published_at")
+    if not isinstance(raw, str) or not raw.strip():
+        return "publication_time_unverified"
+    try:
+        published = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "publication_time_unverified"
+    if published.tzinfo is None:
+        return "publication_time_unverified"
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        return "preview_clock_timezone_required"
+    published = published.astimezone(timezone.utc)
+    current = current.astimezone(timezone.utc)
+    if published > current + timedelta(days=1):
+        return "publication_time_in_future"
+    if published < current - timedelta(days=max_age_days):
+        return "preview_candidate_older_than_90_days"
+    return None
+
+
+def _official_publishing_config_enabled() -> bool:
+    config_path = Path(__file__).resolve().parents[2] / "config" / "mob_official_sources.json"
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    policy = payload.get("publishing") if isinstance(payload, dict) else None
+    return isinstance(policy, dict) and policy.get("enabled") is True
+
 
 
 def _safe_public_url(url: str) -> bool:
@@ -426,6 +470,25 @@ def run_trial(
         return report
 
     lifecycle_policy = load_lifecycle_policy()
+    if publish:
+        if lifecycle_policy["mode"] != "production":
+            report["error"] = "publishing_requires_production_lifecycle"
+            report["lifecycle"] = {
+                "mode": lifecycle_policy["mode"],
+                "birth_cutoff_enabled": False,
+            }
+            _report(output_report, report)
+            return report
+        if not _official_publishing_config_enabled():
+            report["error"] = "official_publishing_config_disabled"
+            report["lifecycle"] = {
+                "mode": lifecycle_policy["mode"],
+                "born_at": lifecycle_policy["born_at"],
+                "birth_cutoff_enabled": True,
+            }
+            _report(output_report, report)
+            return report
+
     if candidate_report is not None:
         candidates, source_result = load_official_candidates_from_report(candidate_report)
         source_attempts = [{
@@ -436,6 +499,25 @@ def run_trial(
     else:
         candidates, source_attempts = discover_all_official_posts(max_results=12)
     candidates, birth_rejections = filter_candidates_by_birth_for_trial(candidates, lifecycle_policy)
+    preview_rejections: list[dict[str, str]] = []
+    if not publish:
+        recent_candidates: list[dict[str, Any]] = []
+        preview_now = datetime.now(timezone.utc)
+        for item in candidates:
+            reason = preview_freshness_rejection(item, now=preview_now)
+            if reason:
+                preview_rejections.append({
+                    "id": str(item.get("external_id") or item.get("id") or "")[:120],
+                    "reason": reason,
+                })
+            else:
+                recent_candidates.append(item)
+        candidates = recent_candidates
+        report["preview_freshness"] = {
+            "max_age_days": PREVIEW_MAX_AGE_DAYS,
+            "rejected_count": len(preview_rejections),
+            "rejections": preview_rejections[:25],
+        }
     report["lifecycle"] = {
         "mode": lifecycle_policy["mode"],
         "born_at": lifecycle_policy["born_at"],
@@ -450,13 +532,20 @@ def run_trial(
             "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
             "rejected_count": len(birth_rejections),
         },
+        *([{
+            "source": "preview_freshness",
+            "max_age_days": PREVIEW_MAX_AGE_DAYS,
+            "rejected_count": len(preview_rejections),
+        }] if not publish else []),
     ]
     report["candidate_count"] = len(candidates)
     if not candidates:
-        # A quiet or temporarily unindexed public source is not a publish failure.
-        # Preserve source-attempt diagnostics without notifying the owner every poll.
+        # Old or undated items are never used as a test-preview fallback.
         report["status"] = "nothing_new"
-        report["error"] = "no_verified_official_mob_posts_found"
+        report["error"] = (
+            "no_recent_verified_official_mob_posts_found"
+            if preview_rejections else "no_verified_official_mob_posts_found"
+        )
         _report(output_report, report)
         return report
 
