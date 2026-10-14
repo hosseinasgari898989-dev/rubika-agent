@@ -255,6 +255,18 @@ class MobTranslationTests(unittest.TestCase):
         self.assertTrue(all(len(value) <= 700 for value in calls))
         self.assertTrue(translated.startswith("ترجمه "))
 
+
+    def test_translator_factory_output_with_cyrillic_is_rejected(self):
+        translated = translate_to_persian(
+            "Explore the depths of Playtime Co.",
+            translator_factory=lambda **_: type(
+                "Translator",
+                (),
+                {"translate": lambda self, _value: "به عمق Playtime Co. بروید, еще اسرارآمیزتر."},
+            )(),
+        )
+        self.assertIsNone(translated)
+
     def test_translation_provider_factory_is_injectable(self):
         result = translate_to_persian(
             "Five years since you first ran from Huggy 🎈",
