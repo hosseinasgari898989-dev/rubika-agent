@@ -494,6 +494,65 @@ def discover_mob_x_posts(
         "result": "verified_again_through_syndication" if seed_ids else "no_configured_seed_urls",
         "post_urls_found": len(seed_ids),
     }]
+    # Prefer the public profile timeline when available. It supplies candidate IDs only;
+    # all publishable captions, dates, authors and media still come from X syndication.
+    profile_status: int | None = None
+    profile_result = "no_indexed_official_posts"
+    profile_error_type: str | None = None
+    try:
+        profile_response = client.get(
+            "https://unifapi.com/tools/x/profile",
+            params={"handle": OFFICIAL_HANDLE},
+            headers={"Accept": "application/json"},
+            timeout=timeout_seconds,
+            allow_redirects=False,
+        )
+        profile_status = int(getattr(profile_response, "status_code", 0))
+        if profile_status == 200:
+            try:
+                profile_payload = profile_response.json()
+            except (ValueError, json.JSONDecodeError):
+                profile_payload = None
+                profile_result = "invalid_json"
+            posts_container = profile_payload.get("posts") if isinstance(profile_payload, dict) else None
+            profile_rows = posts_container.get("items") if isinstance(posts_container, dict) else None
+            if isinstance(profile_rows, list):
+                for row in profile_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    listed_url = str(row.get("url") or row.get("permalink") or "").strip()
+                    raw_id = str(row.get("id") or row.get("post_id") or row.get("tweet_id") or "").strip()
+                    if listed_url:
+                        # Reject non-canonical/other-account URLs; the ID is not trusted
+                        # unless the URL itself identifies the configured official handle.
+                        post_id = _post_id_from_url(listed_url)
+                        if not post_id:
+                            continue
+                    else:
+                        post_id = raw_id if POST_ID_RE.fullmatch(raw_id) else None
+                    if post_id and post_id not in seed_ids and post_id not in index_ids:
+                        index_ids.append(post_id)
+                    if len(index_ids) >= index_limit:
+                        break
+                profile_result = "post_ids_found" if index_ids else "no_usable_post_ids"
+            elif profile_payload is not None:
+                profile_result = "post_list_missing"
+        else:
+            profile_result = f"http_{profile_status}"
+    except requests.RequestException as exc:
+        profile_result = "request_failed"
+        profile_error_type = type(exc).__name__
+    profile_attempt: dict[str, Any] = {
+        "source": "mob_x",
+        "engine": "unifapi_public_profile",
+        "http_status": profile_status,
+        "result": profile_result,
+        "post_urls_found": len(index_ids),
+    }
+    if profile_error_type:
+        profile_attempt["error_type"] = profile_error_type
+    attempts.append(profile_attempt)
+
     bing_status: int | None = None
     bing_result = "no_indexed_official_posts"
     queries = (

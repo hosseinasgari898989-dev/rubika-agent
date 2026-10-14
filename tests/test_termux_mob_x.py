@@ -32,16 +32,20 @@ class FakeSession:
         posts: dict[str, dict],
         mirror_body: str = "",
         mirror_responses: dict[str, FakeResponse] | None = None,
+        profile_response: FakeResponse | None = None,
     ):
         self.search_body = search_body
         self.posts = posts
         self.mirror_body = mirror_body
         self.mirror_responses = mirror_responses or {}
+        self.profile_response = profile_response
         self.headers: dict[str, str] = {}
         self.calls: list[tuple[str, dict]] = []
 
     def get(self, url: str, **kwargs):
         self.calls.append((url, kwargs))
+        if url == "https://unifapi.com/tools/x/profile":
+            return self.profile_response or FakeResponse(status_code=403)
         if url == "https://www.bing.com/search":
             return FakeResponse(text=self.search_body)
         if url == "https://cdn.syndication.twimg.com/tweet-result":
@@ -128,6 +132,54 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             ["x-" + newer_id, "x-" + older_id],
         )
 
+
+    def test_public_profile_supplies_ids_but_x_syndication_is_authoritative(self):
+        post_id = "2110158933356847501"
+        other_account_id = "2110158933356847502"
+        profile = FakeResponse(payload={
+            "posts": {"items": [
+                {
+                    "id": post_id,
+                    "url": f"https://x.com/mobgamesstudios/status/{post_id}",
+                    "author": "not-the-real-author",
+                    "text": "Untrusted profile text",
+                    "createdAt": "not-a-trusted-timestamp",
+                },
+                {
+                    "id": other_account_id,
+                    "url": f"https://x.com/fanaccount/status/{other_account_id}",
+                    "author": "mobgamesstudios",
+                    "text": "Must never be used",
+                },
+            ]}
+        })
+        session = FakeSession(
+            "<rss><channel></channel></rss>",
+            {
+                post_id: syndication_post(
+                    post_id,
+                    text="Caption verified by X syndication",
+                    created_at="Wed Oct 14 00:01:09 +0000 2026",
+                ),
+                other_account_id: syndication_post(other_account_id),
+            },
+            profile_response=profile,
+        )
+
+        candidates, attempts = discover_mob_x_posts(session=session, sleep_seconds=0)
+
+        self.assertEqual([row["external_id"] for row in candidates], ["x-" + post_id])
+        self.assertEqual(candidates[0]["author"], "@mobgamesstudios")
+        self.assertEqual(candidates[0]["original_caption"], "Caption verified by X syndication")
+        self.assertEqual(candidates[0]["published_at"], "2026-10-14T00:01:09+00:00")
+        self.assertEqual(candidates[0]["media_url"], "https://pbs.twimg.com/media/example.jpg")
+        profile_attempt = next(row for row in attempts if row.get("engine") == "unifapi_public_profile")
+        self.assertEqual(profile_attempt["result"], "post_ids_found")
+        self.assertEqual(profile_attempt["post_urls_found"], 1)
+        self.assertTrue(any(url == "https://cdn.syndication.twimg.com/tweet-result" for url, _ in session.calls))
+        profile_call = next(call for call in session.calls if call[0] == "https://unifapi.com/tools/x/profile")
+        self.assertEqual(profile_call[1]["params"], {"handle": "mobgamesstudios"})
+        self.assertFalse(any("Cookie" in (kwargs.get("headers") or {}) for _, kwargs in session.calls))
 
     def test_public_mirror_is_used_only_for_ids_then_x_verifies_post(self):
         post_id = "1734258130186559716"
