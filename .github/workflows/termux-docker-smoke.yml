@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker pull termux/termux-docker:x86_64
+          timeout 240s docker pull termux/termux-docker:x86_64
 
           cat > "$RUNNER_TEMP/termux_docker_live_smoke.py" <<'PY'
           from __future__ import annotations
@@ -90,7 +90,7 @@ jobs:
           print("SAFETY=metadata_only; no media downloads; no GitHub push; no Rubika publishing")
           PY
 
-          docker run --rm -i \
+          timeout 20m docker run --rm -i \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -w /workspace \
             -e PYTHONPATH=/workspace \
@@ -98,14 +98,16 @@ jobs:
             sh -lc '
               set -eu
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
-              pkg update -y
-              pkg install -y python git
-              python -m pip install --disable-pip-version-check requests yt-dlp==2026.08.19
+              timeout 180s pkg update -y
+              timeout 240s pkg install -y python git
+              python -m venv /tmp/termux-docker-venv
+              export PATH="/tmp/termux-docker-venv/bin:$PATH"
+              timeout 240s python -m pip install --disable-pip-version-check --retries 2 --timeout 20 requests yt-dlp==2026.08.19
               python --version
-              python -c "import requests, yt_dlp; print(\"PYTHON_DEPENDENCIES=ready requests=\" + requests.__version__ + \" yt_dlp=\" + yt_dlp.version.__version__)"
-              python -m unittest discover -s tests -p "test_termux_sources.py" -v
-              python -m unittest discover -s tests -p "test_termux_instagram.py" -v
-              python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
-              python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
-              python -
+              python -c "import requests, yt_dlp; print('PYTHON_DEPENDENCIES=ready', requests.__version__, yt_dlp.version.__version__)"
+              timeout 90s python -m unittest discover -s tests -p "test_termux_sources.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_termux_instagram.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
+              timeout 12m python -
             ' < "$RUNNER_TEMP/termux_docker_live_smoke.py"
