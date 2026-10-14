@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from agent.discovery.termux_mob_x import (
     _media_url,
+    _parse_post,
     _post_id_from_url,
     discover_mob_x_posts,
 )
@@ -117,7 +118,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             {"type": "photo", "media_url_https": "https://pbs.twimg.com/media/b.jpg"},
         ]
         self.assertIsNone(_media_url({"type": "video", "video_info": {"variants": []}}))
-        self.assertIsNone(_media_url(two_photos[0]) if len(two_photos) != 1 else None)
+        self.assertIsNone(_parse_post(syndication_post(post_id, media=two_photos), post_id))
 
 
 if __name__ == "__main__":
