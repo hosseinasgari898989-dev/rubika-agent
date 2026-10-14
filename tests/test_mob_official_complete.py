@@ -170,6 +170,52 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         self.assertNotEqual(rows[0]["media_url"], "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg")
         self.assertEqual(rows[0]["original_caption"], "The actual original YouTube description.")
 
+
+    def test_live_steam_api_external_post_resolves_canonical_item_and_embedded_youtube_media(self):
+        homepage = "https://mobentertainment.com/"
+        endpoint = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/"
+        gid = "1844115010499376"
+        steam_payload = {"appnews": {"newsitems": [{
+            "gid": gid,
+            "title": "Escape from Playtime Launches Soon",
+            "url": "https://steamstore-a.akamaihd.net/news/externalpost/steam_community_announcements/" + gid,
+            "is_external_url": True,
+            "author": "Tyler (Mob Entertainment)",
+            "date": 1789922676,
+            "feedname": "steam_community_announcements",
+            "contents": (
+                '[p]Mob Entertainment announces an official Poppy Playtime update.[/p]'
+                '[p]Read more at [url="https://example.com/signup"]the official signup page[/url].[/p]'
+                '[previewyoutube="fAXzLmsbrd8;full"][/previewyoutube]'
+            ),
+        }]}}
+        session = FakeSession({
+            homepage: FakeResponse("<html><body>No newsroom cards.</body></html>"),
+            endpoint: FakeResponse(payload=steam_payload),
+        })
+        sources = [
+            {"id": "mob_newsroom", "kind": "html_newsroom", "enabled": True,
+             "source_name": "Mob Entertainment newsroom", "url": homepage},
+            {"id": "mob_youtube", "kind": "youtube_atom", "enabled": False,
+             "channel_id": "UCXqV4yoyC_mmZye6VbKFPeQ", "url": "https://www.youtube.com/channel/UCXqV4yoyC_mmZye6VbKFPeQ"},
+            {"id": "steam_news", "kind": "steam_news_api", "enabled": True,
+             "app_id": 1721470, "url": endpoint},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = config_file(folder, sources)
+            rows, _ = discover_complete_official_posts(config_path=path, session=session)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source_platform"], "steam")
+        self.assertEqual(
+            rows[0]["canonical_url"],
+            "https://steamcommunity.com/games/1721470/announcements/detail/" + gid,
+        )
+        self.assertEqual(rows[0]["media_type"], "video")
+        self.assertEqual(rows[0]["media_url"], "https://www.youtube.com/watch?v=fAXzLmsbrd8")
+        self.assertIn("official Poppy Playtime update", rows[0]["original_caption"])
+        self.assertNotIn("example.com", rows[0]["original_caption"])
+
     def test_steam_fallback_accepts_only_official_announcement_feed_with_media(self):
         homepage = "https://www.mobentertainment.com/"
         endpoint = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/"
