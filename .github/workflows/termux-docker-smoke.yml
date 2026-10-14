@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: termux-docker-smoke-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   termux-runtime-and-live-discovery:
