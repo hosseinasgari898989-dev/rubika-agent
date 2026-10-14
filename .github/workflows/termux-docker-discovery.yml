@@ -52,12 +52,15 @@ jobs:
           python-version: "3.12"
 
       - name: Install project requirements
+        id: install_requirements
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
       - name: Run all repository unit tests
+        id: unit_tests
         run: python -m unittest discover -s tests -v
 
       - name: Run real Termux Docker source tests and collect live metadata
+        id: termux_discovery
         shell: bash
         run: |
           set -euo pipefail
@@ -233,6 +236,53 @@ jobs:
               print(f"{key}={value}")
           counts = payload.get("queue_counts", {})
           print("queue_total=" + str(counts.get("total", 0) if isinstance(counts, dict) else 0))
+          PY
+
+      - name: Get safe advisory diagnosis for pipeline failure
+        if: failure()
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+        shell: bash
+        run: |
+          set +e
+          event_code="unknown_error"
+          stage="unknown"
+          error_code="pipeline_step_failed"
+          if [[ "${{ steps.install_requirements.outcome }}" == "failure" ]]; then
+            event_code="workflow_tests_failed"; stage="tests"; error_code="dependency_install_failed"
+          elif [[ "${{ steps.unit_tests.outcome }}" == "failure" ]]; then
+            event_code="workflow_tests_failed"; stage="tests"; error_code="test_suite_failed"
+          elif [[ "${{ steps.termux_discovery.outcome }}" == "failure" ]]; then
+            event_code="discovery_failed"; stage="collector"; error_code="termux_discovery_failed"
+          elif [[ "${{ steps.push_report.outcome }}" == "failure" ]]; then
+            event_code="report_push_failed"; stage="report"; error_code="report_commit_or_push_failed"
+          elif [[ "${{ steps.queue_intake.outcome }}" == "failure" ]]; then
+            event_code="queue_intake_failed"; stage="queue_intake"; error_code="queue_intake_failed"
+          fi
+          python -m agent.brain.error_supervisor \
+            --event-code "$event_code" \
+            --stage "$stage" \
+            --error-code "$error_code" \
+            --output-report "$RUNNER_TEMP/ai-supervisor.json" \
+            > "$RUNNER_TEMP/ai-supervisor-output.json"
+          status=$?
+          if [[ "$status" -ne 0 || ! -s "$RUNNER_TEMP/ai-supervisor-output.json" ]]; then
+            echo "AI advisor unavailable; the original pipeline failure remains authoritative." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - "$RUNNER_TEMP/ai-supervisor-output.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          recommendation = result.get("recommendation", {})
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\\n### AI error advisor (advice only)\\n")
+              summary.write(f"- Source: {result.get('source', 'local_fallback')}\\n")
+              summary.write(f"- Recommendation: {recommendation.get('action', 'human_review')}\\n")
+              summary.write(f"- Reason code: {recommendation.get('reason_code', 'unknown_error')}\\n")
+              summary.write(f"- Next step: {recommendation.get('next_step_code', 'review_error_code_and_recent_logs')}\\n")
+              summary.write("- Applied automatically: no\\n")
           PY
 
       - name: Upload collection report and queue result
