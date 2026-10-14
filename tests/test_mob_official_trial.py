@@ -211,5 +211,70 @@ class OfficialPreviewSafetyTests(unittest.TestCase):
         self.assertFalse(result["publishing"])
 
 
+class TestChannelPublishingGateTests(unittest.TestCase):
+    def test_config_allows_only_test_channel_mode_not_production(self):
+        self.assertTrue(mob_official_trial._test_channel_publishing_config_enabled())
+        self.assertFalse(mob_official_trial._official_publishing_config_enabled())
+
+    def test_test_channel_publish_refuses_a_different_destination(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_seen_index(self):
+                return {"ids": set(), "hashes": set()}
+
+        test_policy = {"mode": "test", "born_at": None, "birth_datetime": None}
+        with tempfile.TemporaryDirectory() as folder:
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=test_policy),
+                patch.object(mob_official_trial, "_test_channel_publishing_config_enabled", return_value=True),
+                patch.dict("os.environ", {"RUBIKA_CHANNEL_GUID": "not-the-test-channel", "RUBIKA_TOKEN": "dummy-token"}),
+            ):
+                result = run_trial(
+                    publish=False,
+                    test_channel_publish=True,
+                    limit=1,
+                    output_report=Path(folder) / "report.json",
+                    output_dir=Path(folder) / "media",
+                    candidate_report=Path(folder) / "missing-candidates.json",
+                )
+
+        self.assertEqual(result["error"], "test_channel_target_mismatch")
+        self.assertFalse(result["publishing"])
+
+    def test_test_channel_publish_requires_explicit_config_and_token(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_seen_index(self):
+                return {"ids": set(), "hashes": set()}
+
+        test_policy = {"mode": "test", "born_at": None, "birth_datetime": None}
+        with tempfile.TemporaryDirectory() as folder:
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=test_policy),
+                patch.object(mob_official_trial, "_test_channel_publishing_config_enabled", return_value=False),
+                patch.dict("os.environ", {
+                    "RUBIKA_CHANNEL_GUID": mob_official_trial.TEST_CHANNEL_GUID,
+                    "RUBIKA_TOKEN": "dummy-token",
+                }),
+            ):
+                result = run_trial(
+                    publish=False,
+                    test_channel_publish=True,
+                    limit=1,
+                    output_report=Path(folder) / "report.json",
+                    output_dir=Path(folder) / "media",
+                    candidate_report=Path(folder) / "missing-candidates.json",
+                )
+
+        self.assertEqual(result["error"], "test_channel_publishing_config_disabled")
+        self.assertFalse(result["publishing"])
+
+
 if __name__ == "__main__":
     unittest.main()
