@@ -127,8 +127,11 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             rows, _ = discover_complete_official_posts(config_path=path, session=session)
 
         self.assertEqual(len(rows), 1)
-        self.assertIn("The first genuine paragraph", rows[0]["original_caption"])
-        self.assertIn("The second genuine paragraph", rows[0]["original_caption"])
+        self.assertEqual(
+            rows[0]["original_caption"],
+            "The first genuine paragraph from the article.",
+        )
+        self.assertNotIn("The second genuine paragraph", rows[0]["original_caption"])
 
 
     def test_site_header_logo_is_never_used_as_article_media(self):
