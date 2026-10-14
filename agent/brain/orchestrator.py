@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from .authorization import SourceRegistry
 from .cloud_state import CloudState, CloudStateError
+from .deduplication import blocking_ledger_entries, blocking_ledger_hashes
 from .ledger import MegaLedger, new_state
 from .models import Candidate
 from .pipeline import BatchResult, StagedMedia, stage_edit_batch
@@ -156,12 +157,15 @@ class StagingOrchestrator:
             )
 
         ledger_items = ledger_state.get("items", {})
-        ledger_ids = set(ledger_items) if isinstance(ledger_items, dict) else set()
-        ledger_hashes = {
-            item.get("sha256")
-            for item in ledger_items.values()
-            if isinstance(item, dict) and isinstance(item.get("sha256"), str)
-        } if isinstance(ledger_items, dict) else set()
+        blocking_items = blocking_ledger_entries(ledger_items)
+        ledger_ids = set(blocking_items)
+        for ledger_item in blocking_items.values():
+            platform = ledger_item.get("platform")
+            external_id = ledger_item.get("external_id")
+            if isinstance(platform, str) and isinstance(external_id, str) and external_id:
+                ledger_ids.add(platform + ":" + external_id)
+                ledger_ids.add(external_id)
+        ledger_hashes = blocking_ledger_hashes(ledger_items)
         seen_ids = set(seen.get("ids", set())) | ledger_ids
         seen_hashes = set(seen.get("hashes", set())) | ledger_hashes
 
