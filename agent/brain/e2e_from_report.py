@@ -58,6 +58,41 @@ def _safe_error(exc: Exception) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value))[:80] or "unknown_error"
 
 
+def _stage_failure_summary(stage_result: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain actionable staging error codes without leaking provider bodies or credentials."""
+    raw_skipped = stage_result.get("skipped")
+    skipped: list[dict[str, str]] = []
+    if isinstance(raw_skipped, (list, tuple)):
+        for row in raw_skipped[:8]:
+            if not isinstance(row, Mapping):
+                continue
+            item = re.sub(r"[^A-Za-z0-9._:-]", "", str(row.get("item") or "unknown"))[:140]
+            reason = re.sub(r"[^A-Za-z0-9_.,:-]", "", str(row.get("reason") or "unknown_error"))[:180]
+            if reason:
+                skipped.append({"item": item, "reason": reason})
+
+    raw_sync = stage_result.get("cloud_sync_errors")
+    sync_errors = []
+    if isinstance(raw_sync, (list, tuple)):
+        sync_errors = [
+            re.sub(r"[^A-Za-z0-9._:-]", "", str(value))[:180]
+            for value in raw_sync[:5]
+        ]
+
+    if sync_errors:
+        primary_reason = "cloud_sync_failed"
+    elif skipped:
+        primary_reason = skipped[0]["reason"].split(",", 1)[0][:100]
+    else:
+        primary_reason = "no_media_staged"
+
+    return {
+        "reason": primary_reason,
+        "failure_details": skipped,
+        "cloud_sync_errors": sync_errors,
+    }
+
+
 def _matches_poppy_edit(candidate: Candidate) -> bool:
     # This is an agent-brain metadata prefilter. Creator identity is never enough
     # to classify an individual upload; final policy checks run after download.
@@ -200,12 +235,16 @@ def run_one(
             "publishing": False,
         }
         if stage.status != "ok" or stage.staged_count != 1:
+            stage_result = stage.as_dict()
+            report_detail["stage_detail"] = stage_result
+            report_detail.update(_stage_failure_summary(stage_result))
             stage_file = Path(stage.report_path)
             if stage_file.is_file():
                 try:
-                    report_detail["stage_detail"] = json.loads(
-                        stage_file.read_text(encoding="utf-8")
-                    )
+                    detailed_report = json.loads(stage_file.read_text(encoding="utf-8"))
+                    if isinstance(detailed_report, dict):
+                        report_detail["stage_detail"] = detailed_report
+                        report_detail.update(_stage_failure_summary(detailed_report))
                 except (OSError, json.JSONDecodeError):
                     pass
             return {"ok": False, "status": "staging_failed", **report_detail}
