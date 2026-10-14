@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
-from agent.brain.mob_official_trial import load_x_candidates_from_report
+from agent.brain import mob_official_trial
+from agent.brain.mob_official_trial import load_x_candidates_from_report, preview_freshness_rejection, run_trial
 
 
 class MobOfficialTrialReportTests(unittest.TestCase):
@@ -130,6 +133,84 @@ class MobOfficialTrialReportTests(unittest.TestCase):
 
         self.assertEqual(candidates, [])
         self.assertEqual(status, "no_verified_official_posts_in_termux_report")
+
+
+class OfficialPreviewSafetyTests(unittest.TestCase):
+    def test_preview_requires_a_verified_recent_timestamp(self):
+        now = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+        recent = {"published_at": "2026-09-20T16:44:36+00:00"}
+        old = {"published_at": "2024-02-26T20:00:53+00:00"}
+        undated = {"published_at": None}
+        future = {"published_at": "2026-10-18T12:00:00+00:00"}
+
+        self.assertIsNone(preview_freshness_rejection(recent, now=now))
+        self.assertEqual(
+            preview_freshness_rejection(old, now=now),
+            "preview_candidate_older_than_90_days",
+        )
+        self.assertEqual(
+            preview_freshness_rejection(undated, now=now),
+            "publication_time_unverified",
+        )
+        self.assertEqual(
+            preview_freshness_rejection(future, now=now),
+            "publication_time_in_future",
+        )
+
+    def test_publish_mode_is_blocked_while_lifecycle_is_test(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_seen_index(self):
+                return {"ids": set(), "hashes": set()}
+
+        with tempfile.TemporaryDirectory() as folder:
+            report = Path(folder) / "report.json"
+            with patch.object(mob_official_trial, "CloudState", FakeCloud):
+                result = run_trial(
+                    publish=True,
+                    limit=1,
+                    output_report=report,
+                    output_dir=Path(folder) / "media",
+                    candidate_report=Path(folder) / "missing-candidates.json",
+                )
+
+        self.assertEqual(result["error"], "publishing_requires_production_lifecycle")
+        self.assertFalse(result["publishing"])
+        self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["error"],
+                         "publishing_requires_production_lifecycle")
+
+    def test_publish_mode_also_requires_explicit_source_config_approval(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_seen_index(self):
+                return {"ids": set(), "hashes": set()}
+
+        production_policy = {
+            "mode": "production",
+            "born_at": "2026-10-14T12:00:00Z",
+            "birth_datetime": datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            report = Path(folder) / "report.json"
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=production_policy),
+                patch.object(mob_official_trial, "_official_publishing_config_enabled", return_value=False),
+            ):
+                result = run_trial(
+                    publish=True,
+                    limit=1,
+                    output_report=report,
+                    output_dir=Path(folder) / "media",
+                    candidate_report=Path(folder) / "missing-candidates.json",
+                )
+
+        self.assertEqual(result["error"], "official_publishing_config_disabled")
+        self.assertFalse(result["publishing"])
 
 
 if __name__ == "__main__":
