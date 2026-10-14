@@ -1,17 +1,16 @@
 name: Discovery to Brain, MEGA/D1 and Rubika batch test
 
 on:
-  push:
-    branches:
-      - agent-brain-mega-v1
-    paths:
-      - "artifacts/brain-e2e-request.json"
+  # A request-file commit must never start a real-media workflow automatically.
+  # Run manually only after the separate publication gate has been deliberately approved.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   batch-e2e:
+    if: ${{ vars.RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014 == 'approved' }}
     runs-on: ubuntu-24.04
     env:
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev

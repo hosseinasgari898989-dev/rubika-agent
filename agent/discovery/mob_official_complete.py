@@ -792,3 +792,99 @@ def discover_complete_official_posts(
         seen_fingerprints.update(fingerprints)
         output.append(row)
     return output, attempts
+
+
+def discover_all_official_posts(
+    *,
+    config_path: str | Path = DEFAULT_CONFIG,
+    max_results: int = 12,
+    session: Any | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Combine X with official newsroom, YouTube and Steam; never download or publish.
+
+    Duplicate cross-posts prefer the primary newsroom record, while the final feed is
+    ordered by verified publication time so new announcements are considered first.
+    A blocked source remains a diagnostic result, not a reason to suppress the others.
+    """
+    complete_rows, complete_attempts = discover_complete_official_posts(
+        config_path=config_path,
+        session=session,
+    )
+
+    try:
+        # Import locally to keep the three-source adapters independently testable.
+        from .termux_mob_x import discover_mob_x_posts
+        x_rows, x_attempts = discover_mob_x_posts(max_results=max(1, min(int(max_results), 25)))
+    except Exception as exc:
+        x_rows = []
+        x_attempts = [{
+            "source": "mob_x",
+            "result": "source_error",
+            "error_code": re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "source_error",
+            "candidate_count": 0,
+        }]
+
+    source_priority = {"website": 0, "youtube": 1, "steam": 2, "x": 3}
+    combined = [
+        row for row in [*complete_rows, *x_rows]
+        if isinstance(row, dict)
+        and row.get("platform") == "mob_official"
+        and row.get("official_source") is True
+        and str(row.get("canonical_url") or "").startswith("https://")
+        and str(row.get("original_caption") or row.get("caption") or "").strip()
+        and str(row.get("media_url") or "").strip()
+        and row.get("media_type") in {"image", "video"}
+    ]
+
+    def published_epoch(row: dict[str, Any]) -> float:
+        value = _timestamp(row.get("published_at"))
+        if not value:
+            return 0.0
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
+    # Deduplicate in source-priority order, then present the newest verified posts first.
+    combined.sort(
+        key=lambda row: (
+            source_priority.get(str(row.get("source_platform") or ""), 9),
+            -published_epoch(row),
+            str(row.get("external_id") or row.get("id") or ""),
+        )
+    )
+    output: list[dict[str, Any]] = []
+    seen_identity: set[tuple[str, str]] = set()
+    seen_urls: set[str] = set()
+    seen_fingerprints: set[str] = set()
+    for row in combined:
+        source_platform = str(row.get("source_platform") or "")
+        external_id = str(row.get("external_id") or row.get("id") or "")
+        canonical = str(row.get("canonical_url") or "")
+        identity = (source_platform, external_id)
+        fingerprints = _fingerprints(row)
+        if identity in seen_identity or canonical in seen_urls:
+            continue
+        if fingerprints.intersection(seen_fingerprints):
+            continue
+        seen_identity.add(identity)
+        seen_urls.add(canonical)
+        seen_fingerprints.update(fingerprints)
+        output.append(row)
+
+    output.sort(
+        key=lambda row: (
+            0 if published_epoch(row) > 0 else 1,
+            -published_epoch(row),
+            source_priority.get(str(row.get("source_platform") or ""), 9),
+            str(row.get("external_id") or row.get("id") or ""),
+        )
+    )
+    attempts = [*x_attempts, *complete_attempts]
+    attempts.append({
+        "source": "official_source_merge",
+        "result": "ok" if output else "no_complete_official_posts",
+        "candidate_count": len(output),
+        "enabled_lanes": ["website", "youtube", "steam", "x"],
+    })
+    return output[:max(1, min(int(max_results), 25))], attempts

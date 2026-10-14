@@ -67,5 +67,70 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             self.assertEqual(load_x_candidates_from_report(invalid), ([], "termux_report_invalid"))
 
 
+    def test_accepts_verified_official_website_youtube_and_steam_media(self):
+        website = self.row(
+            id="pop-chapter-five",
+            external_id="pop-chapter-five",
+            url="https://www.mobentertainment.com/news/chapter-five",
+            canonical_url="https://www.mobentertainment.com/news/chapter-five",
+            title="Official chapter news",
+            author="",
+            source_platform="website",
+            source_name="Mob Entertainment",
+            source_key="mobentertainment.com",
+            media_type="image",
+            media_url="https://cdn.mobentertainment.com/news/chapter-five.jpg",
+            published_at="2026-10-14T12:00:00+00:00",
+        )
+        youtube = self.row(
+            id="yt-abcdefghijk",
+            external_id="yt-abcdefghijk",
+            url="https://www.youtube.com/watch?v=abcdefghijk",
+            canonical_url="https://www.youtube.com/watch?v=abcdefghijk",
+            source_platform="youtube",
+            source_name="Mob Entertainment YouTube",
+            source_key="youtube.com",
+            author="",
+            media_type="video",
+            media_url="https://www.youtube.com/watch?v=abcdefghijk",
+        )
+        steam = self.row(
+            id="steam-12345678901",
+            external_id="steam-12345678901",
+            url="https://steamcommunity.com/games/1721470/announcements/detail/12345678901",
+            canonical_url="https://steamcommunity.com/games/1721470/announcements/detail/12345678901",
+            source_platform="steam",
+            source_name="Poppy Playtime official Steam news",
+            source_key="steamcommunity.com",
+            author="",
+            media_type="image",
+            media_url="https://clan.cloudflare.steamstatic.com/images/12345/update.jpg",
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            path = self.report_file(folder, [website, youtube, steam])
+            candidates, status = load_x_candidates_from_report(path)
+
+        self.assertEqual(status, "ok")
+        self.assertEqual([row["source_platform"] for row in candidates], ["website", "youtube", "steam"])
+
+    def test_rejects_official_page_with_untrusted_media_host(self):
+        forged_media = self.row(
+            id="official-story",
+            external_id="official-story",
+            url="https://www.mobentertainment.com/news/story",
+            canonical_url="https://www.mobentertainment.com/news/story",
+            source_platform="website",
+            source_name="Mob Entertainment",
+            media_type="image",
+            media_url="https://evil.example/tracker.jpg",
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            path = self.report_file(folder, [forged_media])
+            candidates, status = load_x_candidates_from_report(path)
+
+        self.assertEqual(candidates, [])
+        self.assertEqual(status, "no_verified_official_posts_in_termux_report")
+
+
 if __name__ == "__main__":
     unittest.main()
