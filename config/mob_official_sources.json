@@ -13,12 +13,11 @@
       "api_credits_required": false,
       "seed_urls": [
         "https://x.com/mobgamesstudios/status/2110370731628298519",
-        "https://x.com/mobgamesstudios/status/2110158933356847501",
         "https://x.com/mobgamesstudios/status/2109690712006533267",
         "https://x.com/mobgamesstudios/status/2101713521020912076",
         "https://x.com/mobgamesstudios/status/2107878755079213476"
       ],
-      "note": "Owner-provided recent status links bootstrap free discovery when public indexes are blocked. X syndication must re-verify author, caption, date and actual media for every seed. Paid X API is not used."
+      "note": "Verified owner-provided seeds prioritize recent official X posts because free public indexes are blocked. Each seed is re-verified through X syndication; only the real post caption, timestamp and actual media are accepted. No paid X API."
     },
     {
       "id": "mob_newsroom",
