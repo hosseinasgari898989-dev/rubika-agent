@@ -5,6 +5,7 @@ quote/translation is added to the outgoing Rubika caption.
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Callable
 
@@ -66,6 +67,22 @@ def translate_to_persian(
     source = _strip_urls(raw_source)[:MAX_TRANSLATION_CHARS]
     if not source:
         return None
+
+    # In the cloud trial, prefer the authenticated Cloudflare AI endpoint already
+    # bound to this project's Worker. This avoids depending solely on Google's
+    # public web-translation endpoint, which can be unavailable to CI runners.
+    if translator_factory is None:
+        base_url = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
+        token = os.getenv("AGENT_API_TOKEN", "").strip()
+        if token:
+            try:
+                from agent.brain.cloud_state import CloudState
+                translated = CloudState(base_url, token=token, timeout_seconds=25).translate_official(source)
+                if translated and translated.strip() and translated.casefold() != source.casefold():
+                    return translated.strip()[:MAX_TRANSLATION_CHARS]
+            except Exception:
+                # Use the existing fallback below; never invent a translation.
+                pass
 
     try:
         if translator_factory is None:
