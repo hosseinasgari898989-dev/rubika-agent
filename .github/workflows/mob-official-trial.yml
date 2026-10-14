@@ -35,9 +35,8 @@ jobs:
             echo "::error::Missing or invalid AGENT_API_TOKEN secret."
             exit 2
           fi
-          python - <<'PY'
+          TRIAL_MODE="$(python - <<'PY'
           import json
-          import os
           from pathlib import Path
 
           path = Path("artifacts/mob-official-trial-request.json")
@@ -47,10 +46,11 @@ jobs:
           mode = request.get("mode", "preview") if isinstance(request, dict) else ""
           if mode not in {"preview", "publish"}:
               raise SystemExit("mode must be preview or publish.")
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write("TRIAL_MODE=" + mode + "\\n")
-          print("Official Mob one-post mode:", mode)
+          print(mode)
           PY
+          )"
+          echo "TRIAL_MODE=$TRIAL_MODE" >> "$GITHUB_ENV"
+          echo "Official Mob one-post mode: $TRIAL_MODE"
           if [[ "$TRIAL_MODE" == "publish" ]]; then
             if [[ -z "${RUBIKA_TOKEN:-}" || -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
               echo "::error::Missing RUBIKA_TOKEN or RUBIKA_CHANNEL_GUID secret; nothing was published."
