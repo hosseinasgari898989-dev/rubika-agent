@@ -244,7 +244,70 @@ def filter_candidates_by_birth_for_trial(
     return allowed, rejected
 
 
-def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Path) -> dict[str, Any]:
+def load_x_candidates_from_report(report_path: Path) -> tuple[list[dict[str, Any]], str]:
+    """Accept only verified @mobgamesstudios post records emitted by Termux discovery."""
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], "termux_report_unreadable"
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or payload.get("source") != "termux_phone"
+        or payload.get("mode") != "metadata_only_no_download_no_publish"
+    ):
+        return [], "termux_report_invalid"
+
+    candidates = payload.get("candidates")
+    rows = candidates.get("mob_official", []) if isinstance(candidates, dict) else []
+    if not isinstance(rows, list):
+        return [], "mob_x_candidates_invalid"
+
+    valid: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        external_id = str(row.get("external_id") or row.get("id") or "")
+        canonical_url = str(row.get("canonical_url") or row.get("url") or "")
+        media_url = str(row.get("media_url") or "")
+        media_type = str(row.get("media_type") or "").lower()
+        caption = str(row.get("original_caption") or row.get("caption") or "").strip()
+        author = str(row.get("author") or "").lstrip("@").casefold()
+        try:
+            canonical = urlparse(canonical_url)
+            media = urlparse(media_url)
+        except ValueError:
+            continue
+        match = re.fullmatch(r"/mobgamesstudios/status/([0-9]{15,22})/?", canonical.path)
+        if (
+            row.get("platform") != "mob_official"
+            or row.get("source_platform") != "x"
+            or row.get("official_source") is not True
+            or author != "mobgamesstudios"
+            or not match
+            or canonical.scheme != "https"
+            or canonical.hostname not in {"x.com", "www.x.com"}
+            or external_id != "x-" + match.group(1)
+            or media.scheme != "https"
+            or media_type not in {"image", "video"}
+            or not caption
+        ):
+            continue
+        expected_media_hosts = {"pbs.twimg.com"} if media_type == "image" else {"video.twimg.com"}
+        if (media.hostname or "").lower().rstrip(".") not in expected_media_hosts:
+            continue
+        valid.append(row)
+    return valid[:12], "ok" if valid else "no_verified_official_x_posts_in_termux_report"
+
+
+def run_trial(
+    *,
+    publish: bool,
+    limit: int,
+    output_report: Path,
+    output_dir: Path,
+    candidate_report: Path | None = None,
+) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": 1,
         "mode": "publish_one" if publish else "dry_run",
@@ -266,7 +329,15 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
         return report
 
     lifecycle_policy = load_lifecycle_policy()
-    candidates, source_attempts = discover_mob_x_posts(max_results=12)
+    if candidate_report is not None:
+        candidates, source_result = load_x_candidates_from_report(candidate_report)
+        source_attempts = [{
+            "source": "termux_discovery_report",
+            "result": source_result,
+            "candidate_count": len(candidates),
+        }]
+    else:
+        candidates, source_attempts = discover_mob_x_posts(max_results=12)
     candidates, birth_rejections = filter_candidates_by_birth_for_trial(candidates, lifecycle_policy)
     report["lifecycle"] = {
         "mode": lifecycle_policy["mode"],
@@ -497,6 +568,7 @@ def main() -> int:
     parser.add_argument("--publish", action="store_true", help="Actually send one validated new official post to Rubika.")
     parser.add_argument("--limit", type=int, default=1, choices=[1], help="First trial is limited to exactly one post.")
     parser.add_argument("--report", type=Path, default=Path("artifacts/mob-official-trial-report.json"))
+    parser.add_argument("--candidate-report", type=Path, default=None, help="Use X-only candidates found by Termux instead of searching again.")
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/mob-official-media"))
     args = parser.parse_args()
     result = run_trial(
@@ -504,6 +576,7 @@ def main() -> int:
         limit=args.limit,
         output_report=args.report,
         output_dir=args.output_dir,
+        candidate_report=args.candidate_report,
     )
     if args.publish:
         try:
