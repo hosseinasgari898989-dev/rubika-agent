@@ -15,7 +15,11 @@ from agent.brain.models import Candidate, InspectionResult
 from agent.brain.normalizer import NormalizeError, normalize_video_square_1080
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import stage_edit_batch
-from agent.brain.policy import evaluate_edit_candidate, format_official_mob_caption
+from agent.brain.policy import (
+    evaluate_edit_candidate,
+    format_official_mob_caption,
+    precheck_edit_candidate,
+)
 
 
 class BrainModelPolicyTests(unittest.TestCase):
@@ -100,6 +104,31 @@ class BrainModelPolicyTests(unittest.TestCase):
         self.assertEqual(result.decision, "eligible")
         self.assertNotIn("is_edit", result.checks)
         self.assertNotIn("high_effort", result.checks)
+
+    def test_compound_poppy_edit_hashtag_counts_as_edit_signal(self):
+        candidate = self.candidate(
+            title="Yesterday was the anniversary of Poppy Playtime",
+            caption="#poppyplaytime #poppyplaytimeedit #smyxae",
+            source_key="smyxae",
+            source_policy={
+                "require_poppy_relevance_check": True,
+                "require_edit_signal_check": True,
+                "require_brain_quality_check": False,
+                "minimum_source_short_side": 480,
+                "output_format": "square_1080x1080",
+            },
+        )
+        self.assertNotIn(
+            "edit_signal_not_found_by_brain",
+            precheck_edit_candidate(candidate),
+        )
+        result = evaluate_edit_candidate(
+            candidate,
+            self.inspection(),
+            moderation=self.moderation(),
+        )
+        self.assertTrue(result.checks["is_edit"])
+        self.assertEqual(result.decision, "eligible", result.reasons)
 
     def test_missing_poppy_metadata_is_rejected_locally(self):
         result = evaluate_edit_candidate(
