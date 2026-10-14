@@ -1,0 +1,22 @@
+name: Safe workflow dispatch probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Confirm dispatch event without touching project data
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$EVENT_NAME" = "workflow_dispatch"
+          echo "probe=ok event=$EVENT_NAME ref=$REF_NAME"
