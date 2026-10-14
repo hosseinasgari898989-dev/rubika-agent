@@ -1,10 +1,10 @@
 name: Online Termux discovery and queue sync
 
 on:
-  # Run a lightweight gate hourly; it starts collection only after five hours since
+  # Run a lightweight gate every 30 minutes; it starts collection only after five hours since
   # the last successful D1 intake, avoiding the midnight gap in "*/5" cron hours.
   schedule:
-    - cron: "17 * * * *"
+    - cron: "2,32 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -60,7 +60,7 @@ jobs:
               print("Last-cycle timestamp is in the future; fail open to a safe new metadata-only cycle.", file=__import__("sys").stderr)
           elif elapsed < timedelta(hours=5):
               print("false")
-              print(f"Skipping early hourly tick; {elapsed.total_seconds():.0f} seconds since last successful intake.", file=__import__("sys").stderr)
+              print(f"Skipping early schedule tick; {elapsed.total_seconds():.0f} seconds since last successful intake.", file=__import__("sys").stderr)
           else:
               print("true")
               print(f"Five-hour interval elapsed ({elapsed.total_seconds():.0f} seconds).", file=__import__("sys").stderr)
@@ -402,7 +402,7 @@ jobs:
             echo "## Online Termux discovery"
             echo ""
             echo "- Runtime: real Termux Docker image"
-            echo "- Schedule: hourly UTC gate; full collection after five hours from successful D1 intake"
+            echo "- Schedule: twice-hourly UTC gate; full collection after five hours from successful D1 intake"
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
             echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
