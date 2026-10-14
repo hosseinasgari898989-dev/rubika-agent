@@ -48,6 +48,8 @@ on:
       - "tests/test_mob_official_complete.py"
       - "tests/test_mob_official_trial.py"
       - "tests/test_cloud_state.py"
+      - "tests/test_error_supervisor.py"
+      - "agent/brain/error_supervisor.py"
       - "tests/test_rubika_publisher.py"
       - "tests/test_queue_intake.py"
       - "tests/test_queue_worker.py"
@@ -78,6 +80,7 @@ jobs:
           python -m compileall -q agent relay termux
           bash -n termux/bootstrap.sh termux/daily.sh
       - name: Run brain and storage unit tests
+        id: brain_tests
         run: |
           python -m unittest discover -s tests -p 'test_agent_brain.py' -v
           python -m unittest discover -s tests -p 'test_source_policy.py' -v
@@ -104,6 +107,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_tavily_discovery.py' -v
           python -m unittest discover -s tests -p 'test_discovery_run.py' -v
           python -m unittest discover -s tests -p 'test_cloud_state.py' -v
+          python -m unittest discover -s tests -p 'test_error_supervisor.py' -v
           python -m unittest discover -s tests -p 'test_rubika_publisher.py' -v
           python -m unittest discover -s tests -p 'test_queue_intake.py' -v
           python -m unittest discover -s tests -p 'test_queue_worker.py' -v
@@ -114,3 +118,36 @@ jobs:
           python -m unittest discover -s tests -p 'test_relay.py' -v
           python -m unittest discover -s tests -p 'test_relay_client.py' -v
           node tests/worker.test.mjs
+
+      - name: Get safe advisory diagnosis for CI failure
+        if: failure()
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+        shell: bash
+        run: |
+          set +e
+          python -m agent.brain.error_supervisor \
+            --event-code workflow_tests_failed \
+            --stage tests \
+            --error-code test_suite_failed \
+            --output-report "$RUNNER_TEMP/ai-supervisor.json" \
+            > "$RUNNER_TEMP/ai-supervisor-output.json"
+          status=$?
+          if [[ "$status" -ne 0 || ! -s "$RUNNER_TEMP/ai-supervisor-output.json" ]]; then
+            echo "AI advisor unavailable; the original test failure remains authoritative." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - "$RUNNER_TEMP/ai-supervisor-output.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          recommendation = result.get("recommendation", {})
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\\n### AI error advisor (advice only)\\n")
+              summary.write(f"- Source: {result.get('source', 'local_fallback')}\\n")
+              summary.write(f"- Recommendation: {recommendation.get('action', 'human_review')}\\n")
+              summary.write(f"- Reason code: {recommendation.get('reason_code', 'unknown_error')}\\n")
+              summary.write(f"- Next step: {recommendation.get('next_step_code', 'review_error_code_and_recent_logs')}\\n")
+              summary.write("- Applied automatically: no\\n")
+          PY
