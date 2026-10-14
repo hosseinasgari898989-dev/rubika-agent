@@ -77,6 +77,8 @@ jobs:
 
           report_path = Path("/out/termux_discovery.json")
           report = collect_daily_report(output_path=report_path)
+          # The Termux container writes as its own UID; grant the host runner read access.
+          report_path.chmod(0o644)
           summary = report.get("summary", {})
           candidates = report.get("candidates", {})
           tiktok = candidates.get("tiktok", [])
@@ -252,7 +254,7 @@ jobs:
             echo "## Online Termux discovery"
             echo ""
             echo "- Runtime: real Termux Docker image"
-            echo "- Schedule: cron `17 */5 * * *` (UTC; GitHub can delay scheduled runs)"
+            echo "- Schedule: cron 17 */5 * * * UTC; GitHub can delay scheduled runs"
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
             echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
