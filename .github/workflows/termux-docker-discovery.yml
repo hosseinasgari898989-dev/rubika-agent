@@ -33,11 +33,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m termux.collection_gate \
-            --state artifacts/termux_collection_state.json \
+          result="$(python -m agent.brain.five_hour_gate \
             --event-name "$GITHUB_EVENT_NAME" \
-            --github-output "$GITHUB_OUTPUT" \
-            --summary "$GITHUB_STEP_SUMMARY"
+            --state-file artifacts/termux_collection_state.json)"
+          echo "decision=$result" >> "$GITHUB_OUTPUT"
+          should_run="$(python -c 'import json,sys; print("true" if json.loads(sys.argv[1]).get("should_run") is True else "false")' "$result")"
+          reason="$(python -c 'import json,sys; print(json.loads(sys.argv[1]).get("reason","unknown"))' "$result")"
+          elapsed="$(python -c 'import json,sys; value=json.loads(sys.argv[1]).get("elapsed_seconds"); print("n/a" if value is None else value)' "$result")"
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "Gate decision: $reason; elapsed_seconds=$elapsed; should_run=$should_run"
+          if [[ "$should_run" == "false" ]]; then
+            echo "This scheduled tick is only a gate; collection is skipped until five hours have elapsed since the last successful D1 intake." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   collect-and-sync:
     needs: five-hour-gate
