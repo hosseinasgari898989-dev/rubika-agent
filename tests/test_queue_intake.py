@@ -52,7 +52,7 @@ class FakeCloudState:
         }
         self.items["queued"].append(old)
         self.blocking_seen_ids = {"tiktok:" + _video_id(0, 99)}
-        self.duplicate_once = {_video_id(1, 0)}
+        self.duplicate_once = {_video_id(2, 0)}
 
     def get_automation_queue(self, *, status: str = "queued", limit: int = 100, offset: int = 0):
         values = self.items[status]
@@ -148,7 +148,7 @@ class QueueIntakeTests(unittest.TestCase):
                     {**_row("valid", "creator"), "url": "http://www.tiktok.com/@x/video/valid"},
                     {**_row("undated", "creator"), "published_at": None},
                     {**_row("stale", "creator"), "published_at": old_date},
-                    {**_row("offtopic", "creator", title="Funny unrelated clip"), "caption": "nothing related"},
+                    {**_row("offtopic", "creator", title="Funny unrelated clip"), "caption": "nothing related", "hashtags": []},
                 ]
             }
         }
