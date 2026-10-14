@@ -1,4 +1,4 @@
-name: Mob Entertainment official-source preview
+name: Mob Entertainment official-source test-channel trial
 
 on:
   push:
@@ -11,17 +11,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: rubika-agent-mob-x-preview
+  group: rubika-agent-mob-test-channel-trial
   cancel-in-progress: false
 
 jobs:
-  preview-one-official-x-post:
-    # Intentionally preview-only during development; no Rubika publishing credentials are provided.
+  publish-one-official-test-post:
+    # Test-channel only: target is hard-locked in both workflow and Python guard.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
       AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
     steps:
       - name: Check out the experimental code
         uses: actions/checkout@v4
@@ -29,15 +31,23 @@ jobs:
           ref: agent-brain-mega-v1
           persist-credentials: false
 
-      - name: Validate the private Cloudflare agent connection
+      - name: Validate secrets and lock publishing to the test channel
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 ]]; then
-            echo "::error::Missing or invalid AGENT_API_TOKEN; preview stopped before discovering or downloading media."
+            echo "::error::Missing or invalid AGENT_API_TOKEN; test-channel trial stopped before discovering or downloading media."
             exit 2
           fi
-          echo "X preview mode verified. RUBIKA_TOKEN and RUBIKA_CHANNEL_GUID are deliberately not provided."
+          if [[ -z "${RUBIKA_TOKEN:-}" ]]; then
+            echo "::error::Missing Actions secret RUBIKA_TOKEN; no post was sent."
+            exit 2
+          fi
+          if [[ "${RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
+            echo "::error::Refusing to publish because the destination is not the fixed test channel."
+            exit 2
+          fi
+          echo "Test-channel publishing verified: max 1 post, no production-channel target."
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,23 +61,24 @@ jobs:
           sudo apt-get install --yes ffmpeg
           ffprobe -version | head -n 1
 
-      - name: Discover official sources, translate the original caption, and validate the post media
+      - name: Discover, translate, validate, and publish at most one official post to the test channel
         shell: bash
         run: |
           set -euo pipefail
           python -m agent.brain.mob_official_trial \
+            --publish-test-channel \
             --limit 1 \
             --candidate-report artifacts/termux_discovery.json \
-            --report artifacts/mob-x-preview-report.json \
-            --output-dir artifacts/mob-x-preview-media
+            --report artifacts/mob-official-test-publish-report.json \
+            --output-dir artifacts/mob-official-test-publish-media
 
-      - name: Upload X preview report and recovery media
+      - name: Upload official test-channel result and retained media
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mob-official-preview
+          name: mob-official-test-channel-trial
           path: |
-            artifacts/mob-x-preview-report.json
-            artifacts/mob-x-preview-media/**
+            artifacts/mob-official-test-publish-report.json
+            artifacts/mob-official-test-publish-media/**
           if-no-files-found: warn
           retention-days: 7
