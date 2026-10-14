@@ -282,8 +282,21 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
             "title": selected.get("title"),
         }
     )
-    if formatted["translation_status"] != "translated" or not formatted.get("original_caption") or not formatted.get("persian_translation"):
-        report["error"] = "original_caption_or_persian_translation_unavailable"
+    original_caption = str(formatted.get("original_caption") or "")
+    persian_translation = str(formatted.get("persian_translation") or "")
+    report["translation"] = {
+        "original_caption_available": bool(original_caption.strip()),
+        "original_caption_chars": len(original_caption),
+        "translation_status": str(formatted.get("translation_status") or "unknown"),
+        "persian_translation_available": bool(persian_translation.strip()),
+        "persian_translation_chars": len(persian_translation),
+    }
+    if not original_caption.strip():
+        report["error"] = "original_caption_unavailable"
+        _report(output_report, report)
+        return report
+    if formatted["translation_status"] != "translated" or not persian_translation.strip():
+        report["error"] = "persian_translation_unavailable"
         _report(output_report, report)
         return report
     caption = str(formatted["caption"])
