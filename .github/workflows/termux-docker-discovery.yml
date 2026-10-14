@@ -33,43 +33,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          should_run="$(python - <<'PY'
-          from datetime import datetime, timedelta, timezone
-          import json
-          from pathlib import Path
-
-          if __import__("os").environ.get("GITHUB_EVENT_NAME") != "schedule":
-              print("true")
-              print("Manual dispatch / initial trigger: forced run.", file=__import__("sys").stderr)
-              raise SystemExit(0)
-          state_path = Path("artifacts/termux_collection_state.json")
-          try:
-              state = json.loads(state_path.read_text(encoding="utf-8"))
-              completed = datetime.fromisoformat(str(state["completed_at"]).replace("Z", "+00:00"))
-              if completed.tzinfo is None:
-                  raise ValueError("timestamp_has_no_timezone")
-          except Exception:
-              print("true")
-              print("No valid successful-cycle marker; collection is due.", file=__import__("sys").stderr)
-              raise SystemExit(0)
-
-          now = datetime.now(timezone.utc)
-          elapsed = now - completed.astimezone(timezone.utc)
-          if elapsed < timedelta(0):
-              print("true")
-              print("Last-cycle timestamp is in the future; fail open to a safe new metadata-only cycle.", file=__import__("sys").stderr)
-          elif elapsed < timedelta(hours=5):
-              print("false")
-              print(f"Skipping early schedule tick; {elapsed.total_seconds():.0f} seconds since last successful intake.", file=__import__("sys").stderr)
-          else:
-              print("true")
-              print(f"Five-hour interval elapsed ({elapsed.total_seconds():.0f} seconds).", file=__import__("sys").stderr)
-          PY
-          )"
-          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
-          if [[ "$should_run" == "false" ]]; then
-            echo "This hourly tick is only a gate; the full Termux collector runs after five hours." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          python -m termux.collection_gate \
+            --state artifacts/termux_collection_state.json \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
 
   collect-and-sync:
     needs: five-hour-gate
