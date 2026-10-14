@@ -382,6 +382,18 @@ function makeOmniAI(probability = 0.97) {
   }), env()));
   assert.equal(response.status, 401);
 }
+
+{
+  const state = env();
+  state.AI = makeTranslationAI("به عمق بازی بروید, еще اسرارآمیزتر.");
+  const response = await read(await worker.fetch(request("/api/brain/translate-official", {
+    method: "POST",
+    body: { text: "Explore the depths of the game." },
+  }), state));
+  assert.equal(response.status, 502);
+  assert.equal(response.body.error, "translation_model_output_invalid");
+}
+
 console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction, Clef Omni music moderation and uncapped daily usage accounting.");
 
 function makeTranslationAI(response = "ماب انترتینمنت خبر رسمی تازه‌ای منتشر کرد.") {
