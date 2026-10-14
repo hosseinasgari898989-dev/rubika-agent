@@ -184,7 +184,7 @@ jobs:
           elif [[ "${{ steps.queue_worker.outcome }}" == "failure" ]]; then
             event_code="rubika_delivery_failed"; stage="publish"; error_code="queue_worker_failed"
             if [[ -s artifacts/automation-daily-report.json ]]; then
-              python - artifacts/automation-daily-report.json >> "$GITHUB_ENV" <<'PY'
+              diagnosis="$(python - artifacts/automation-daily-report.json <<'PY'
           import json, sys
           from pathlib import Path
           try:
@@ -194,21 +194,73 @@ jobs:
           errors = report.get("errors", []) if isinstance(report, dict) else []
           codes = {row.get("error") for row in errors if isinstance(row, dict) and isinstance(row.get("error"), str)}
           if "delivery_uncertain" in codes:
-              print("SUPERVISOR_EVENT_CODE=rubika_delivery_uncertain")
-              print("SUPERVISOR_STAGE=publish")
-              print("SUPERVISOR_ERROR_CODE=delivery_receipt_missing")
+              values = ("rubika_delivery_uncertain", "publish", "delivery_receipt_missing")
           elif "control_api_unreachable" in codes or "control_api_http_503" in codes:
-              print("SUPERVISOR_EVENT_CODE=queue_read_failed")
-              print("SUPERVISOR_STAGE=queue_read")
-              print("SUPERVISOR_ERROR_CODE=control_api_unreachable")
+              values = ("queue_read_failed", "queue_read", "control_api_unreachable")
           elif "staging_failed" in codes:
-              print("SUPERVISOR_EVENT_CODE=download_failed")
-              print("SUPERVISOR_STAGE=download")
-              print("SUPERVISOR_ERROR_CODE=staging_failed")
+              values = ("download_failed", "download", "staging_failed")
+          else:
+              values = ("rubika_delivery_failed", "publish", "queue_worker_failed")
+          print("\\t".join(values))
           PY
-              if [[ -n "${SUPERVISOR_EVENT_CODE:-}" ]]; then event_code="$SUPERVISOR_EVENT_CODE"; fi
-              if [[ -n "${SUPERVISOR_STAGE:-}" ]]; then stage="$SUPERVISOR_STAGE"; fi
-              if [[ -n "${SUPERVISOR_ERROR_CODE:-}" ]]; then error_code="$SUPERVISOR_ERROR_CODE"; fi
+              )"
+              IFS=
+            fi
+          fi
+          python -m agent.brain.error_supervisor \
+            --event-code "$event_code" \
+            --stage "$stage" \
+            --error-code "$error_code" \
+            --output-report "$RUNNER_TEMP/ai-supervisor.json" \
+            > "$RUNNER_TEMP/ai-supervisor-output.json"
+          advisor_status=$?
+          if [[ "$advisor_status" -ne 0 || ! -s "$RUNNER_TEMP/ai-supervisor-output.json" ]]; then
+            echo "AI advisor unavailable; the original pipeline failure remains authoritative." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - "$RUNNER_TEMP/ai-supervisor-output.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          recommendation = result.get("recommendation", {})
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\\n### AI error advisor (advice only)\\n")
+              summary.write(f"- Source: {result.get('source', 'local_fallback')}\\n")
+              summary.write(f"- Recommendation: {recommendation.get('action', 'human_review')}\\n")
+              summary.write(f"- Reason code: {recommendation.get('reason_code', 'unknown_error')}\\n")
+              summary.write(f"- Next step: {recommendation.get('next_step_code', 'review_error_code_and_recent_logs')}\\n")
+              summary.write("- Applied automatically: no\\n")
+          PY
+
+      - name: Notify owner when this workflow fails
+        if: failure()
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify             --event workflow_failed             --workflow "Daily edit queue"             --reason "daily_queue_workflow_failed"
+
+      - name: Upload daily queue and storage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-daily-queue-report
+          path: |
+            artifacts/automation-daily-report.json
+            artifacts/storage-cleanup-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop temporary services and log out of MEGA
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/cobalt-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/cobalt-api.pid")" 2>/dev/null || true
+          fi
+          mega-logout >/dev/null 2>&1 || true
+          mega-quit >/dev/null 2>&1 || true
+\\t' read -r detected_event detected_stage detected_error <<< "$diagnosis"
+              if [[ -n "${detected_event:-}" ]]; then event_code="$detected_event"; fi
+              if [[ -n "${detected_stage:-}" ]]; then stage="$detected_stage"; fi
+              if [[ -n "${detected_error:-}" ]]; then error_code="$detected_error"; fi
             fi
           fi
           python -m agent.brain.error_supervisor \
