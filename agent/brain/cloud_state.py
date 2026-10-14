@@ -420,6 +420,11 @@ class CloudState:
             if type(value) is not int or value < 0:
                 raise CloudStateError("control_api_invalid_automation_queue_count")
             result[key] = value
+        sent_today = response.get("sent_today", 0)
+        if type(sent_today) is not int or sent_today < 0:
+            raise CloudStateError("control_api_invalid_automation_queue_daily_count")
+        result["sent_today"] = sent_today
+        result["usage_day"] = str(response.get("usage_day") or "")[:10]
         return result
 
     def update_automation_queue_item(
