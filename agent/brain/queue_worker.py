@@ -249,7 +249,7 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                     "✅ انتشار موفق ویدئوی ادیت\n"
                     f"پلتفرم: {platform}\n"
                     f"عنوان: {str(item.get('title') or 'بدون عنوان')[:250]}\n"
-                    f"سهمیهٔ موفق امروز: {report['sent_count']}/{daily_limit}\n"
+                    f"سهمیهٔ موفق امروز: {sent_today_before + report['sent_count']}/{daily_limit}\n"
                     + inventory
                 )
                 notify_result = send_owner_notification(message)
@@ -322,12 +322,24 @@ def main() -> int:
         "report": str(args.report),
     }, ensure_ascii=False, sort_keys=True))
     if not args.no_notify:
+        error_rows = result.get("errors") if isinstance(result.get("errors"), list) else []
+        error_lines = []
+        for error_row in error_rows[:4]:
+            if not isinstance(error_row, dict):
+                continue
+            platform = re.sub(r"[^A-Za-z0-9_-]", "", str(error_row.get("platform") or ""))[:20]
+            external_id = re.sub(r"[^A-Za-z0-9._-]", "", str(error_row.get("external_id") or ""))[:40]
+            code = _safe_code(error_row.get("error") or "unknown_error")
+            identity = f" ({platform}:{external_id})" if platform and external_id else ""
+            error_lines.append(f"• {code}{identity}")
+        error_summary = ("\nآخرین کدهای خطا:\n" + "\n".join(error_lines)) if error_lines else ""
         message = (
             "📊 گزارش پایان نوبت خودکار روبیکا\n"
             f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))}/4\n"
             f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\n"
             f"وضعیت: {result.get('status', 'unknown')}\n"
             + str(result.get("inventory_text") or queue_inventory_lines(result.get("queue_counts") or {}))
+            + error_summary
         )
         notify = send_owner_notification(message)
         result["final_notification_sent"] = bool(notify.get("sent"))
