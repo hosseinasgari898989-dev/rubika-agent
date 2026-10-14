@@ -1,0 +1,262 @@
+name: Online Termux discovery and queue sync
+
+on:
+  # GitHub cron uses UTC; */5 means 00, 05, 10, 15 and 20 UTC.
+  # The day boundary creates a 4-hour overnight gap; GitHub may delay scheduled jobs.
+  schedule:
+    - cron: "17 */5 * * *"
+  workflow_dispatch:
+  # Run an initial live validation when this workflow is installed/updated on main.
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/termux-docker-discovery.yml"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: rubika-agent-online-termux-discovery
+  cancel-in-progress: false
+
+jobs:
+  collect-and-sync:
+    name: Real Termux runtime, discovery, GitHub report and D1 queue intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+    steps:
+      - name: Check out the current experimental agent brain
+        uses: actions/checkout@v4
+        with:
+          ref: agent-brain-mega-v1
+          persist-credentials: true
+
+      - name: Validate queue credential without exposing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 ]]; then
+            echo "::error::AGENT_API_TOKEN is missing or invalid; discovery and queue sync stopped safely."
+            exit 2
+          fi
+          docker version
+
+      - name: Install host test dependencies and run the complete unit test suite
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run all repository unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Run real Termux Docker source tests and collect live metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 240s docker pull termux/termux-docker:x86_64
+
+          output_dir="$RUNNER_TEMP/termux-discovery-output"
+          mkdir -p "$output_dir"
+          chmod 0777 "$output_dir"
+
+          cat > "$RUNNER_TEMP/termux_docker_discovery.py" <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          from termux.daily_discovery import collect_daily_report
+
+          report_path = Path("/out/termux_discovery.json")
+          report = collect_daily_report(output_path=report_path)
+          summary = report.get("summary", {})
+          candidates = report.get("candidates", {})
+          tiktok = candidates.get("tiktok", [])
+          mob = candidates.get("mob_official", [])
+
+          safe_summary = {
+              "generated_at": report.get("generated_at"),
+              "tiktok_candidates": len(tiktok) if isinstance(tiktok, list) else 0,
+              "mob_official_candidates": len(mob) if isinstance(mob, list) else 0,
+              "paid_providers_used": summary.get("paid_providers_used", []),
+              "media_downloads": report.get("limits", {}).get("media_downloads", 0),
+              "rubika_posts": report.get("limits", {}).get("rubika_posts", 0),
+          }
+          print("ONLINE_TERMUX_SUMMARY=" + json.dumps(
+              safe_summary, ensure_ascii=False, sort_keys=True
+          ))
+
+          for attempt in report.get("attempts", []):
+              if not isinstance(attempt, dict):
+                  continue
+              safe = {}
+              for key in ("source", "method", "status", "result_count",
+                          "candidate_count", "http_status", "error", "reason"):
+                  value = attempt.get(key)
+                  if value is not None:
+                      safe[key] = value
+              if safe:
+                  print("SOURCE_ATTEMPT=" + json.dumps(
+                      safe, ensure_ascii=False, sort_keys=True
+                  ))
+
+          total = safe_summary["tiktok_candidates"] + safe_summary["mob_official_candidates"]
+          if total == 0:
+              raise SystemExit(
+                  "Both live discovery lanes returned zero candidates; refusing to replace "
+                  "the last report or update the queue with an empty run."
+              )
+          if safe_summary["media_downloads"] != 0 or safe_summary["rubika_posts"] != 0:
+              raise SystemExit("Safety violation: this job must remain metadata-only.")
+          if safe_summary["paid_providers_used"] not in ([], None):
+              raise SystemExit("Safety violation: an unexpected paid provider was used.")
+          print("SAFETY=metadata_only; no media downloads; no Rubika publishing")
+          PY
+
+          timeout 25m docker run --rm -i \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -v "$output_dir:/out" \
+            -w /workspace \
+            -e PYTHONPATH=/workspace \
+            termux/termux-docker:x86_64 \
+            sh -lc '
+              set -eu
+              echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
+              timeout 180s pkg update -y
+              timeout 240s pkg install -y python git
+              mkdir -p "$HOME/.venvs"
+              VENV_DIR="$HOME/.venvs/termux-docker"
+              python -m venv "$VENV_DIR"
+              export PATH="$VENV_DIR/bin:$PATH"
+              timeout 240s python -m pip install --disable-pip-version-check --retries 2 --timeout 20 requests yt-dlp==2026.08.19
+              python --version
+              python -c "import requests, yt_dlp; print(requests.__version__, yt_dlp.version.__version__)"
+              timeout 90s python -m unittest discover -s tests -p "test_termux_sources.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_termux_instagram.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
+              timeout 12m python -
+            ' < "$RUNNER_TEMP/termux_docker_discovery.py"
+
+      - name: Validate report and push only the metadata report to the experimental branch
+        id: push_report
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/termux-discovery-output/termux_discovery.json"
+          test -s "$report"
+          python - "$report" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          if payload.get("schema_version") != 1:
+              raise SystemExit("invalid_schema_version")
+          if payload.get("source") != "termux_phone":
+              raise SystemExit("invalid_report_source")
+          if payload.get("mode") != "metadata_only_no_download_no_publish":
+              raise SystemExit("report_not_metadata_only")
+          candidates = payload.get("candidates")
+          if not isinstance(candidates, dict):
+              raise SystemExit("invalid_candidates")
+          for key in ("tiktok", "mob_official"):
+              rows = candidates.get(key)
+              if not isinstance(rows, list):
+                  raise SystemExit("invalid_candidate_list_" + key)
+              for row in rows:
+                  if not isinstance(row, dict):
+                      raise SystemExit("invalid_candidate_row")
+                  url = row.get("url") or row.get("canonical_url")
+                  if not isinstance(url, str) or not url.startswith("https://"):
+                      raise SystemExit("candidate_url_not_https")
+          if len(path.read_bytes()) > 20 * 1024 * 1024:
+              raise SystemExit("report_size_limit_exceeded")
+          print(json.dumps({
+              "schema_valid": True,
+              "tiktok_candidates": len(candidates["tiktok"]),
+              "mob_official_candidates": len(candidates["mob_official"]),
+              "media_downloads": payload.get("limits", {}).get("media_downloads", 0),
+              "rubika_posts": payload.get("limits", {}).get("rubika_posts", 0),
+          }, sort_keys=True))
+          PY
+
+          git fetch origin agent-brain-mega-v1
+          git merge --ff-only origin/agent-brain-mega-v1
+          mkdir -p artifacts
+          cp "$report" artifacts/termux_discovery.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- artifacts/termux_discovery.json
+          staged_paths="$(git diff --cached --name-only)"
+          if [[ "$staged_paths" != "artifacts/termux_discovery.json" ]]; then
+            echo "::error::Refusing to commit anything besides the metadata report."
+            exit 2
+          fi
+          git commit -m "Update online Termux metadata discovery report"
+          git push origin HEAD:refs/heads/agent-brain-mega-v1
+          echo "report_pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Add TikTok metadata to the persistent D1 edit queue
+        id: queue_intake
+        if: steps.push_report.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m agent.brain.queue_intake \
+            --report artifacts/termux_discovery.json \
+            --no-notify | tee "$RUNNER_TEMP/queue-intake-result.json"
+          python - "$RUNNER_TEMP/queue-intake-result.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if payload.get("ok") is not True:
+              raise SystemExit("queue_intake_not_confirmed")
+          for key in ("received_count", "inserted_count", "duplicate_count", "invalid_count"):
+              value = payload.get(key, 0)
+              if type(value) is not int or value < 0:
+                  value = 0
+              print(f"{key}={value}")
+          counts = payload.get("queue_counts", {})
+          print("queue_total=" + str(counts.get("total", 0) if isinstance(counts, dict) else 0))
+          PY
+
+      - name: Upload collection report and queue result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: online-termux-discovery
+          path: |
+            artifacts/termux_discovery.json
+            ${{ runner.temp }}/termux-discovery-output/termux_discovery.json
+            ${{ runner.temp }}/queue-intake-result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Write a concise execution summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Online Termux discovery"
+            echo ""
+            echo "- Runtime: real Termux Docker image"
+            echo "- Schedule: cron `17 */5 * * *` (UTC; GitHub can delay scheduled runs)"
+            echo "- Full unit suite: completed before live discovery if preceding step passed"
+            echo "- Report commit/push: ${{ steps.push_report.outcome }}"
+            echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
+            echo "- Newly inserted into queue: ${{ steps.queue_intake.outputs.inserted_count || 'n/a' }}"
+            echo "- Duplicates skipped: ${{ steps.queue_intake.outputs.duplicate_count || 'n/a' }}"
+            echo "- This workflow never downloads media or publishes to Rubika"
+          } >> "$GITHUB_STEP_SUMMARY"
