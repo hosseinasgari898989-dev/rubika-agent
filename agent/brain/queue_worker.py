@@ -125,6 +125,18 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
         "errors": [],
     }
 
+    initial_counts = cloud.get_automation_queue_summary()
+    sent_today_before = int(initial_counts.get("sent_today", 0) or 0)
+    report["daily_sent_before"] = sent_today_before
+    remaining_successes = max(0, daily_limit - sent_today_before)
+    if remaining_successes == 0:
+        report["status"] = "daily_quota_reached"
+        report["finished_at"] = _utc_now()
+        report["queue_counts"] = initial_counts
+        report["inventory"] = _mega_inventory()
+        report["inventory_text"] = _inventory_text(initial_counts, report["inventory"])
+        return report
+
     queue_response = cloud.get_automation_queue(status="queued", limit=QUEUE_READ_LIMIT)
     candidates = queue_response.get("items", [])
     if not isinstance(candidates, list):
@@ -134,12 +146,14 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
         report["status"] = "queue_empty"
         report["finished_at"] = _utc_now()
         report["queue_counts"] = cloud.get_automation_queue_summary()
+        report["inventory"] = _mega_inventory()
+        report["inventory_text"] = _inventory_text(report["queue_counts"], report["inventory"])
         return report
 
     with tempfile.TemporaryDirectory(prefix="rubika-agent-queue-") as folder:
         root = Path(folder)
         for item in candidates:
-            if report["sent_count"] >= daily_limit or report["attempted_count"] >= max_attempts:
+            if report["sent_count"] >= remaining_successes or report["attempted_count"] >= max_attempts:
                 break
             if not isinstance(item, dict):
                 continue
@@ -260,9 +274,9 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
 
     report["finished_at"] = _utc_now()
     report["queue_counts"] = cloud.get_automation_queue_summary()
+    report["daily_sent_today"] = int(report["queue_counts"].get("sent_today", 0) or 0)
     report["status"] = (
-        "sent" if report["sent_count"] == daily_limit
-        else "partial" if report["sent_count"] and report["queue_counts"].get("queued", 0)
+        "sent" if report["sent_count"] >= remaining_successes
         else "queue_empty" if report["sent_count"] == 0 and report["queue_counts"].get("queued", 0) == 0
         else "failed" if report["sent_count"] == 0 and report["failed_count"]
         else "partial"
@@ -310,7 +324,7 @@ def main() -> int:
     if not args.no_notify:
         message = (
             "📊 گزارش پایان نوبت خودکار روبیکا\n"
-            f"ویدئوهای موفق: {result.get('sent_count', 0)}/4\n"
+            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))}/4\n"
             f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\n"
             f"وضعیت: {result.get('status', 'unknown')}\n"
             + str(result.get("inventory_text") or queue_inventory_lines(result.get("queue_counts") or {}))
