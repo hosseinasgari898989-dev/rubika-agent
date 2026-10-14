@@ -35,6 +35,7 @@ jobs:
           ref: agent-brain-mega-v1
 
       - name: Validate required credentials without printing them
+        id: credentials_check
         shell: bash
         run: |
           set -euo pipefail
@@ -72,9 +73,11 @@ jobs:
           version: "9.6.0"
 
       - name: Install project Python dependencies
+        id: install_python_dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
       - name: Install ffmpeg if required
+        id: ffmpeg_setup
         run: |
           if ! command -v ffprobe >/dev/null 2>&1; then
             sudo apt-get update
@@ -95,6 +98,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Start temporary Cobalt API
+        id: cobalt_start
         working-directory: cobalt-src
         env:
           API_URL: http://127.0.0.1:9000/
@@ -136,6 +140,7 @@ jobs:
           echo "MEGA login and project folder verified."
 
       - name: Process the D1 backlog with a one-success test-channel cap
+        id: queue_worker
         run: |
           python -m agent.brain.queue_worker \
             --daily-limit 1 \
@@ -143,6 +148,7 @@ jobs:
             --report artifacts/automation-daily-report.json
 
       - name: Safely reclaim stale confirmed-sent media
+        id: storage_cleanup
         if: always() && steps.mega_login.outcome == 'success'
         run: |
           set -uo pipefail
@@ -153,6 +159,82 @@ jobs:
                 printf '%s\n' '{"ok":false,"status":"failed_closed","deleted_count":0}' > artifacts/storage-cleanup-report.json
               fi
             }
+
+      - name: Get safe AI diagnosis for editing pipeline failure
+        if: failure()
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+        shell: bash
+        run: |
+          set +e
+          event_code="unknown_error"
+          stage="unknown"
+          error_code="daily_pipeline_step_failed"
+          if [[ "${{ steps.credentials_check.outcome }}" == "failure" ]]; then
+            event_code="workflow_tests_failed"; stage="tests"; error_code="required_credentials_missing"
+          elif [[ "${{ steps.install_python_dependencies.outcome }}" == "failure" ]]; then
+            event_code="workflow_tests_failed"; stage="tests"; error_code="dependency_install_failed"
+          elif [[ "${{ steps.ffmpeg_setup.outcome }}" == "failure" ]]; then
+            event_code="media_validation_failed"; stage="media_validation"; error_code="ffmpeg_setup_failed"
+          elif [[ "${{ steps.cobalt_start.outcome }}" == "failure" ]]; then
+            event_code="download_failed"; stage="download"; error_code="cobalt_service_unavailable"
+          elif [[ "${{ steps.mega_login.outcome }}" == "failure" ]]; then
+            event_code="mega_upload_failed"; stage="mega_storage"; error_code="mega_auth_or_listing_failed"
+          elif [[ "${{ steps.queue_worker.outcome }}" == "failure" ]]; then
+            event_code="rubika_delivery_failed"; stage="publish"; error_code="queue_worker_failed"
+            if [[ -s artifacts/automation-daily-report.json ]]; then
+              python - artifacts/automation-daily-report.json >> "$GITHUB_ENV" <<'PY'
+          import json, sys
+          from pathlib import Path
+          try:
+              report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          except Exception:
+              report = {}
+          errors = report.get("errors", []) if isinstance(report, dict) else []
+          codes = {row.get("error") for row in errors if isinstance(row, dict) and isinstance(row.get("error"), str)}
+          if "delivery_uncertain" in codes:
+              print("SUPERVISOR_EVENT_CODE=rubika_delivery_uncertain")
+              print("SUPERVISOR_STAGE=publish")
+              print("SUPERVISOR_ERROR_CODE=delivery_receipt_missing")
+          elif "control_api_unreachable" in codes or "control_api_http_503" in codes:
+              print("SUPERVISOR_EVENT_CODE=queue_read_failed")
+              print("SUPERVISOR_STAGE=queue_read")
+              print("SUPERVISOR_ERROR_CODE=control_api_unreachable")
+          elif "staging_failed" in codes:
+              print("SUPERVISOR_EVENT_CODE=download_failed")
+              print("SUPERVISOR_STAGE=download")
+              print("SUPERVISOR_ERROR_CODE=staging_failed")
+          PY
+              if [[ -n "${SUPERVISOR_EVENT_CODE:-}" ]]; then event_code="$SUPERVISOR_EVENT_CODE"; fi
+              if [[ -n "${SUPERVISOR_STAGE:-}" ]]; then stage="$SUPERVISOR_STAGE"; fi
+              if [[ -n "${SUPERVISOR_ERROR_CODE:-}" ]]; then error_code="$SUPERVISOR_ERROR_CODE"; fi
+            fi
+          fi
+          python -m agent.brain.error_supervisor \
+            --event-code "$event_code" \
+            --stage "$stage" \
+            --error-code "$error_code" \
+            --output-report "$RUNNER_TEMP/ai-supervisor.json" \
+            > "$RUNNER_TEMP/ai-supervisor-output.json"
+          advisor_status=$?
+          if [[ "$advisor_status" -ne 0 || ! -s "$RUNNER_TEMP/ai-supervisor-output.json" ]]; then
+            echo "AI advisor unavailable; the original pipeline failure remains authoritative." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - "$RUNNER_TEMP/ai-supervisor-output.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          recommendation = result.get("recommendation", {})
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\\n### AI error advisor (advice only)\\n")
+              summary.write(f"- Source: {result.get('source', 'local_fallback')}\\n")
+              summary.write(f"- Recommendation: {recommendation.get('action', 'human_review')}\\n")
+              summary.write(f"- Reason code: {recommendation.get('reason_code', 'unknown_error')}\\n")
+              summary.write(f"- Next step: {recommendation.get('next_step_code', 'review_error_code_and_recent_logs')}\\n")
+              summary.write("- Applied automatically: no\\n")
+          PY
 
       - name: Notify owner when this workflow fails
         if: failure()
