@@ -52,8 +52,9 @@ class QueueIntakeTests(unittest.TestCase):
             },
         }
         rows = candidates_for_queue(payload)
-        self.assertEqual(len(rows), 3)
-        self.assertEqual([row["platform"] for row in rows], ["tiktok", "youtube", "instagram"])
+        self.assertEqual(len(rows), 1)
+        # YouTube is postponed and Instagram is no longer part of the normal queue.
+        self.assertEqual([row["platform"] for row in rows], ["tiktok"])
         self.assertEqual(rows[0]["external_id"], "7616247520657771796")
         self.assertEqual(rows[0]["source_key"], "@creator")
         self.assertTrue(rows[0]["freshness_verified"])
