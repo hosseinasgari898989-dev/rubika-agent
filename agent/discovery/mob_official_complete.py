@@ -449,13 +449,65 @@ def _discover_steam(session: Any, sources: list[dict[str, Any]]) -> list[dict[st
         # Do not label external press coverage/community chatter as developer news.
         if feed and feed not in {"steam_community_announcements", "steam_community_announcement"}:
             continue
-        canonical_url = str(row.get("url") or "")
-        host = _host(canonical_url)
-        if not (host == "steamcommunity.com" or _is_host(host, "steamcommunity.com")):
+        raw_url = str(row.get("url") or "")
+        host = _host(raw_url)
+        gid = str(row.get("gid") or "").strip()
+        if not re.fullmatch(r"[0-9]{5,30}", gid):
             continue
+
+        if host == "steamcommunity.com" or _is_host(host, "steamcommunity.com"):
+            canonical_url = raw_url
+        elif (
+            _is_host(host, "akamaihd.net")
+            and re.fullmatch(r"/news/externalpost/steam_community_announcements/[0-9]+/?", urlparse(raw_url).path)
+            and "mob entertainment" in str(row.get("author") or "").casefold()
+        ):
+            # Steam's official app-news API often returns an Akamai external-post
+            # URL for the Mob-authored community announcement. Rebuild the canonical
+            # Steam Community URL from the verified feed item ID.
+            canonical_url = (
+                "https://steamcommunity.com/games/"
+                + str(STEAM_APP_ID)
+                + "/announcements/detail/"
+                + gid
+            )
+        else:
+            continue
+
+        contents = str(row.get("contents") or "")
         parser = _SteamContentParser(canonical_url)
-        parser.feed(str(row.get("contents") or ""))
-        caption = _plain_text(" ".join(parser.text_parts), MAX_CAPTION_CHARS)
+        parser.feed(contents)
+
+        # Steam announcement bodies commonly use BBCode, including embedded
+        # previewyoutube and STEAM_CLAN_IMAGE tokens rather than HTML media tags.
+        caption_body = re.sub(
+            r"\[previewyoutube=[\"'][^]]+\][^\[]*\[/previewyoutube\]",
+            " ",
+            contents,
+            flags=re.IGNORECASE,
+        )
+        caption_body = re.sub(
+            r"\[img\].*?\[/img\]",
+            " ",
+            caption_body,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        caption_body = re.sub(
+            r"\[dynamiclink\b[^\]]*\].*?\[/dynamiclink\]",
+            " ",
+            caption_body,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        caption_body = re.sub(
+            r"\[url=[\"'][^\"']+[\"']\](.*?)\[/url\]",
+            r"\1",
+            caption_body,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        caption_body = re.sub(r"\[(?:/?p|/?b|/?i|/?u|/?strike|/?h[1-6]|/?list|\*|/?hr)\]", " ", caption_body, flags=re.IGNORECASE)
+        caption_body = re.sub(r"\[[^\]]{1,80}\]", " ", caption_body)
+        caption = _plain_text(caption_body, MAX_CAPTION_CHARS)
+
         chosen_video = ""
         chosen_image = ""
         for kind, raw in parser.media:
@@ -463,14 +515,42 @@ def _discover_steam(session: Any, sources: list[dict[str, Any]]) -> list[dict[st
             if not clean:
                 continue
             host_media = _host(clean)
-            path = urlparse(clean).path.lower()
-            if kind == "video" and (path.endswith((".mp4", ".webm", ".mov", ".m3u8")) or "youtube.com" in host_media):
+            media_path = urlparse(clean).path.lower()
+            if kind == "video" and (
+                media_path.endswith((".mp4", ".webm", ".mov", ".m3u8"))
+                or host_media == "youtube.com"
+                or host_media.endswith(".youtube.com")
+                or host_media == "youtu.be"
+            ):
                 chosen_video = chosen_video or clean
             elif kind == "image" and (
-                path.endswith((".jpg", ".jpeg", ".png", ".webp"))
+                media_path.endswith((".jpg", ".jpeg", ".png", ".webp"))
                 or any(_is_host(host_media, suffix) for suffix in STEAM_MEDIA_HOST_SUFFIXES)
             ):
                 chosen_image = chosen_image or clean
+
+        if not chosen_video:
+            preview = re.search(
+                r'\[previewyoutube=[\"\']([A-Za-z0-9_-]{11})(?:;[^\\"\']*)?[\"\']\]',
+                contents,
+                flags=re.IGNORECASE,
+            )
+            if preview:
+                chosen_video = "https://www.youtube.com/watch?v=" + preview.group(1)
+
+        if not chosen_image:
+            for image_match in re.finditer(r"\[img\](.*?)\[/img\]", contents, flags=re.IGNORECASE | re.DOTALL):
+                clean = _steam_media_url(unescape(image_match.group(1).strip()), canonical_url)
+                if not clean:
+                    continue
+                host_media = _host(clean)
+                media_path = urlparse(clean).path.lower()
+                if (
+                    media_path.endswith((".jpg", ".jpeg", ".png", ".webp"))
+                    or any(_is_host(host_media, suffix) for suffix in STEAM_MEDIA_HOST_SUFFIXES)
+                ):
+                    chosen_image = clean
+                    break
         # A Steam news card without a post-level image/video or body is not publishable.
         if not caption or not (chosen_video or chosen_image):
             continue
@@ -479,9 +559,6 @@ def _discover_steam(session: Any, sources: list[dict[str, Any]]) -> list[dict[st
             published = datetime.fromtimestamp(int(published), tz=timezone.utc).isoformat()
         except (ValueError, TypeError, OSError, OverflowError):
             published = None
-        gid = str(row.get("gid") or "").strip()
-        if not re.fullmatch(r"[0-9]{5,30}", gid):
-            continue
         item = _make_item(
             source_platform="steam",
             source_name="Poppy Playtime official Steam news",
