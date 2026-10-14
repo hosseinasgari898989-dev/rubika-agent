@@ -262,6 +262,34 @@ jobs:
           git push origin HEAD:refs/heads/agent-brain-mega-v1
           echo "report_pushed=true" >> "$GITHUB_OUTPUT"
 
+      # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
+      - name: Add TikTok metadata to the persistent D1 edit queue
+        id: queue_intake
+        if: steps.push_report.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m agent.brain.queue_intake \
+            --report artifacts/termux_discovery.json \
+            --max-new 4 \
+            --no-notify | tee "$RUNNER_TEMP/queue-intake-result.json"
+          python - "$RUNNER_TEMP/queue-intake-result.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if payload.get("ok") is not True:
+              raise SystemExit("queue_intake_not_confirmed")
+          for key in ("received_count", "inserted_count", "duplicate_count", "invalid_count"):
+              value = payload.get(key, 0)
+              if type(value) is not int or value < 0:
+                  value = 0
+              print(f"{key}={value}")
+          counts = payload.get("queue_counts", {})
+          print("queue_total=" + str(counts.get("total", 0) if isinstance(counts, dict) else 0))
+          PY
+
       - name: Record successful five-hour collection cycle
         id: record_cycle
         if: steps.queue_intake.outcome == 'success'
@@ -295,7 +323,7 @@ jobs:
           }
           destination = Path(sys.argv[3])
           destination.parent.mkdir(parents=True, exist_ok=True)
-          destination.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+          destination.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -306,34 +334,6 @@ jobs:
           fi
           git commit -m "Record successful five-hour metadata intake"
           git push origin HEAD:agent-brain-mega-v1
-
-      # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
-      - name: Add TikTok metadata to the persistent D1 edit queue
-        id: queue_intake
-        if: steps.push_report.outcome == 'success'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m agent.brain.queue_intake \
-            --report artifacts/termux_discovery.json \
-            --max-new 4 \
-            --no-notify | tee "$RUNNER_TEMP/queue-intake-result.json"
-          python - "$RUNNER_TEMP/queue-intake-result.json" >> "$GITHUB_OUTPUT" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          if payload.get("ok") is not True:
-              raise SystemExit("queue_intake_not_confirmed")
-          for key in ("received_count", "inserted_count", "duplicate_count", "invalid_count"):
-              value = payload.get(key, 0)
-              if type(value) is not int or value < 0:
-                  value = 0
-              print(f"{key}={value}")
-          counts = payload.get("queue_counts", {})
-          print("queue_total=" + str(counts.get("total", 0) if isinstance(counts, dict) else 0))
-          PY
 
       - name: Get safe advisory diagnosis for pipeline failure
         if: failure()
@@ -374,12 +374,12 @@ jobs:
           result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           recommendation = result.get("recommendation", {})
           with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("\\n### AI error advisor (advice only)\\n")
-              summary.write(f"- Source: {result.get('source', 'local_fallback')}\\n")
-              summary.write(f"- Recommendation: {recommendation.get('action', 'human_review')}\\n")
-              summary.write(f"- Reason code: {recommendation.get('reason_code', 'unknown_error')}\\n")
-              summary.write(f"- Next step: {recommendation.get('next_step_code', 'review_error_code_and_recent_logs')}\\n")
-              summary.write("- Applied automatically: no\\n")
+              summary.write("\n### AI error advisor (advice only)\n")
+              summary.write(f"- Source: {result.get('source', 'local_fallback')}\n")
+              summary.write(f"- Recommendation: {recommendation.get('action', 'human_review')}\n")
+              summary.write(f"- Reason code: {recommendation.get('reason_code', 'unknown_error')}\n")
+              summary.write(f"- Next step: {recommendation.get('next_step_code', 'review_error_code_and_recent_logs')}\n")
+              summary.write("- Applied automatically: no\n")
           PY
 
       - name: Upload collection report and queue result
@@ -402,7 +402,7 @@ jobs:
             echo "## Online Termux discovery"
             echo ""
             echo "- Runtime: real Termux Docker image"
-            echo "- Schedule: cron 17 */5 * * * UTC; GitHub can delay scheduled runs"
+            echo "- Schedule: hourly UTC gate; full collection after five hours from successful D1 intake"
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
             echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
@@ -418,10 +418,10 @@ jobs:
 
           data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
-              out.write("\\n### Newly queued URLs (not already in D1)\\n\\n")
+              out.write("\n### Newly queued URLs (not already in D1)\n\n")
               rows = data.get("selected_items", [])
               if not isinstance(rows, list) or not rows:
-                  out.write("No new eligible URLs were added in this run.\\n")
+                  out.write("No new eligible URLs were added in this run.\n")
               else:
                   for i, row in enumerate(rows, 1):
                       if not isinstance(row, dict):
@@ -430,6 +430,6 @@ jobs:
                       title = " ".join(str(row.get("title") or "").split())[:110]
                       url = str(row.get("url") or "")
                       if url.startswith("https://"):
-                          out.write(f"{i}. [{source} — {title}]({url})\\n")
+                          out.write(f"{i}. [{source} — {title}]({url})\n")
           PY
           fi
