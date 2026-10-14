@@ -145,6 +145,29 @@ class CloudStateTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "control_api_http_401")
         self.assertNotIn("secret", str(caught.exception))
 
+    def test_http_failure_exposes_only_safe_api_error_code(self):
+        state = CloudState("https://worker.example", TOKEN)
+        error = __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
+            "https://worker.example/api/brain/items/upsert",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(b'{"error":"invalid_canonical_url","secret":"do not expose this"}'),
+        )
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(CloudStateError) as caught:
+                state.upsert_item({
+                    "platform": "mob_official",
+                    "external_id": "x-2107878755079213476",
+                    "canonical_url": "https://x.com/mobgamesstudios/status/2107878755079213476",
+                    "source_key": "x.com/mobgamesstudios",
+                    "status": "discovered",
+                })
+
+        self.assertEqual(caught.exception.code, "control_api_http_400_invalid_canonical_url")
+        self.assertNotIn("secret", str(caught.exception))
+        self.assertNotIn("do not expose this", str(caught.exception))
+
     def test_rejects_oversized_payload_before_network(self):
         state = CloudState("https://worker.example", TOKEN)
         with self.assertRaises(ValueError):
