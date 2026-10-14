@@ -339,7 +339,7 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         self.assertIn("Official update caption.", rows[0]["original_caption"])
 
 
-    def test_combined_sources_dedupe_crossposts_and_return_newest_verified_post_first(self):
+    def test_combined_sources_dedupe_and_preserve_primary_source_precedence(self):
         shared = (
             "Mob Entertainment announces an official Poppy Playtime update for the "
             "community with new details about the upcoming chapter and its characters."
@@ -398,10 +398,50 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             rows, attempts = discover_all_official_posts(max_results=12)
 
         self.assertEqual([row["external_id"] for row in rows], [
-            "x-1734258130186559717",
             "chapter-announcement",
+            "x-1734258130186559717",
         ])
         self.assertIn("official_source_merge", [row.get("source") for row in attempts])
+
+
+    def test_steam_embedded_youtube_prefers_original_steam_image_when_available(self):
+        homepage = "https://mobentertainment.com/"
+        endpoint = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/"
+        gid = "1844115010499376"
+        steam_payload = {"appnews": {"newsitems": [{
+            "gid": gid,
+            "title": "Recent official Poppy Playtime update",
+            "url": "https://steamcommunity.com/games/1721470/announcements/detail/" + gid,
+            "date": 1791200000,
+            "feedname": "steam_community_announcements",
+            "contents": (
+                '[p]Mob Entertainment announces an official Poppy Playtime update.[/p]'
+                '[previewyoutube="fAXzLmsbrd8;full"][/previewyoutube]'
+                '[img]{STEAM_CLAN_IMAGE}/12345/update.jpg[/img]'
+            ),
+        }]}}
+        session = FakeSession({
+            homepage: FakeResponse("<html><body>No newsroom cards.</body></html>"),
+            endpoint: FakeResponse(payload=steam_payload),
+        })
+        sources = [
+            {"id": "mob_newsroom", "kind": "html_newsroom", "enabled": True,
+             "source_name": "Mob Entertainment newsroom", "url": homepage},
+            {"id": "mob_youtube", "kind": "youtube_atom", "enabled": False,
+             "channel_id": "UCXqV4yoyC_mmZye6VbKFPeQ", "url": "https://www.youtube.com/channel/UCXqV4yoyC_mmZye6VbKFPeQ"},
+            {"id": "steam_news", "kind": "steam_news_api", "enabled": True,
+             "app_id": 1721470, "url": endpoint},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = config_file(folder, sources)
+            rows, _ = discover_complete_official_posts(config_path=path, session=session)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["media_type"], "image")
+        self.assertEqual(
+            rows[0]["media_url"],
+            "https://clan.cloudflare.steamstatic.com/images/12345/update.jpg",
+        )
 
 
 if __name__ == "__main__":
