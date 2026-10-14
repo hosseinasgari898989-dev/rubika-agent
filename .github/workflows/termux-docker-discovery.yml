@@ -211,6 +211,7 @@ jobs:
           git push origin HEAD:refs/heads/agent-brain-mega-v1
           echo "report_pushed=true" >> "$GITHUB_OUTPUT"
 
+      # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
       - name: Add TikTok metadata to the persistent D1 edit queue
         id: queue_intake
         if: steps.push_report.outcome == 'success'
