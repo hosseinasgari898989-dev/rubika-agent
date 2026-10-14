@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "mode": "preview",
-  "requested_at": "2026-10-14T00:14:55.513Z",
-  "request_id": "mob-official-preview-natural-persian",
-  "reason": "Verify the improved natural Persian translation prompt and the real post image. This preview must not publish to Rubika."
+  "requested_at": "2026-10-14T00:17:46.133Z",
+  "request_id": "mob-official-preview-llama33",
+  "reason": "Check the improved official Mob Persian translation model and validate the same post media. Preview only; do not publish to Rubika."
 }
