@@ -3,6 +3,7 @@ import unittest
 from agent.brain.edit_caption import EDIT_CAPTION
 from agent.brain.e2e_batch_from_report import _round_robin_candidates
 from agent.brain.e2e_from_report import _stage_failure_summary
+from agent.brain.e2e_from_report import _blocking_ledger_ids, _is_reusable_staged_item
 from agent.brain.models import Candidate
 
 
@@ -44,6 +45,55 @@ class StageFailureDiagnosticsTests(unittest.TestCase):
         self.assertEqual(result["reason"], "cloud_sync_failed")
         self.assertTrue(result["cloud_sync_errors"])
         self.assertNotIn("private-token-should-not-appear", str(result))
+
+
+class DeliveryAwareDeduplicationTests(unittest.TestCase):
+    def test_only_delivery_blocking_ledger_entries_exclude_queue_candidates(self):
+        ids = _blocking_ledger_ids({
+            "tiktok:ready": {
+                "platform": "tiktok", "external_id": "ready", "status": "ready",
+            },
+            "tiktok:failed": {
+                "platform": "tiktok", "external_id": "failed", "status": "failed",
+            },
+            "tiktok:sent": {
+                "platform": "tiktok", "external_id": "sent", "status": "sent",
+            },
+        })
+        self.assertNotIn("tiktok:ready", ids)
+        self.assertNotIn("tiktok:failed", ids)
+        self.assertIn("tiktok:sent", ids)
+        self.assertIn("sent", ids)
+
+    def test_reuses_only_validated_ready_media_with_successful_cloud_sync(self):
+        candidate = _candidate("tiktok", "123", "Poppy Playtime edit")
+        entry = {
+            "status": "ready",
+            "platform": "tiktok",
+            "external_id": "123",
+            "permission_confirmed": True,
+            "cloud_sync": "ok",
+            "media_type": "video",
+            "storage_key": "/Rubika-Agent/staging/tiktok_123-preserved.mp4",
+            "sha256": "a" * 64,
+            "cloud_payload": {
+                "media_type": "video",
+                "media_sha256": "a" * 64,
+                "validation": {"ok": True, "mime_type": "video/mp4"},
+            },
+        }
+        self.assertTrue(_is_reusable_staged_item(candidate, entry))
+        for patch in (
+            {"status": "failed"},
+            {"permission_confirmed": False},
+            {"cloud_sync": "pending"},
+            {"media_type": "unknown"},
+            {"storage_key": "/Rubika-Agent/../outside.mp4"},
+            {"cloud_payload": {"media_type": "video", "media_sha256": "b" * 64, "validation": {"ok": True}}},
+        ):
+            invalid = dict(entry)
+            invalid.update(patch)
+            self.assertFalse(_is_reusable_staged_item(candidate, invalid), patch)
 
 
 class BatchOrderTests(unittest.TestCase):
