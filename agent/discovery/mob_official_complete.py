@@ -58,6 +58,7 @@ class _PostPageParser(HTMLParser):
         self.base_url = base_url
         self.meta: dict[str, str] = {}
         self.media: list[tuple[str, str]] = []
+        self.article_media: list[tuple[str, str]] = []
         self.jsonld_chunks: list[str] = []
         self._script_jsonld = False
         self._script_data: list[str] = []
@@ -89,7 +90,11 @@ class _PostPageParser(HTMLParser):
             raw = values.get(attr) or values.get("data-src") or values.get("data-lazy-src") or ""
             if raw:
                 kind = "video" if lower in {"video", "source", "iframe"} else ("audio" if lower == "audio" else "image")
-                self.media.append((kind, urljoin(self.base_url, raw)))
+                media_entry = (kind, urljoin(self.base_url, raw))
+                self.media.append(media_entry)
+                # Keep content media separate from shared header/footer logos and icons.
+                if self._capture_depth > 0:
+                    self.article_media.append(media_entry)
         capture_container = (
             lower in {"article", "main"}
             or (
@@ -185,6 +190,14 @@ def _detail_from_page(body: str, page_url: str) -> dict[str, Any]:
     video_url = meta_value("og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream")
     if not image_url or not video_url:
         for row in json_objects:
+            row_type = row.get("@type", "")
+            kinds = row_type if isinstance(row_type, list) else [row_type]
+            is_article = any(
+                str(kind).lower() in {"article", "newsarticle", "blogposting", "reportage"}
+                for kind in kinds
+            )
+            if not is_article:
+                continue
             for key in ("image", "thumbnailUrl"):
                 value = row.get(key)
                 if not image_url and isinstance(value, str):
@@ -203,8 +216,8 @@ def _detail_from_page(body: str, page_url: str) -> dict[str, Any]:
     image_url = _absolute_http_url(page_url, image_url) if image_url else None
     video_url = _absolute_http_url(page_url, video_url) if video_url else None
 
-    # Real video sources/embeds inside the story are preferred over a thumbnail.
-    for kind, raw in parser.media:
+    # Use media embedded in the article, never a generic site-header image.
+    for kind, raw in parser.article_media:
         candidate_url = _absolute_http_url(page_url, raw)
         if not candidate_url:
             continue
