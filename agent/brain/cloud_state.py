@@ -102,6 +102,8 @@ class CloudState:
         clean = re.sub(r"\s+", " ", translation).strip()
         if not re.search(r"[\u0600-\u06FF]", clean):
             raise CloudStateError("control_api_translation_not_persian")
+        if re.search(r"[\u0400-\u04FF]", clean):
+            raise CloudStateError("control_api_translation_wrong_script")
         return clean[:6500]
 
     def moderate_music(
