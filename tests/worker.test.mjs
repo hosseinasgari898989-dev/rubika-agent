@@ -726,7 +726,7 @@ function supervisorInput(extra = {}) {
   const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.source, "deterministic_fallback");
-  assert.equal(response.body.recommendation.action, "human_review");
+  assert.equal(response.body.recommendation.action, "retry_next_scheduled_run");
   assert.equal(JSON.stringify(response.body).includes("shell_command"), false);
   assert.equal(JSON.stringify(response.body).includes("delete_everything"), false);
 }
