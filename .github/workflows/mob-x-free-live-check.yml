@@ -215,7 +215,7 @@ jobs:
               report["request_error_type"] = type(exc).__name__
           Path("artifacts/mob-x-unifapi-probe.json").parent.mkdir(parents=True, exist_ok=True)
           Path("artifacts/mob-x-unifapi-probe.json").write_text(
-              json.dumps(report, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8"
+              json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
           )
           print(json.dumps(report, ensure_ascii=False, sort_keys=True))
           PY
@@ -225,5 +225,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mob-x-free-live-check
-          path: |\n            artifacts/mob-x-free-live-check.json\n            artifacts/mob-x-unifapi-probe.json\n          if-no-files-found: warn
+          path: |
+            artifacts/mob-x-free-live-check.json
+            artifacts/mob-x-unifapi-probe.json
+          if-no-files-found: warn
           retention-days: 7
