@@ -1,0 +1,101 @@
+name: Mob official X news publisher (gated)
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rubika-agent-official-mob-x-production
+  cancel-in-progress: false
+
+jobs:
+  publish-one-new-official-x-post:
+    # Closed unless explicitly approved during the final production launch.
+    if: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
+      RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+    steps:
+      - name: Check out the tested X-only agent branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent-brain-mega-v1
+          persist-credentials: false
+
+      - name: Validate launch boundary and required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from agent.lifecycle import load_lifecycle_policy
+          policy = load_lifecycle_policy()
+          if policy["mode"] != "production" or policy["birth_datetime"] is None:
+              raise SystemExit(
+                  "Publishing blocked: set config/agent_lifecycle.json to production "
+                  "and set a valid UTC born_at only at final launch."
+              )
+          print("Production launch boundary verified; historical posts are filtered.")
+          PY
+          missing=0
+          for key in AGENT_API_TOKEN RUBIKA_TOKEN RUBIKA_CHANNEL_GUID RUBIKA_OWNER_CHAT_ID; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "::error::Missing required Actions secret: $key. No post will be sent."
+              missing=1
+            fi
+          done
+          if [[ "${AGENT_API_TOKEN:-}" && ${#AGENT_API_TOKEN} -lt 32 ]]; then
+            echo "::error::AGENT_API_TOKEN is too short. No post will be sent."
+            missing=1
+          fi
+          if [[ "$missing" -ne 0 ]]; then exit 2; fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project dependencies and media validator
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes ffmpeg
+          fi
+          ffprobe -version | head -n 1
+
+      - name: Find the newest unposted official Mob X item and publish at most one
+        run: |
+          python -m agent.brain.mob_official_trial \
+            --publish \
+            --limit 1 \
+            --report artifacts/mob-x-production-report.json \
+            --output-dir artifacts/mob-x-production-media
+
+      - name: Notify owner if production processing failed
+        if: failure()
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify \
+            --event workflow_failed \
+            --workflow "Mob official X news publisher" \
+            --reason "mob_x_production_workflow_failed"
+
+      - name: Upload post report and recoverable media
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mob-x-production-report
+          path: |
+            artifacts/mob-x-production-report.json
+            artifacts/mob-x-production-media/**
+          if-no-files-found: warn
+          retention-days: 7
