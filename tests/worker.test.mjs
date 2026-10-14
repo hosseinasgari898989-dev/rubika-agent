@@ -716,12 +716,12 @@ function supervisorInput(extra = {}) {
 }
 {
   const state = env();
-  state.AI = makeSupervisorAI("Here is the JSON result:\\n```json\\n" + JSON.stringify({
+  state.AI = makeSupervisorAI("Here is the JSON result: ```json " + JSON.stringify({
     action: "skip_source_and_continue",
     reason_code: "source_blocked",
     next_step_code: "continue_with_other_sources",
     human_review: false,
-  }) + "\\n```");
+  }) + " ```");
   const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.source, "workers_ai");
