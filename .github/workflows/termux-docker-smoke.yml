@@ -100,8 +100,10 @@ jobs:
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
               timeout 180s pkg update -y
               timeout 240s pkg install -y python git
-              python -m venv /tmp/termux-docker-venv
-              export PATH="/tmp/termux-docker-venv/bin:$PATH"
+              mkdir -p "$HOME/.venvs"
+              VENV_DIR="$HOME/.venvs/termux-docker"
+              python -m venv "$VENV_DIR"
+              export PATH="$VENV_DIR/bin:$PATH"
               timeout 240s python -m pip install --disable-pip-version-check --retries 2 --timeout 20 requests yt-dlp==2026.08.19
               python --version
               python -c "import requests, yt_dlp; print('PYTHON_DEPENDENCIES=ready', requests.__version__, yt_dlp.version.__version__)"
