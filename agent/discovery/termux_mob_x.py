@@ -118,6 +118,27 @@ def _post_id_from_url(raw_url: str) -> str | None:
     return match.group(1) if POST_ID_RE.fullmatch(match.group(1)) else None
 
 
+def _post_id_from_mirror_url(raw_url: str) -> str | None:
+    """Accept only Mob's exact status path on the public TwStalker mirror."""
+    value = html.unescape(str(raw_url or "")).strip()
+    if value.startswith("//"):
+        value = "https:" + value
+    if value.startswith("/"):
+        value = "https://mobile.twstalker.com" + value
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or host not in {"twstalker.com", "www.twstalker.com", "mobile.twstalker.com"}:
+        return None
+    match = re.fullmatch(r"/mobgamesstudios/status/([0-9]{15,22})/?", parsed.path, re.IGNORECASE)
+    if not match:
+        return None
+    post_id = match.group(1)
+    return post_id if POST_ID_RE.fullmatch(post_id) else None
+
+
 def _rss_items(body: str) -> list[dict[str, str]]:
     try:
         root = ET.fromstring(body or "")
@@ -319,6 +340,50 @@ def _parse_post(payload: dict[str, Any], post_id: str) -> dict[str, Any] | None:
     }
 
 
+def _discover_ids_from_public_mirror(
+    client: Any,
+    *,
+    timeout_seconds: int,
+    limit: int,
+) -> tuple[list[str], dict[str, Any]]:
+    """Fallback index only: parse public post links, then verify every post directly via X syndication."""
+    url = "https://mobile.twstalker.com/" + OFFICIAL_HANDLE
+    try:
+        response = client.get(
+            url,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+            timeout=timeout_seconds,
+            allow_redirects=True,
+        )
+    except requests.RequestException as exc:
+        return [], {"source": "mob_x", "engine": "public_profile_mirror", "result": "request_failed", "error_type": type(exc).__name__}
+    status = int(getattr(response, "status_code", 0))
+    final_url = str(getattr(response, "url", url) or url)
+    parsed = urlparse(final_url)
+    if status != 200 or parsed.scheme != "https" or (parsed.hostname or "").lower() not in {"mobile.twstalker.com", "twstalker.com", "www.twstalker.com"}:
+        return [], {"source": "mob_x", "engine": "public_profile_mirror", "http_status": status, "result": "unavailable"}
+    parser = _AnchorParser()
+    try:
+        parser.feed(str(getattr(response, "text", "") or ""))
+    except Exception:
+        return [], {"source": "mob_x", "engine": "public_profile_mirror", "http_status": status, "result": "html_parse_failed"}
+    ids: list[str] = []
+    for anchor in parser.anchors:
+        post_id = _post_id_from_mirror_url(anchor.get("href", ""))
+        if post_id and post_id not in ids:
+            ids.append(post_id)
+        if len(ids) >= limit:
+            break
+    return ids, {
+        "source": "mob_x",
+        "engine": "public_profile_mirror",
+        "http_status": status,
+        "result": "post_ids_found" if ids else "no_post_ids_found",
+        "post_urls_found": len(ids),
+        "note": "Only IDs are used from the mirror; author, caption, date, and media must pass X syndication validation.",
+    }
+
+
 def _fetch_post(client: Any, post_id: str, timeout_seconds: int) -> tuple[dict[str, Any] | None, str]:
     endpoint = "https://cdn.syndication.twimg.com/tweet-result"
     tokens = ["0", _syndication_token(post_id)]
@@ -417,6 +482,15 @@ def discover_mob_x_posts(
         "result": bing_result,
         "post_urls_found": len(post_ids),
     })
+
+    # Search engines can lag behind the official account. If they have no canonical
+    # URLs, use a public profile mirror only as an ID index, then verify with X itself.
+    if not post_ids:
+        mirror_ids, mirror_attempt = _discover_ids_from_public_mirror(
+            client, timeout_seconds=timeout_seconds, limit=limit
+        )
+        attempts.append(mirror_attempt)
+        post_ids.extend(mirror_ids)
 
     if not post_ids:
         ddg_status: int | None = None
