@@ -263,3 +263,26 @@ jobs:
             echo "- Duplicates skipped: ${{ steps.queue_intake.outputs.duplicate_count || 'n/a' }}"
             echo "- This workflow never downloads media or publishes to Rubika"
           } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -s "$RUNNER_TEMP/queue-intake-result.json" ]]; then
+            python - "$RUNNER_TEMP/queue-intake-result.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write("\\n### Newly queued URLs (not already in D1)\\n\\n")
+              rows = data.get("selected_items", [])
+              if not isinstance(rows, list) or not rows:
+                  out.write("No new eligible URLs were added in this run.\\n")
+              else:
+                  for i, row in enumerate(rows, 1):
+                      if not isinstance(row, dict):
+                          continue
+                      source = str(row.get("source_key") or "unknown")
+                      title = " ".join(str(row.get("title") or "").split())[:110]
+                      url = str(row.get("url") or "")
+                      if url.startswith("https://"):
+                          out.write(f"{i}. [{source} — {title}]({url})\\n")
+          PY
+          fi
