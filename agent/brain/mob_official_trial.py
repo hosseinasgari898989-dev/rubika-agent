@@ -805,7 +805,10 @@ def run_trial(
         try:
             cloud.upsert_item(payload)
         except Exception as exc:
-            report["error"] = "cloud_item_record_failed_" + type(exc).__name__
+            raw_code = getattr(exc, "code", None)
+            safe_code = raw_code if isinstance(raw_code, str) else type(exc).__name__
+            safe_code = re.sub(r"[^A-Za-z0-9_-]", "", safe_code)[:100] or "unknown_error"
+            report["error"] = "cloud_item_record_failed_" + safe_code
             _report(output_report, report)
             return report
 
