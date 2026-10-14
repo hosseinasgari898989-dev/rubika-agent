@@ -6,6 +6,12 @@ on:
       - agent-brain-mega-v1
     paths:
       - "artifacts/termux_discovery.json"
+      - "config/mob_official_sources.json"
+      - "agent/discovery/termux_mob_x.py"
+      - "agent/discovery/mob_official_complete.py"
+      - "agent/brain/mob_official_trial.py"
+      - ".github/workflows/mob-official-trial.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -61,14 +67,15 @@ jobs:
           sudo apt-get install --yes ffmpeg
           ffprobe -version | head -n 1
 
-      - name: Discover, translate, validate, and publish at most one official post to the test channel
+      - name: Discover fresh Mob X posts, translate, validate, and publish at most one to the test channel
+        # This workflow discovers current public X posts at run time; it must never use a stale Termux candidate snapshot. It only publishes posts whose verified source platform is X, and it never falls back to the website, YouTube or Steam if X has no fresh eligible post.
         shell: bash
         run: |
           set -euo pipefail
           python -m agent.brain.mob_official_trial \
             --publish-test-channel \
             --limit 1 \
-            --candidate-report artifacts/termux_discovery.json \
+            --source-platform x \
             --report artifacts/mob-official-test-publish-report.json \
             --output-dir artifacts/mob-official-test-publish-media
 
