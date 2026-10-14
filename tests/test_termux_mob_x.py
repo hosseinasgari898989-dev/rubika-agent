@@ -43,11 +43,11 @@ class FakeSession:
         raise AssertionError("unexpected_url")
 
 
-def syndication_post(post_id: str, *, handle: str = "mobgamesstudios", media=None, text="Official Mob update"):
+def syndication_post(post_id: str, *, handle: str = "mobgamesstudios", media=None, text="Official Mob update", created_at="Wed Oct 14 12:00:00 +0000 2026"):
     return {
         "id_str": post_id,
         "text": text,
-        "created_at": "Wed Oct 14 12:00:00 +0000 2026",
+        "created_at": created_at,
         "user": {"screen_name": handle, "name": "Mob Entertainment"},
         "mediaDetails": media if media is not None else [{
             "type": "photo",
@@ -87,6 +87,25 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         self.assertTrue(item["freshness_verified"])
         self.assertIn("public_syndication", str(attempts))
         self.assertTrue(all("AGENT_API_TOKEN" not in str(call) for call in session.calls))
+
+    def test_results_are_sorted_by_newest_verified_publication_time(self):
+        older_id = "1734258130186559716"
+        newer_id = "1734258130186559717"
+        body = (
+            "<rss><channel>"
+            f"<item><link>https://x.com/mobgamesstudios/status/{older_id}</link></item>"
+            f"<item><link>https://x.com/mobgamesstudios/status/{newer_id}</link></item>"
+            "</channel></rss>"
+        )
+        session = FakeSession(body, {
+            older_id: syndication_post(older_id, created_at="Mon Oct 12 10:00:00 +0000 2026"),
+            newer_id: syndication_post(newer_id, created_at="Wed Oct 14 12:00:00 +0000 2026"),
+        })
+        candidates, _ = discover_mob_x_posts(session=session, sleep_seconds=0)
+        self.assertEqual(
+            [row["external_id"] for row in candidates],
+            ["x-" + newer_id, "x-" + older_id],
+        )
 
     def test_video_selects_actual_mp4_instead_of_thumbnail(self):
         media = [{
