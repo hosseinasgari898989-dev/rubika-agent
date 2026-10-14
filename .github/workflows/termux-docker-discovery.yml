@@ -1,17 +1,11 @@
 name: Online Termux discovery and queue sync
 
 on:
-  # GitHub cron uses UTC; */5 means 00, 05, 10, 15 and 20 UTC.
-  # The day boundary creates a 4-hour overnight gap; GitHub may delay scheduled jobs.
+  # Run a lightweight gate hourly; it starts collection only after five hours since
+  # the last successful D1 intake, avoiding the midnight gap in "*/5" cron hours.
   schedule:
-    - cron: "17 */5 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
-  # Run an initial live validation when this workflow is installed/updated on main.
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/termux-docker-discovery.yml"
 
 permissions:
   contents: write
@@ -22,7 +16,64 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  five-hour-gate:
+    name: Enforce five-hour interval after successful queue intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - name: Read the last successful collection state
+        uses: actions/checkout@v4
+        with:
+          ref: agent-brain-mega-v1
+          persist-credentials: false
+      - name: Decide whether a collection cycle is due
+        id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          should_run="$(python - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          import json
+          from pathlib import Path
+
+          if __import__("os").environ.get("GITHUB_EVENT_NAME") != "schedule":
+              print("true")
+              print("Manual dispatch / initial trigger: forced run.", file=__import__("sys").stderr)
+              raise SystemExit(0)
+          state_path = Path("artifacts/termux_collection_state.json")
+          try:
+              state = json.loads(state_path.read_text(encoding="utf-8"))
+              completed = datetime.fromisoformat(str(state["completed_at"]).replace("Z", "+00:00"))
+              if completed.tzinfo is None:
+                  raise ValueError("timestamp_has_no_timezone")
+          except Exception:
+              print("true")
+              print("No valid successful-cycle marker; collection is due.", file=__import__("sys").stderr)
+              raise SystemExit(0)
+
+          now = datetime.now(timezone.utc)
+          elapsed = now - completed.astimezone(timezone.utc)
+          if elapsed < timedelta(0):
+              print("true")
+              print("Last-cycle timestamp is in the future; fail open to a safe new metadata-only cycle.", file=__import__("sys").stderr)
+          elif elapsed < timedelta(hours=5):
+              print("false")
+              print(f"Skipping early hourly tick; {elapsed.total_seconds():.0f} seconds since last successful intake.", file=__import__("sys").stderr)
+          else:
+              print("true")
+              print(f"Five-hour interval elapsed ({elapsed.total_seconds():.0f} seconds).", file=__import__("sys").stderr)
+          PY
+          )"
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          if [[ "$should_run" == "false" ]]; then
+            echo "This hourly tick is only a gate; the full Termux collector runs after five hours." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   collect-and-sync:
+    needs: five-hour-gate
+    if: needs.five-hour-gate.outputs.should_run == 'true'
     name: Real Termux runtime, discovery, GitHub report and D1 queue intake
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -210,6 +261,51 @@ jobs:
           git commit -m "Update online Termux metadata discovery report"
           git push origin HEAD:refs/heads/agent-brain-mega-v1
           echo "report_pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Record successful five-hour collection cycle
+        id: record_cycle
+        if: steps.queue_intake.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/queue-intake-result.json" "$RUNNER_TEMP/termux-discovery-output/termux_discovery.json" artifacts/termux_collection_state.json <<'PY'
+          import json, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          queue_result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          report = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          if queue_result.get("ok") is not True:
+              raise SystemExit("cannot_mark_cycle_success_when_intake_failed")
+          selected = queue_result.get("selected_items", [])
+          if not isinstance(selected, list):
+              selected = []
+          state = {
+              "schema_version": 1,
+              "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "report_generated_at": report.get("generated_at"),
+              "queue_status": queue_result.get("status"),
+              "inserted_count": queue_result.get("inserted_count", 0),
+              "candidate_pool_count": queue_result.get("candidate_pool_count", 0),
+              "selected_source_distribution": queue_result.get("selected_source_distribution", {}),
+              "selected_external_ids": [
+                  str(row.get("external_id")) for row in selected if isinstance(row, dict)
+              ],
+              "mode": "metadata_only_no_download_no_publish"
+          }
+          destination = Path(sys.argv[3])
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/termux_collection_state.json
+          if git diff --cached --quiet; then
+            echo "Cycle marker already matches; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Record successful five-hour metadata intake"
+          git push origin HEAD:agent-brain-mega-v1
 
       # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
       - name: Add TikTok metadata to the persistent D1 edit queue
