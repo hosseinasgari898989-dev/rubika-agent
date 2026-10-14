@@ -216,6 +216,7 @@ jobs:
           set -euo pipefail
           python -m agent.brain.queue_intake \
             --report artifacts/termux_discovery.json \
+            --max-new 4 \
             --no-notify | tee "$RUNNER_TEMP/queue-intake-result.json"
           python - "$RUNNER_TEMP/queue-intake-result.json" >> "$GITHUB_OUTPUT" <<'PY'
           import json
