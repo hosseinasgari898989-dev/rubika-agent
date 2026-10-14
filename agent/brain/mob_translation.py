@@ -78,7 +78,13 @@ def translate_to_persian(
             try:
                 from agent.brain.cloud_state import CloudState
                 translated = CloudState(base_url, token=token, timeout_seconds=25).translate_official(source)
-                if translated and translated.strip() and translated.casefold() != source.casefold():
+                if (
+                    translated
+                    and translated.strip()
+                    and translated.casefold() != source.casefold()
+                    and re.search(r"[\u0600-\u06FF]", translated)
+                    and not re.search(r"[\u0400-\u04FF]", translated)
+                ):
                     return translated.strip()[:MAX_TRANSLATION_CHARS]
             except Exception:
                 # Use the existing fallback below; never invent a translation.
@@ -96,7 +102,12 @@ def translate_to_persian(
                 return None
             translated_parts.append(re.sub(r"\s+", " ", translated).strip())
         translated_text = " ".join(part for part in translated_parts if part).strip()
-        if not translated_text or translated_text.casefold() == source.casefold():
+        if (
+            not translated_text
+            or translated_text.casefold() == source.casefold()
+            or not re.search(r"[\u0600-\u06FF]", translated_text)
+            or re.search(r"[\u0400-\u04FF]", translated_text)
+        ):
             return None
         return translated_text[:MAX_TRANSLATION_CHARS]
     except Exception:
