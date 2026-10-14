@@ -306,8 +306,14 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
         else "failed" if report["sent_count"] == 0 and report["failed_count"]
         else "partial"
     )
-    report["ok"] = report["ok"] and not any(
+    reached_goal = report["sent_count"] >= remaining_successes
+    has_queue_claim_error = any(
         error.get("error", "").startswith("queue_claim_") for error in report["errors"]
+    )
+    # A run that failed before meeting its delivery goal must exit non-zero;
+    # don't report ok=true simply because the inventory API itself worked.
+    report["ok"] = report["ok"] and not has_queue_claim_error and (
+        reached_goal or report["failed_count"] == 0
     )
     ledger = _mega_inventory()
     report["inventory"] = ledger
@@ -360,7 +366,7 @@ def main() -> int:
         error_summary = ("\nآخرین کدهای خطا:\n" + "\n".join(error_lines)) if error_lines else ""
         message = (
             "📊 گزارش پایان نوبت خودکار روبیکا\n"
-            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))}/{daily_limit}\n"
+            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))}/{args.daily_limit}\n"
             f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\n"
             f"وضعیت: {result.get('status', 'unknown')}\n"
             + str(result.get("inventory_text") or queue_inventory_lines(result.get("queue_counts") or {}))
