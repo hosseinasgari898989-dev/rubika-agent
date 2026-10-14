@@ -168,7 +168,10 @@ class FakeStatement {
       return { meta: { changes: 1 } };
     }
     if (sql.startsWith("INSERT INTO brain_events")) {
-      this.db.events.push({ values: v, sql });
+      this.db.events.push({
+        values: v, sql, level: v[0], code: v[1],
+        details_json: v[2], created_at: new Date().toISOString(),
+      });
       return { meta: { changes: 1 } };
     }
     return { meta: { changes: 1 } };
