@@ -20,31 +20,70 @@ def _strip_urls(value: str) -> str:
     return value.strip()
 
 
+def _translation_chunks(text: str, limit: int = 700) -> list[str]:
+    """Split long source captions at sentence/paragraph boundaries when possible."""
+    chunks: list[str] = []
+    current = ""
+    segments = [
+        segment.strip()
+        for segment in re.split(r"(?<=[.!?。！？])\s+|\n+", text)
+        if segment.strip()
+    ]
+    for segment in segments:
+        while len(segment) > limit:
+            split_at = segment.rfind(" ", 0, limit + 1)
+            if split_at <= 0:
+                split_at = limit
+            piece = segment[:split_at].strip()
+            if piece:
+                if current:
+                    chunks.append(current)
+                    current = ""
+                chunks.append(piece)
+            segment = segment[split_at:].strip()
+        if not segment:
+            continue
+        if current and len(current) + 1 + len(segment) <= limit:
+            current += " " + segment
+        else:
+            if current:
+                chunks.append(current)
+            current = segment
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def translate_to_persian(
     text: str,
     *,
     translator_factory: Callable[..., Any] | None = None,
 ) -> str | None:
-    """Translate one real source caption into Persian, returning None on failure."""
-    source = str(text or "").strip()
+    """Translate real source text to Persian in bounded chunks; fail closed on any error."""
+    raw_source = str(text or "").strip()
+    if not raw_source:
+        return None
+    source = _strip_urls(raw_source)[:MAX_TRANSLATION_CHARS]
     if not source:
         return None
-    if len(source) > MAX_TRANSLATION_CHARS:
-        source = source[:MAX_TRANSLATION_CHARS]
 
     try:
         if translator_factory is None:
             from deep_translator import GoogleTranslator
             translator_factory = GoogleTranslator
         translator = translator_factory(source="auto", target="fa")
-        translated = translator.translate(source)
-        if not isinstance(translated, str):
+        translated_parts: list[str] = []
+        for chunk in _translation_chunks(source):
+            translated = translator.translate(chunk)
+            if not isinstance(translated, str) or not translated.strip():
+                return None
+            translated_parts.append(re.sub(r"\s+", " ", translated).strip())
+        translated_text = " ".join(part for part in translated_parts if part).strip()
+        if not translated_text or translated_text.casefold() == source.casefold():
             return None
-        translated = re.sub(r"\s+", " ", translated).strip()
-        if not translated or translated.casefold() == source.casefold():
-            return None
-        return translated[:MAX_TRANSLATION_CHARS]
+        return translated_text[:MAX_TRANSLATION_CHARS]
     except Exception:
+        # Never substitute a guessed translation when one part could not be translated.
         return None
 
 
