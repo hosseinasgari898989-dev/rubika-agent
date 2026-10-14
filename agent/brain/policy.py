@@ -54,7 +54,7 @@ EDIT_SIGNAL_RE = re.compile(
 # Match the recognized editing term only at the end of a hashtag, so unrelated
 # tags containing the letters "edit" internally do not become false positives.
 EDIT_HASHTAG_RE = re.compile(
-    r"(?<![a-z0-9])#[a-z0-9_]*(?:edits?|aep|amv|montage|velocity|fanedit|sync)(?=$|[\\s#])"
+    r"(?<![a-z0-9])#[a-z0-9_]*(?:edits?|aep|amv|montage|velocity|fanedit|sync)(?=$|[\s#])"
 )
 SUPPORTED_VIDEO_CODECS = frozenset({
     "h264", "avc1", "hevc", "h265", "vp9", "av1", "mpeg4",
