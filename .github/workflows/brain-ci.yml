@@ -33,6 +33,7 @@ on:
       - "tests/test_tiktok_search_index.py"
       - "tests/test_termux_instagram.py"
       - "tests/test_termux_daily_discovery.py"
+      - "tests/test_collection_gate.py"
       - "tests/test_phone_report_integration.py"
       - "tests/test_tavily_discovery.py"
       - "tests/test_discovery_run.py"
@@ -101,6 +102,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_tiktok_search_index.py' -v
           python -m unittest discover -s tests -p 'test_termux_instagram.py' -v
           python -m unittest discover -s tests -p 'test_termux_daily_discovery.py' -v
+          python -m unittest discover -s tests -p 'test_collection_gate.py' -v
           python -m unittest discover -s tests -p 'test_termux_mob_x.py' -v
           python -m unittest discover -s tests -p 'test_lifecycle.py' -v
           python -m unittest discover -s tests -p 'test_phone_report_integration.py' -v
