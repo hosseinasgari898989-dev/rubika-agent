@@ -659,6 +659,145 @@ async function translateOfficial(env, body) {
   }
 }
 
+const QUEUE_PLATFORMS = new Set(["tiktok", "youtube", "instagram"]);
+const QUEUE_STATUSES = new Set(["queued", "processing", "sent", "failed", "uncertain", "skipped"]);
+
+async function automationQueueIngest(env, body) {
+  if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 12) {
+    return json({ ok: false, error: "queue_items_must_contain_1_to_12_rows" }, 400);
+  }
+  const rows = [];
+  const invalid = [];
+  const seen = new Set();
+  for (const [index, raw] of body.items.entries()) {
+    if (!isObject(raw)) {
+      invalid.push({ index, error: "item_must_be_object" });
+      continue;
+    }
+    const platform = text(raw.platform, 24);
+    const externalId = text(raw.external_id, 120);
+    if (!QUEUE_PLATFORMS.has(platform) || !/^[A-Za-z0-9._-]{1,120}$/.test(externalId)) {
+      invalid.push({ index, error: "invalid_platform_or_external_id" });
+      continue;
+    }
+    const canonicalUrl = canonicalUrlFor(platform, raw.canonical_url);
+    if (!canonicalUrl) {
+      invalid.push({ index, error: "invalid_canonical_url" });
+      continue;
+    }
+    const sourceKey = text(raw.source_key, 200);
+    if (!sourceKey) {
+      invalid.push({ index, error: "source_key_required" });
+      continue;
+    }
+    const identity = platform + ":" + externalId;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const mediaType = text(raw.media_type, 20) || "video";
+    if (!MEDIA_TYPES.has(mediaType)) {
+      invalid.push({ index, error: "invalid_media_type" });
+      continue;
+    }
+    const metadata = {
+      author: text(raw.author, 100),
+      query: text(raw.query, 200),
+      freshness_source: text(raw.freshness_source, 100),
+      freshness_verified: raw.freshness_verified === true,
+      source_method: text(raw.method, 100)
+    };
+    rows.push({
+      id: identity,
+      platform,
+      externalId,
+      canonicalUrl,
+      sourceKey,
+      title: text(raw.title, 500),
+      caption: text(raw.caption, 4000),
+      publishedAt: text(raw.published_at, 80),
+      mediaType,
+      freshnessVerified: raw.freshness_verified === true ? 1 : 0,
+      method: text(raw.method, 100),
+      metadataJson: JSON.stringify(metadata)
+    });
+  }
+  if (rows.length === 0) {
+    return json({ ok: false, error: "no_valid_queue_items", invalid }, 400);
+  }
+  try {
+    const statements = rows.map(row => env.DB.prepare(
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, title, caption, published_at, media_type, freshness_verified, method, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(platform, external_id) DO NOTHING"
+    ).bind(
+      row.id, row.platform, row.externalId, row.canonicalUrl, row.sourceKey,
+      row.title || null, row.caption || null, row.publishedAt || null,
+      row.mediaType, row.freshnessVerified, row.method || null, row.metadataJson
+    ));
+    const results = await env.DB.batch(statements);
+    const inserted = results.reduce((total, result) => total + Number(result.meta?.changes || 0), 0);
+    return json({
+      ok: true,
+      received_count: body.items.length,
+      valid_count: rows.length,
+      inserted_count: inserted,
+      duplicate_count: rows.length - inserted,
+      invalid_count: invalid.length,
+      invalid
+    });
+  } catch {
+    return json({ ok: false, error: "queue_ingest_failed" }, 500);
+  }
+}
+
+async function automationQueueList(env, url) {
+  const requested = Number(url.searchParams.get("limit") || "100");
+  const limit = Number.isInteger(requested) ? Math.min(100, Math.max(1, requested)) : 100;
+  const offsetRaw = Number(url.searchParams.get("offset") || "0");
+  const offset = Number.isInteger(offsetRaw) ? Math.min(1000000, Math.max(0, offsetRaw)) : 0;
+  const summaryOnly = url.searchParams.get("summary") === "1";
+  try {
+    // A run that disappears while sending is ambiguous: do not silently retry it.
+    await env.DB.prepare(
+      "UPDATE automation_queue SET status = 'uncertain', last_error_code = 'stale_processing_requires_review', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status = 'processing' AND updated_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-12 hours')"
+    ).run();
+    const countsResult = await env.DB.prepare(
+      "SELECT status, COUNT(*) AS total FROM automation_queue GROUP BY status"
+    ).all();
+    const counts = Object.fromEntries((countsResult.results || []).map(row => [row.status, Number(row.total || 0)]));
+    if (summaryOnly) return json({ ok: true, counts });
+    const status = text(url.searchParams.get("status"), 20) || "queued";
+    if (!QUEUE_STATUSES.has(status)) return json({ ok: false, error: "invalid_queue_status" }, 400);
+    const result = await env.DB.prepare(
+      "SELECT id, platform, external_id, canonical_url, source_key, title, caption, published_at, media_type, freshness_verified, method, metadata_json, status, attempt_count, last_error_code, created_at, updated_at, sent_at FROM automation_queue WHERE status = ? ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?"
+    ).bind(status, limit, offset).all();
+    return json({ ok: true, items: result.results || [], page: { limit, offset, returned: (result.results || []).length }, counts });
+  } catch {
+    return json({ ok: false, error: "automation_queue_read_failed" }, 500);
+  }
+}
+
+async function automationQueueState(env, queueId, body) {
+  if (!validIdentifier(queueId)) return json({ ok: false, error: "invalid_queue_id" }, 400);
+  const nextStatus = text(body.status, 20);
+  if (!QUEUE_STATUSES.has(nextStatus)) return json({ ok: false, error: "invalid_queue_status" }, 400);
+  const errorCode = safeCode(body.error_code, "");
+  try {
+    const item = await env.DB.prepare(
+      "SELECT id, status, attempt_count FROM automation_queue WHERE id = ?"
+    ).bind(queueId).first();
+    if (!item) return json({ ok: false, error: "queue_item_not_found" }, 404);
+    if (item.status === nextStatus) return json({ ok: true, id: queueId, status: nextStatus, unchanged: true });
+    const validTransition =
+      item.status === "queued" && nextStatus === "processing" ||
+      item.status === "processing" && ["queued", "sent", "failed", "uncertain", "skipped"].includes(nextStatus);
+    if (!validTransition) return json({ ok: false, error: "invalid_queue_state_transition" }, 409);
+    await env.DB.prepare(
+      "UPDATE automation_queue SET status = ?, attempt_count = attempt_count + CASE WHEN ? = 'processing' AND status = 'queued' THEN 1 ELSE 0 END, last_error_code = ?, sent_at = CASE WHEN ? = 'sent' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE sent_at END, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"
+    ).bind(nextStatus, nextStatus, errorCode || null, nextStatus, queueId).run();
+    return json({ ok: true, id: queueId, status: nextStatus });
+  } catch {
+    return json({ ok: false, error: "automation_queue_state_update_failed" }, 500);
+  }
+}
+
 async function approvedQueue(env, url) {
   const requested = Number(url.searchParams.get("limit") || "25");
   const limit = Number.isInteger(requested) ? Math.min(100, Math.max(1, requested)) : 25;
@@ -693,6 +832,20 @@ export default {
       return json({ ok: false, error: "unauthorized" }, 401);
     }
 
+    if (path === "/api/brain/automation-queue" && request.method === "GET") {
+      return automationQueueList(env, url);
+    }
+    if (path === "/api/brain/automation-queue" && request.method === "POST") {
+      const parsedQueue = await readJson(request);
+      if (!parsedQueue.ok) return json({ ok: false, error: parsedQueue.error }, parsedQueue.status);
+      return automationQueueIngest(env, parsedQueue.value);
+    }
+    const queueStateMatch = /^\/api\/brain\/automation-queue\/([^/]+)\/state$/.exec(path);
+    if (queueStateMatch && request.method === "POST") {
+      const parsedQueueState = await readJson(request);
+      if (!parsedQueueState.ok) return json({ ok: false, error: parsedQueueState.error }, parsedQueueState.status);
+      return automationQueueState(env, decodeURIComponent(queueStateMatch[1]), parsedQueueState.value);
+    }
     if (path === "/api/brain/queue" && request.method === "GET") {
       return approvedQueue(env, url);
     }
