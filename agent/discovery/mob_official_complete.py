@@ -910,7 +910,7 @@ def discover_all_official_posts(
     # applying the global limit, then backfill from healthy fallback sources.
     output.sort(
         key=lambda row: (
-            int(row.get("source_priority", source_priority.get(str(row.get("source_platform") or ""), 9))),
+            int(source_priority.get(str(row.get("source_platform") or ""), 9)),
             0 if published_epoch(row) > 0 else 1,
             -published_epoch(row),
             str(row.get("external_id") or row.get("id") or ""),
