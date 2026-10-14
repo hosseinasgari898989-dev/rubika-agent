@@ -203,6 +203,37 @@ class MobTranslationTests(unittest.TestCase):
         self.assertNotIn("example.com", captured["source_text"])
         self.assertEqual(captured["base_url"], "https://rubika-agent.h98609294.workers.dev")
 
+
+    def test_mixed_script_cloudflare_translation_falls_back_to_translator(self):
+        class FailingCloudState:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def translate_official(self, source_text):
+                raise RuntimeError("control_api_translation_wrong_script")
+
+        class GoodGoogleTranslator:
+            def __init__(self, source="auto", target="fa"):
+                self.source = source
+                self.target = target
+
+            def translate(self, value):
+                return "به عمق کارخانه پلی‌تایم بروید و برای ساخت مکانی مرموز تلاش کنید."
+
+        with patch.dict("os.environ", {
+            "AGENT_API_BASE_URL": "https://rubika-agent.h98609294.workers.dev",
+            "AGENT_API_TOKEN": "a-token-with-at-least-thirty-two-characters",
+        }):
+            with patch("agent.brain.cloud_state.CloudState", FailingCloudState):
+                with patch("deep_translator.GoogleTranslator", GoodGoogleTranslator):
+                    result = translate_to_persian(
+                        "Explore the depths of Playtime Co. while working to build a mysterious location."
+                    )
+
+        self.assertIsInstance(result, str)
+        self.assertIn("به عمق", result)
+        self.assertNotRegex(result, r"[\u0400-\u04FF]")
+
     def test_long_official_caption_is_translated_in_bounded_chunks(self):
         calls = []
 
