@@ -380,8 +380,8 @@ class CloudState:
     def enqueue_automation_items(self, items: list[Mapping[str, Any]]) -> dict[str, int]:
         """Add public metadata to the durable D1 queue in bounded request chunks."""
         inserted = duplicate = invalid = received = 0
-        for offset in range(0, len(items), 12):
-            chunk = [dict(item) for item in items[offset:offset + 12]]
+        for offset in range(0, len(items), 5):
+            chunk = [dict(item) for item in items[offset:offset + 5]]
             response = self._request("POST", "/api/brain/automation-queue", {"items": chunk})
             inserted += int(response.get("inserted_count") or 0)
             duplicate += int(response.get("duplicate_count") or 0)
