@@ -90,7 +90,11 @@
     "never_claim_first_source_without_comparable_timestamps": true
   },
   "publishing": {
-    "enabled": false,
-    "reason": "Official sources are enabled for discovery and preview only. The public channel publisher remains disabled until final launch approval."
+    "enabled": true,
+    "mode": "test_channel_only",
+    "target_channel_guid": "c0EFohK0f3174377fb6fa422d3ccb230",
+    "max_posts_per_run": 1,
+    "production_enabled": false,
+    "reason": "Explicitly enabled for a one-post official-source trial in the hard-locked Rubika test channel only. Production publishing remains disabled."
   }
 }
