@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "mode": "preview",
-  "requested_at": "2026-10-14T00:17:46.133Z",
-  "request_id": "mob-official-preview-llama33",
-  "reason": "Check the improved official Mob Persian translation model and validate the same post media. Preview only; do not publish to Rubika."
+  "requested_at": "2026-10-14T00:22:06.622Z",
+  "request_id": "mob-official-preview-script-safe",
+  "reason": "Retry one official Mob post after adding strict Persian-script validation and a safe translation fallback. Preview only; no Rubika publish."
 }
