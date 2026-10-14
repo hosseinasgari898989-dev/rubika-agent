@@ -10,9 +10,12 @@ from typing import Any
 
 from agent.brain.cloud_state import CloudState
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
+from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
 
 
-PLATFORMS = ("tiktok", "youtube", "instagram")
+# YouTube is paused for later; Instagram is no longer part of this project.
+# Official Mob X news is handled by its own separate workflow and never enters this queue.
+PLATFORMS = ("tiktok",)
 MAX_ENQUEUE_ITEMS = 500
 
 
@@ -36,12 +39,18 @@ def candidates_for_queue(payload: dict[str, Any], *, max_items: int = MAX_ENQUEU
     """Map phone discovery rows to minimal queue metadata; never includes media bytes."""
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
+    lifecycle_policy = load_lifecycle_policy()
     for platform in PLATFORMS:
         raw_rows = payload["candidates"].get(platform, [])
         if not isinstance(raw_rows, list):
             continue
         for raw in raw_rows:
             if not isinstance(raw, dict):
+                continue
+            allowed_by_birth, _birth_reason = candidate_passes_birth_cutoff(
+                raw, policy=lifecycle_policy
+            )
+            if not allowed_by_birth:
                 continue
             external_id = raw.get("id") or raw.get("external_id")
             url = raw.get("url") or raw.get("canonical_url")
