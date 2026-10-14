@@ -57,6 +57,7 @@ jobs:
           set -euo pipefail
           python -m agent.brain.mob_official_trial \
             --limit 1 \
+            --candidate-report artifacts/termux_discovery.json \
             --report artifacts/mob-x-preview-report.json \
             --output-dir artifacts/mob-x-preview-media
 
