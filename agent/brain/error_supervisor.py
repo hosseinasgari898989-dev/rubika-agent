@@ -77,7 +77,7 @@ def local_recommendation(*, event_code: str, stage: str, error_code: str) -> dic
         decision = _recommendation(
             "human_review", "uncertain_delivery", "review_publisher_delivery_receipt", True
         )
-    elif re.search(r"timeout|temporar|network|connection|reset|rate_limit|http_5[0-9][0-9]", code):
+    elif re.search(r"timeout|temporar|network|connection|unreachable|reset|rate_limit|http_5[0-9][0-9]", code):
         decision = _recommendation(
             "retry_next_scheduled_run", "temporary_network", "wait_for_next_schedule", False
         )
