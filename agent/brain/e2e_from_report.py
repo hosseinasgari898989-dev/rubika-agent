@@ -72,12 +72,21 @@ def _stage_failure_summary(stage_result: Mapping[str, Any]) -> dict[str, Any]:
                 skipped.append({"item": item, "reason": reason})
 
     raw_sync = stage_result.get("cloud_sync_errors")
-    sync_errors = []
+    sync_errors: list[str] = []
     if isinstance(raw_sync, (list, tuple)):
-        sync_errors = [
-            re.sub(r"[^A-Za-z0-9._:-]", "", str(value))[:180]
-            for value in raw_sync[:5]
-        ]
+        for value in raw_sync[:5]:
+            parts = str(value).split(":")
+            if len(parts) >= 3:
+                platform = parts[0] if re.fullmatch(r"[A-Za-z0-9_-]{1,24}", parts[0]) else "unknown"
+                external_id = parts[1] if re.fullmatch(r"[A-Za-z0-9._-]{1,120}", parts[1]) else "unknown"
+                # The final component should be an exception/code name. Never copy arbitrary
+                # remainder text from a provider response or a malformed diagnostic.
+                code = parts[2]
+                if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,79}", code):
+                    code = "unknown_error"
+                sync_errors.append(f"{platform}:{external_id}:{code}")
+            else:
+                sync_errors.append("cloud_sync_error")
 
     if sync_errors:
         primary_reason = "cloud_sync_failed"
