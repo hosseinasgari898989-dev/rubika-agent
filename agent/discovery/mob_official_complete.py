@@ -377,6 +377,82 @@ def _discover_newsroom(session: Any, sources: list[dict[str, Any]]) -> list[dict
     return output
 
 
+def _discover_youtube_via_ytdlp(source: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fallback for the verified channel when YouTube's public Atom feed is unavailable."""
+    channel_id = str(source.get("channel_id") or "").strip()
+    if not re.fullmatch(r"UC[A-Za-z0-9_-]{20,30}", channel_id):
+        return []
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("youtube_profile_yt_dlp_unavailable") from None
+
+    channel_url = "https://www.youtube.com/channel/" + channel_id + "/videos"
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": "in_playlist",
+        "playlistend": 5,
+        "socket_timeout": 15,
+        "retries": 1,
+        "extractor_retries": 1,
+        "noplaylist": False,
+    }
+    result: list[dict[str, Any]] = []
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            channel_info = ydl.extract_info(channel_url, download=False)
+            entries = channel_info.get("entries", []) if isinstance(channel_info, dict) else []
+            for entry in entries[:5] if isinstance(entries, list) else []:
+                if not isinstance(entry, dict):
+                    continue
+                video_id = str(entry.get("id") or "").strip()
+                if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+                    continue
+                canonical_url = "https://www.youtube.com/watch?v=" + video_id
+                full_info = entry
+                # Flat channel entries often omit the genuine description. Fetch
+                # the selected video metadata, not its thumbnail, before publishing.
+                if not str(entry.get("description") or "").strip():
+                    try:
+                        full_info = ydl.extract_info(canonical_url, download=False) or entry
+                    except Exception:
+                        continue
+                caption = str(full_info.get("description") or "").strip()
+                if not caption:
+                    # The title alone is not substituted for a missing caption.
+                    continue
+                timestamp = full_info.get("release_timestamp") or full_info.get("timestamp") or entry.get("timestamp")
+                if isinstance(timestamp, (int, float)):
+                    try:
+                        timestamp = datetime.fromtimestamp(float(timestamp), tz=timezone.utc).isoformat()
+                    except (ValueError, OSError, OverflowError):
+                        timestamp = None
+                if not timestamp:
+                    upload_date = str(full_info.get("upload_date") or entry.get("upload_date") or "")
+                    if re.fullmatch(r"\d{8}", upload_date):
+                        timestamp = upload_date[:4] + "-" + upload_date[4:6] + "-" + upload_date[6:] + "T00:00:00+00:00"
+                item = _make_item(
+                    source_platform="youtube",
+                    source_name="Mob Entertainment YouTube",
+                    source_key="youtube.com",
+                    canonical_url=canonical_url,
+                    external_id="yt-" + video_id,
+                    title=str(full_info.get("title") or entry.get("title") or ""),
+                    caption=caption,
+                    published_at=timestamp if isinstance(timestamp, str) else None,
+                    media_type="video",
+                    media_url=canonical_url,
+                    source_priority=1,
+                )
+                if item:
+                    result.append(item)
+    except Exception as exc:
+        raise RuntimeError("youtube_profile_" + type(exc).__name__) from None
+    return result
+
+
 def _discover_youtube(session: Any, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     source = next((row for row in sources if row.get("id") == "mob_youtube"), None)
     if not source or source.get("enabled") is not True:
@@ -387,7 +463,10 @@ def _discover_youtube(session: Any, sources: list[dict[str, Any]]) -> list[dict[
     feed_url = "https://www.youtube.com/feeds/videos.xml?channel_id=" + channel_id
     feed_source = dict(source)
     feed_source["url"] = feed_url
-    rows = _atom_entries(_fetch_text(session, feed_url), feed_source)
+    try:
+        rows = _atom_entries(_fetch_text(session, feed_url), feed_source)
+    except Exception:
+        rows = []
     result: list[dict[str, Any]] = []
     for row in rows[:MAX_DISCOVERY_ITEMS]:
         url = str(row.get("canonical_url") or "")
@@ -413,7 +492,11 @@ def _discover_youtube(session: Any, sources: list[dict[str, Any]]) -> list[dict[
         )
         if item:
             result.append(item)
-    return result
+    if result:
+        return result
+    # YouTube's official channel is linked from Mob's newsroom, but the Atom
+    # endpoint may return 404. Fall back to metadata from that same verified channel.
+    return _discover_youtube_via_ytdlp(source)
 
 
 class _SteamContentParser(HTMLParser):
@@ -670,10 +753,18 @@ def discover_complete_official_posts(
             found.extend(rows)
             attempts.append({"source": source_id, "result": "ok" if rows else "no_complete_posts", "candidate_count": len(rows)})
         except Exception as exc:
+            raw_error = str(exc)
+            safe_error = re.search(
+                r"(?:source_http_\d{3}|source_response_too_large|steam_news_http_\d{3}|youtube_profile_[A-Za-z0-9_]+)",
+                raw_error,
+            )
             attempts.append({
                 "source": source_id,
                 "result": "source_error",
-                "error_code": re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "source_error",
+                "error_code": (
+                    re.sub(r"[^A-Za-z0-9_-]", "", safe_error.group(0))[:80]
+                    if safe_error else (re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "source_error")
+                ),
                 "candidate_count": 0,
             })
 
