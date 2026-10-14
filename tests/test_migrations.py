@@ -15,6 +15,7 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0001_init.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0002_brain_metadata.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0003_ai_usage_daily.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0004_automation_queue.sql").read_text(encoding="utf-8"))
 
             columns = {
                 row[1] for row in db.execute("PRAGMA table_info(items)").fetchall()
@@ -30,7 +31,8 @@ class D1MigrationTests(unittest.TestCase):
                 ).fetchall()
             }
             self.assertTrue({
-                "agent_config", "sources", "items", "runs", "delivery_attempts", "brain_events", "ai_usage_daily"
+                "agent_config", "sources", "items", "runs", "delivery_attempts", "brain_events",
+                "ai_usage_daily", "automation_queue"
             }.issubset(tables))
 
             db.execute(
@@ -52,6 +54,35 @@ class D1MigrationTests(unittest.TestCase):
                 db.execute("SELECT request_count FROM ai_usage_daily WHERE usage_day = '2026-10-13'").fetchone(),
                 (1,),
             )
+        finally:
+            db.close()
+
+    def test_persistent_queue_constraints_and_duplicate_identity(self):
+        db = sqlite3.connect(":memory:")
+        try:
+            db.executescript((ROOT / "migrations" / "0001_init.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0002_brain_metadata.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0003_ai_usage_daily.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0004_automation_queue.sql").read_text(encoding="utf-8"))
+
+            values = (
+                "tiktok:7616247520657771796", "tiktok", "7616247520657771796",
+                "https://www.tiktok.com/@creator/video/7616247520657771796",
+                "@creator", "Poppy edit", "caption", None, "video", 1, "termux_phone", "{}",
+            )
+            db.execute(
+                "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, title, caption, published_at, media_type, freshness_verified, method, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            self.assertEqual(
+                db.execute("SELECT status, attempt_count FROM automation_queue WHERE id = ?", (values[0],)).fetchone(),
+                ("queued", 0),
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key) VALUES (?, ?, ?, ?, ?)",
+                    ("tiktok:another-id", "tiktok", "7616247520657771796", values[3], "@creator"),
+                )
         finally:
             db.close()
 
