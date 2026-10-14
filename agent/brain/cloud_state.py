@@ -84,6 +84,26 @@ class CloudState:
             raise CloudStateError("control_api_" + safe)
         return result
 
+    def translate_official(self, source_text: str) -> str:
+        """Translate an official news excerpt through the authenticated Cloudflare AI route."""
+        if not isinstance(source_text, str) or not source_text.strip():
+            raise CloudStateError("translation_text_required")
+        if len(source_text) > 4500:
+            raise CloudStateError("translation_text_too_long")
+        result = self._request(
+            "POST",
+            "/api/brain/translate-official",
+            {"text": source_text},
+            max_body_bytes=20 * 1024,
+        )
+        translation = result.get("translation")
+        if not isinstance(translation, str) or not translation.strip():
+            raise CloudStateError("control_api_translation_missing")
+        clean = re.sub(r"\\s+", " ", translation).strip()
+        if not re.search(r"[\\u0600-\\u06FF]", clean):
+            raise CloudStateError("control_api_translation_not_persian")
+        return clean[:6500]
+
     def moderate_music(
         self,
         audio_data_url: str,
