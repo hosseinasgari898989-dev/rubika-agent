@@ -43,11 +43,11 @@
       "profile_url": "https://www.tiktok.com/@menezxl9",
       "trust_tier": "owner_selected",
       "output_format": "square_1080x1080",
-      "minimum_source_short_side": 720,
-      "notes": "Agent brain checks Poppy Playtime metadata, edit markers and technical quality using source resolution, codec, duration and file-size rate. Deliver as 1:1.",
+      "minimum_source_short_side": 480,
+      "notes": "Owner-selected creator; allow flexible Poppy/Playtime/edit tags and use basic media validation without the extra strict quality score. Deliver as 1:1.",
       "require_poppy_relevance_check": true,
       "require_edit_signal_check": true,
-      "require_brain_quality_check": true
+      "require_brain_quality_check": false
     },
     {
       "platform": "tiktok",

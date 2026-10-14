@@ -54,7 +54,7 @@ class TikTokSourcePolicyTests(unittest.TestCase):
         )
         self.assertEqual([row["handle"] for row in config["sources"]], list(known_tiktok_profiles()))
 
-    def test_known_sources_keep_their_configured_output_formats_and_checks(self):
+    def test_known_sources_keep_their_output_formats_with_relaxed_quality_filters(self):
         config = load_source_policy_config()
         sources = {row["handle"]: row for row in config["sources"]}
         for handle in ("meloaep_", "smyxae", "menezxl9"):
@@ -66,11 +66,8 @@ class TikTokSourcePolicyTests(unittest.TestCase):
         for handle in ("rickkzn_", "saylex.aep812", "poppytv_ae"):
             with self.subTest(handle=handle):
                 self.assertEqual(resolve_source_policy("tiktok", handle)["output_format"], "preserve_source")
-        self.assertEqual(sources["menezxl9"]["require_brain_quality_check"], True)
-        self.assertTrue(all(
-            sources[handle]["require_brain_quality_check"] is False
-            for handle in ("meloaep_", "smyxae", "rickkzn_", "saylex.aep812", "poppytv_ae")
-        ))
+        self.assertTrue(all(row["require_brain_quality_check"] is False for row in sources.values()))
+        self.assertTrue(all(row["minimum_source_short_side"] == 480 for row in sources.values()))
 
     def test_unknown_sources_use_strict_brain_policy(self):
         policy = resolve_source_policy("tiktok", "unlisted_creator")
@@ -94,6 +91,38 @@ class TikTokSourcePolicyTests(unittest.TestCase):
         self.assertNotIn("high_quality_edit", result.checks)
         self.assertEqual(result.checks["topic_check_method"], "agent_brain_public_metadata")
         self.assertEqual(result.checks["edit_check_method"], "agent_brain_edit_signal_rules")
+
+    def test_known_creator_accepts_an_edit_mention_without_a_poppy_keyword(self):
+        candidate = self.candidate("smyxae", title="new clip", caption="@edit")
+        result = evaluate_edit_candidate(
+            candidate, self.inspection(), moderation={"has_music": True},
+        )
+        self.assertTrue(result.eligible, result.reasons)
+        self.assertIs(result.checks["is_poppy_playtime"], True)
+        self.assertIs(result.checks["is_edit"], True)
+
+    def test_known_creator_accepts_a_poppy_tag_without_an_explicit_edit_marker(self):
+        candidate = self.candidate("smyxae", title="new clip", caption="@poppy_playtime")
+        result = evaluate_edit_candidate(
+            candidate, self.inspection(), moderation={"has_music": True},
+        )
+        self.assertTrue(result.eligible, result.reasons)
+        self.assertIs(result.checks["is_poppy_playtime"], True)
+        self.assertIs(result.checks["is_edit"], True)
+
+    def test_unknown_creator_accepts_compound_tags_and_playtime_mentions_but_keeps_quality_gate(self):
+        candidate = self.candidate(
+            "unlisted_creator",
+            title="fresh clip",
+            caption="@playtime #poppy_playtime_edits",
+        )
+        result = evaluate_edit_candidate(
+            candidate, self.inspection(), moderation={"has_music": True},
+        )
+        self.assertTrue(result.eligible, result.reasons)
+        self.assertIs(result.checks["is_poppy_playtime"], True)
+        self.assertIs(result.checks["is_edit"], True)
+        self.assertIs(result.checks["high_quality_edit"], True)
 
     def test_known_creator_username_does_not_make_unrelated_upload_relevant(self):
         result = evaluate_edit_candidate(
@@ -120,22 +149,14 @@ class TikTokSourcePolicyTests(unittest.TestCase):
         self.assertEqual(result.checks["music_probability"], 0.55)
         self.assertEqual(result.checks["music_decision_reason"], "music_probability_ambiguous")
 
-    def test_menezxl9_quality_is_checked_by_brain_not_ai(self):
+    def test_known_source_does_not_apply_the_extra_brain_quality_gate(self):
         candidate = self.candidate("menezxl9")
         result = evaluate_edit_candidate(
             candidate, self.inspection(), moderation={"has_music": True},
         )
         self.assertTrue(result.eligible, result.reasons)
-        self.assertIs(result.checks["high_quality_edit"], True)
-        self.assertEqual(result.checks["quality_check_method"], "agent_brain_technical_quality")
-        self.assertEqual(result.checks["moderation_fields_missing"], [])
-
-        low_quality = evaluate_edit_candidate(
-            candidate, self.inspection(width=640, height=360, size_bytes=80_000, codec="unknown"),
-            moderation={"has_music": True},
-        )
-        self.assertIn("brain_technical_quality_check_failed", low_quality.reasons)
-        self.assertIs(low_quality.checks["high_quality_edit"], False)
+        self.assertNotIn("high_quality_edit", result.checks)
+        self.assertEqual(result.checks["quality_check_method"], "not_required_by_source_policy")
 
     def test_unknown_creator_must_pass_topic_edit_music_and_technical_gates(self):
         candidate = self.candidate("unlisted_creator")
