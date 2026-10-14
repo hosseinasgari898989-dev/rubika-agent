@@ -82,3 +82,10 @@ TikTok end-to-end test also verified:
 - Production/main-channel publishing remains disabled; limit stays at one post per trial run.
 - TikTok `tiktok:7694421166508838165` remains `uncertain`; do not automatically retry.
 - Next step: monitor ongoing free-source reliability and improve fallback resilience if the profile endpoint is unavailable. Any code change to `agent/discovery/termux_mob_x.py` triggers Brain CI, the read-only live check, and the one-post test-channel trial; prepare tests before a single atomic push.
+
+
+### Follow-up: controlled UnifAPI rate-limit header probe — 2026-10-14
+- One-shot GitHub Actions run: https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38628728472 — one GET to `https://unifapi.com/tools/x/profile?handle=mobgamesstudios`, HTTP 200, `X-RateLimit-Limit=20`, `X-RateLimit-Remaining=19`, zero downloads and zero Rubika posts.
+- Controlled same-job comparison: https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38628872233 — two sequential GETs, both HTTP 200, both returned `X-RateLimit-Remaining=19` and the same reset timestamp. The counter did **not visibly decrease** between these two requests.
+- Interpretation: this test does not prove that usage is never counted; the endpoint may cache or expose a non-per-request/shared header. Do not claim that these requests definitely consumed one unit each. More importantly, do not infer account-wide usage from the response without a documented quota identity/scope.
+- The temporary probe workflow `.github/workflows/unifapi-quota-probe.yml` was deleted after the test. No media was downloaded and no Rubika post was sent by these probe runs.
