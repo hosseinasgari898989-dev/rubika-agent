@@ -709,8 +709,8 @@ function supervisorInput(extra = {}) {
   const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.source, "deterministic_fallback");
-  assert.equal(response.body.recommendation.action, "human_review");
-  assert.equal(response.body.recommendation.next_step_code, "inspect_d1_queue_counts");
+  assert.equal(response.body.recommendation.action, "retry_next_scheduled_run");
+  assert.equal(response.body.recommendation.next_step_code, "wait_for_next_schedule");
   assert.equal(state.DB.events.filter(event => event.code === "ai_supervisor_reserved").length, 4);
   assert.equal(JSON.stringify(response.body).includes("LEAKED_TEST_SECRET"), false);
 }
