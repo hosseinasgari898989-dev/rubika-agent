@@ -130,7 +130,10 @@ def _post_id_from_mirror_url(raw_url: str) -> str | None:
     except ValueError:
         return None
     host = (parsed.hostname or "").lower().rstrip(".")
-    if parsed.scheme != "https" or host not in {"twstalker.com", "www.twstalker.com", "mobile.twstalker.com"}:
+    if parsed.scheme != "https" or host not in {
+        "twstalker.com", "www.twstalker.com", "mobile.twstalker.com",
+        "ww.twstalker.com", "www6.twstalker.com",
+    }:
         return None
     match = re.fullmatch(r"/mobgamesstudios/status/([0-9]{15,22})/?", parsed.path, re.IGNORECASE)
     if not match:
@@ -346,41 +349,79 @@ def _discover_ids_from_public_mirror(
     timeout_seconds: int,
     limit: int,
 ) -> tuple[list[str], dict[str, Any]]:
-    """Fallback index only: parse public post links, then verify every post directly via X syndication."""
-    url = "https://mobile.twstalker.com/" + OFFICIAL_HANDLE
-    try:
-        response = client.get(
-            url,
-            headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
-            timeout=timeout_seconds,
-            allow_redirects=True,
-        )
-    except requests.RequestException as exc:
-        return [], {"source": "mob_x", "engine": "public_profile_mirror", "result": "request_failed", "error_type": type(exc).__name__}
-    status = int(getattr(response, "status_code", 0))
-    final_url = str(getattr(response, "url", url) or url)
-    parsed = urlparse(final_url)
-    if status != 200 or parsed.scheme != "https" or (parsed.hostname or "").lower() not in {"mobile.twstalker.com", "twstalker.com", "www.twstalker.com"}:
-        return [], {"source": "mob_x", "engine": "public_profile_mirror", "http_status": status, "result": "unavailable"}
-    parser = _AnchorParser()
-    try:
-        parser.feed(str(getattr(response, "text", "") or ""))
-    except Exception:
-        return [], {"source": "mob_x", "engine": "public_profile_mirror", "http_status": status, "result": "html_parse_failed"}
-    ids: list[str] = []
-    for anchor in parser.anchors:
-        post_id = _post_id_from_mirror_url(anchor.get("href", ""))
-        if post_id and post_id not in ids:
-            ids.append(post_id)
-        if len(ids) >= limit:
-            break
-    return ids, {
+    """Try several public profile mirrors for IDs only; X syndication verifies all post data."""
+    hosts = (
+        "mobile.twstalker.com",
+        "www.twstalker.com",
+        "twstalker.com",
+        "ww.twstalker.com",
+        "www6.twstalker.com",
+    )
+    outcomes: list[dict[str, Any]] = []
+    for host in hosts:
+        url = "https://" + host + "/" + OFFICIAL_HANDLE
+        try:
+            response = client.get(
+                url,
+                headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+                timeout=timeout_seconds,
+                allow_redirects=True,
+            )
+        except requests.RequestException as exc:
+            outcomes.append({"host": host, "result": "request_failed", "error_type": type(exc).__name__})
+            continue
+
+        status = int(getattr(response, "status_code", 0))
+        final_url = str(getattr(response, "url", url) or url)
+        parsed = urlparse(final_url)
+        final_host = (parsed.hostname or "").lower().rstrip(".")
+        allowed_hosts = set(hosts)
+        if status != 200:
+            outcomes.append({"host": host, "http_status": status, "result": "unavailable"})
+            continue
+        if parsed.scheme != "https" or final_host not in allowed_hosts:
+            outcomes.append({"host": host, "http_status": status, "result": "redirect_rejected"})
+            continue
+
+        parser = _AnchorParser()
+        try:
+            parser.feed(str(getattr(response, "text", "") or ""))
+        except Exception:
+            outcomes.append({"host": host, "http_status": status, "result": "html_parse_failed"})
+            continue
+
+        ids: list[str] = []
+        for anchor in parser.anchors:
+            post_id = _post_id_from_mirror_url(anchor.get("href", ""))
+            if post_id and post_id not in ids:
+                ids.append(post_id)
+            if len(ids) >= limit:
+                break
+        outcomes.append({
+            "host": host,
+            "http_status": status,
+            "result": "post_ids_found" if ids else "no_post_ids_found",
+            "post_urls_found": len(ids),
+        })
+        if ids:
+            return ids, {
+                "source": "mob_x",
+                "engine": "public_profile_mirror",
+                "http_status": status,
+                "host_used": host,
+                "hosts_tried": [row["host"] for row in outcomes],
+                "result": "post_ids_found",
+                "post_urls_found": len(ids),
+                "note": "Only post IDs come from the mirror; author, caption, date, and media must pass X syndication validation.",
+            }
+
+    return [], {
         "source": "mob_x",
         "engine": "public_profile_mirror",
-        "http_status": status,
-        "result": "post_ids_found" if ids else "no_post_ids_found",
-        "post_urls_found": len(ids),
-        "note": "Only IDs are used from the mirror; author, caption, date, and media must pass X syndication validation.",
+        "result": "unavailable_or_empty",
+        "hosts_tried": [row["host"] for row in outcomes],
+        "outcomes": outcomes,
+        "note": "Mirror pages provide candidate IDs only; no mirror caption or media is trusted for publishing.",
     }
 
 
@@ -422,11 +463,12 @@ def discover_mob_x_posts(
     timeout_seconds: int = 12,
     sleep_seconds: float = 0.15,
     session: Any | None = None,
+    seed_urls: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Discover recent indexed post URLs and verify actual post details via X syndication.
+    """Find official X post IDs via free public indexes and validate posts via X syndication.
 
-    Public indexing is best-effort: it is free and needs no X API key, but can lag
-    behind new posts or fail when a search engine blocks the query.
+    seed_urls are owner-provided X status links used only to bootstrap a known post;
+    they are never trusted for caption/media and must pass the same X verification.
     """
     client = session or requests.Session()
     try:
@@ -438,8 +480,20 @@ def discover_mob_x_posts(
     except AttributeError:
         pass
     limit = max(1, min(int(max_results), MAX_RESULTS))
-    post_ids: list[str] = []
-    attempts: list[dict[str, Any]] = []
+    seed_ids: list[str] = []
+    for raw_url in seed_urls:
+        post_id = _post_id_from_url(raw_url)
+        if post_id and post_id not in seed_ids:
+            seed_ids.append(post_id)
+    seed_ids = seed_ids[:limit]
+    index_limit = max(1, limit - len(seed_ids))
+    index_ids: list[str] = []
+    attempts: list[dict[str, Any]] = [{
+        "source": "mob_x",
+        "engine": "owner_seed_urls",
+        "result": "verified_again_through_syndication" if seed_ids else "no_configured_seed_urls",
+        "post_urls_found": len(seed_ids),
+    }]
     bing_status: int | None = None
     bing_result = "no_indexed_official_posts"
     queries = (
@@ -460,11 +514,11 @@ def discover_mob_x_posts(
                 continue
             for row in _rss_items(str(getattr(response, "text", "") or "")):
                 for post_id in _post_ids_from_search_result(row.get("link", ""), row.get("description", "")):
-                    if post_id not in post_ids:
-                        post_ids.append(post_id)
-                if len(post_ids) >= limit:
+                    if post_id not in index_ids:
+                        index_ids.append(post_id)
+                if len(index_ids) >= index_limit:
                     break
-            if post_ids:
+            if index_ids:
                 bing_result = "indexed_post_urls_found"
                 break
         except requests.RequestException as exc:
@@ -480,19 +534,18 @@ def discover_mob_x_posts(
         "engine": "bing_rss",
         "http_status": bing_status,
         "result": bing_result,
-        "post_urls_found": len(post_ids),
+        "post_urls_found": len(index_ids),
     })
 
-    # Search engines can lag behind the official account. If they have no canonical
-    # URLs, use a public profile mirror only as an ID index, then verify with X itself.
-    if not post_ids:
+    # Search engines can lag behind the account. Try multiple public mirrors if needed.
+    if not index_ids:
         mirror_ids, mirror_attempt = _discover_ids_from_public_mirror(
-            client, timeout_seconds=timeout_seconds, limit=limit
+            client, timeout_seconds=timeout_seconds, limit=index_limit
         )
         attempts.append(mirror_attempt)
-        post_ids.extend(mirror_ids)
+        index_ids.extend(mirror_ids)
 
-    if not post_ids:
+    if not index_ids:
         ddg_status: int | None = None
         ddg_result = "no_indexed_official_posts"
         try:
@@ -508,11 +561,11 @@ def discover_mob_x_posts(
                 parser.feed(str(getattr(response, "text", "") or ""))
                 for anchor in parser.anchors:
                     post_id = _post_id_from_url(anchor.get("href", ""))
-                    if post_id and post_id not in post_ids:
-                        post_ids.append(post_id)
-                    if len(post_ids) >= limit:
+                    if post_id and post_id not in index_ids:
+                        index_ids.append(post_id)
+                    if len(index_ids) >= index_limit:
                         break
-                ddg_result = "indexed_post_urls_found" if post_ids else "no_indexed_official_posts"
+                ddg_result = "indexed_post_urls_found" if index_ids else "no_indexed_official_posts"
             elif ddg_status in {202, 401, 403, 429}:
                 ddg_result = f"blocked_http_{ddg_status}"
             else:
@@ -530,12 +583,13 @@ def discover_mob_x_posts(
             "engine": "duckduckgo_html",
             "http_status": ddg_status,
             "result": ddg_result,
-            "post_urls_found": len(post_ids),
+            "post_urls_found": len(index_ids),
         })
 
+    post_ids = list(dict.fromkeys([*seed_ids, *index_ids]))[:limit]
     output: list[dict[str, Any]] = []
     skipped: dict[str, int] = {}
-    for post_id in post_ids[:limit]:
+    for post_id in post_ids:
         item, result = _fetch_post(client, post_id, timeout_seconds)
         if item:
             output.append(item)
@@ -543,7 +597,6 @@ def discover_mob_x_posts(
             skipped[result] = skipped.get(result, 0) + 1
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
-    # Prefer the newest verified source post, not whichever result Bing ranked first.
     output.sort(key=lambda row: str(row.get("published_at") or ""), reverse=True)
     attempts.append({
         "source": "mob_x",
@@ -553,3 +606,4 @@ def discover_mob_x_posts(
         "skipped": skipped,
     })
     return output, attempts
+
