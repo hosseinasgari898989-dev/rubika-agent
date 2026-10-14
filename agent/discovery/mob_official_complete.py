@@ -681,6 +681,18 @@ def _discover_steam(session: Any, sources: list[dict[str, Any]]) -> list[dict[st
             published = datetime.fromtimestamp(int(published), tz=timezone.utc).isoformat()
         except (ValueError, TypeError, OSError, OverflowError):
             published = None
+        # A direct file is preferred as video media. If the post embeds only a
+        # YouTube/Vimeo page and also contains an actual Steam-hosted image, use that
+        # original in-post image for preview instead of relying on a blocked video page.
+        video_host = _host(chosen_video) if chosen_video else ""
+        video_is_page = bool(chosen_video) and (
+            _is_host(video_host, "youtube.com")
+            or video_host == "youtu.be"
+            or _is_host(video_host, "vimeo.com")
+        )
+        use_image_fallback = bool(chosen_image) and video_is_page
+        selected_media_type = "image" if use_image_fallback or not chosen_video else "video"
+        selected_media_url = chosen_image if use_image_fallback else (chosen_video or chosen_image)
         item = _make_item(
             source_platform="steam",
             source_name="Poppy Playtime official Steam news",
@@ -690,8 +702,8 @@ def _discover_steam(session: Any, sources: list[dict[str, Any]]) -> list[dict[st
             title=str(row.get("title") or ""),
             caption=caption,
             published_at=published,
-            media_type="video" if chosen_video else "image",
-            media_url=chosen_video or chosen_image,
+            media_type=selected_media_type,
+            media_url=selected_media_url,
             source_priority=2,
         )
         if item:
@@ -872,11 +884,13 @@ def discover_all_official_posts(
         seen_fingerprints.update(fingerprints)
         output.append(row)
 
+    # Keep the requested source precedence: newsroom first, then official
+    # YouTube and Steam, and X as a final fallback. Recency orders posts within a lane.
     output.sort(
         key=lambda row: (
+            int(row.get("source_priority", source_priority.get(str(row.get("source_platform") or ""), 9))),
             0 if published_epoch(row) > 0 else 1,
             -published_epoch(row),
-            source_priority.get(str(row.get("source_platform") or ""), 9),
             str(row.get("external_id") or row.get("id") or ""),
         )
     )
