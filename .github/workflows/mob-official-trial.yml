@@ -1,4 +1,4 @@
-name: Mob Entertainment X news preview
+name: Mob Entertainment official-source preview
 
 on:
   push:
@@ -51,7 +51,7 @@ jobs:
           sudo apt-get install --yes ffmpeg
           ffprobe -version | head -n 1
 
-      - name: Discover X, translate its real caption, and validate its actual media
+      - name: Discover official sources, translate the original caption, and validate the post media
         shell: bash
         run: |
           set -euo pipefail
@@ -65,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mob-x-preview
+          name: mob-official-preview
           path: |
             artifacts/mob-x-preview-report.json
             artifacts/mob-x-preview-media/**
