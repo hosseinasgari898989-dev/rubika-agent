@@ -74,6 +74,36 @@ class ErrorSupervisorTests(unittest.TestCase):
         self.assertEqual(result["recommendation"]["action"], "inspect_queue")
         self.assertFalse(result["applied"])
 
+    def test_prefers_current_local_fallback_over_stale_remote_deterministic_advice(self):
+        class StaleWorkerFallback:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def supervise_error(self, **_kwargs):
+                return {
+                    "ok": True,
+                    "source": "deterministic_fallback",
+                    "recommendation": {
+                        "action": "human_review",
+                        "reason_code": "unknown_error",
+                        "next_step_code": "review_error_code_and_recent_logs",
+                        "human_review": True,
+                    },
+                    "applied": False,
+                    "daily_ai_limit": 4,
+                }
+
+        result = recommend_error(
+            event_code="queue_intake_failed",
+            stage="queue_intake",
+            error_code="control_api_unreachable",
+            client_factory=StaleWorkerFallback,
+        )
+        self.assertEqual(result["source"], "local_fallback")
+        self.assertEqual(result["recommendation"]["action"], "retry_next_scheduled_run")
+        self.assertEqual(result["recommendation"]["next_step_code"], "wait_for_next_schedule")
+        self.assertFalse(result["applied"])
+
     def test_api_unavailable_uses_safe_local_fallback_without_leaking_error_text(self):
         class BrokenClient:
             def __init__(self, *_args, **_kwargs):
