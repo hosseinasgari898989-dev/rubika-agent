@@ -106,7 +106,8 @@ jobs:
               export PATH="$VENV_DIR/bin:$PATH"
               timeout 240s python -m pip install --disable-pip-version-check --retries 2 --timeout 20 requests yt-dlp==2026.08.19
               python --version
-              python -c "import requests, yt_dlp; print('PYTHON_DEPENDENCIES=ready', requests.__version__, yt_dlp.version.__version__)"
+              echo "PYTHON_DEPENDENCIES=ready"
+              python -c "import requests, yt_dlp; print(requests.__version__, yt_dlp.version.__version__)"
               timeout 90s python -m unittest discover -s tests -p "test_termux_sources.py" -v
               timeout 90s python -m unittest discover -s tests -p "test_termux_instagram.py" -v
               timeout 90s python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
