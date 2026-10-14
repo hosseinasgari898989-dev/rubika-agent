@@ -17,7 +17,7 @@ from agent.brain.owner_notify import queue_inventory_lines, send_owner_notificat
 from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
 
 
-DAILY_SUCCESS_LIMIT = 4
+DAILY_SUCCESS_LIMIT = 1
 MAX_CANDIDATE_ATTEMPTS = 20
 QUEUE_READ_LIMIT = 100
 PLATFORMS = ("tiktok",)
@@ -101,8 +101,8 @@ def _inventory_text(queue_counts: dict[str, int], ledger: dict[str, Any]) -> str
 
 
 def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX_CANDIDATE_ATTEMPTS) -> dict[str, Any]:
-    if daily_limit != DAILY_SUCCESS_LIMIT:
-        raise ValueError("daily_success_limit_is_fixed_at_four")
+    if type(daily_limit) is not int or not 1 <= daily_limit <= 4:
+        raise ValueError("daily_success_limit_out_of_range")
     if not 1 <= max_attempts <= 100:
         raise ValueError("max_attempts_out_of_range")
 
@@ -145,6 +145,11 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
     candidates = queue_response.get("items", [])
     if not isinstance(candidates, list):
         raise RuntimeError("automation_queue_invalid")
+    # Test-channel rollout: attempt the supported TikTok path first and never
+    # mutate unsupported YouTube/Instagram rows; those stay queued for later.
+    candidates.sort(
+        key=lambda item: 0 if isinstance(item, dict) and item.get("platform") in PLATFORMS else 1
+    )
     report["queued_at_start"] = len(candidates)
     if not candidates:
         report["status"] = "queue_empty"
@@ -166,6 +171,17 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
             queue_id = str(item.get("id") or "")
             if not external_id or not queue_id:
                 report["skipped_count"] += 1
+                continue
+
+            if platform not in PLATFORMS:
+                report["skipped_count"] += 1
+                report["results"].append({
+                    "platform": platform,
+                    "external_id": external_id,
+                    "status": "deferred",
+                    "reason": "platform_paused",
+                    "queue_state": "left_queued",
+                })
                 continue
 
             # Enforce the launch timestamp again at the last possible point before staging.
@@ -196,24 +212,6 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                     "reason": "youtube_freshness_unverified",
                 })
                 continue
-            if platform in {"youtube", "instagram"}:
-                # These paths are paused; official Mob posts use a separate X-only workflow.
-                try:
-                    cloud.update_automation_queue_item(queue_id, "processing")
-                    cloud.update_automation_queue_item(queue_id, "skipped", error_code="platform_paused")
-                except Exception:
-                    report["ok"] = False
-                report["skipped_count"] += 1
-                report["results"].append({
-                    "platform": platform, "external_id": external_id,
-                    "status": "skipped", "reason": "platform_paused",
-                })
-                continue
-
-            if platform not in PLATFORMS:
-                report["skipped_count"] += 1
-                continue
-
             try:
                 cloud.update_automation_queue_item(queue_id, "processing")
             except Exception as exc:
@@ -319,7 +317,7 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--daily-limit", type=int, choices=[4], default=4)
+    parser.add_argument("--daily-limit", type=int, choices=range(1, 5), default=DAILY_SUCCESS_LIMIT)
     parser.add_argument("--max-attempts", type=int, choices=range(1, 101), default=20)
     parser.add_argument("--report", type=Path, default=Path("artifacts/automation-daily-report.json"))
     parser.add_argument("--no-notify", action="store_true")
@@ -362,7 +360,7 @@ def main() -> int:
         error_summary = ("\nآخرین کدهای خطا:\n" + "\n".join(error_lines)) if error_lines else ""
         message = (
             "📊 گزارش پایان نوبت خودکار روبیکا\n"
-            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))}/4\n"
+            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))}/{daily_limit}\n"
             f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\n"
             f"وضعیت: {result.get('status', 'unknown')}\n"
             + str(result.get("inventory_text") or queue_inventory_lines(result.get("queue_counts") or {}))
