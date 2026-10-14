@@ -1,4 +1,5 @@
 name: Daily Rubika edit queue
+# Refresh workflow metadata so GitHub re-indexes the workflow triggers.
 
 on:
   schedule:
