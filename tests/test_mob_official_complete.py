@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent.discovery.mob_official_complete import _fingerprints, discover_complete_official_posts
+from agent.discovery.mob_official_complete import _detail_from_page, _fingerprints, discover_complete_official_posts
 
 
 class FakeResponse:
@@ -129,6 +129,38 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIn("The first genuine paragraph", rows[0]["original_caption"])
         self.assertIn("The second genuine paragraph", rows[0]["original_caption"])
+
+
+    def test_site_header_logo_is_never_used_as_article_media(self):
+        html = """
+        <html><head>
+          <meta property="og:title" content="Official Mob newsroom post">
+          <meta property="og:description" content="An actual official news caption that has enough information.">
+        </head><body>
+          <header><img src="https://mobentertainment.com/payload-api/media/file/Mob_Entertainment_footer_logo.webp"></header>
+          <main><article><p>The post text is present, but this story exposes no post media.</p></article></main>
+        </body></html>
+        """
+        detail = _detail_from_page(html, "https://mobentertainment.com/news/example-story")
+        self.assertEqual(detail["media_type"], "unknown")
+        self.assertIsNone(detail["media_url"])
+
+    def test_video_embedded_inside_article_is_selected_over_shared_header_logo(self):
+        html = """
+        <html><head>
+          <meta property="og:title" content="Official Mob video post">
+          <meta property="og:description" content="An actual official video announcement caption.">
+        </head><body>
+          <header><img src="https://mobentertainment.com/payload-api/media/file/Mob_Entertainment_footer_logo.webp"></header>
+          <main><article>
+            <p>Watch the reveal trailer here.</p>
+            <iframe src="https://www.youtube.com/embed/fAXzLmsbrd8"></iframe>
+          </article></main>
+        </body></html>
+        """
+        detail = _detail_from_page(html, "https://mobentertainment.com/news/example-video")
+        self.assertEqual(detail["media_type"], "video")
+        self.assertEqual(detail["media_url"], "https://www.youtube.com/embed/fAXzLmsbrd8")
 
     def test_youtube_fallback_uses_the_video_post_not_its_thumbnail(self):
         homepage = "https://www.mobentertainment.com/"
