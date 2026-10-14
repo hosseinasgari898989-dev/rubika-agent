@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from agent.discovery.termux_mob_x import (
     _media_url,
     _parse_post,
+    _post_id_from_mirror_url,
     _post_id_from_url,
     discover_mob_x_posts,
 )
@@ -25,9 +26,10 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, search_body: str, posts: dict[str, dict]):
+    def __init__(self, search_body: str, posts: dict[str, dict], mirror_body: str = ""):
         self.search_body = search_body
         self.posts = posts
+        self.mirror_body = mirror_body
         self.headers: dict[str, str] = {}
         self.calls: list[tuple[str, dict]] = []
 
@@ -38,6 +40,8 @@ class FakeSession:
         if url == "https://cdn.syndication.twimg.com/tweet-result":
             post_id = str((kwargs.get("params") or {}).get("id") or "")
             return FakeResponse(payload=self.posts.get(post_id, {}))
+        if url == "https://mobile.twstalker.com/mobgamesstudios":
+            return FakeResponse(text=self.mirror_body)
         if url == "https://html.duckduckgo.com/html/":
             return FakeResponse(text="")
         raise AssertionError("unexpected_url")
@@ -106,6 +110,33 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             [row["external_id"] for row in candidates],
             ["x-" + newer_id, "x-" + older_id],
         )
+
+
+    def test_public_mirror_is_used_only_for_ids_then_x_verifies_post(self):
+        post_id = "1734258130186559716"
+        empty_bing = "<rss><channel></channel></rss>"
+        mirror_body = (
+            '<html><body><a href="/mobgamesstudios/status/'
+            + post_id
+            + '">View Details</a></body></html>'
+        )
+        session = FakeSession(empty_bing, {post_id: syndication_post(post_id)}, mirror_body=mirror_body)
+        candidates, attempts = discover_mob_x_posts(session=session, sleep_seconds=0)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["author"], "@mobgamesstudios")
+        mirror_attempt = next(item for item in attempts if item.get("engine") == "public_profile_mirror")
+        self.assertEqual(mirror_attempt["result"], "post_ids_found")
+        self.assertTrue(any(url == "https://cdn.syndication.twimg.com/tweet-result" for url, _ in session.calls))
+
+    def test_mirror_only_accepts_exact_handle_and_canonical_status_path(self):
+        self.assertEqual(
+            _post_id_from_mirror_url("https://mobile.twstalker.com/mobgamesstudios/status/1734258130186559716"),
+            "1734258130186559716",
+        )
+        self.assertIsNone(_post_id_from_mirror_url("https://mobile.twstalker.com/fanaccount/status/1734258130186559716"))
+        self.assertIsNone(_post_id_from_mirror_url("https://evil.example/mobgamesstudios/status/1734258130186559716"))
 
     def test_video_selects_actual_mp4_instead_of_thumbnail(self):
         media = [{
