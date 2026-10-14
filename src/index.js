@@ -618,6 +618,8 @@ async function translateOfficial(env, body) {
         "Translate the provided source text faithfully into natural, fluent, idiomatic Persian, using Persian word order and collocations rather than copying English syntax.",
         "Preserve the grammatical mood and person of the source, including imperative marketing subheadings. For example, translate 'Explore...' as a natural Persian call to action such as 'به ... بروید' or '... را کاوش کنید', not as 'در حال کشف ... هستید'.",
         "Never mix Persian with Cyrillic or Russian words. Output only Persian prose, except for necessary official English names that should remain unchanged. Do not insert Russian, Urdu, or other unrelated scripts.",
+        "Avoid literal English-progressive phrasing such as 'در حال کار برای ... باشید'. Render 'while working to ...' as a natural Persian continuation such as 'و هم‌زمان برای ... تلاش کنید'.",
+        "Style example: 'Explore the depths of Playtime Co. as the Smiling Critters while working to build a mysterious location for an even more mysterious voice' should read naturally as 'در نقش کریترهای خندان به اعماق Playtime Co. سفر کنید و هم‌زمان برای ساخت مکانی مرموز برای صدایی حتی مرموزتر تلاش کنید.' Use this as a style guide only; translate the actual source faithfully.",
         "For the English phrase 'even more mysterious', use natural Persian such as 'حتی اسرارآمیزتر', never a Russian equivalent.",
         "This is official entertainment news. Preserve names and established spellings such as Poppy Playtime, Mob Entertainment, Escape From Playtime, Smiling Critters, and Playtime Co. when appropriate.",
         "Do not summarize, embellish, add facts, add a headline, or explain the translation.",
