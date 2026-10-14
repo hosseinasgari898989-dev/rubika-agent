@@ -902,7 +902,17 @@ async function superviseError(env, body) {
     if (typeof raw !== "string" || raw.length > 1200) {
       return await supervisorFallback(env, normalized, "model_output_invalid");
     }
-    const parsed = JSON.parse(raw.trim());
+    // Workers AI models sometimes wrap otherwise-valid JSON in Markdown fences
+    // or a short preamble; extract one bounded object, then strictly validate it.
+    let candidate = raw.trim();
+    const fenced = candidate.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/i);
+    if (fenced) candidate = fenced[1].trim();
+    const objectStart = candidate.indexOf("{");
+    const objectEnd = candidate.lastIndexOf("}");
+    if (objectStart < 0 || objectEnd < objectStart) {
+      return await supervisorFallback(env, normalized, "model_output_invalid");
+    }
+    const parsed = JSON.parse(candidate.slice(objectStart, objectEnd + 1));
     const keys = isObject(parsed) ? Object.keys(parsed).sort() : [];
     const expectedKeys = ["action", "human_review", "next_step_code", "reason_code"];
     if (JSON.stringify(keys) !== JSON.stringify(expectedKeys) ||
