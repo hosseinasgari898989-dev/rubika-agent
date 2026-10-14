@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "mode": "preview",
-  "requested_at": "2026-10-14T00:12:00Z",
-  "request_id": "mob-official-preview-retry-02",
-  "reason": "Retry the official Mob one-post preview after fixing caption extraction and chunked Persian translation. Do not publish to Rubika."
+  "requested_at": "2026-10-14T00:11:29.131Z",
+  "request_id": "mob-official-preview-cloudflare-ai",
+  "reason": "Test the authenticated Cloudflare AI Persian-translation route plus the official Mob source/media validation. Do not publish to Rubika."
 }
