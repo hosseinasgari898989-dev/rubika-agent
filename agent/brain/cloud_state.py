@@ -99,8 +99,8 @@ class CloudState:
         translation = result.get("translation")
         if not isinstance(translation, str) or not translation.strip():
             raise CloudStateError("control_api_translation_missing")
-        clean = re.sub(r"\\s+", " ", translation).strip()
-        if not re.search(r"[\\u0600-\\u06FF]", clean):
+        clean = re.sub(r"\s+", " ", translation).strip()
+        if not re.search(r"[\u0600-\u06FF]", clean):
             raise CloudStateError("control_api_translation_not_persian")
         return clean[:6500]
 
