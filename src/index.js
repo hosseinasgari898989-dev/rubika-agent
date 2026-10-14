@@ -905,7 +905,7 @@ async function superviseError(env, body) {
     // Workers AI models sometimes wrap otherwise-valid JSON in Markdown fences
     // or a short preamble; extract one bounded object, then strictly validate it.
     let candidate = raw.trim();
-    const fenced = candidate.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/i);
+    const fenced = candidate.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
     if (fenced) candidate = fenced[1].trim();
     const objectStart = candidate.indexOf("{");
     const objectEnd = candidate.lastIndexOf("}");
