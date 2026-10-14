@@ -387,7 +387,7 @@ console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval g
 function makeTranslationAI(response = "ماب انترتینمنت خبر رسمی تازه‌ای منتشر کرد.") {
   return {
     run: async (model, input) => {
-      assert.equal(model, "@cf/meta/llama-3.1-8b-instruct-fp8");
+      assert.equal(model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
       assert.equal(input.temperature, 0.1);
       assert.equal(input.max_tokens, 2048);
       assert.ok(Array.isArray(input.messages));
