@@ -61,20 +61,34 @@ class MegaLedgerTests(unittest.TestCase):
         self.assertEqual(loaded["items"]["tiktok:123"]["sha256"], "abc")
         self.assertTrue(result["remote_path"].startswith("/Rubika-Agent/state/"))
 
-    def test_duplicate_source_id_and_hash_are_detected(self):
+    def test_duplicate_source_id_and_hash_are_detected_only_after_delivery(self):
         state = new_state()
         MegaLedger.upsert_item(state, "tiktok:123", {
-            "platform": "tiktok", "external_id": "123", "sha256": "abc",
+            "platform": "tiktok", "external_id": "123", "sha256": "a" * 64,
+            "status": "sent",
         })
         self.assertTrue(MegaLedger.is_duplicate(
             state, platform="tiktok", external_id="123"
         ))
         self.assertTrue(MegaLedger.is_duplicate(
-            state, platform="instagram", external_id="other", sha256="abc"
+            state, platform="instagram", external_id="other", sha256="a" * 64
         ))
         self.assertFalse(MegaLedger.is_duplicate(
-            state, platform="youtube", external_id="different", sha256="different"
+            state, platform="youtube", external_id="different", sha256="b" * 64
         ))
+
+    def test_failed_or_ready_ledger_items_remain_recoverable(self):
+        state = new_state()
+        MegaLedger.upsert_item(state, "tiktok:queued", {
+            "platform": "tiktok", "external_id": "queued", "sha256": "a" * 64,
+            "status": "ready",
+        })
+        MegaLedger.upsert_item(state, "tiktok:failed", {
+            "platform": "tiktok", "external_id": "failed", "sha256": "b" * 64,
+            "status": "failed",
+        })
+        self.assertFalse(MegaLedger.is_duplicate(state, platform="tiktok", external_id="queued"))
+        self.assertFalse(MegaLedger.is_duplicate(state, platform="tiktok", external_id="failed"))
 
     def test_delivery_attempt_history_and_three_attempt_stop(self):
         state = new_state()
