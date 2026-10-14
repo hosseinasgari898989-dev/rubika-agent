@@ -55,6 +55,8 @@ class FakeCloud:
             result[item["status"]] = result.get(item["status"], 0) + 1
         for key in ("queued", "processing", "sent", "failed", "uncertain", "skipped"):
             result.setdefault(key, 0)
+        result["sent_today"] = result["sent"]
+        result["usage_day"] = "2026-10-14"
         return result
 
 
@@ -93,6 +95,27 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(report["queue_counts"]["queued"], 1)
         self.assertEqual(report["results"][0]["status"], "staging_failed")
         self.assertEqual(sum(1 for result in report["results"] if result["status"] == "sent"), 4)
+
+    def test_stops_after_four_successes_were_already_recorded_today(self):
+        cloud = FakeCloud()
+        for item in cloud.items[:4]:
+            item["status"] = "sent"
+        def fake_run_one(*args, **kwargs):
+            raise AssertionError("No extra publication attempt should run after daily quota is reached.")
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one) as mocked_run,
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+        ):
+            report = queue_worker.run_daily()
+
+        mocked_run.assert_not_called()
+        self.assertEqual(report["status"], "daily_quota_reached")
+        self.assertEqual(report["daily_sent_before"], 4)
+        self.assertEqual(report["sent_count"], 0)
+        self.assertEqual(report["queue_counts"]["sent_today"], 4)
 
     def test_youtube_without_freshness_verification_is_skipped(self):
         cloud = FakeCloud()
