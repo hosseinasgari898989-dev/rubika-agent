@@ -343,7 +343,7 @@ def load_official_candidates_from_report(report_path: Path) -> tuple[list[dict[s
             match = re.fullmatch(r"/mobgamesstudios/status/([0-9]{15,22})/?", canonical.path)
             if (
                 canonical_host not in {"x.com", "www.x.com"}
-                or row.get("author", "").lstrip("@").casefold() != "mobgamesstudios"
+                or str(row.get("author") or "").lstrip("@").casefold() != "mobgamesstudios"
                 or not match
                 or external_id != "x-" + match.group(1)
                 or not _direct_media_host_allowed(media_host, media_type, "x")
