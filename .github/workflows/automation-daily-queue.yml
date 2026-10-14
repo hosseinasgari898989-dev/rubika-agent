@@ -1,0 +1,173 @@
+name: Daily Rubika edit queue
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rubika-agent-daily-edit-queue
+  cancel-in-progress: false
+
+jobs:
+  process-edit-queue:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
+      RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+      MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+      MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+      RELAY_BASE_URL: ${{ secrets.RELAY_BASE_URL }}
+      RELAY_API_TOKEN: ${{ secrets.RELAY_API_TOKEN }}
+      COBALT_API_URL: http://127.0.0.1:9000/
+    steps:
+      - name: Check out the automation code
+        uses: actions/checkout@v4
+        with:
+          ref: agent-brain-mega-v1
+
+      - name: Validate required credentials without printing them
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in AGENT_API_TOKEN RUBIKA_TOKEN RUBIKA_CHANNEL_GUID MEGA_EMAIL MEGA_PASSWORD RUBIKA_OWNER_CHAT_ID; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "::error::Missing Actions secret: $key. Publishing stopped safely."
+              missing=1
+            fi
+          done
+          if [[ "${AGENT_API_TOKEN:-}" && ${#AGENT_API_TOKEN} -lt 32 ]]; then
+            echo "::error::AGENT_API_TOKEN is too short. Publishing stopped safely."
+            missing=1
+          fi
+          if [[ "$missing" -ne 0 ]]; then exit 2; fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.6.0"
+
+      - name: Install project Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Install ffmpeg if required
+        run: |
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes ffmpeg
+          fi
+          ffprobe -version | head -n 1
+
+      - name: Check out pinned Cobalt source
+        uses: actions/checkout@v4
+        with:
+          repository: imputnet/cobalt
+          ref: a636575b09de1fc55d9b8cd98cac88f5f2f16b42
+          path: cobalt-src
+          persist-credentials: false
+
+      - name: Install Cobalt dependencies
+        working-directory: cobalt-src
+        run: pnpm install --frozen-lockfile
+
+      - name: Start temporary Cobalt API
+        working-directory: cobalt-src
+        env:
+          API_URL: http://127.0.0.1:9000/
+          API_PORT: "9000"
+          API_LISTEN_ADDRESS: 127.0.0.1
+          CORS_WILDCARD: "1"
+        run: |
+          pnpm --filter @imput/cobalt-api start > "$RUNNER_TEMP/cobalt-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/cobalt-api.pid"
+          for attempt in $(seq 1 45); do
+            if curl --silent --show-error --fail http://127.0.0.1:9000/ -o "$RUNNER_TEMP/cobalt-health.json"; then
+              echo "Temporary Cobalt API is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Cobalt did not start; safe diagnostics follow:"
+          tail -n 60 "$RUNNER_TEMP/cobalt-api.log"
+          exit 1
+
+      - name: Install MEGAcmd
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/megacmd-xUbuntu_24.04_amd64.deb"
+          curl --fail --silent --show-error --location             "https://mega.nz/linux/repo/xUbuntu_24.04/amd64/megacmd-xUbuntu_24.04_amd64.deb"             --output "$package"
+          sudo apt-get update
+          sudo apt-get install --yes "$package"
+          command -v mega-login
+          command -v mega-put
+          command -v mega-get
+          command -v mega-rm
+
+      - name: Log in to MEGA securely
+        id: mega_login
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          mega-ls /Rubika-Agent >/dev/null
+          echo "MEGA login and project folder verified."
+
+      - name: Process the D1 backlog with a four-success daily cap
+        run: |
+          python -m agent.brain.queue_worker             --daily-limit 4             --max-attempts 20             --report artifacts/automation-daily-report.json
+
+      - name: Safely reclaim stale confirmed-sent media
+        if: always() && steps.mega_login.outcome == 'success'
+        run: |
+          set -uo pipefail
+          python -m agent.brain.storage_cleanup             --apply             --min-age-hours 24             --max-delete 25             --output-report artifacts/storage-cleanup-report.json || {
+              result=$?
+              echo "::warning::Storage cleanup did not fully complete (exit $result). Unknown, failed, and uncertain items remain protected."
+              if [ ! -f artifacts/storage-cleanup-report.json ]; then
+                printf '{"ok":false,"status":"failed_closed","deleted_count":0}
+' > artifacts/storage-cleanup-report.json
+              fi
+            }
+
+      - name: Notify owner when this workflow fails
+        if: failure()
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify             --event workflow_failed             --workflow "Daily edit queue"             --reason "daily_queue_workflow_failed"
+
+      - name: Upload daily queue and storage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-daily-queue-report
+          path: |
+            artifacts/automation-daily-report.json
+            artifacts/storage-cleanup-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop temporary services and log out of MEGA
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/cobalt-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/cobalt-api.pid")" 2>/dev/null || true
+          fi
+          mega-logout >/dev/null 2>&1 || true
+          mega-quit >/dev/null 2>&1 || true
