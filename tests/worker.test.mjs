@@ -299,6 +299,43 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
+  const officialXPost = {
+    platform: "mob_official",
+    external_id: "x-2107878755079213476",
+    canonical_url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+    source_key: "x.com/mobgamesstudios",
+    title: "Official Mob X announcement",
+    status: "discovered",
+    review_state: "pending",
+    media_type: "image",
+    source_tier: "official",
+    original_caption: "Official Mob caption",
+    persian_translation: "کپشن رسمی",
+  };
+  let response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST", body: officialXPost,
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.item_id, "mob_official:x-2107878755079213476");
+  assert.equal(state.DB.items.get("mob_official:x-2107878755079213476").canonical_url,
+    "https://x.com/mobgamesstudios/status/2107878755079213476");
+
+  for (const badUrl of [
+    "https://x.com/fanaccount/status/2107878755079213476",
+    "https://evil.x.com/mobgamesstudios/status/2107878755079213476",
+    "https://x.com/mobgamesstudios/status/2107878755079213476?s=20",
+    "https://x.com/mobgamesstudios/status/not-a-post-id",
+  ]) {
+    response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+      method: "POST",
+      body: { ...officialXPost, external_id: "x-invalid-" + Math.random().toString(36).slice(2, 10), canonical_url: badUrl },
+    }), state));
+    assert.equal(response.status, 400, badUrl);
+    assert.equal(response.body.error, "invalid_canonical_url", badUrl);
+  }
+}
+{
+  const state = env();
   const directSent = {
     platform: "youtube", external_id: "vkVFgmgLo1s",
     canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
