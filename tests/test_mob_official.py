@@ -176,6 +176,28 @@ class MobTranslationTests(unittest.TestCase):
         self.assertIn("📝 ترجمه فارسی:", result["caption"])
         self.assertEqual(result["source_url"], "https://mobentertainment.com/news/sample")
 
+
+    def test_long_official_caption_is_translated_in_bounded_chunks(self):
+        calls = []
+
+        class ChunkTranslator:
+            def translate(self, value):
+                calls.append(value)
+                self.assert_short = len(value) <= 700
+                return "ترجمه " + value
+
+        def factory(**kwargs):
+            return ChunkTranslator()
+
+        source = (
+            "Mob Entertainment announced an official update. " * 24
+        ).strip()
+        translated = translate_to_persian(source, translator_factory=factory)
+        self.assertIsInstance(translated, str)
+        self.assertGreater(len(calls), 1)
+        self.assertTrue(all(len(value) <= 700 for value in calls))
+        self.assertTrue(translated.startswith("ترجمه "))
+
     def test_translation_provider_factory_is_injectable(self):
         result = translate_to_persian(
             "Five years since you first ran from Huggy 🎈",
