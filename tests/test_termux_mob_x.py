@@ -26,10 +26,17 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, search_body: str, posts: dict[str, dict], mirror_body: str = ""):
+    def __init__(
+        self,
+        search_body: str,
+        posts: dict[str, dict],
+        mirror_body: str = "",
+        mirror_responses: dict[str, FakeResponse] | None = None,
+    ):
         self.search_body = search_body
         self.posts = posts
         self.mirror_body = mirror_body
+        self.mirror_responses = mirror_responses or {}
         self.headers: dict[str, str] = {}
         self.calls: list[tuple[str, dict]] = []
 
@@ -40,8 +47,18 @@ class FakeSession:
         if url == "https://cdn.syndication.twimg.com/tweet-result":
             post_id = str((kwargs.get("params") or {}).get("id") or "")
             return FakeResponse(payload=self.posts.get(post_id, {}))
-        if url == "https://mobile.twstalker.com/mobgamesstudios":
-            return FakeResponse(text=self.mirror_body)
+        if url in self.mirror_responses:
+            return self.mirror_responses[url]
+        if url.startswith((
+            "https://mobile.twstalker.com/",
+            "https://www.twstalker.com/",
+            "https://twstalker.com/",
+            "https://ww.twstalker.com/",
+            "https://www6.twstalker.com/",
+        )):
+            if url == "https://mobile.twstalker.com/mobgamesstudios":
+                return FakeResponse(text=self.mirror_body)
+            return FakeResponse(status_code=403)
         if url == "https://html.duckduckgo.com/html/":
             return FakeResponse(text="")
         raise AssertionError("unexpected_url")
@@ -129,6 +146,50 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         mirror_attempt = next(item for item in attempts if item.get("engine") == "public_profile_mirror")
         self.assertEqual(mirror_attempt["result"], "post_ids_found")
         self.assertTrue(any(url == "https://cdn.syndication.twimg.com/tweet-result" for url, _ in session.calls))
+
+    def test_owner_seed_url_is_still_verified_through_x_syndication(self):
+        post_id = "2107878755079213476"
+        session = FakeSession(
+            "<rss><channel></channel></rss>",
+            {post_id: syndication_post(post_id, created_at="Wed Oct 07 17:00:32 +0000 2026")},
+        )
+        candidates, attempts = discover_mob_x_posts(
+            session=session,
+            sleep_seconds=0,
+            seed_urls=("https://x.com/mobgamesstudios/status/" + post_id,),
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["author"], "@mobgamesstudios")
+        seed_attempt = next(item for item in attempts if item.get("engine") == "owner_seed_urls")
+        self.assertEqual(seed_attempt["post_urls_found"], 1)
+        self.assertTrue(any(url == "https://cdn.syndication.twimg.com/tweet-result" for url, _ in session.calls))
+
+    def test_public_mirror_failover_uses_working_alternate_host(self):
+        post_id = "1734258130186559716"
+        mirror_url = "https://www6.twstalker.com/mobgamesstudios"
+        mirror_body = (
+            '<html><body><a href="https://www6.twstalker.com/mobgamesstudios/status/'
+            + post_id
+            + '">View Details</a></body></html>'
+        )
+        session = FakeSession(
+            "<rss><channel></channel></rss>",
+            {post_id: syndication_post(post_id)},
+            mirror_responses={
+                "https://mobile.twstalker.com/mobgamesstudios": FakeResponse(status_code=403),
+                mirror_url: FakeResponse(text=mirror_body),
+            },
+        )
+        candidates, attempts = discover_mob_x_posts(session=session, sleep_seconds=0)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        mirror_attempt = next(item for item in attempts if item.get("engine") == "public_profile_mirror")
+        self.assertEqual(mirror_attempt["host_used"], "www6.twstalker.com")
+        self.assertIn("mobile.twstalker.com", mirror_attempt["hosts_tried"])
+        self.assertIn("www6.twstalker.com", mirror_attempt["hosts_tried"])
 
     def test_mirror_only_accepts_exact_handle_and_canonical_status_path(self):
         self.assertEqual(
