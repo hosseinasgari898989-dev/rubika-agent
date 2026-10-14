@@ -41,10 +41,11 @@ def _safe_failure_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
         for row in raw_details[:8]:
             if not isinstance(row, dict):
                 continue
-            item = re.sub(r"[^A-Za-z0-9._:-]", "", str(row.get("item") or "unknown"))[:140]
-            reason = re.sub(r"[^A-Za-z0-9_.,:-]", "", str(row.get("reason") or "unknown_error"))[:180]
-            if reason:
-                details.append({"item": item or "unknown", "reason": reason})
+            raw_item = str(row.get("item") or "unknown")
+            raw_reason = str(row.get("reason") or "unknown_error")
+            item = raw_item if re.fullmatch(r"[A-Za-z0-9._:-]{1,140}", raw_item) else "unknown"
+            reason = raw_reason if re.fullmatch(r"[A-Za-z0-9_.,:-]{1,180}", raw_reason) else "unknown_error"
+            details.append({"item": item, "reason": reason})
     if details:
         diagnostics["failure_details"] = details
 
