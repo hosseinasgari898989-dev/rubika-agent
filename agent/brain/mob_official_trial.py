@@ -67,14 +67,32 @@ def preview_freshness_rejection(
     return None
 
 
-def _official_publishing_config_enabled() -> bool:
+TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
+
+
+def _official_publishing_policy() -> dict[str, Any]:
     config_path = Path(__file__).resolve().parents[2] / "config" / "mob_official_sources.json"
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
+        return {}
     policy = payload.get("publishing") if isinstance(payload, dict) else None
-    return isinstance(policy, dict) and policy.get("enabled") is True
+    return policy if isinstance(policy, dict) else {}
+
+
+def _official_publishing_config_enabled() -> bool:
+    policy = _official_publishing_policy()
+    return policy.get("enabled") is True and policy.get("mode") == "production"
+
+
+def _test_channel_publishing_config_enabled() -> bool:
+    policy = _official_publishing_policy()
+    return (
+        policy.get("enabled") is True
+        and policy.get("mode") == "test_channel_only"
+        and policy.get("target_channel_guid") == TEST_CHANNEL_GUID
+        and policy.get("max_posts_per_run") == 1
+    )
 
 
 
@@ -465,10 +483,15 @@ def run_trial(
     output_report: Path,
     output_dir: Path,
     candidate_report: Path | None = None,
+    test_channel_publish: bool = False,
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": 1,
-        "mode": "publish_one" if publish else "dry_run",
+        "mode": (
+            "publish_one" if publish
+            else "publish_test_channel_one" if test_channel_publish
+            else "dry_run"
+        ),
         "status": "failed",
         "publishing": False,
         "candidate_count": 0,
@@ -487,6 +510,11 @@ def run_trial(
         return report
 
     lifecycle_policy = load_lifecycle_policy()
+    if publish and test_channel_publish:
+        report["error"] = "conflicting_publish_modes"
+        _report(output_report, report)
+        return report
+
     if publish:
         if lifecycle_policy["mode"] != "production":
             report["error"] = "publishing_requires_production_lifecycle"
@@ -503,6 +531,28 @@ def run_trial(
                 "born_at": lifecycle_policy["born_at"],
                 "birth_cutoff_enabled": True,
             }
+            _report(output_report, report)
+            return report
+
+    if test_channel_publish:
+        if lifecycle_policy["mode"] != "test":
+            report["error"] = "test_channel_publish_requires_test_lifecycle"
+            report["lifecycle"] = {
+                "mode": lifecycle_policy["mode"],
+                "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+            }
+            _report(output_report, report)
+            return report
+        if not _test_channel_publishing_config_enabled():
+            report["error"] = "test_channel_publishing_config_disabled"
+            _report(output_report, report)
+            return report
+        if os.getenv("RUBIKA_CHANNEL_GUID", "").strip() != TEST_CHANNEL_GUID:
+            report["error"] = "test_channel_target_mismatch"
+            _report(output_report, report)
+            return report
+        if not os.getenv("RUBIKA_TOKEN", "").strip():
+            report["error"] = "rubika_credentials_missing"
             _report(output_report, report)
             return report
 
@@ -740,7 +790,7 @@ def run_trial(
             "storage_key": None,
         }
         report["caption"] = caption
-        if not publish:
+        if not (publish or test_channel_publish):
             report["status"] = "validated_preview"
             report["publishing"] = False
             _report(output_report, report)
@@ -826,20 +876,22 @@ def run_trial(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--publish", action="store_true", help="Actually send one validated new official post to Rubika.")
-    parser.add_argument("--limit", type=int, default=1, choices=[1], help="First trial is limited to exactly one post.")
+    parser.add_argument("--publish", action="store_true", help="Actually send one validated new official post to the approved production channel.")
+    parser.add_argument("--publish-test-channel", action="store_true", help="Send exactly one validated recent official post to the hard-locked Rubika test channel only.")
+    parser.add_argument("--limit", type=int, default=1, choices=[1], help="Each official-source run is limited to exactly one post.")
     parser.add_argument("--report", type=Path, default=Path("artifacts/mob-official-trial-report.json"))
     parser.add_argument("--candidate-report", type=Path, default=None, help="Use the verified official-source candidates found by Termux instead of searching again.")
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/mob-official-media"))
     args = parser.parse_args()
     result = run_trial(
         publish=args.publish,
+        test_channel_publish=args.publish_test_channel,
         limit=args.limit,
         output_report=args.report,
         output_dir=args.output_dir,
         candidate_report=args.candidate_report,
     )
-    if args.publish:
+    if args.publish or args.publish_test_channel:
         try:
             from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
             status = str(result.get("status") or "unknown")
