@@ -733,7 +733,7 @@ function supervisorFallbackRecommendation(input, reason = "unknown_error") {
       human_review: true
     };
   }
-  if (/timeout|temporar|network|connection|reset|rate_limit|http_5\d\d/.test(input.error_code)) {
+  if (/timeout|temporar|network|connection|unreachable|reset|rate_limit|http_5\d\d/.test(input.error_code)) {
     return {
       action: "retry_next_scheduled_run",
       reason_code: "temporary_network",
