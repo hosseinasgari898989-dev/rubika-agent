@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from agent.storage.mega import MegaStorage, MegaStorageError, sha256_file
+from .deduplication import status_blocks_delivery
 
 
 STATE_SCHEMA_VERSION = 1
@@ -193,15 +194,21 @@ class MegaLedger:
         external_id: str,
         sha256: str | None = None,
     ) -> bool:
+        """Block only media whose delivery state makes a repeat send unsafe."""
         identity = platform + ":" + external_id
         items = state.get("items", {})
         if not isinstance(items, Mapping):
             return False
         for key, item in items.items():
+            if not isinstance(item, Mapping):
+                # Unknown legacy ledger entries are conservatively protected by identity.
+                if key == identity:
+                    return True
+                continue
+            if not status_blocks_delivery(item.get("status")):
+                continue
             if key == identity:
                 return True
-            if not isinstance(item, Mapping):
-                continue
             if item.get("platform") == platform and item.get("external_id") == external_id:
                 return True
             if sha256 and item.get("sha256") == sha256:
