@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   process-edit-queue:
+    # Fail-closed safety gate: publishing stays disabled until explicitly approved.
+    if: ${{ vars.RUBIKA_AGENT_PUBLISH_GATE_20261014 == 'approved' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
