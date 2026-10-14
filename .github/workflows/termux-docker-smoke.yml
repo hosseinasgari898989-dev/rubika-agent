@@ -44,7 +44,7 @@ jobs:
 
           from termux.daily_discovery import collect_daily_report
 
-          report_path = Path("/tmp/termux-docker-smoke-report.json")
+          report_path = Path.home() / "tmp" / "termux-docker-smoke-report.json"
           report = collect_daily_report(output_path=report_path)
           summary = report.get("summary", {})
           candidates = report.get("candidates", {})
