@@ -52,23 +52,36 @@ jobs:
         if: success()
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: \${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
+          workflow_api="https://api.github.com/repos/\${GITHUB_REPOSITORY}/actions/workflows/automation-daily-queue.yml"
+          headers=(-H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28")
+
+          metadata_code="$(curl --silent --show-error --output "$RUNNER_TEMP/daily-workflow-metadata.json" --write-out '%{http_code}' "\${headers[@]}" "$workflow_api" || true)"
+          echo "workflow_metadata_http=\${metadata_code:-request_failed}"
+          if [[ "$metadata_code" == "200" ]]; then
+            jq -r '"workflow_name=\(.name // "n/a") workflow_path=\(.path // "n/a") workflow_state=\(.state // "n/a")"' "$RUNNER_TEMP/daily-workflow-metadata.json" || echo "workflow_metadata_parse=failed"
+          else
+            jq -r '"workflow_metadata_message=\((.message // "n/a" | tostring)[:180])"' "$RUNNER_TEMP/daily-workflow-metadata.json" 2>/dev/null || echo "workflow_metadata_body=unavailable"
+          fi
+
           response_code="$(curl --silent --show-error --output "$RUNNER_TEMP/dispatch-response.json" --write-out '%{http_code}' \
-            --request POST \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --header "Content-Type: application/json" \
+            --request POST "\${headers[@]}" \
+            -H "Content-Type: application/json" \
             --data '{"ref":"main"}' \
-            "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/workflows/automation-daily-queue.yml/dispatches")"
+            "$workflow_api/dispatches" || true)"
+          echo "dispatch_http=\${response_code:-request_failed}"
           if [[ "$response_code" != "204" ]]; then
-            echo "::warning::Queue was saved, but immediate processing dispatch returned HTTP $response_code. The daily schedule will continue to process the backlog."
+            jq -r '[
+              ((.message // "n/a") | tostring | .[0:200] | gsub("[\r\n]"; " ")),
+              ((.documentation_url // "n/a") | tostring | .[0:200])
+            ] | "dispatch_error_message=\(.[0])\ndispatch_error_documentation_url=\(.[1])"' "$RUNNER_TEMP/dispatch-response.json" 2>/dev/null || echo "dispatch_error_body=unavailable"
+            echo "::warning::Queue was saved, but immediate processing dispatch failed; see the sanitized GitHub API diagnostic above."
             exit 1
           fi
-          echo "The saved queue was dispatched to the daily processor; the persistent UTC-day cap still limits sending to four successful edits."
-
+          echo "The saved queue was dispatched; the processor's fail-closed release gate must be explicitly approved before any publishing can occur."
       - name: Notify owner if immediate processing dispatch failed
         if: steps.dispatch_daily.outcome == 'failure'
         continue-on-error: true
