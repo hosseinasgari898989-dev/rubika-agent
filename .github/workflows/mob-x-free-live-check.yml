@@ -32,8 +32,56 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install HTTP dependency
-        run: python -m pip install --disable-pip-version-check "requests>=2.31,<3"
+      - name: Install public metadata dependencies
+        run: |
+          python -m pip install --disable-pip-version-check "requests>=2.31,<3" "yt-dlp==2026.08.19"
+
+      - name: Test public X profile metadata using yt-dlp without login
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from yt_dlp import YoutubeDL
+
+          options = {
+              "quiet": True,
+              "no_warnings": True,
+              "skip_download": True,
+              "extract_flat": "in_playlist",
+              "playlistend": 12,
+              "socket_timeout": 15,
+              "retries": 1,
+              "extractor_retries": 1,
+              "noplaylist": False,
+          }
+          try:
+              with YoutubeDL(options) as ydl:
+                  info = ydl.extract_info("https://x.com/mobgamesstudios", download=False)
+              entries = info.get("entries", []) if isinstance(info, dict) else []
+              rows = [{
+                  "id": str(row.get("id") or ""),
+                  "url": str(row.get("url") or ""),
+                  "title": str(row.get("title") or "")[:160],
+                  "timestamp_available": bool(row.get("timestamp") or row.get("upload_date")),
+                  "media_available": bool(row.get("url") or row.get("id")),
+              } for row in entries[:12] if isinstance(row, dict)]
+              print(json.dumps({
+                  "extractor": info.get("extractor_key") if isinstance(info, dict) else None,
+                  "entry_count": len(rows),
+                  "entries": rows[:3],
+                  "login_cookies_used": False,
+                  "downloaded_media": False,
+              }, ensure_ascii=False))
+          except Exception as exc:
+              print(json.dumps({
+                  "ok": False,
+                  "error_type": type(exc).__name__,
+                  "error_code": str(exc).split(":", 1)[0][:100],
+                  "login_cookies_used": False,
+                  "downloaded_media": False,
+              }, ensure_ascii=False))
+          PY
 
       - name: Search public indexes and verify X post metadata
         shell: bash
