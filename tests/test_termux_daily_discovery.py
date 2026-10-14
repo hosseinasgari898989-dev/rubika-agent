@@ -11,7 +11,7 @@ from termux import daily_discovery
 
 
 class TermuxDailyDiscoveryTests(unittest.TestCase):
-    def test_report_combines_tiktok_edits_and_separate_official_mob_x_posts(self):
+    def test_report_combines_tiktok_edits_and_multi_source_official_mob_posts(self):
         tiktok = [{
             "platform": "tiktok",
             "id": "7610592632179297558",
@@ -46,14 +46,14 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             with patch.object(
                 daily_discovery, "discover_tiktok_hashtags", return_value=(tiktok, [])
             ), patch.object(
-                daily_discovery, "discover_mob_x_posts", return_value=(mob_x, [])
-            ) as x_search:
+                daily_discovery, "discover_all_official_posts", return_value=(mob_x, [])
+            ) as official_search:
                 report = daily_discovery.collect_daily_report(output_path=output)
 
-            x_search.assert_called_once_with(max_results=12)
+            official_search.assert_called_once_with(max_results=12)
             self.assertEqual(report["summary"]["tiktok_candidates"], 1)
             self.assertEqual(report["summary"]["mob_official_candidates"], 1)
-            self.assertEqual(report["summary"]["mob_official_source"], "@mobgamesstudios")
+            self.assertEqual(report["summary"]["mob_official_source"], "Mob Entertainment official sources")
             self.assertEqual(report["summary"]["paid_providers_used"], [])
             self.assertEqual(report["lifecycle"]["mode"], "test")
             self.assertFalse(report["summary"]["ready_to_publish"])
