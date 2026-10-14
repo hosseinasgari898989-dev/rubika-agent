@@ -56,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          workflow_api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/automation-daily-queue.yml"
+          workflow_api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/daily-queue-processor.yml"
           headers=(-H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28")
 
           metadata_code="$(curl --silent --show-error --output "$RUNNER_TEMP/daily-workflow-metadata.json" --write-out '%{http_code}' "${headers[@]}" "$workflow_api" || true)"
