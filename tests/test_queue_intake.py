@@ -14,6 +14,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _video_id(creator_index: int, video_index: int) -> str:
+    return f"769{creator_index:02d}{video_index:02d}000000000000"
+
+
 def _row(external_id: str, author: str, *, title: str = "Poppy Playtime edit") -> dict:
     return {
         "id": external_id,
@@ -39,16 +43,16 @@ class FakeCloudState:
             "skipped": [],
         }
         old = {
-            "id": "tiktok:already-queued",
+            "id": "tiktok:" + _video_id(5, 99),
             "platform": "tiktok",
-            "external_id": "already-queued",
-            "source_key": "creator0",
+            "external_id": _video_id(5, 99),
+            "source_key": "creator5",
             "status": "queued",
             "created_at": "2026-10-14T01:00:00Z",
         }
         self.items["queued"].append(old)
-        self.blocking_seen_ids = {"tiktok:already-sent"}
-        self.duplicate_once = {"race-duplicate"}
+        self.blocking_seen_ids = {"tiktok:" + _video_id(0, 99)}
+        self.duplicate_once = {_video_id(1, 0)}
 
     def get_automation_queue(self, *, status: str = "queued", limit: int = 100, offset: int = 0):
         values = self.items[status]
@@ -171,12 +175,10 @@ class QueueIntakeTests(unittest.TestCase):
         for creator_index in range(6):
             creator = f"creator{creator_index}"
             for video_index in range(4):
-                external_id = f"{creator_index}{video_index}"
+                external_id = _video_id(creator_index, video_index)
                 candidates.append(_row(external_id, creator))
-        candidates.extend([
-            _row("already-sent", "creator4"),
-            _row("race-duplicate", "creator5"),
-        ])
+        candidates.insert(0, _row(_video_id(0, 99), "creator0"))
+        candidates.append(_row(_video_id(5, 99), "creator5"))
         payload = {
             "schema_version": 1,
             "source": "termux_phone",
@@ -197,11 +199,11 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertEqual(len(result["selected_items"]), 4)
         self.assertEqual(len({row["source_key"] for row in result["selected_items"]}), 4)
         self.assertNotIn(
-            "already-sent",
+            _video_id(0, 99),
             {row["external_id"] for row in result["selected_items"]},
         )
         self.assertNotIn(
-            "already-queued",
+            _video_id(5, 99),
             {row["external_id"] for row in result["selected_items"]},
         )
         self.assertEqual(result["duplicate_count"], 1)
