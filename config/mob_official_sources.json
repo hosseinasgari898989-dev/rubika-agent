@@ -11,6 +11,9 @@
       "url": "https://x.com/mobgamesstudios",
       "enabled": true,
       "api_credits_required": false,
+      "seed_urls": [
+        "https://x.com/mobgamesstudios/status/2107878755079213476"
+      ],
       "note": "Verified public X source. Used alongside the official newsroom, YouTube and Steam fallback sources; no paid X API."
     },
     {
