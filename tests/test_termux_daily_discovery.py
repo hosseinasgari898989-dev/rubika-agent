@@ -11,67 +11,63 @@ from termux import daily_discovery
 
 
 class TermuxDailyDiscoveryTests(unittest.TestCase):
-    def test_report_combines_free_metadata_without_downloading_or_publishing(self):
+    def test_report_combines_tiktok_edits_and_separate_official_mob_x_posts(self):
         tiktok = [{
             "platform": "tiktok",
             "id": "7610592632179297558",
             "url": "https://www.tiktok.com/@creator/video/7610592632179297558",
             "title": "Poppy Playtime edit",
+            "caption": "A public edit",
+            "published_at": "2026-10-14T11:00:00+00:00",
+            "freshness_verified": True,
             "media_type": "video",
         }]
-        instagram = [{
-            "platform": "instagram",
-            "id": "AbCdEf_1234",
-            "url": "https://www.instagram.com/reel/AbCdEf_1234/",
-            "title": "Poppy Playtime Reel",
-            "media_type": "video",
-        }]
-        youtube = [{
-            "platform": "youtube",
-            "id": "vkVFgmgLo1s",
-            "url": "https://www.youtube.com/shorts/vkVFgmgLo1s",
-            "title": "Poppy Playtime Short",
-            "media_type": "video",
-        }]
-        mob_official = [{
+        mob_x = [{
             "platform": "mob_official",
-            "id": "youtube:abcdefghijk",
-            "url": "https://www.youtube.com/watch?v=abcdefghijk",
-            "canonical_url": "https://www.youtube.com/watch?v=abcdefghijk",
-            "title": "Official Mob trailer",
-            "source_platform": "youtube",
+            "id": "x-1734258130186559716",
+            "external_id": "x-1734258130186559716",
+            "url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "title": "Official Mob update",
+            "caption": "Actual official post caption",
+            "original_caption": "Actual official post caption",
+            "source_platform": "x",
+            "source_name": "Mob Entertainment on X",
+            "source_key": "x.com/mobgamesstudios",
+            "author": "@mobgamesstudios",
             "official_source": True,
-            "media_type": "video",
+            "published_at": "2026-10-14T12:00:00+00:00",
+            "freshness_verified": True,
+            "media_type": "image",
+            "media_url": "https://pbs.twimg.com/media/example.jpg",
         }]
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "termux_discovery.json"
             with patch.object(
                 daily_discovery, "discover_tiktok_hashtags", return_value=(tiktok, [])
             ), patch.object(
-                daily_discovery, "discover_instagram_hashtags", return_value=(instagram, [])
-            ) as instagram_search, patch.object(
-                daily_discovery, "discover_youtube_metadata", return_value=(youtube, [])
-            ), patch.object(
-                daily_discovery, "discover_mob_official", return_value=(mob_official, [])
-            ):
+                daily_discovery, "discover_mob_x_posts", return_value=(mob_x, [])
+            ) as x_search:
                 report = daily_discovery.collect_daily_report(output_path=output)
 
-            instagram_search.assert_called_once()
+            x_search.assert_called_once_with(max_results=12)
             self.assertEqual(report["summary"]["tiktok_candidates"], 1)
-            self.assertEqual(report["summary"]["youtube_candidates"], 1)
-            self.assertEqual(report["summary"]["instagram_candidates"], 1)
             self.assertEqual(report["summary"]["mob_official_candidates"], 1)
+            self.assertEqual(report["summary"]["mob_official_source"], "@mobgamesstudios")
             self.assertEqual(report["summary"]["paid_providers_used"], [])
-            self.assertEqual(report["candidates"]["mob_official"][0]["source_platform"], "youtube")
-            self.assertEqual(report["summary"]["tiktok_method"], "yt_dlp_owner_selected_profiles_plus_public_hashtag_pages")
-            self.assertEqual(report["summary"]["instagram_method"], "public_search_index_bing_rss_ddg_fallback")
+            self.assertEqual(report["lifecycle"]["mode"], "test")
             self.assertFalse(report["summary"]["ready_to_publish"])
-            self.assertEqual(report["mode"], "metadata_only_no_download_no_publish")
+            self.assertEqual(set(report["candidates"]), {"tiktok", "mob_official"})
+            self.assertEqual(report["candidates"]["mob_official"][0]["source_platform"], "x")
+            self.assertEqual(
+                report["candidates"]["mob_official"][0]["media_url"],
+                "https://pbs.twimg.com/media/example.jpg",
+            )
             written = output.read_text(encoding="utf-8")
             self.assertNotIn("test-only-token", written)
             self.assertEqual(
-                json.loads(written)["candidates"]["instagram"][0]["id"],
-                "AbCdEf_1234",
+                json.loads(written)["candidates"]["mob_official"][0]["id"],
+                "x-1734258130186559716",
             )
 
     def test_push_refuses_to_publish_report_from_main_branch(self):
