@@ -356,7 +356,10 @@ def run_trial(
     ]
     report["candidate_count"] = len(candidates)
     if not candidates:
-        report["error"] = "no_post_with_original_caption_and_original_media"
+        # A quiet or temporarily unindexed public source is not a publish failure.
+        # Preserve source-attempt diagnostics without notifying the owner every poll.
+        report["status"] = "nothing_new"
+        report["error"] = "no_verified_official_x_posts_found"
         _report(output_report, report)
         return report
 
