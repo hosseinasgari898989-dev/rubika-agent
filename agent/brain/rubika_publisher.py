@@ -1,6 +1,8 @@
 """Media-type-aware adapter for the tested Rubka API surface.
 
-This is only a callable adapter; importing it does not connect or publish.
+Images and videos use Rubka's native media methods so they render inline in
+Rubika instead of being delivered as generic file attachments.
+Importing this module does not connect or publish.
 """
 from __future__ import annotations
 
@@ -25,6 +27,16 @@ class RubikaPublisher:
         if not local_path.is_file() or local_path.stat().st_size <= 0:
             raise ValueError("media_file_missing_or_empty")
         name = local_path.name
+        if media_type == "image":
+            send_image = getattr(self.bot, "send_image", None)
+            if not callable(send_image):
+                raise RuntimeError("rubka_send_image_unavailable")
+            return send_image(
+                chat_id=self.channel_guid,
+                path=str(local_path),
+                text=caption or None,
+                file_name=name,
+            )
         if media_type == "video":
             return self.bot.send_video(
                 chat_id=self.channel_guid,
@@ -32,7 +44,7 @@ class RubikaPublisher:
                 text=caption or None,
                 file_name=name,
             )
-        if media_type in {"image", "audio"}:
+        if media_type == "audio":
             send_file = getattr(self.bot, "send_file", None)
             if not callable(send_file):
                 raise RuntimeError("rubka_send_file_unavailable")
