@@ -126,7 +126,7 @@ function canonicalUrlFor(platform, value) {
     // Only canonical status URLs from Mob's exact official handle are accepted.
     // Do not allow arbitrary X users, search parameters, or third-party subdomains.
     if (!["x.com", "www.x.com"].includes(host) || parsed.search) return null;
-    const match = /^\\/mobgamesstudios\\/status\\/([0-9]{15,22})\\/?$/.exec(parsed.pathname);
+    const match = /^\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/.exec(parsed.pathname);
     if (!match) return null;
     return "https://x.com/mobgamesstudios/status/" + match[1];
   }
