@@ -132,20 +132,34 @@ def recommend_error(
     client_factory: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Request a bounded remote recommendation and never raise to the main workflow."""
-    safe_event = event_code if event_code in EVENT_CODES else "unknown_error"
-    safe_stage = stage if stage in STAGES else "unknown"
-    safe_code = (
-        error_code.lower()
-        if isinstance(error_code, str) and re.fullmatch(r"[a-z0-9_-]{1,80}", error_code.lower())
-        else "unknown_error"
+    counts_valid = counts is None or (
+        isinstance(counts, Mapping)
+        and all(
+            key in COUNT_KEYS and type(value) is int and 0 <= value <= 100000
+            for key, value in counts.items()
+        )
     )
-    safe_platform = platform if platform in PLATFORMS else "none"
-    safe_attempts = attempt_count if type(attempt_count) is int and 0 <= attempt_count <= 3 else 0
-    safe_counts: dict[str, int] = {}
-    if isinstance(counts, Mapping):
-        for key, value in counts.items():
-            if key in COUNT_KEYS and type(value) is int and 0 <= value <= 100000:
-                safe_counts[key] = value
+    if (
+        event_code not in EVENT_CODES
+        or stage not in STAGES
+        or platform not in PLATFORMS
+        or not isinstance(error_code, str)
+        or not re.fullmatch(r"[a-z0-9_-]{1,80}", error_code.lower())
+        or type(attempt_count) is not int
+        or not 0 <= attempt_count <= 3
+        or not counts_valid
+    ):
+        # Invalid raw input must never be sent to the remote model.
+        return local_recommendation(event_code="unknown_error", stage="unknown", error_code="unknown_error")
+
+    safe_event = event_code
+    safe_stage = stage
+    safe_code = error_code.lower()
+    safe_platform = platform
+    safe_attempts = attempt_count
+    safe_counts: dict[str, int] = {
+        key: value for key, value in (counts or {}).items()
+    }
 
     fallback = local_recommendation(event_code=safe_event, stage=safe_stage, error_code=safe_code)
     # An LLM cannot resolve uncertainty about whether a post was sent.
