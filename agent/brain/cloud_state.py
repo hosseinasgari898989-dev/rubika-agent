@@ -72,7 +72,17 @@ class CloudState:
                 raw = response.read(256 * 1024).decode("utf-8")
                 result = json.loads(raw)
         except urllib.error.HTTPError as exc:
-            raise CloudStateError("control_api_http_" + str(exc.code)) from None
+            # Surface only the API's machine-readable error code, never its body,
+            # which could contain request details. This makes 4xx schema errors diagnosable.
+            detail = ""
+            try:
+                error_payload = json.loads(exc.read(4096).decode("utf-8", errors="replace"))
+                raw_code = error_payload.get("error") if isinstance(error_payload, dict) else None
+                if isinstance(raw_code, str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", raw_code):
+                    detail = "_" + raw_code.lower()
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                pass
+            raise CloudStateError("control_api_http_" + str(exc.code) + detail) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise CloudStateError("control_api_unreachable") from None
         except (UnicodeDecodeError, json.JSONDecodeError):
