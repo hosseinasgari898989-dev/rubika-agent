@@ -762,7 +762,13 @@ async function automationQueueList(env, url) {
       "SELECT status, COUNT(*) AS total FROM automation_queue GROUP BY status"
     ).all();
     const counts = Object.fromEntries((countsResult.results || []).map(row => [row.status, Number(row.total || 0)]));
-    if (summaryOnly) return json({ ok: true, counts });
+    const usageDay = new Date().toISOString().slice(0, 10);
+    const todayStart = usageDay + "T00:00:00.000Z";
+    const sentTodayRow = await env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM automation_queue WHERE status = 'sent' AND sent_at >= ?"
+    ).bind(todayStart).first();
+    const sentToday = Number(sentTodayRow?.total || 0);
+    if (summaryOnly) return json({ ok: true, counts, sent_today: sentToday, usage_day: usageDay });
     const status = text(url.searchParams.get("status"), 20) || "queued";
     if (!QUEUE_STATUSES.has(status)) return json({ ok: false, error: "invalid_queue_status" }, 400);
     const result = await env.DB.prepare(
