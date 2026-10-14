@@ -127,7 +127,12 @@ class FakeStatement {
         validation_json: v[15], moderation_json: v[16], review_state: v[17],
         original_caption: v[18], persian_translation: v[19],
       };
-      this.db.items.set(item.id, item);
+      const previous = this.db.items.get(item.id);
+      if (previous && ["sent", "uncertain", "sending"].includes(previous.status) &&
+          !["sent", "uncertain", "sending"].includes(item.status)) {
+        item.status = previous.status;
+      }
+      this.db.items.set(item.id, { ...previous, ...item });
       return { meta: { changes: 1 } };
     }
     if (sql.startsWith("INSERT INTO delivery_attempts")) {
@@ -296,6 +301,33 @@ const read = async response => ({ status: response.status, body: await response.
   }), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.item_id, "mob_official:yt-abcdefghijk");
+}
+{
+  const state = env();
+  const original = {
+    id: "tiktok:7616247520657771711",
+    platform: "tiktok",
+    external_id: "7616247520657771711",
+    status: "sending",
+    review_state: "pending",
+  };
+  state.DB.items.set(original.id, original);
+  const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST",
+    body: {
+      platform: "tiktok",
+      external_id: original.external_id,
+      canonical_url: "https://www.tiktok.com/@creator/video/" + original.external_id,
+      source_key: "@creator",
+      title: "Retry must not overwrite an in-flight send",
+      status: "ready",
+      review_state: "pending",
+      media_type: "video",
+      source_tier: "trusted",
+    },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.items.get(original.id).status, "sending");
 }
 {
   const state = env();
