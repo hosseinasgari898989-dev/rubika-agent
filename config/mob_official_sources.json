@@ -2,13 +2,25 @@
   "version": 1,
   "official_sources": [
     {
+      "id": "mob_x",
+      "kind": "public_search_plus_x_syndication",
+      "platform": "mob_official",
+      "source_platform": "x",
+      "source_name": "Mob Entertainment on X",
+      "handle": "mobgamesstudios",
+      "url": "https://x.com/mobgamesstudios",
+      "enabled": true,
+      "api_credits_required": false,
+      "note": "Best-effort free public search index plus public post syndication; no paid X API. X is the sole active official-news source during this test."
+    },
+    {
       "id": "mob_newsroom",
       "kind": "html_newsroom",
       "platform": "mob_official",
       "source_platform": "website",
       "source_name": "Mob Entertainment newsroom",
       "url": "https://mobentertainment.com/",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "poppyplaytime_news",
@@ -28,7 +40,7 @@
       "source_name": "Mob Entertainment YouTube",
       "channel_id": "UCXqV4yoyC_mmZye6VbKFPeQ",
       "url": "https://www.youtube.com/channel/UCXqV4yoyC_mmZye6VbKFPeQ",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "mob_tiktok",
@@ -66,7 +78,7 @@
       "app_id": 1721470,
       "feed_name": "steam_community_announcements",
       "url": "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/",
-      "enabled": true
+      "enabled": false
     }
   ],
   "dedupe": {
@@ -76,6 +88,6 @@
   },
   "publishing": {
     "enabled": false,
-    "reason": "Publishing remains off by default; only the one-item manual trial with an explicit --publish flag can send a post."
+    "reason": "The active source is Mob Entertainment on X only. The trial is preview-only; the public channel publisher remains disabled until final launch approval."
   }
 }
