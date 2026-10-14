@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from typing import Any, Mapping
+from .deduplication import status_blocks_delivery
 
 
 class CloudStateError(RuntimeError):
@@ -364,7 +365,6 @@ class CloudState:
         ids: set[str] = set()
         hashes: set[str] = set()
         offset = 0
-        blocking_statuses = {"sent", "uncertain", "sending"}
         for _ in range(max_pages):
             page = self.get_seen_items(limit=page_size, offset=offset)
             items = page.get("items")
@@ -374,7 +374,7 @@ class CloudState:
                 if not isinstance(item, dict):
                     continue
                 status = item.get("status")
-                blocks_delivery = status in blocking_statuses or status is None
+                blocks_delivery = status_blocks_delivery(status)
                 platform = item.get("platform")
                 external_id = item.get("external_id")
                 if (
