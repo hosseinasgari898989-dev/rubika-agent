@@ -8,7 +8,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain import mob_official_trial
-from agent.brain.mob_official_trial import load_x_candidates_from_report, preview_freshness_rejection, run_trial
+from agent.brain.mob_official_trial import (
+    filter_official_candidates_by_source,
+    load_x_candidates_from_report,
+    preview_freshness_rejection,
+    run_trial,
+)
 
 
 class MobOfficialTrialReportTests(unittest.TestCase):
@@ -133,6 +138,26 @@ class MobOfficialTrialReportTests(unittest.TestCase):
 
         self.assertEqual(candidates, [])
         self.assertEqual(status, "no_verified_official_posts_in_termux_report")
+
+
+    def test_source_lane_filter_never_backfills_from_another_official_source(self):
+        candidates = [
+            {"source_platform": "x", "external_id": "x-1"},
+            {"source_platform": "youtube", "external_id": "yt-1"},
+            {"source_platform": "website", "external_id": "site-1"},
+            {"source_platform": "steam", "external_id": "steam-1"},
+        ]
+
+        selected = filter_official_candidates_by_source(candidates, "x")
+
+        self.assertEqual(selected, [{"source_platform": "x", "external_id": "x-1"}])
+        self.assertEqual(len(candidates), 4)
+        self.assertEqual(filter_official_candidates_by_source(candidates), candidates)
+        self.assertEqual(filter_official_candidates_by_source(candidates, "youtube"), [candidates[1]])
+
+    def test_source_lane_filter_rejects_unknown_lane(self):
+        with self.assertRaisesRegex(ValueError, "invalid_official_source_platform"):
+            filter_official_candidates_by_source([{"source_platform": "x"}], "random")
 
 
 class OfficialPreviewSafetyTests(unittest.TestCase):

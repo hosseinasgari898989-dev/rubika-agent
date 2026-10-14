@@ -12,9 +12,13 @@
       "enabled": true,
       "api_credits_required": false,
       "seed_urls": [
+        "https://x.com/mobgamesstudios/status/2110370731628298519",
+        "https://x.com/mobgamesstudios/status/2110158933356847501",
+        "https://x.com/mobgamesstudios/status/2109690712006533267",
+        "https://x.com/mobgamesstudios/status/2101713521020912076",
         "https://x.com/mobgamesstudios/status/2107878755079213476"
       ],
-      "note": "Verified public X source. Used alongside the official newsroom, YouTube and Steam fallback sources; no paid X API."
+      "note": "Owner-provided recent status links bootstrap free discovery when public indexes are blocked. X syndication must re-verify author, caption, date and actual media for every seed. Paid X API is not used."
     },
     {
       "id": "mob_newsroom",

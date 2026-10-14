@@ -476,6 +476,26 @@ def load_x_candidates_from_report(report_path: Path) -> tuple[list[dict[str, Any
     return load_official_candidates_from_report(report_path)
 
 
+OFFICIAL_SOURCE_PLATFORMS = frozenset({"x", "website", "youtube", "steam"})
+
+
+def filter_official_candidates_by_source(
+    candidates: list[dict[str, Any]],
+    source_platform: str | None = None,
+) -> list[dict[str, Any]]:
+    """Restrict an official-news run to one verified source lane without cross-lane fallback."""
+    if source_platform is None:
+        return list(candidates)
+    lane = str(source_platform).strip().casefold()
+    if lane not in OFFICIAL_SOURCE_PLATFORMS:
+        raise ValueError("invalid_official_source_platform")
+    return [
+        item for item in candidates
+        if isinstance(item, dict)
+        and str(item.get("source_platform") or "").strip().casefold() == lane
+    ]
+
+
 def run_trial(
     *,
     publish: bool,
@@ -484,6 +504,7 @@ def run_trial(
     output_dir: Path,
     candidate_report: Path | None = None,
     test_channel_publish: bool = False,
+    source_platform: str | None = None,
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -565,6 +586,22 @@ def run_trial(
         }]
     else:
         candidates, source_attempts = discover_all_official_posts(max_results=12)
+
+    # Source-lane filtering happens before freshness, deduplication and media download.
+    # If the requested lane has no usable new post, do not silently backfill from
+    # another official account/platform (for example YouTube instead of X).
+    source_filter_input_count = len(candidates)
+    candidates = filter_official_candidates_by_source(candidates, source_platform)
+    if source_platform is not None:
+        report["source_platform_filter"] = source_platform
+        source_attempts.append({
+            "source": "official_source_lane_filter",
+            "requested_lane": source_platform,
+            "input_candidate_count": source_filter_input_count,
+            "candidate_count": len(candidates),
+            "result": "lane_candidates_found" if candidates else "no_candidates_in_requested_lane",
+        })
+
     candidates, birth_rejections = filter_candidates_by_birth_for_trial(candidates, lifecycle_policy)
     preview_rejections: list[dict[str, str]] = []
     if not publish:
@@ -611,7 +648,10 @@ def run_trial(
         report["status"] = "nothing_new"
         report["error"] = (
             "no_recent_verified_official_mob_posts_found"
-            if preview_rejections else "no_verified_official_mob_posts_found"
+            if preview_rejections
+            else "no_verified_official_posts_in_" + source_platform + "_lane"
+            if source_platform is not None
+            else "no_verified_official_mob_posts_found"
         )
         _report(output_report, report)
         return report
@@ -890,6 +930,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=1, choices=[1], help="Each official-source run is limited to exactly one post.")
     parser.add_argument("--report", type=Path, default=Path("artifacts/mob-official-trial-report.json"))
     parser.add_argument("--candidate-report", type=Path, default=None, help="Use the verified official-source candidates found by Termux instead of searching again.")
+    parser.add_argument("--source-platform", choices=sorted(OFFICIAL_SOURCE_PLATFORMS), default=None, help="Restrict this run to a verified source lane; never fall back to another lane.")
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/mob-official-media"))
     args = parser.parse_args()
     result = run_trial(
@@ -899,6 +940,7 @@ def main() -> int:
         output_report=args.report,
         output_dir=args.output_dir,
         candidate_report=args.candidate_report,
+        source_platform=args.source_platform,
     )
     if args.publish or args.publish_test_channel:
         try:
