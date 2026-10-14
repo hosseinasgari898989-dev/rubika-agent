@@ -177,6 +177,32 @@ class MobTranslationTests(unittest.TestCase):
         self.assertEqual(result["source_url"], "https://mobentertainment.com/news/sample")
 
 
+
+    def test_cloudflare_ai_translation_is_preferred_when_worker_credentials_exist(self):
+        captured = {}
+
+        class FakeCloudState:
+            def __init__(self, base_url, token=None, timeout_seconds=15):
+                captured["base_url"] = base_url
+                captured["token"] = token
+
+            def translate_official(self, source_text):
+                captured["source_text"] = source_text
+                return "ماب انترتینمنت یک خبر رسمی منتشر کرد."
+
+        with patch.dict("os.environ", {
+            "AGENT_API_BASE_URL": "https://rubika-agent.h98609294.workers.dev",
+            "AGENT_API_TOKEN": "a-token-with-at-least-thirty-two-characters",
+        }):
+            with patch("agent.brain.cloud_state.CloudState", FakeCloudState):
+                result = translate_to_persian(
+                    "Mob Entertainment published an update at https://example.com/news.",
+                )
+
+        self.assertEqual(result, "ماب انترتینمنت یک خبر رسمی منتشر کرد.")
+        self.assertNotIn("example.com", captured["source_text"])
+        self.assertEqual(captured["base_url"], "https://rubika-agent.h98609294.workers.dev")
+
     def test_long_official_caption_is_translated_in_bounded_chunks(self):
         calls = []
 
