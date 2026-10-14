@@ -1,22 +1,67 @@
-"""Validate and enqueue the metadata-only Termux report into Cloudflare D1."""
+"""Select and enqueue a small, diverse batch of new TikTok edit metadata.
+
+The collector may discover many candidates; intake adds at most four *new* queue
+items per scheduled run, rotating across creator profiles and skipping known IDs.
+Media bytes are never handled here.
+"""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import re
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from agent.brain.cloud_state import CloudState
+from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
 from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
 
 
-# YouTube is paused for later; Instagram is no longer part of this project.
-# Official Mob X news is handled by its own separate workflow and never enters this queue.
+# YouTube is paused for later; Instagram is no longer part of the normal edit queue.
+# Official Mob news remains in its own separate lane.
 PLATFORMS = ("tiktok",)
+QUEUE_STATUSES = ("queued", "processing", "sent", "failed", "uncertain", "skipped")
 MAX_ENQUEUE_ITEMS = 500
+DEFAULT_NEW_ITEMS_PER_RUN = 4
+MAX_NEW_ITEMS_PER_RUN = 4
+MAX_QUEUE_PAGES_PER_STATUS = 100
+MAX_CANDIDATE_AGE_DAYS = 90
+FUTURE_TIMESTAMP_TOLERANCE = timedelta(minutes=5)
+
+POPPY_RELEVANCE_TERMS = (
+    "poppy playtime", "poppyplaytime", "huggy wuggy", "huggywuggy",
+    "catnap", "cat nap", "kissy missy", "mommy long legs", "dogday",
+    "smiling critters", "smilingcritters", "nightmare critters",
+    "bobby bearhug", "craftycorn", "kickin chicken", "hoppy hopscotch",
+    "picky piggy", "bubba bubbaphant", "prototype",
+)
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_poppy_related(raw: Mapping[str, Any]) -> bool:
+    parts = [
+        raw.get("title"), raw.get("caption"), raw.get("query"),
+        raw.get("author"), raw.get("source_key"),
+    ]
+    hashtags = raw.get("hashtags")
+    if isinstance(hashtags, list):
+        parts.extend(value for value in hashtags if isinstance(value, str))
+    text = " ".join(value for value in parts if isinstance(value, str)).casefold()
+    return any(term in text for term in POPPY_RELEVANCE_TERMS)
 
 
 def load_report(path: Path) -> dict[str, Any]:
@@ -35,36 +80,54 @@ def load_report(path: Path) -> dict[str, Any]:
     return payload
 
 
-def candidates_for_queue(payload: dict[str, Any], *, max_items: int = MAX_ENQUEUE_ITEMS) -> list[dict[str, Any]]:
-    """Map phone discovery rows to minimal queue metadata; never includes media bytes."""
+def candidates_for_queue(
+    payload: dict[str, Any],
+    *,
+    max_items: int = MAX_ENQUEUE_ITEMS,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Validate and map fresh, relevant candidate metadata without media bytes."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ValueError("now_must_be_timezone_aware")
+    current = current.astimezone(timezone.utc)
+    oldest_allowed = current - timedelta(days=MAX_CANDIDATE_AGE_DAYS)
+    future_allowed = current + FUTURE_TIMESTAMP_TOLERANCE
+
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     lifecycle_policy = load_lifecycle_policy()
     for platform in PLATFORMS:
-        raw_rows = payload["candidates"].get(platform, [])
+        raw_rows = payload.get("candidates", {}).get(platform, [])
         if not isinstance(raw_rows, list):
             continue
         for raw in raw_rows:
-            if not isinstance(raw, dict):
+            if not isinstance(raw, dict) or not _is_poppy_related(raw):
                 continue
             allowed_by_birth, _birth_reason = candidate_passes_birth_cutoff(
                 raw, policy=lifecycle_policy
             )
             if not allowed_by_birth:
                 continue
+
+            published_at = _parse_timestamp(raw.get("published_at"))
+            if published_at is None or published_at < oldest_allowed or published_at > future_allowed:
+                continue
+
             external_id = raw.get("id") or raw.get("external_id")
             url = raw.get("url") or raw.get("canonical_url")
             if not isinstance(external_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
                 continue
             if not isinstance(url, str) or not url.startswith("https://"):
                 continue
-            if platform == "instagram" and str(raw.get("media_type") or "").lower() != "video":
-                continue
+
             identity = (platform, external_id)
             if identity in seen:
                 continue
             seen.add(identity)
-            source_key = str(raw.get("author") or raw.get("source_key") or raw.get("channel") or "").strip()[:200]
+            source_key = str(
+                raw.get("author") or raw.get("source_key") or raw.get("channel") or ""
+            ).strip()[:200]
             if not source_key:
                 source_key = platform + "_public_discovery"
             rows.append({
@@ -74,7 +137,7 @@ def candidates_for_queue(payload: dict[str, Any], *, max_items: int = MAX_ENQUEU
                 "source_key": source_key,
                 "title": str(raw.get("title") or "")[:500],
                 "caption": str(raw.get("caption") or "")[:4000],
-                "published_at": str(raw.get("published_at") or "")[:80],
+                "published_at": published_at.isoformat(),
                 "media_type": "video",
                 "author": str(raw.get("author") or "")[:100],
                 "query": str(raw.get("query") or "")[:200],
@@ -87,36 +150,168 @@ def candidates_for_queue(payload: dict[str, Any], *, max_items: int = MAX_ENQUEU
     return rows
 
 
-def run_intake(report_path: Path) -> dict[str, Any]:
+def fair_round_robin(
+    rows: list[dict[str, Any]],
+    *,
+    last_source_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """Interleave creators, rotating the first creator after the previous batch."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    names: dict[str, str] = {}
+    for row in rows:
+        raw_key = str(row.get("source_key") or row.get("author") or "unknown").strip()
+        key = raw_key.casefold() or "unknown"
+        groups.setdefault(key, []).append(row)
+        names.setdefault(key, raw_key)
+
+    keys = list(groups)
+    if len(keys) > 1 and last_source_key:
+        previous = last_source_key.strip().casefold()
+        if previous in keys:
+            start = (keys.index(previous) + 1) % len(keys)
+            keys = keys[start:] + keys[:start]
+
+    ordered: list[dict[str, Any]] = []
+    while any(groups.get(key) for key in keys):
+        for key in keys:
+            group = groups.get(key, [])
+            if group:
+                ordered.append(group.pop(0))
+    return ordered
+
+
+def _existing_queue_inventory(cloud: CloudState) -> tuple[set[str], str | None]:
+    """Read all queue states fail-closed; return existing identities and latest creator."""
+    identities: set[str] = set()
+    latest_created_at = ""
+    latest_source_key: str | None = None
+
+    for status in QUEUE_STATUSES:
+        offset = 0
+        for _page in range(MAX_QUEUE_PAGES_PER_STATUS):
+            page = cloud.get_automation_queue(status=status, limit=100, offset=offset)
+            items = page.get("items")
+            if not isinstance(items, list):
+                raise CloudStateError("control_api_invalid_automation_queue")
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                platform = item.get("platform")
+                external_id = item.get("external_id")
+                row_id = item.get("id")
+                if isinstance(platform, str) and isinstance(external_id, str) and external_id:
+                    identities.add(platform + ":" + external_id)
+                elif isinstance(row_id, str) and re.fullmatch(r"(?:tiktok|youtube|instagram):[A-Za-z0-9._-]{1,120}", row_id):
+                    identities.add(row_id)
+
+                created_at = item.get("created_at")
+                source_key = item.get("source_key")
+                if isinstance(created_at, str) and created_at >= latest_created_at:
+                    latest_created_at = created_at
+                    latest_source_key = source_key if isinstance(source_key, str) else None
+
+            returned = len(items)
+            offset += returned
+            if returned < 100:
+                break
+        else:
+            # Never guess that a large queue was fully read.
+            raise CloudStateError("control_api_automation_queue_page_limit")
+    return identities, latest_source_key
+
+
+def run_intake(
+    report_path: Path,
+    *,
+    max_new_items: int = DEFAULT_NEW_ITEMS_PER_RUN,
+) -> dict[str, Any]:
+    if type(max_new_items) is not int or not 1 <= max_new_items <= MAX_NEW_ITEMS_PER_RUN:
+        raise ValueError("max_new_items_must_be_between_1_and_4")
+
     base_url = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
     token = os.getenv("AGENT_API_TOKEN", "").strip()
     cloud = CloudState(base_url, token=token, timeout_seconds=25)
     payload = load_report(report_path)
-    rows = candidates_for_queue(payload)
-    if not rows:
-        summary = {
-            "ok": True,
-            "status": "empty_report",
-            "received_count": 0,
-            "inserted_count": 0,
-            "duplicate_count": 0,
-            "invalid_count": 0,
-        }
-    else:
-        summary = {"ok": True, "status": "enqueued", **cloud.enqueue_automation_items(rows)}
-    summary["report_generated_at"] = str(payload.get("generated_at") or "")[:80]
-    summary["queue_counts"] = cloud.get_automation_queue_summary()
-    summary["queue_inventory"] = queue_inventory_lines(summary["queue_counts"])
-    return summary
+    candidates = candidates_for_queue(payload)
+    existing_ids, last_source_key = _existing_queue_inventory(cloud)
+
+    # The separate media ledger may know about sends from an older pipeline version.
+    seen_index = cloud.get_seen_index()
+    delivery_blocking_ids = seen_index.get("ids", set())
+    if not isinstance(delivery_blocking_ids, set):
+        raise CloudStateError("control_api_invalid_seen_index")
+    existing_ids.update(delivery_blocking_ids)
+
+    ordered = fair_round_robin(candidates, last_source_key=last_source_key)
+    inserted_items: list[dict[str, Any]] = []
+    duplicate_count = invalid_count = api_received_count = 0
+    skipped_existing_count = 0
+
+    # Send one identity at a time. If the API reports a duplicate/invalid row, keep
+    # going to the next fresh candidate so the run can still fill its four-new-item cap.
+    for item in ordered:
+        identity = item["platform"] + ":" + item["external_id"]
+        if identity in existing_ids:
+            skipped_existing_count += 1
+            continue
+
+        result = cloud.enqueue_automation_items([item])
+        api_received_count += int(result.get("received_count") or 0)
+        inserted = int(result.get("inserted_count") or 0)
+        duplicate_count += int(result.get("duplicate_count") or 0)
+        invalid_count += int(result.get("invalid_count") or 0)
+
+        if inserted == 1:
+            existing_ids.add(identity)
+            inserted_items.append({
+                "platform": item["platform"],
+                "external_id": item["external_id"],
+                "url": item["canonical_url"],
+                "source_key": item["source_key"],
+                "title": item["title"],
+                "published_at": item["published_at"],
+                "queue_status": "queued",
+            })
+        elif inserted > 1:
+            raise CloudStateError("control_api_insert_count_exceeded_single_item")
+        else:
+            # A race or API-level duplicate must not consume one of the four slots.
+            existing_ids.add(identity)
+
+        if len(inserted_items) >= max_new_items:
+            break
+
+    queue_counts = cloud.get_automation_queue_summary()
+    inserted_sources = Counter(item["source_key"] for item in inserted_items)
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": "enqueued" if inserted_items else "no_new_candidates",
+        "report_generated_at": str(payload.get("generated_at") or "")[:80],
+        "candidate_pool_count": len(candidates),
+        "ordered_candidate_count": len(ordered),
+        "received_count": api_received_count,
+        "inserted_count": len(inserted_items),
+        "duplicate_count": duplicate_count,
+        "invalid_count": invalid_count,
+        "skipped_existing_count": skipped_existing_count,
+        "max_new_items_per_run": max_new_items,
+        "selection_policy": "fresh_unique_poppy_relevant_round_robin_across_creators",
+        "selected_items": inserted_items,
+        "selected_source_distribution": dict(inserted_sources),
+        "queue_counts": queue_counts,
+        "queue_inventory": queue_inventory_lines(queue_counts),
+    }
+    return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, default=Path("artifacts/termux_discovery.json"))
+    parser.add_argument("--max-new", type=int, default=DEFAULT_NEW_ITEMS_PER_RUN)
     parser.add_argument("--no-notify", action="store_true")
     args = parser.parse_args()
     try:
-        result = run_intake(args.report)
+        result = run_intake(args.report, max_new_items=args.max_new)
     except Exception as exc:
         result = {
             "ok": False,
@@ -128,8 +323,8 @@ def main() -> int:
         if result.get("ok"):
             message = (
                 "📥 صف ویدئوهای روبیکا به‌روزرسانی شد.\n"
-                f"موارد جدید: {result.get('inserted_count', 0)}\n"
-                f"تکراری‌ها: {result.get('duplicate_count', 0)}\n"
+                f"موارد جدید: {result.get('inserted_count', 0)} از سقف {args.max_new}\n"
+                f"تکراری‌های کنارگذاشته‌شده: {result.get('duplicate_count', 0) + result.get('skipped_existing_count', 0)}\n"
                 f"موارد نامعتبر: {result.get('invalid_count', 0)}\n"
                 + str(result.get("queue_inventory") or "")
             )
