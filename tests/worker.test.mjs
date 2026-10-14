@@ -320,15 +320,16 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(state.DB.items.get("mob_official:x-2107878755079213476").canonical_url,
     "https://x.com/mobgamesstudios/status/2107878755079213476");
 
-  for (const badUrl of [
+  const badUrls = [
     "https://x.com/fanaccount/status/2107878755079213476",
     "https://evil.x.com/mobgamesstudios/status/2107878755079213476",
     "https://x.com/mobgamesstudios/status/2107878755079213476?s=20",
     "https://x.com/mobgamesstudios/status/not-a-post-id",
-  ]) {
+  ];
+  for (const [index, badUrl] of badUrls.entries()) {
     response = await read(await worker.fetch(request("/api/brain/items/upsert", {
       method: "POST",
-      body: { ...officialXPost, external_id: "x-invalid-" + Math.random().toString(36).slice(2, 10), canonical_url: badUrl },
+      body: { ...officialXPost, external_id: "x-invalid-" + index, canonical_url: badUrl },
     }), state));
     assert.equal(response.status, 400, badUrl);
     assert.equal(response.body.error, "invalid_canonical_url", badUrl);
