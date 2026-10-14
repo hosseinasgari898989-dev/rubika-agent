@@ -25,7 +25,8 @@ from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.inspector import inspect_media
 from agent.brain.mob_translation import format_mob_post
 from agent.brain.rubika_publisher import RubikaPublisher
-from agent.discovery.mob_official_complete import discover_complete_official_posts
+from agent.discovery.termux_mob_x import discover_mob_x_posts
+from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
 
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_VIDEO_SECONDS = 600
@@ -64,6 +65,10 @@ def _youtube_or_vimeo(url: str) -> bool:
 def _download_direct(url: str, kind: str, output_dir: Path) -> Path:
     if not _safe_public_url(url):
         raise RuntimeError("media_url_rejected")
+    allowed_hosts = {"pbs.twimg.com"} if kind == "image" else {"video.twimg.com"}
+    initial_host = (urlparse(url).hostname or "").lower().rstrip(".")
+    if kind not in {"image", "video"} or initial_host not in allowed_hosts:
+        raise RuntimeError("x_media_host_not_allowed")
     session = requests.Session()
     partial = output_dir / "official_media.part"
     try:
@@ -77,7 +82,8 @@ def _download_direct(url: str, kind: str, output_dir: Path) -> Path:
             if response.status_code != 200:
                 raise RuntimeError("media_http_" + str(response.status_code))
             final_url = str(getattr(response, "url", url) or url)
-            if not _safe_public_url(final_url):
+            final_host = (urlparse(final_url).hostname or "").lower().rstrip(".")
+            if not _safe_public_url(final_url) or final_host not in allowed_hosts:
                 raise RuntimeError("media_redirect_rejected")
             content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
             if content_type in {"text/html", "application/json", "text/plain"}:
@@ -220,6 +226,24 @@ def _report(path: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def filter_candidates_by_birth_for_trial(
+    candidates: list[dict[str, Any]],
+    lifecycle_policy: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    allowed: list[dict[str, Any]] = []
+    rejected: list[dict[str, str]] = []
+    for candidate in candidates:
+        passes, reason = candidate_passes_birth_cutoff(candidate, policy=lifecycle_policy)
+        if passes:
+            allowed.append(candidate)
+        else:
+            rejected.append({
+                "id": str(candidate.get("external_id") or candidate.get("id") or "")[:120],
+                "reason": reason,
+            })
+    return allowed, rejected
+
+
 def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Path) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -241,8 +265,24 @@ def run_trial(*, publish: bool, limit: int, output_report: Path, output_dir: Pat
         _report(output_report, report)
         return report
 
-    candidates, source_attempts = discover_complete_official_posts()
-    report["attempts"] = source_attempts
+    lifecycle_policy = load_lifecycle_policy()
+    candidates, source_attempts = discover_mob_x_posts(max_results=12)
+    candidates, birth_rejections = filter_candidates_by_birth_for_trial(candidates, lifecycle_policy)
+    report["lifecycle"] = {
+        "mode": lifecycle_policy["mode"],
+        "born_at": lifecycle_policy["born_at"],
+        "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+        "rejected_before_or_unverified": len(birth_rejections),
+    }
+    report["attempts"] = [
+        *source_attempts,
+        {
+            "source": "agent_lifecycle",
+            "mode": lifecycle_policy["mode"],
+            "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+            "rejected_count": len(birth_rejections),
+        },
+    ]
     report["candidate_count"] = len(candidates)
     if not candidates:
         report["error"] = "no_post_with_original_caption_and_original_media"
