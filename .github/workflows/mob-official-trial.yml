@@ -1,16 +1,11 @@
 name: Official Mob media trial
 
 on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: Preview one validated post, or explicitly publish one post to Rubika
-        required: true
-        type: choice
-        default: preview
-        options:
-          - preview
-          - publish
+  push:
+    branches:
+      - agent-brain-mega-v1
+    paths:
+      - "artifacts/mob-official-trial-request.json"
 
 permissions:
   contents: read
@@ -24,9 +19,11 @@ jobs:
       AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
       RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
       RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
-      TRIAL_MODE: ${{ inputs.mode }}
     steps:
-      - name: Refuse unsafe branch or missing required secrets
+      - name: Check out experimental branch
+        uses: actions/checkout@v4
+
+      - name: Validate one-post request and required secrets
         shell: bash
         run: |
           set -euo pipefail
@@ -38,16 +35,31 @@ jobs:
             echo "::error::Missing or invalid AGENT_API_TOKEN secret."
             exit 2
           fi
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("artifacts/mob-official-trial-request.json")
+          if not path.is_file():
+              raise SystemExit("Official Mob request file is missing; no media was downloaded.")
+          request = json.loads(path.read_text(encoding="utf-8"))
+          mode = request.get("mode", "preview") if isinstance(request, dict) else ""
+          if mode not in {"preview", "publish"}:
+              raise SystemExit("mode must be preview or publish.")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write("TRIAL_MODE=" + mode + "\\n")
+          print("Official Mob one-post mode:", mode)
+          PY
           if [[ "$TRIAL_MODE" == "publish" ]]; then
             if [[ -z "${RUBIKA_TOKEN:-}" || -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
               echo "::error::Missing RUBIKA_TOKEN or RUBIKA_CHANNEL_GUID secret; nothing was published."
               exit 2
             fi
           fi
-          echo "Mode=$TRIAL_MODE; this is a manually dispatched one-post official-media trial."
+          echo "Request accepted. Publishing only occurs when mode=publish."
 
-      - name: Check out experimental branch
-        uses: actions/checkout@v4
+
 
       - name: Set up Python
         uses: actions/setup-python@v5
