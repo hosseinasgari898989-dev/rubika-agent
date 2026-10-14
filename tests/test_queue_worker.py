@@ -125,6 +125,7 @@ class QueueWorkerTests(unittest.TestCase):
         result = report["results"][0]
         self.assertEqual(result["reason"], "cloud_sync_failed")
         self.assertEqual(result["failure_details"][0]["reason"], "download_timeout")
+        self.assertEqual(result["failure_details"][1]["item"], "unknown")
         self.assertEqual(result["cloud_sync_errors"][0], "tiktok:12345:control_api_http_500_item_upsert_failed")
         self.assertEqual(result["cloud_sync_errors"][1], "cloud_sync_error")
         self.assertEqual(result["found_count"], 1)
