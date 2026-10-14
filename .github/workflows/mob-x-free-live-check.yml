@@ -154,6 +154,7 @@ jobs:
               )
               report["http_status"] = response.status_code
               report["content_type"] = response.headers.get("content-type", "")[:100]
+              report["rate_limit_headers"] = {key: response.headers.get(key) for key in ("X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset") if response.headers.get(key) is not None}
               report["final_host"] = (requests.utils.urlparse(response.url).hostname or "")[:120]
               try:
                   payload = response.json()
@@ -190,6 +191,46 @@ jobs:
 
                   inspect(payload)
                   report["collections"] = collections[:20]
+                  # The profile endpoint nests recent posts under posts.items. Only use it for IDs;
+                  # canonical caption, timestamp, author and media must independently pass X syndication.
+                  posts_container = payload.get("posts")
+                  items = posts_container.get("items") if isinstance(posts_container, dict) else payload.get("items")
+                  if isinstance(items, list):
+                      report["profile_post_count"] = len(items)
+                      from agent.discovery.termux_mob_x import _fetch_post, POST_ID_RE, _post_id_from_url
+                      session = requests.Session()
+                      verified_count = 0
+                      samples = []
+                      for row in items[:3]:
+                          if not isinstance(row, dict):
+                              continue
+                          raw_id = str(row.get("id") or row.get("post_id") or row.get("tweet_id") or "").strip()
+                          listed_url = str(row.get("url") or row.get("permalink") or "").strip()
+                          post_id = _post_id_from_url(listed_url) or (raw_id if POST_ID_RE.fullmatch(raw_id) else None)
+                          author = row.get("author") or row.get("username") or row.get("handle") or ""
+                          if isinstance(author, dict):
+                              author = author.get("username") or author.get("handle") or author.get("screen_name") or ""
+                          sample = {
+                              "listed_id": raw_id[:60],
+                              "listed_url": listed_url[:240],
+                              "listed_author": str(author)[:120],
+                              "listed_timestamp": str(row.get("createdAt") or row.get("created_at") or row.get("timestamp") or row.get("date") or "")[:100],
+                              "syndication_result": "no_usable_post_id",
+                          }
+                          if post_id:
+                              verified, result = _fetch_post(session, post_id, timeout_seconds=10)
+                              sample["syndication_result"] = result
+                              if verified:
+                                  verified_count += 1
+                                  sample["verified_author"] = str(verified.get("author") or "")[:120]
+                                  sample["verified_published_at"] = verified.get("published_at")
+                                  sample["verified_media_type"] = verified.get("media_type")
+                                  sample["verified_media_host"] = (requests.utils.urlparse(str(verified.get("media_url") or "")).hostname or "")[:120]
+                                  sample["verified_canonical_url"] = str(verified.get("canonical_url") or "")[:240]
+                                  sample["verified_caption_chars"] = len(str(verified.get("original_caption") or ""))
+                          samples.append(sample)
+                      report["syndication_verified_count"] = verified_count
+                      report["profile_post_samples"] = samples
                   for key in ("items", "posts", "tweets", "results", "data"):
                       value = payload.get(key)
                       if isinstance(value, list) and value and isinstance(value[0], dict):
