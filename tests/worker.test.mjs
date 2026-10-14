@@ -36,9 +36,25 @@ class FakeStatement {
     if (this.sql.includes("FROM items WHERE id = ?")) {
       return this.db.items.get(this.values[0]) || null;
     }
+    if (this.sql.includes("FROM automation_queue WHERE id = ?")) {
+      return this.db.automationQueue.get(this.values[0]) || null;
+    }
     return null;
   }
   async all() {
+    if (this.sql.includes("FROM automation_queue GROUP BY status")) {
+      const totals = new Map();
+      for (const row of this.db.automationQueue.values()) {
+        totals.set(row.status, (totals.get(row.status) || 0) + 1);
+      }
+      return { results: [...totals.entries()].map(([status, total]) => ({ status, total })) };
+    }
+    if (this.sql.includes("FROM automation_queue WHERE status = ?")) {
+      const status = this.values[0];
+      const limit = this.values[1];
+      const offset = this.values[2];
+      return { results: [...this.db.automationQueue.values()].filter(row => row.status === status).slice(offset, offset + limit) };
+    }
     if (this.sql.includes("GROUP BY status")) return { results: [] };
     if (this.sql.includes("FROM runs ORDER BY")) return { results: [] };
     if (this.sql.includes("review_state = 'approved'")) {
@@ -64,6 +80,34 @@ class FakeStatement {
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("INSERT INTO automation_queue")) {
+      const row = {
+        id: v[0], platform: v[1], external_id: v[2], canonical_url: v[3],
+        source_key: v[4], title: v[5], caption: v[6], published_at: v[7],
+        media_type: v[8], freshness_verified: v[9], method: v[10],
+        metadata_json: v[11], status: "queued", attempt_count: 0,
+        last_error_code: null, created_at: "2026-10-14T00:00:00Z",
+        updated_at: "2026-10-14T00:00:00Z", sent_at: null,
+      };
+      const existing = [...this.db.automationQueue.values()].some(
+        item => item.platform === row.platform && item.external_id === row.external_id
+      );
+      if (!existing) this.db.automationQueue.set(row.id, row);
+      return { meta: { changes: existing ? 0 : 1 } };
+    }
+    if (sql.startsWith("UPDATE automation_queue SET status = 'uncertain'")) {
+      return { meta: { changes: 0 } };
+    }
+    if (sql.startsWith("UPDATE automation_queue SET status = ?")) {
+      const row = this.db.automationQueue.get(v[4]);
+      if (!row) return { meta: { changes: 0 } };
+      if (v[1] === "processing" && row.status === "queued") row.attempt_count += 1;
+      row.status = v[0];
+      row.last_error_code = v[2];
+      if (v[3] === "sent") row.sent_at = "2026-10-14T00:00:00Z";
+      row.updated_at = "2026-10-14T00:00:00Z";
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("INSERT INTO runs")) {
       this.db.runs.set(v[0], { id: v[0], trigger_type: v[1], status: "running" });
       return { meta: { changes: 1 } };
@@ -115,6 +159,7 @@ class FakeDB {
   constructor() {
     this.runs = new Map();
     this.items = new Map();
+    this.automationQueue = new Map();
     this.attempts = [];
     this.events = [];
     this.queueLimit = null;
@@ -123,6 +168,9 @@ class FakeDB {
   }
   prepare(sql) {
     return new FakeStatement(this, sql);
+  }
+  async batch(statements) {
+    return Promise.all(statements.map(statement => statement.run()));
   }
 }
 
@@ -288,6 +336,64 @@ const read = async response => ({ status: response.status, body: await response.
   }), env()));
   assert.equal(response.status, 200);
 }
+{
+  const state = env();
+  const valid = {
+    platform: "tiktok", external_id: "7616247520657771796",
+    canonical_url: "https://www.tiktok.com/@creator/video/7616247520657771796",
+    source_key: "@creator", title: "Poppy Playtime edit",
+    caption: "Public metadata only", media_type: "video",
+    freshness_verified: true, method: "termux_phone",
+  };
+  const invalid = {
+    platform: "youtube", external_id: "abcdefghijk",
+    canonical_url: "https://www.youtube.com/watch?v=abcdefghijk&feature=share",
+    source_key: "channel", title: "bad canonical url",
+  };
+  let response = await read(await worker.fetch(request("/api/brain/automation-queue", {
+    method: "POST", body: { items: [valid, invalid] },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.inserted_count, 1);
+  assert.equal(response.body.invalid_count, 1);
+  assert.equal(state.DB.automationQueue.size, 1);
+
+  response = await read(await worker.fetch(request("/api/brain/automation-queue", {
+    method: "POST", body: { items: [valid] },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.inserted_count, 0);
+  assert.equal(response.body.duplicate_count, 1);
+
+  response = await read(await worker.fetch(request("/api/brain/automation-queue?status=queued&limit=100"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].id, "tiktok:7616247520657771796");
+
+  response = await read(await worker.fetch(request("/api/brain/automation-queue/tiktok%3A7616247520657771796/state", {
+    method: "POST", body: { status: "processing" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.automationQueue.get("tiktok:7616247520657771796").attempt_count, 1);
+
+  response = await read(await worker.fetch(request("/api/brain/automation-queue/tiktok%3A7616247520657771796/state", {
+    method: "POST", body: { status: "sent" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.automationQueue.get("tiktok:7616247520657771796").status, "sent");
+
+  response = await read(await worker.fetch(request("/api/brain/automation-queue?summary=1"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.counts.sent, 1);
+  assert.equal(response.body.counts.queued || 0, 0);
+}
+{
+  const response = await read(await worker.fetch(request("/api/brain/automation-queue", {
+    method: "POST", body: { items: [] }, token: null,
+  }), env()));
+  assert.equal(response.status, 401);
+}
+
 function sampleAudioDataUrl() {
   const bytes = Buffer.concat([
     Buffer.from("ID3"),
