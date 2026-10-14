@@ -84,7 +84,7 @@ class QueueWorkerTests(unittest.TestCase):
             }),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily()
+            report = queue_worker.run_daily(daily_limit=4)
 
         self.assertEqual(report["sent_count"], 4)
         self.assertEqual(report["failed_count"], 1)
@@ -109,7 +109,7 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
         ):
-            report = queue_worker.run_daily()
+            report = queue_worker.run_daily(daily_limit=4)
 
         mocked_run.assert_not_called()
         self.assertEqual(report["status"], "daily_quota_reached")
@@ -117,9 +117,9 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(report["sent_count"], 0)
         self.assertEqual(report["queue_counts"]["sent_today"], 4)
 
-    def test_youtube_without_freshness_verification_is_skipped(self):
+    def test_paused_youtube_item_remains_queued_for_later(self):
         cloud = FakeCloud()
-        cloud.items = [make_item("youtube", "abcdefghijk", "Unverified YouTube")]
+        cloud.items = [make_item("youtube", "abcdefghijk", "YouTube must remain queued")]
         cloud.items[0]["canonical_url"] = "https://www.youtube.com/shorts/abcdefghijk"
         cloud.items[0]["freshness_verified"] = 0
 
@@ -129,12 +129,13 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
         ):
-            report = queue_worker.run_daily()
+            report = queue_worker.run_daily(daily_limit=1)
 
         mocked_run.assert_not_called()
-        self.assertEqual(report["skipped_count"], 1)
-        self.assertEqual(report["queue_counts"]["skipped"], 1)
-        self.assertEqual(report["queue_counts"]["queued"], 0)
+        self.assertEqual(cloud.items[0]["status"], "queued")
+        self.assertEqual(report["queue_counts"]["queued"], 1)
+        self.assertEqual(report["results"][0]["status"], "deferred")
+        self.assertEqual(report["results"][0]["queue_state"], "left_queued")
 
 
 if __name__ == "__main__":
