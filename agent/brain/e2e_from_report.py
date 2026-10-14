@@ -19,8 +19,10 @@ from typing import Any, Mapping
 from agent.brain.authorization import SourceRegistry
 from agent.brain.cloud_state import CloudState
 from agent.brain.delivery import deliver_with_retry
+from agent.brain.deduplication import blocking_ledger_entries
 from agent.brain.downloaders import CobaltDownloader, YouTubeRelayDownloader
 from agent.brain.ledger import MegaLedger
+from agent.brain.inspector import inspect_media
 from agent.brain.models import Candidate
 from agent.brain.orchestrator import StagingOrchestrator, candidates_from_report
 from agent.brain.relay_client import AuthorizedYouTubeRelay
@@ -116,6 +118,48 @@ def _matches_poppy_edit(candidate: Candidate) -> bool:
     return any(term in text for term in relevance)
 
 
+def _blocking_ledger_ids(items: Any) -> set[str]:
+    """Use ledger identity only when its delivery status blocks another send."""
+    protected = blocking_ledger_entries(items)
+    ids = set(protected)
+    for row in protected.values():
+        platform = row.get("platform")
+        external_id = row.get("external_id")
+        if isinstance(platform, str) and isinstance(external_id, str) and external_id:
+            ids.add(platform + ":" + external_id)
+            ids.add(external_id)
+    return ids
+
+
+def _is_reusable_staged_item(candidate: Candidate, item: Any) -> bool:
+    """Check ledger metadata before downloading a previous validated MEGA copy."""
+    if not isinstance(item, Mapping):
+        return False
+    payload = item.get("cloud_payload")
+    validation = payload.get("validation") if isinstance(payload, Mapping) else None
+    digest = item.get("sha256")
+    payload_digest = payload.get("media_sha256") if isinstance(payload, Mapping) else None
+    storage_key = item.get("storage_key")
+    return (
+        item.get("status") == "ready"
+        and item.get("platform") == candidate.platform
+        and item.get("external_id") == candidate.external_id
+        and item.get("permission_confirmed") is True
+        and item.get("cloud_sync") == "ok"
+        and item.get("media_type") == "video"
+        and isinstance(storage_key, str)
+        and storage_key.startswith("/Rubika-Agent/")
+        and ".." not in storage_key
+        and isinstance(digest, str)
+        and re.fullmatch(r"[a-fA-F0-9]{64}", digest) is not None
+        and isinstance(payload, Mapping)
+        and payload.get("media_type") == "video"
+        and isinstance(validation, Mapping)
+        and validation.get("ok") is True
+        and isinstance(payload_digest, str)
+        and payload_digest.casefold() == digest.casefold()
+    )
+
 def _select_candidates(
     report_path: Path,
     platform: str,
@@ -188,7 +232,7 @@ def run_one(
     ledger = MegaLedger(storage)
     initial_state = ledger.load()
     initial_items = initial_state.get("items", {})
-    ledger_ids = set(initial_items) if isinstance(initial_items, dict) else set()
+    ledger_ids = _blocking_ledger_ids(initial_items)
     seen = cloud.get_seen_index()
     seen_ids = set(seen.get("ids", set()))
     candidates = _select_candidates(
@@ -226,6 +270,49 @@ def run_one(
     moderator = CloudflareVideoModerator(cloud)
     with tempfile.TemporaryDirectory(prefix="rubika-agent-e2e-") as temp:
         output_dir = Path(temp)
+        reused_candidate: Candidate | None = None
+        reuse_error: str | None = None
+
+        # Reuse a validated staged object after an interrupted delivery rather than
+        # downloading and uploading another copy of the same queued item.
+        for candidate in candidates:
+            identity = candidate.platform + ":" + candidate.external_id
+            entry = initial_items.get(identity) if isinstance(initial_items, dict) else None
+            if not _is_reusable_staged_item(candidate, entry):
+                continue
+            local_copy: Path | None = None
+            try:
+                local_copy = Path(storage.download(str(entry["storage_key"]), output_dir))
+                if local_copy.suffix.lower() != ".mp4":
+                    raise RuntimeError("reusable_media_not_mp4")
+                inspection = inspect_media(local_copy, "video")
+                expected_sha = str(entry.get("sha256") or "").lower()
+                expected_size = entry.get("size_bytes")
+                if (
+                    not inspection.ok
+                    or inspection.media_type != "video"
+                    or not inspection.sha256
+                    or inspection.sha256.lower() != expected_sha
+                    or (type(expected_size) is int and inspection.size_bytes != expected_size)
+                ):
+                    raise RuntimeError("reusable_media_integrity_check_failed")
+
+                safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", candidate.external_id)[:80]
+                target_path = output_dir / (candidate.platform + "_" + safe_id + "-preserved.mp4")
+                if local_copy.resolve() != target_path.resolve():
+                    target_path.unlink(missing_ok=True)
+                    local_copy.replace(target_path)
+                reused_candidate = candidate
+                candidates = [candidate]
+                break
+            except Exception as exc:
+                reuse_error = _safe_error(exc)
+                if local_copy is not None:
+                    local_copy.unlink(missing_ok=True)
+
+        registry_path = Path("config/trusted_sources.json")
+        registry = SourceRegistry.load(registry_path)
+        moderator = CloudflareVideoModerator(cloud)
         orchestrator = StagingOrchestrator(
             cloud=cloud,
             storage=storage,
@@ -236,28 +323,45 @@ def run_one(
             ledger=ledger,
             required_counts={platform: 1},
         )
-        stage = orchestrator.run(candidates, trigger_type="discovery_e2e_smoke")
-        report_detail: dict[str, Any] = {
-            "platform": platform,
-            "candidates_considered": len(candidates),
-            "stage": stage.as_dict(),
-            "publishing": False,
-        }
-        if stage.status != "ok" or stage.staged_count != 1:
-            stage_result = stage.as_dict()
-            report_detail["stage_detail"] = stage_result
-            report_detail.update(_stage_failure_summary(stage_result))
-            stage_file = Path(stage.report_path)
-            if stage_file.is_file():
-                try:
-                    detailed_report = json.loads(stage_file.read_text(encoding="utf-8"))
-                    if isinstance(detailed_report, dict):
-                        report_detail["stage_detail"] = detailed_report
-                        report_detail.update(_stage_failure_summary(detailed_report))
-                except (OSError, json.JSONDecodeError):
-                    pass
-            return {"ok": False, "status": "staging_failed", **report_detail}
 
+        if reused_candidate is not None:
+            report_detail: dict[str, Any] = {
+                "platform": platform,
+                "candidates_considered": len(candidates),
+                "stage": {
+                    "status": "ok",
+                    "staged_count": 1,
+                    "reused_validated_media": True,
+                    "publishing": False,
+                },
+                "reused_validated_media": True,
+                "publishing": False,
+            }
+        else:
+            stage = orchestrator.run(candidates, trigger_type="discovery_e2e_smoke")
+            report_detail = {
+                "platform": platform,
+                "candidates_considered": len(candidates),
+                "stage": stage.as_dict(),
+                "reused_validated_media": False,
+                "publishing": False,
+            }
+            if reuse_error:
+                report_detail["previous_staged_copy_rejected"] = reuse_error
+            if stage.status != "ok" or stage.staged_count != 1:
+                stage_result = stage.as_dict()
+                report_detail["stage_detail"] = stage_result
+                report_detail.update(_stage_failure_summary(stage_result))
+                stage_file = Path(stage.report_path)
+                if stage_file.is_file():
+                    try:
+                        detailed_report = json.loads(stage_file.read_text(encoding="utf-8"))
+                        if isinstance(detailed_report, dict):
+                            report_detail["stage_detail"] = detailed_report
+                            report_detail.update(_stage_failure_summary(detailed_report))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                return {"ok": False, "status": "staging_failed", **report_detail}
         current_state = ledger.load()
         item_map = current_state.get("items", {})
         if not isinstance(item_map, dict):
