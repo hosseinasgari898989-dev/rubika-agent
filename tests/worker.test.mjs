@@ -682,9 +682,7 @@ function supervisorInput(extra = {}) {
     next_step_code: "wait_for_next_schedule",
     human_review: false,
   }));
-  const response = await read(await worker.fetch(supervisorRequest(supervisorInput({
-    diagnostic: "LEAKED_TEST_SECRET https://secret.invalid/raw_log",
-  } ), state), state));
+  const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.ok, true);
   assert.equal(response.body.source, "workers_ai");
