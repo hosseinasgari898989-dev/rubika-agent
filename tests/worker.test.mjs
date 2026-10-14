@@ -694,7 +694,7 @@ function supervisorInput(extra = {}) {
   assert.equal(response.body.applied, false);
   assert.equal(JSON.stringify(response.body).includes("LEAKED_TEST_SECRET"), false);
   assert.equal(state.DB.events.filter(event => event.code === "ai_supervisor_reserved").length, 1);
-  assert.equal(state.DB.events.some(event => event.sql && event.sql.includes("ai_supervisor_decision")), true);
+  assert.equal(state.DB.events.some(event => event.code === "ai_supervisor_decision"), true);
 }
 {
   const state = env();
