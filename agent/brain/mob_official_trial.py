@@ -465,6 +465,40 @@ def main() -> int:
         output_report=args.report,
         output_dir=args.output_dir,
     )
+    if args.publish:
+        try:
+            from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
+            status = str(result.get("status") or "unknown")
+            selected = result.get("selected") if isinstance(result.get("selected"), dict) else {}
+            if status == "published":
+                inventory = ""
+                try:
+                    inventory = queue_inventory_lines(
+                        CloudState(
+                            os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
+                            token=os.getenv("AGENT_API_TOKEN", ""),
+                            timeout_seconds=15,
+                        ).get_automation_queue_summary()
+                    )
+                except Exception:
+                    inventory = "📦 موجودی صف در این لحظه در دسترس نبود."
+                message = (
+                    "✅ خبر رسمی ماب انترتینمنت منتشر شد.\n"
+                    f"عنوان: {str(selected.get('title') or 'بدون عنوان')[:280]}\n"
+                    f"رسانه: {str(selected.get('media_type') or 'unknown')}\n"
+                    + inventory
+                )
+                send_owner_notification(message)
+            elif status in {"uncertain", "rejected", "published_ledger_update_failed", "failed"}:
+                error = re.sub(r"[^A-Za-z0-9_-]", "", str(result.get("error") or status))[:80]
+                send_owner_notification(
+                    "🚨 هشدار انتشار خبر رسمی ماب\n"
+                    f"وضعیت: {status}\nکد خطا: {error or 'unknown_error'}\n"
+                    "برای جلوگیری از انتشار تکراری، اجرای نامشخص خودکار تکرار نمی‌شود."
+                )
+        except Exception:
+            # Notification failures never cause a second post attempt.
+            pass
     print(json.dumps({
         "status": result.get("status"),
         "publishing": result.get("publishing"),
