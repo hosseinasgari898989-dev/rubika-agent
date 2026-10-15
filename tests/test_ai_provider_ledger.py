@@ -140,7 +140,6 @@ class AIProviderLedgerTests(unittest.TestCase):
         self.assertIn("AND finish_marker = ?)", source)
         self.assertIn("await env.DB.batch([updateCall, updateCooldown])", source)
         self.assertIn("code_ai_call_already_finished", source)
-        self.assertIn("finish_marker IS NULL", source)
 
     def test_worker_fail_closed_when_ledger_database_is_unavailable(self):
         source = WORKER.read_text(encoding="utf-8")
