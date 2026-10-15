@@ -16,6 +16,11 @@ TOKEN = "test-token-value-with-more-than-thirty-two-characters"
 
 
 class CloudStateTests(unittest.TestCase):
+    def test_removed_worker_supervisor_route_has_no_stale_remote_client_method(self):
+        # Worker error supervision was intentionally removed; local deterministic
+        # Python supervision remains in agent.brain.error_supervisor.
+        self.assertFalse(hasattr(CloudState, "supervise_error"))
+
     def test_brain_retries_only_allowlisted_transient_infrastructure_errors(self):
         calls = []
         sleeps = []
