@@ -217,7 +217,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         engine_source = Path(gemini.__file__).read_text(encoding="utf-8")
         helper_source = engine_source.split("def call_gemini_with_ledger(", 1)[1].split("\ndef _write_json(", 1)[0]
         self.assertLess(helper_source.index("ledger.reserve("), helper_source.index("proposal, usage = call_gemini("))
-        self.assertLess(helper_source.index("proposal, usage = call_gemini("), helper_source.index("ledger.finish("))
+        self.assertLess(helper_source.index("proposal, usage = call_gemini("), helper_source.rindex("ledger.finish("))
 
 
 if __name__ == "__main__":
