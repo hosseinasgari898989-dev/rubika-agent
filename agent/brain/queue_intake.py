@@ -208,12 +208,20 @@ def candidates_for_queue(
             topic_relevant = (
                 _owner_selected_poppy_signal(raw) if owner_selected else _is_poppy_related(raw)
             )
-            if not topic_relevant:
-                reject("poppy_relevance_not_verified_in_visible_text", source_name)
-                continue
-            if not _has_edit_signal(raw):
-                reject("edit_signal_missing", source_name)
-                continue
+            edit_signal = _has_edit_signal(raw)
+            if owner_selected:
+                # Match the existing brain policy for these six profiles: a Poppy/Playtime
+                # signal OR an edit signal is sufficient. Other source and media checks still apply.
+                if not (topic_relevant or edit_signal):
+                    reject("owner_selected_topic_or_edit_signal_missing", source_name)
+                    continue
+            else:
+                if not topic_relevant:
+                    reject("poppy_relevance_not_verified_in_visible_text", source_name)
+                    continue
+                if not edit_signal:
+                    reject("edit_signal_missing", source_name)
+                    continue
 
             allowed_by_birth, _birth_reason = candidate_passes_birth_cutoff(
                 raw, policy=lifecycle_policy

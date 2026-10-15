@@ -324,22 +324,31 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertEqual(diagnostics["duplicate_within_report_count"], 1)
 
 
-    def test_owner_selected_source_accepts_poppy_hashtag_plus_edit_signal(self):
+    def test_owner_selected_source_accepts_poppy_hashtag_without_explicit_edit_signal(self):
         row = _row("knownhashtag0001", "meloaep_", title="A different kind of intro")
-        row["caption"] = "SONG: Sequencia Quebra (Slowed)"
-        row["hashtags"] = ["edit", "poppyplaytime", "chapter5"]
+        row["caption"] = "A different kind of intro"
+        row["hashtags"] = ["poppyplaytime"]
 
         rows = candidates_for_queue({"candidates": {"tiktok": [row]}})
         self.assertEqual([item["external_id"] for item in rows], ["knownhashtag0001"])
         self.assertEqual(rows[0]["source_key"], "meloaep_")
 
-    def test_owner_selected_source_still_rejects_unrelated_franchise_edit(self):
-        unrelated = _row("knownunrelated0001", "smyxae", title="Carlos Oliveira edit")
-        unrelated["caption"] = "Resident Evil fan edit"
-        unrelated["hashtags"] = ["carlosoliveira", "residenteviledit", "smyxae"]
+    def test_owner_selected_source_accepts_edit_signal_without_poppy_keyword(self):
+        row = _row("knowneditonly0001", "smyxae", title="Carlos Oliveira")
+        row["caption"] = "Resident Evil fan edit"
+        row["hashtags"] = ["carlosoliveira", "residenteviledit"]
+
+        rows = candidates_for_queue({"candidates": {"tiktok": [row]}})
+        self.assertEqual([item["external_id"] for item in rows], ["knowneditonly0001"])
+
+
+    def test_owner_selected_source_still_requires_at_least_one_topic_or_edit_signal(self):
+        row = _row("knownempty0001", "menezxl9", title="Birthday vlog")
+        row["caption"] = "A day outside"
+        row["hashtags"] = ["travel", "family"]
 
         self.assertEqual(
-            candidates_for_queue({"candidates": {"tiktok": [unrelated]}}),
+            candidates_for_queue({"candidates": {"tiktok": [row]}}),
             [],
         )
 
