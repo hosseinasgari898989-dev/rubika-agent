@@ -220,6 +220,34 @@ class QueueIntakeTests(unittest.TestCase):
         }
         self.assertEqual(candidates_for_queue(payload), [])
 
+    def test_search_query_and_creator_metadata_cannot_fake_relevance(self):
+        unrelated = {
+            **_row("unrelated", "smyxae", title="I think Carlos is my ideal type"),
+            "caption": "Resident Evil edit",
+            "hashtags": ["carlosoliveira", "residenteviledit"],
+            "query": "poppyplaytime",
+            "source_key": "Poppy Playtime search",
+        }
+        self.assertEqual(candidates_for_queue({"candidates": {"tiktok": [unrelated]}}), [])
+
+    def test_rejects_game_mention_without_an_edit_signal(self):
+        gameplay_news = {
+            **_row("news-only", "creator", title="Poppy Playtime Chapter 6 is coming"),
+            "caption": "Poppy Playtime Chapter 6 announcement",
+            "hashtags": ["poppyplaytime", "chapter6"],
+        }
+        self.assertEqual(candidates_for_queue({"candidates": {"tiktok": [gameplay_news]}}), [])
+
+    def test_accepts_relevant_character_edit_without_search_query(self):
+        row = {
+            **_row("huggy-edit", "creator", title="Huggy Wuggy edit"),
+            "caption": "Fan edit",
+            "hashtags": ["huggywuggy", "edit"],
+        }
+        result = candidates_for_queue({"candidates": {"tiktok": [row]}})
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["external_id"], "huggy-edit")
+
 
 if __name__ == "__main__":
     unittest.main()
