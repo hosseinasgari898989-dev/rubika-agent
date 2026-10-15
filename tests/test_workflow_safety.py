@@ -20,6 +20,16 @@ class WorkflowSafetyTests(unittest.TestCase):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("github.com/rhysd/actionlint/cmd/actionlint@v1.7.12", ci)
 
+    def test_automatic_code_repair_requires_explicit_free_tier_acknowledgement(self):
+        workflow = (ROOT / ".github" / "workflows" / "gemini-code-assistant.yml").read_text(encoding="utf-8")
+        self.assertIn("AI_FREE_TIER_APPROVED: ${{ vars.RUBIKA_AGENT_AI_FREE_TIER_APPROVED }}", workflow)
+        guard_pos = workflow.index('if [[ "${AI_FREE_TIER_APPROVED:-}" != "true" ]]')
+        provider_status_pos = workflow.index("/api/brain/ai-provider/status?provider=gemini")
+        first_provider_call_pos = workflow.index("python -m agent.brain.multi_ai_code_repair")
+        self.assertLess(guard_pos, provider_status_pos)
+        self.assertLess(guard_pos, first_provider_call_pos)
+        self.assertIn("no AI provider request was sent.", workflow)
+
     def test_official_news_publishing_is_locked_to_test_channel_only(self):
         config = json.loads((ROOT / "config" / "mob_official_sources.json").read_text(encoding="utf-8"))
         policy = json.loads((ROOT / "config" / "agent_lifecycle.json").read_text(encoding="utf-8"))
