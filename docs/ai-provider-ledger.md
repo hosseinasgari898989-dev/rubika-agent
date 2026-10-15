@@ -1,29 +1,52 @@
-# Durable Gemini code-repair request ledger
+# Multi-provider code-repair request ledger
 
-This ledger is exclusively for the **code-repair workflow**. Gemini is currently the only model enabled for code repair. Cloudflare Workers AI's existing jobs elsewhere in Rubika-Agent (such as translation, music moderation, or operational recommendations) remain separate and are not called by this code-repair request flow.
+The durable ledger is used only by the **code-repair workflow**. The default four-provider ensemble is:
+1. **Groq + Mistral + OpenRouter Free — diagnose in parallel:** collect independent views of sanitized CI logs and read-only test context.
+2. **Gemini — propose:** produce one constrained patch using the existing strict prompt and allowlisted unified-diff validator.
+3. **Mistral + OpenRouter Free — review independently:** both reviewers must approve; a veto, malformed response, or reviewer outage stops promotion.
 
-## How it works
+This is a cooperative multi-model pipeline, not a single giant model. Each response is untrusted evidence; no model can execute commands or tools. A reviewer cannot authorize deployment, bypass fixed tests, merge a pull request, or publish to Rubika. Cloudflare Workers AI remains separate for its existing unrelated jobs; the code-repair provider module never calls `env.AI.run`.
 
-Before the production Gemini workflow sends a prompt to Google's Gemini API, `agent/brain/gemini_usage_client.py` reserves one request through the existing authenticated Worker API. If D1 cannot reserve it, the Gemini request is not made. When the model call returns, the client records success, failure, or an uncertain outcome. Token counts are persisted when Gemini provides them. A failure to record the final outcome blocks the proposal from continuing.
+## Ledger and budget
 
-## Endpoints
+All requests must reserve a slot through the authenticated Worker API before contacting a provider, then record the final outcome. The server enforces both a provider-specific limit of **6 reservations per provider per UTC day** and a shared total of **18 reservations per UTC day**. A complete ensemble normally uses six calls (three parallel diagnoses, one proposal, and two reviews), leaving a conservative maximum of three complete repair cycles per day. A reservation counts even when the result is unknown. Requests are never automatically retried.
 
-All endpoints use the existing `Authorization: Bearer <AGENT_API_TOKEN>` protection for `/api/brain/*`.
+- `GET /api/brain/ai-provider/status?provider=gemini` (also `groq`, `mistral`, or `openrouter`): reports provider usage, shared usage, remaining slots, cooldown, and readiness.
+- `POST /api/brain/ai-provider/reserve`: accepts `provider`, role (`diagnose`, `propose_patch`, or `review_patch`), a unique `call_id`, and optional `run_id`.
+- `POST /api/brain/ai-provider/finish`: records `succeeded`, `failed`, or `unknown`, plus optional safe error code and token counts.
 
-- `GET /api/brain/ai-provider/status?provider=gemini`: returns today's UTC request count, daily limit, remaining count, cooldown, and whether another request may be reserved.
-- `POST /api/brain/ai-provider/reserve`: accepts `provider`, `role`, `call_id`, and optional `run_id`. Roles are exactly `diagnose`, `propose_patch`, or `review_patch`. The current hard-coded Gemini budget is 5 reservations per UTC day.
-- `POST /api/brain/ai-provider/finish`: accepts `provider`, `call_id`, `outcome`, and optional `error_code`, token counts, and `retry_after_seconds`. Outcomes are `succeeded`, `failed`, and `unknown`. The exact `rate_limited` and `quota_exhausted` error codes set a persisted cooldown; the default is five minutes and the maximum is 24 hours.
+Every endpoint is behind the existing `Authorization: Bearer <AGENT_API_TOKEN>` check. Provider names outside the explicit allowlist are rejected. The reservation SQL checks the provider and shared budgets in one conditional insert, preventing concurrent requests from passing a stale count. Reused call IDs are rejected and each reservation can be finished only once. A rate-limited response records a persistent five-minute cooldown by default (up to 24 hours).
 
-Unknown provider names are rejected. The accounting client sends only request identifiers, role, outcome, safe error code, and usage counters. It never sends prompts, source code, model output, credentials other than its bearer token, or raw exception details to accounting endpoints.
+The accounting client sends only identifiers, role, outcome, safe error code, and token counters. It does not send prompts, source code, model output, credentials other than its ledger bearer token, or raw provider exceptions to the accounting endpoints.
+
+## API configuration
+
+The multi-AI workflow reads credentials from GitHub Actions secrets; keys must never be committed to the repository or pasted into chat. Required secrets:
+- `GEMINI_API_KEY`
+- `GROQ_API_KEY`
+- `MISTRAL_API_KEY` (Mistral Studio must remain in its no-card Free mode)
+- `OPENROUTER_API_KEY`
+- `AGENT_API_TOKEN` (existing ledger authorization secret)
+
+The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`, `GEMINI_MODEL=gemini-3.8-flash`, `MISTRAL_MODEL=mistral-small-latest`, and `OPENROUTER_MODEL=openrouter/free`. OpenRouter's `openrouter/free` router selects from available zero-price models; the model can vary between calls. Groq, Gemini, and Mistral have their own service-side limits. Mistral documents a no-card Free mode with limited usage: https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key. Configure Mistral in that free mode only. The code validates all four provider credentials before any model request, so a missing key cannot cause a partial run.
 
 ## Fail-closed protections
 
-The limit is checked inside the reservation SQL statement, preventing concurrent calls from passing a stale count. Every reservation counts toward the daily limit even when the result is unknown. Reused call IDs are rejected. A reservation can be finished only once. Cooldown changes are tied to that exact finish transition. If the ledger is unavailable, the code-repair engine stops before Gemini is called or prevents the resulting proposal from continuing.
+- No model request occurs if its ledger reservation cannot be confirmed.
+- If writing the result to the ledger fails, the result is blocked from progressing.
+- Uncertain network outcomes consume their reservation and are not retried automatically.
+- Any provider failure, invalid proposal JSON, unsafe diff, or reviewer veto stops promotion.
+- Proposed patches remain untrusted; the existing fixed checks run in a disposable runner and a human must review the opened PR.
+- Publishing to Rubika remains disabled.
 
-The workflow still has its conservative GitHub Actions run-count guard as a second protective limit. The durable D1 ledger enforces the actual Gemini request-reservation budget.
+The implementation is in a separate draft PR. Until its review, merge, Worker version rollout and secrets setup are complete, the four-provider ensemble has not made any live model request.
 
-## Activation
+## Model identifier maintenance
 
-The code and workflow are prepared in draft PR #12. It is not live until an owner reviews/merges the PR, applies migration `0005_ai_provider_ledger.sql` to the configured D1 database, deploys the Worker, and confirms the GitHub Actions secrets `GEMINI_API_KEY` and `AGENT_API_TOKEN` exist. Live migration and deployment are not performed by this PR.
+The default model IDs in the workflow were checked against provider documentation on 2026-10-15:
+- Gemini: `gemini-3.8-flash` — https://ai.google.dev/gemini-api/docs/models
+- Groq: `openai/gpt-oss-20b` — https://console.groq.com/docs/models. The previous `llama-3.3-70b-versatile` model was marked deprecated for free/developer tiers with an August 16, 2026 shutdown date: https://console.groq.com/docs/deprecations
+- Mistral: `mistral-small-latest` via the no-card Free mode, with limited usage: https://docs.mistral.ai/api/endpoint/chat and https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key
+- OpenRouter: `openrouter/free` — routes to currently available zero-price models: https://openrouter.ai/openrouter/free/. Free-model limits depend on account eligibility and current limits: https://openrouter.ai/pricing/
 
-The ledger APIs do not call `env.AI.run` or any Cloudflare AI model, and do not deploy Workers, execute model output, modify repository files, create repair PRs, or publish to Rubika. All patches remain untrusted until the existing fixed checks pass and a human reviews the resulting PR.
+These values are configurable, not guaranteed permanent. Re-check provider/model availability before the first live request; never use that check as permission to create or spend on an API account automatically.

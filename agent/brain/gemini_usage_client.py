@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 from typing import Any, Mapping
 
-ALLOWED_PROVIDERS = frozenset({"gemini"})
+ALLOWED_PROVIDERS = frozenset({"gemini", "groq", "anthropic"})
 ALLOWED_ROLES = frozenset({"diagnose", "propose_patch", "review_patch"})
 ALLOWED_OUTCOMES = frozenset({"succeeded", "failed", "unknown"})
 SAFE_CODE = re.compile(r"[a-z0-9_-]{1,80}")
@@ -37,7 +37,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class CodeAIUsageLedger:
-    """Small stdlib-only HTTPS client for durable Gemini reservation and usage."""
+    """Small stdlib-only HTTPS client for durable multi-provider reservation and usage."""
 
     def __init__(self, base_url: str, token: str, *, timeout_seconds: int = 8):
         parsed = urllib.parse.urlsplit((base_url or "").strip())

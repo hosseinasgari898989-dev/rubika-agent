@@ -87,9 +87,25 @@ class AIProviderLedgerTests(unittest.TestCase):
                 ("other-provider", "2026-10-15T12:05:00.000Z", "secret_leaked"),
             )
 
-    def test_worker_has_single_active_gemini_provider_and_five_call_limit(self):
+    def test_ledger_schema_accepts_each_explicit_code_repair_provider(self):
+        for provider in ("gemini", "groq", "mistral", "openrouter"):
+            with self.subTest(provider=provider):
+                self.add_call("call-" + provider + "-accepted-0001", provider=provider)
+                self.db.execute(
+                    "INSERT INTO ai_provider_state (provider, cooldown_until, last_error_code) "
+                    "VALUES (?, ?, ?)",
+                    (provider, "2026-10-15T12:05:00.000Z", "rate_limited"),
+                )
+        providers = {
+            row[0] for row in self.db.execute("SELECT provider FROM ai_provider_state")
+        }
+        self.assertEqual(providers, {"gemini", "groq", "mistral", "openrouter"})
+
+    def test_worker_has_three_explicit_providers_and_shared_daily_cap(self):
         source = WORKER.read_text(encoding="utf-8")
-        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 5 });", source)
+        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, mistral: 6, openrouter: 6 });", source)
+        self.assertIn("const CODE_AI_TOTAL_DAILY_LIMIT = 18;", source)
+        self.assertIn("CODE_AI_TOTAL_DAILY_LIMIT", source)
         self.assertIn('"code_ai_provider_not_enabled"', source)
         self.assertIn("CODE_AI_PROVIDER_LIMITS[provider]", source)
 
@@ -103,6 +119,7 @@ class AIProviderLedgerTests(unittest.TestCase):
             "NOT EXISTS (SELECT 1 FROM ai_provider_state WHERE provider = ? AND cooldown_until > ?)",
             source,
         )
+        self.assertIn("SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ?", source)
         self.assertIn("ON CONFLICT(call_id) DO NOTHING", source)
         self.assertIn("RETURNING call_id, usage_day, provider, role, status, started_at", source)
 

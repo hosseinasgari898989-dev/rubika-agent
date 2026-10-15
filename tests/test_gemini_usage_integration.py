@@ -207,17 +207,25 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(UsageLedgerError, "usage_ledger_token_missing_or_short"):
             CodeAIUsageLedger("https://example.invalid", "short")
 
-    def test_production_workflow_requires_gemini_ledger_but_no_workers_ai_model(self):
-        workflow = (Path(__file__).resolve().parents[1] /
-                    ".github" / "workflows" / "gemini-code-assistant.yml").read_text(encoding="utf-8")
-        self.assertIn('GEMINI_LEDGER_REQUIRED: "true"', workflow)
+    def test_production_workflow_requires_multi_ai_ledger_but_no_workers_ai_model(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github" / "workflows" / "gemini-code-assistant.yml").read_text(encoding="utf-8")
+        self.assertIn("python -m agent.brain.multi_ai_code_repair", workflow)
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
         self.assertIn("GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}", workflow)
+        self.assertIn("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}", workflow)
+        self.assertIn("MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}", workflow)
+        self.assertIn("OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}", workflow)
+        self.assertIn("CODE_AI_DIAGNOSER_PROVIDERS: groq,mistral,openrouter", workflow)
+        self.assertIn("CODE_AI_PROPOSER_PROVIDER: gemini", workflow)
+        self.assertIn("CODE_AI_REVIEWER_PROVIDERS: mistral,openrouter", workflow)
         self.assertNotIn("AI.run", workflow)
+        provider_source = (root / "agent" / "brain" / "ai_provider_clients.py").read_text(encoding="utf-8")
+        helper_source = provider_source.split("def call_provider_with_ledger(", 1)[1]
+        self.assertLess(helper_source.index("ledger.reserve("), helper_source.index("invoke_provider("))
+        self.assertLess(helper_source.index("invoke_provider("), helper_source.rindex("ledger.finish("))
         engine_source = Path(gemini.__file__).read_text(encoding="utf-8")
-        helper_source = engine_source.split("def call_gemini_with_ledger(", 1)[1].split("\ndef _write_json(", 1)[0]
-        self.assertLess(helper_source.index("ledger.reserve("), helper_source.index("proposal, usage = call_gemini("))
-        self.assertLess(helper_source.index("proposal, usage = call_gemini("), helper_source.rindex("ledger.finish("))
+        self.assertIn("def call_gemini_with_ledger(", engine_source)
 
 
 if __name__ == "__main__":
