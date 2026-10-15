@@ -1,10 +1,6 @@
 name: Gemini single-provider live smoke test
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/gemini-only-live-smoke.yml"
   workflow_dispatch:
 
 permissions:
@@ -104,6 +100,7 @@ jobs:
                   "status": "provider_error",
                   "error_code": exc.code,
                   "outcome": exc.outcome,
+                  "diagnostics": dict(exc.diagnostics),
                   "timeout_seconds": 90,
               }
           except UsageLedgerError as exc:
@@ -125,6 +122,8 @@ jobs:
               handle.write("- No other AI provider, code patch, deployment, or Rubika publishing is triggered.\n")
               if "error_code" in report:
                   handle.write(f"- Safe error code: `{report['error_code']}`\n")
+              if report.get("diagnostics"):
+                  handle.write(f"- Sanitized provider diagnostics: `{json.dumps(report['diagnostics'], sort_keys=True)}`\n")
               if report.get("usage"):
                   handle.write(f"- Token usage: `{json.dumps(report['usage'], sort_keys=True)}`\n")
 
