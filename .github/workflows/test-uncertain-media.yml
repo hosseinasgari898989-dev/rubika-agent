@@ -1,0 +1,157 @@
+name: One-time resend of uncertain item (test channel only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rubika-agent-uncertain-test-resend
+  cancel-in-progress: false
+
+jobs:
+  resend-one-item:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+      MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+      RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
+      TARGET_EXTERNAL_ID: 7694421166508838165
+      TARGET_SHA256: b3d1f38d53939bd0b80f04354984579d7b6146eb091807a30c4ecf8839f5ee8e
+      TARGET_BYTES: "26438523"
+      TARGET_REMOTE_PATH: /Rubika-Agent/staging/tiktok-7694421166508838165-square1080x1080.mp4
+    steps:
+      - name: Check out the experimental agent brain
+        uses: actions/checkout@v4
+        with:
+          ref: agent-brain-mega-v1
+          persist-credentials: false
+
+      - name: Verify required secrets and test-only destination
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in RUBIKA_TOKEN MEGA_EMAIL MEGA_PASSWORD; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "::error::Missing required Actions secret: $key"
+              exit 2
+            fi
+          done
+          test "$RUBIKA_CHANNEL_GUID" = "c0EFohK0f3174377fb6fa422d3ccb230"
+          test "$TARGET_EXTERNAL_ID" = "7694421166508838165"
+          test "$TARGET_SHA256" = "b3d1f38d53939bd0b80f04354984579d7b6146eb091807a30c4ecf8839f5ee8e"
+          echo "Destination verified: test channel only; target is the single uncertain D1 item."
+
+      - name: Set up Python and media verification tools
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Install ffmpeg
+        run: |
+          set -euo pipefail
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes ffmpeg
+          fi
+          ffprobe -version | head -n 1
+
+      - name: Install MEGAcmd
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/megacmd-xUbuntu_24.04_amd64.deb"
+          curl --fail --silent --show-error --location "https://mega.nz/linux/repo/xUbuntu_24.04/amd64/megacmd-xUbuntu_24.04_amd64.deb" --output "$package"
+          sudo apt-get update
+          sudo apt-get install --yes "$package"
+          command -v mega-login
+          command -v mega-get
+
+      - name: Download exact stored media and publish once to the test channel
+        id: send_test_video
+        shell: bash
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          mega-ls /Rubika-Agent/staging >/dev/null
+          python - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          from agent.brain.rubika_publisher import RubikaPublisher
+          from agent.storage.mega import MegaStorage, sha256_file
+
+          external_id = os.environ["TARGET_EXTERNAL_ID"]
+          remote_path = os.environ["TARGET_REMOTE_PATH"]
+          expected_sha = os.environ["TARGET_SHA256"]
+          expected_bytes = int(os.environ["TARGET_BYTES"])
+          channel = os.environ["RUBIKA_CHANNEL_GUID"]
+          if channel != "c0EFohK0f3174377fb6fa422d3ccb230":
+              raise SystemExit("test_channel_guard_failed")
+          destination = Path(os.environ["RUNNER_TEMP"]) / (external_id + ".mp4")
+          media = MegaStorage().download(remote_path, destination.parent)
+          if media != destination or not media.is_file():
+              raise SystemExit("downloaded_media_path_mismatch")
+          if media.stat().st_size != expected_bytes:
+              raise SystemExit("stored_media_size_mismatch")
+          if sha256_file(media) != expected_sha:
+              raise SystemExit("stored_media_sha256_mismatch")
+          probe = subprocess.run(
+              ["ffprobe", "-v", "error", "-select_streams", "v:0",
+               "-show_entries", "stream=codec_name,width,height", "-of", "json", str(media)],
+              capture_output=True, text=True, timeout=30, check=True
+          )
+          streams = json.loads(probe.stdout).get("streams", [])
+          if not streams or streams[0].get("codec_name") != "h264":
+              raise SystemExit("media_video_codec_not_h264")
+          if streams[0].get("width") != 1080 or streams[0].get("height") != 1080:
+              raise SystemExit("media_dimensions_not_1080_square")
+
+          # This is a deliberate, single test-channel resend because prior delivery is uncertain.
+          # Never retry or clean up automatically: an ambiguous response might already be delivered.
+          publisher = RubikaPublisher(os.environ["RUBIKA_TOKEN"], channel)
+          caption = "What If Prototype killed Verity💀🔥\n#poppyplaytime #edit #prototype #poppyplaytimechapter5 #fyp"
+          try:
+              response = publisher.send_media(media, "video", caption)
+          except Exception as exc:
+              print("send_outcome=uncertain exception_type=" + type(exc).__name__)
+              raise SystemExit("send_outcome_uncertain_do_not_retry")
+          if isinstance(response, dict):
+              payload = response
+          elif isinstance(response, str):
+              try:
+                  value = json.loads(response)
+                  payload = value if isinstance(value, dict) else {}
+              except json.JSONDecodeError:
+                  payload = {}
+          else:
+              payload = {}
+          if payload.get("status") != "OK":
+              if isinstance(payload.get("status"), str) and payload.get("status"):
+                  print("send_outcome=rejected status=" + payload["status"][:60])
+                  raise SystemExit("rubika_explicit_rejection_no_retry")
+              print("send_outcome=uncertain response_shape_unrecognized")
+              raise SystemExit("send_outcome_uncertain_do_not_retry")
+          data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+          message_id = data.get("message_id") or payload.get("message_id")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Test-channel media resend\n")
+              summary.write(f"- Result: success confirmed by Rubika API\n- Item ID: {external_id}\n")
+              summary.write(f"- Message ID: {message_id if message_id is not None else 'not returned'}\n")
+              summary.write("- Destination: hard-locked test channel\n")
+              summary.write("- D1 uncertain state preserved; no D1/ledger changes made\n")
+              summary.write("- Mega file retained; no cleanup or retries performed\n")
+          print("send_outcome=confirmed item=" + external_id + " message_id=" + (str(message_id) if message_id is not None else "not_returned"))
+          PY
+
+      - name: Log out of MEGA
+        if: always()
+        shell: bash
+        run: |
+          mega-logout >/dev/null 2>&1 || true
+          mega-quit >/dev/null 2>&1 || true
