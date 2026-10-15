@@ -71,17 +71,17 @@ class ProviderClientTests(unittest.TestCase):
             clients.provider_config("unknown-provider", environ={})
         self.assertEqual(caught.exception.code, "provider_not_enabled")
         with self.assertRaises(clients.ProviderClientError) as caught:
-            clients.provider_config("anthropic", environ={})
-        self.assertEqual(caught.exception.code, "anthropic_api_key_missing")
+            clients.provider_config("openrouter", environ={})
+        self.assertEqual(caught.exception.code, "openrouter_api_key_missing")
 
     def test_current_provider_defaults_are_explicit_and_configurable(self):
         groq = clients.provider_config("groq", environ={"GROQ_API_KEY": "g" * 32})
         self.assertEqual(groq.model, "openai/gpt-oss-20b")
         self.assertEqual(groq.url, "https://api.groq.com/openai/v1/chat/completions")
 
-        anthropic = clients.provider_config("anthropic", environ={"ANTHROPIC_API_KEY": "a" * 32})
-        self.assertEqual(anthropic.model, "claude-haiku-4-5-20251001")
-        self.assertEqual(anthropic.url, "https://api.anthropic.com/v1/messages")
+        openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
+        self.assertEqual(openrouter.model, "openrouter/free")
+        self.assertEqual(openrouter.url, "https://api.openrouter.com/v1/messages")
 
         gemini = clients.provider_config("gemini", environ={"GEMINI_API_KEY": "m" * 32})
         self.assertEqual(gemini.model, "gemini-3.8-flash")
@@ -130,23 +130,22 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
 
-    def test_anthropic_message_response_is_normalized(self):
+    def test_openrouter_chat_completion_response_is_normalized(self):
         config = clients.ProviderConfig(
-            "anthropic", "a" * 32, "claude-haiku-5-5",
-            "https://api.anthropic.com/v1/messages",
+            "openrouter", "o" * 32, "openrouter/free",
+            "https://openrouter.ai/api/v1/chat/completions",
         )
         opener = FakeOpener(FakeResponse({
-            "content": [{"type": "text", "text": '{"decision":"approve"}'}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 35, "output_tokens": 12},
+            "choices": [{"message": {"content": '{"decision":"approve"}'}}],
+            "usage": {"prompt_tokens": 35, "completion_tokens": 12, "total_tokens": 47},
         }))
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
             result = clients.invoke_provider(config, "review request")
         self.assertEqual(result.text, '{"decision":"approve"}')
         self.assertEqual(result.usage["totalTokenCount"], 47)
-        self.assertEqual(opener.request.get_header("X-api-key"), config.api_key)
-        self.assertEqual(opener.request.get_header("Anthropic-version"), "2023-06-01")
+        self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
+        self.assertEqual(json.loads(opener.request.data.decode("utf-8"))["model"], "openrouter/free")
 
     def test_provider_429_is_a_safe_rate_limited_error_without_raw_body(self):
         config = clients.ProviderConfig(
@@ -199,13 +198,13 @@ class ProviderClientTests(unittest.TestCase):
 
     def test_result_is_blocked_if_ledger_finish_fails(self):
         ledger = FakeLedger(fail_finish=True)
-        result = clients.ProviderResult("anthropic", "model", "answer", {})
+        result = clients.ProviderResult("openrouter", "model", "answer", {})
         with patch.object(clients, "provider_config", return_value=clients.ProviderConfig(
-            "anthropic", "a" * 32, "model", "https://api.anthropic.com/v1/messages"
+            "openrouter", "a" * 32, "model", "https://api.openrouter.com/v1/messages"
         )), patch.object(clients, "invoke_provider", return_value=result):
             with self.assertRaises(clients.ProviderClientError) as caught:
                 clients.call_provider_with_ledger(
-                    provider="anthropic", role="review_patch", prompt="review", usage_client=ledger
+                    provider="openrouter", role="review_patch", prompt="review", usage_client=ledger
                 )
         self.assertEqual(caught.exception.code, "usage_ledger_finish_failed")
 
