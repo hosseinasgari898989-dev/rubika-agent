@@ -235,6 +235,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
         self.assertIn("models: read", workflow)
         self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
+        self.assertIn("GITHUB_MODELS_MODEL: openai/gpt-4o", workflow)
         self.assertIn("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}", workflow)
         self.assertIn("OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}", workflow)
         self.assertIn("CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter", workflow)
