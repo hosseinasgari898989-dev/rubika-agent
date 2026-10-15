@@ -370,7 +370,6 @@ def call_gemini(*, api_key: str, model: str, prompt: str, timeout_seconds: int =
             "thinkingConfig": {"thinkingLevel": "low"},
             "responseMimeType": "application/json",
             "maxOutputTokens": 8192,
-            "temperature": 0.1,
         },
     }
     request = urllib.request.Request(
