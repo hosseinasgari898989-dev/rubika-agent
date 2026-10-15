@@ -74,6 +74,19 @@ class ProviderClientTests(unittest.TestCase):
             clients.provider_config("anthropic", environ={})
         self.assertEqual(caught.exception.code, "anthropic_api_key_missing")
 
+    def test_current_provider_defaults_are_explicit_and_configurable(self):
+        groq = clients.provider_config("groq", environ={"GROQ_API_KEY": "g" * 32})
+        self.assertEqual(groq.model, "openai/gpt-oss-20b")
+        self.assertEqual(groq.url, "https://api.groq.com/openai/v1/chat/completions")
+
+        anthropic = clients.provider_config("anthropic", environ={"ANTHROPIC_API_KEY": "a" * 32})
+        self.assertEqual(anthropic.model, "claude-haiku-4-5-20251001")
+        self.assertEqual(anthropic.url, "https://api.anthropic.com/v1/messages")
+
+        gemini = clients.provider_config("gemini", environ={"GEMINI_API_KEY": "m" * 32})
+        self.assertEqual(gemini.model, "gemini-3.8-flash")
+        self.assertTrue(gemini.url.startswith("https://generativelanguage.googleapis.com/"))
+
     def test_gemini_response_is_parsed_and_api_key_is_only_a_header(self):
         config = clients.ProviderConfig(
             "gemini",
@@ -98,6 +111,8 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(result.usage["totalTokenCount"], 15)
         self.assertNotIn(config.api_key, opener.request.full_url)
         self.assertEqual(opener.request.get_header("X-goog-api-key"), config.api_key)
+        request_body = json.loads(opener.request.data.decode("utf-8"))
+        self.assertEqual(request_body["generationConfig"]["responseMimeType"], "application/json")
 
     def test_groq_openai_compatible_response_is_normalized(self):
         config = clients.ProviderConfig(
