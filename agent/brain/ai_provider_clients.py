@@ -326,6 +326,8 @@ def invoke_provider(
     answer = ""
     usage: dict[str, int] = {}
     if config.provider == "workers_ai":
+        if payload.get("ok") is not True or payload.get("provider") != "workers_ai":
+            raise ProviderClientError("provider_response_invalid", outcome="unknown")
         text_value = payload.get("text")
         answer = text_value.strip() if isinstance(text_value, str) else ""
         counts = payload.get("usage", {})
