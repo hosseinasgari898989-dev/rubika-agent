@@ -86,11 +86,13 @@ class GeminiCodeAgentTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             source.write_text(
                 'API_KEY = "local-test-secret-value"\n'
+                'CONFIG = {"api_key": "another-private-secret"}\n'
                 'def search():\n    return "https://example.invalid/search?token=abc123"\n',
                 encoding="utf-8",
             )
             context = gemini.collect_code_context(root, ["agent/discovery/tavily.py"])
         self.assertNotIn("local-test-secret-value", context)
+        self.assertNotIn("another-private-secret", context)
         self.assertNotIn("?token=abc123", context)
         self.assertIn("agent/discovery/tavily.py", context)
 
@@ -204,6 +206,44 @@ class GeminiCodeAgentTests(unittest.TestCase):
             self.assertFalse(saved["request_sent"])
             self.assertFalse(patch_path.exists())
 
+
+    def test_failed_unittest_module_selects_source_and_readonly_test_context(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "agent/discovery/tavily.py"
+            test_file = root / "tests/test_tavily_discovery.py"
+            source.parent.mkdir(parents=True)
+            test_file.parent.mkdir(parents=True)
+            source.write_text("def search(): return []\n", encoding="utf-8")
+            test_file.write_text("class TestSearch: pass\n", encoding="utf-8")
+            log = (
+                "FAIL: test_search_returns_items "
+                "(test_tavily_discovery.TavilyDiscoveryTests.test_search_returns_items)\n"
+            )
+            self.assertEqual(
+                gemini.extract_candidate_paths(log, root),
+                ["agent/discovery/tavily.py"],
+            )
+            readonly = gemini.extract_readonly_test_paths(log, root)
+            self.assertEqual(readonly, ["tests/test_tavily_discovery.py"])
+            context = gemini.collect_readonly_test_context(root, readonly)
+            self.assertIn("READ-ONLY TEST FILE", context)
+            with self.assertRaises(gemini.PatchValidationError):
+                gemini.validate_patch(VALID_PATCH.replace(
+                    "agent/discovery/tavily.py", "tests/test_tavily_discovery.py"
+                ), ["agent/discovery/tavily.py"])
+
+    def test_fenced_json_response_is_parsed(self):
+        payload = {
+            "summary": "No safe patch.",
+            "root_cause": "The context is insufficient.",
+            "patch": "",
+            "confidence": "low",
+            "manual_review": True,
+        }
+        fence = chr(96) * 3
+        result = gemini.parse_model_json(f"{fence}json\n{json.dumps(payload)}\n{fence}")
+        self.assertEqual(result, payload)
 
 if __name__ == "__main__":
     unittest.main()
