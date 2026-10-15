@@ -27,9 +27,29 @@ class FakeBotAPI:
     def get_me(self):
         return {"status": "OK"}
 
+    def get_updates(self, offset_id=None):
+        return {"status": "OK", "data": {"updates": [], "next_offset_id": offset_id}}
+
     def send_message(self, chat_id, text):
         self.sent.append((chat_id, text))
         return {"status": "OK"}
+
+
+class FakeLocalModel:
+    def __init__(self, *, error=None, answer="پاسخ محلی آزمایشی"):
+        self.error = error
+        self.answer = answer
+        self.health_checks = 0
+        self.completions = []
+
+    def check_available(self):
+        self.health_checks += 1
+        if self.error:
+            raise self.error
+
+    def complete(self, messages):
+        self.completions.append(messages)
+        return self.answer
 
 
 class RubikaBotAPITests(unittest.TestCase):
@@ -62,7 +82,8 @@ class RubikaBotAPITests(unittest.TestCase):
 
 
 class PrivateMessageGateTests(unittest.TestCase):
-    def _update(self, *, chat_id="owner-id-123", sender_id="owner-id-123", update_type="NewMessage", extra=None):
+    def _update(self, *, chat_id="owner-chat-123", sender_id="owner-user-456",
+                update_type="NewMessage", extra=None):
         update = {
             "type": update_type,
             "chat_id": chat_id,
@@ -76,28 +97,78 @@ class PrivateMessageGateTests(unittest.TestCase):
             update.update(extra)
         return update
 
-    def test_accepts_only_owner_private_text(self):
+    def test_accepts_only_owner_private_text_with_separate_ids(self):
         update = self._update()
-        self.assertEqual(agent._owner_private_text(update, "owner-id-123"), "/help")
+        self.assertEqual(
+            agent._owner_private_text(update, "owner-chat-123", "owner-user-456"),
+            "/help",
+        )
 
     def test_rejects_other_sender_and_other_chat(self):
         self.assertIsNone(agent._owner_private_text(
-            self._update(sender_id="someone-else"), "owner-id-123"
+            self._update(sender_id="someone-else"), "owner-chat-123", "owner-user-456"
         ))
         self.assertIsNone(agent._owner_private_text(
-            self._update(chat_id="group-id-123"), "owner-id-123"
+            self._update(chat_id="group-id-123"), "owner-chat-123", "owner-user-456"
         ))
 
     def test_rejects_group_channel_and_edited_messages(self):
         self.assertIsNone(agent._owner_private_text(
-            self._update(extra={"chat_type": "group"}), "owner-id-123"
+            self._update(extra={"chat_type": "group"}), "owner-chat-123", "owner-user-456"
         ))
         self.assertIsNone(agent._owner_private_text(
-            self._update(update_type="UpdatedMessage"), "owner-id-123"
+            self._update(update_type="UpdatedMessage"), "owner-chat-123", "owner-user-456"
         ))
 
     def test_requires_message_identity_to_deduplicate(self):
         self.assertIsNone(agent._message_identity({"type": "NewMessage", "chat_id": "owner-id"}))
+
+
+class LocalModelClientTests(unittest.TestCase):
+    def _completion_response(self, content="سلام؛ پاسخ از مدل محلی"):
+        return FakeResponse({"choices": [{"message": {"content": content}}]})
+
+    def test_uses_only_fixed_loopback_and_sends_no_api_key(self):
+        client = agent.LocalModelClient(environ={})
+        with patch.object(agent.requests, "get", return_value=FakeResponse({"status": "ok"})) as get, \
+             patch.object(agent.requests, "post", return_value=self._completion_response()) as post:
+            client.check_available()
+            answer = client.complete([
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "question"},
+            ])
+        self.assertEqual(answer, "سلام؛ پاسخ از مدل محلی")
+        self.assertEqual(get.call_args.args[0], "http://127.0.0.1:8080/health")
+        self.assertEqual(post.call_args.args[0],
+                         "http://127.0.0.1:8080/v1/chat/completions")
+        headers = post.call_args.kwargs["headers"]
+        self.assertNotIn("Authorization", headers)
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "qwen-local")
+        self.assertFalse(post.call_args.kwargs["allow_redirects"])
+        self.assertEqual(post.call_count, 1)
+
+    def test_unavailable_local_server_returns_safe_error(self):
+        client = agent.LocalModelClient(environ={})
+        with patch.object(agent.requests, "get", side_effect=requests.ConnectionError()):
+            with self.assertRaisesRegex(agent.SafeAgentError, "local_model_not_running"):
+                client.check_available()
+
+    def test_timeout_is_not_retried(self):
+        client = agent.LocalModelClient(environ={})
+        with patch.object(agent.requests, "post", side_effect=requests.Timeout()) as post:
+            with self.assertRaisesRegex(agent.SafeAgentError, "local_model_timeout_no_retry"):
+                client.complete([{"role": "user", "content": "question"}])
+        self.assertEqual(post.call_count, 1)
+
+    def test_rejects_invalid_model_alias(self):
+        with self.assertRaisesRegex(agent.SafeAgentError, "local_model_name_invalid"):
+            agent.LocalModelClient(environ={"LOCAL_MODEL_NAME": "model name with spaces"})
+
+    def test_rejects_non_successful_model_response(self):
+        client = agent.LocalModelClient(environ={})
+        with patch.object(agent.requests, "post", return_value=FakeResponse({}, status_code=503)):
+            with self.assertRaisesRegex(agent.SafeAgentError, "local_model_server_error"):
+                client.complete([{"role": "user", "content": "question"}])
 
 
 class RepositoryContextTests(unittest.TestCase):
@@ -119,7 +190,7 @@ class RepositoryContextTests(unittest.TestCase):
                 "queued report should not be shared",
                 encoding="utf-8",
             )
-            (root / ".env").write_text("GROQ_API_KEY=SHOULD_NEVER_APPEAR", encoding="utf-8")
+            (root / ".env").write_text("LOCAL_KEY=SHOULD_NEVER_APPEAR", encoding="utf-8")
             context = agent.RepositoryContext(root).retrieve("cloud queue worker")
             self.assertIn("agent/demo.py", context)
             self.assertIn("cloud_queue_worker", context)
@@ -128,49 +199,11 @@ class RepositoryContextTests(unittest.TestCase):
             self.assertNotIn("artifacts/report.md", context)
 
     def test_secret_like_text_is_redacted_before_context_is_returned(self):
-        text = "GROQ_API_KEY = 'gsk_" + ("A" * 32) + "'\nAuthorization: Bearer secret-value"
+        text = "RUBIKA_TOKEN = 'my-private-token'\nAuthorization: Bearer secret-value"
         clean = agent.redact_sensitive_text(text)
-        self.assertNotIn("gsk_" + ("A" * 32), clean)
+        self.assertNotIn("my-private-token", clean)
         self.assertNotIn("Bearer secret-value", clean)
         self.assertIn("[REDACTED]", clean)
-
-
-class ProviderClientTests(unittest.TestCase):
-    def test_groq_request_is_single_bounded_request_and_parses_text(self):
-        response = FakeResponse({
-            "choices": [{"message": {"content": "سلام؛ این پاسخ آزمایشی است."}}]
-        })
-        key = "test-groq-api-key-not-real-0123456789"
-        client = agent.ProviderClient("groq", environ={"GROQ_API_KEY": key})
-        with patch.object(agent.requests, "post", return_value=response) as post:
-            answer = client.complete([
-                {"role": "system", "content": "system"},
-                {"role": "user", "content": "question"},
-            ])
-        self.assertEqual(answer, "سلام؛ این پاسخ آزمایشی است.")
-        self.assertEqual(post.call_count, 1)
-        self.assertEqual(post.call_args.args[0], "https://api.groq.com/openai/v1/chat/completions")
-        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer " + key)
-        self.assertNotIn(key, post.call_args.args[0])
-        self.assertFalse(post.call_args.kwargs["allow_redirects"])
-        self.assertEqual(post.call_args.kwargs["json"]["max_tokens"], 1100)
-
-    def test_rate_limit_is_not_retried_or_fallen_back(self):
-        client = agent.ProviderClient("openrouter", environ={
-            "OPENROUTER_API_KEY": "test-openrouter-key-not-real-0123456789"
-        })
-        with patch.object(agent.requests, "post", return_value=FakeResponse({}, status_code=429)) as post:
-            with self.assertRaisesRegex(agent.SafeAgentError, "provider_http_429_no_retry"):
-                client.complete([{"role": "user", "content": "question"}])
-        self.assertEqual(post.call_count, 1)
-
-    def test_missing_key_is_detected_without_network_request(self):
-        with self.assertRaisesRegex(agent.SafeAgentError, "groq_api_key_missing"):
-            agent.ProviderClient("groq", environ={})
-
-    def test_unknown_provider_is_rejected(self):
-        with self.assertRaisesRegex(agent.SafeAgentError, "interactive_provider_not_supported"):
-            agent.ProviderClient("openai", environ={"OPENAI_API_KEY": "not-used"})
 
 
 class LocalStateTests(unittest.TestCase):
@@ -190,9 +223,23 @@ class LocalStateTests(unittest.TestCase):
             self.assertNotIn("conversation", raw)
             self.assertNotIn("API_KEY", raw)
             self.assertNotIn("token-secret", raw)
+            self.assertNotIn("provider", parsed)
             loaded = agent.LocalState(path)
             self.assertEqual(loaded.data["offset_id"], "cursor-123")
             self.assertEqual(loaded.data["ai_requests_today"], 1)
+
+    def test_legacy_provider_setting_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text(json.dumps({
+                "offset_id": None, "processed_ids": [],
+                "usage_day": agent.utc_day(), "ai_requests_today": 0,
+                "provider": "groq",
+            }), encoding="utf-8")
+            state = agent.LocalState(path)
+            self.assertNotIn("provider", state.data)
+            state.save()
+            self.assertNotIn("provider", json.loads(path.read_text(encoding="utf-8")))
 
     def test_local_daily_limit_stops_more_reservations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -203,30 +250,53 @@ class LocalStateTests(unittest.TestCase):
 
 
 class InteractiveAgentTests(unittest.TestCase):
-    def _create_agent(self, directory):
+    def _create_agent(self, directory, model=None):
         api = FakeBotAPI()
+        model = model or FakeLocalModel()
         instance = agent.InteractiveAgent(
             token="test-private-token-0123456789",
-            owner_id="owner-id-123",
+            owner_chat_id="owner-chat-123",
+            owner_user_id="owner-user-456",
             repo_root=Path(directory),
             state_path=Path(directory) / "state.json",
             api=api,
+            model_factory=lambda: model,
         )
-        return instance, api
+        return instance, api, model
 
     def test_help_command_does_not_call_model(self):
         with tempfile.TemporaryDirectory() as directory:
-            instance, api = self._create_agent(directory)
-            with patch.object(agent, "ProviderClient") as provider:
-                stopped = instance.handle_text("/help")
+            instance, api, model = self._create_agent(directory)
+            stopped = instance.handle_text("/help")
             self.assertFalse(stopped)
-            provider.assert_not_called()
+            self.assertEqual(model.health_checks, 0)
+            self.assertEqual(model.completions, [])
             self.assertTrue(api.sent)
-            self.assertIn("/provider groq", api.sent[-1][1])
+            self.assertIn("/status", api.sent[-1][1])
+            self.assertIn("llama.cpp", api.sent[-1][1])
+
+    def test_normal_question_uses_local_model_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance, api, model = self._create_agent(directory)
+            instance.handle_text("سلام، پروژه چه کاری می‌کند؟")
+            self.assertEqual(model.health_checks, 1)
+            self.assertEqual(len(model.completions), 1)
+            self.assertIn("پاسخ محلی آزمایشی", api.sent[-1][1])
+            self.assertEqual(instance.state.data["ai_requests_today"], 1)
+
+    def test_local_model_unavailable_does_not_consume_daily_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = FakeLocalModel(error=agent.SafeAgentError("local_model_not_running"))
+            instance, api, model = self._create_agent(directory, model=model)
+            instance.handle_text("سلام")
+            self.assertEqual(model.health_checks, 1)
+            self.assertEqual(model.completions, [])
+            self.assertEqual(instance.state.data["ai_requests_today"], 0)
+            self.assertIn("local_model_not_running", api.sent[-1][1])
 
     def test_unauthorized_message_is_marked_but_never_answered(self):
         with tempfile.TemporaryDirectory() as directory:
-            instance, api = self._create_agent(directory)
+            instance, api, _ = self._create_agent(directory)
             update = {
                 "type": "NewMessage",
                 "chat_id": "someone-else",
@@ -242,13 +312,13 @@ class InteractiveAgentTests(unittest.TestCase):
 
     def test_duplicate_owner_message_is_processed_once(self):
         with tempfile.TemporaryDirectory() as directory:
-            instance, api = self._create_agent(directory)
+            instance, api, _ = self._create_agent(directory)
             update = {
                 "type": "NewMessage",
-                "chat_id": "owner-id-123",
+                "chat_id": "owner-chat-123",
                 "new_message": {
                     "message_id": "message-help",
-                    "sender_id": "owner-id-123",
+                    "sender_id": "owner-user-456",
                     "text": "/help",
                 },
             }
@@ -260,24 +330,29 @@ class InteractiveAgentTests(unittest.TestCase):
 
     def test_stop_command_does_not_call_model(self):
         with tempfile.TemporaryDirectory() as directory:
-            instance, api = self._create_agent(directory)
-            with patch.object(agent, "ProviderClient") as provider:
-                stopped = instance.handle_text("/stop")
+            instance, api, model = self._create_agent(directory)
+            stopped = instance.handle_text("/stop")
             self.assertTrue(stopped)
-            provider.assert_not_called()
+            self.assertEqual(model.health_checks, 0)
             self.assertIn("متوقف", api.sent[-1][1])
-
 
     def test_assistant_is_not_wired_into_cloud_workflows_or_mutation_tools(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "termux" / "interactive_agent.py").read_text(encoding="utf-8")
-        for forbidden in ("subprocess", "os.system", "RubikaPublisher", "send_video(", "os.popen", "eval("):
+        for forbidden in (
+            "subprocess", "os.system", "RubikaPublisher", "send_video(",
+            "os.popen", "eval(", "api.groq.com", "openrouter.ai",
+            "GROQ_API_KEY", "OPENROUTER_API_KEY",
+        ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
         workflows = root / ".github" / "workflows"
         for path in workflows.glob("*.yml"):
             with self.subTest(workflow=path.name):
-                self.assertNotIn("python -m termux.interactive_agent", path.read_text(encoding="utf-8"))
+                self.assertNotIn(
+                    "python -m termux.interactive_agent",
+                    path.read_text(encoding="utf-8"),
+                )
 
 
 if __name__ == "__main__":
