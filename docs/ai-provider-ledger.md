@@ -27,7 +27,7 @@ The multi-AI workflow reads credentials from GitHub Actions secrets; keys must n
 - `ANTHROPIC_API_KEY`
 - `AGENT_API_TOKEN` (existing ledger authorization secret)
 
-The selected role/model environment defaults are `GROQ_MODEL=llama-3.3-70b-versatile`, `GEMINI_MODEL=gemini-3.8-flash`, and `ANTHROPIC_MODEL=claude-haiku-5-5`. Model identifiers remain configurable. Provider APIs can be subject to paid usage, account eligibility and separate terms; review those conditions before enabling real requests. The code validates that all three provider credentials exist before reserving or sending any request, so a missing key cannot cause a partial three-role run.
+The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`, `GEMINI_MODEL=gemini-3.8-flash`, and `ANTHROPIC_MODEL=claude-haiku-4-5-20251001`. Model identifiers remain configurable. Provider APIs can be subject to paid usage, account eligibility and separate terms; review those conditions before enabling real requests. The code validates that all three provider credentials exist before reserving or sending any request, so a missing key cannot cause a partial three-role run.
 
 ## Fail-closed protections
 
