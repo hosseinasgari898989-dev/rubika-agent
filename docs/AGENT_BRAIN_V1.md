@@ -4,7 +4,7 @@
 
 ### Poppy Playtime edits from TikTok, YouTube and Instagram
 - Discovery adapters must produce canonical source URLs, stable external IDs and source metadata. Search-result menus, tags and pages are not media candidates.
-- The default batch requirement remains five TikTok items and five YouTube items. Instagram is a budget-limited optional source; the phone collector asks Apify for at most two Reels per UTC day.
+- هدف نهایی کشف پنج TikTok و پنج YouTube در هر چرخه است؛ اما گردش‌کار زمان‌بندی‌شدهٔ فعلی فقط metadata مربوط به TikTok را به صف عادی وارد می‌کند (حداکثر چهار URL جدید در هر چرخه) و نامزدهای رسمی Mob را در مسیر جدا نگه می‌دارد. YouTube و Instagram هنوز در intake معمول پنج‌ساعته فعال نیستند.
 - Candidate IDs and SHA-256 hashes are checked for duplicates. Source accounts in config/trusted_sources.json are intentionally empty until the owner chooses and verifies them.
 - Every file is inspected as the actual media type. Video delivery copies are normalized to vertical 1080x1920 MP4 while preserving the full source frame (smaller sources of at least 480 pixels per dimension can be upscaled and padded). The original is never overwritten; final output is re-validated before staging.
 - Metadata keywords and text checks are only weak signals. The six content checks for relevance, edit status, insults against Poppy characters, insults against other games/fandoms, editing effort and music are represented as explicit moderation fields. Without those fields the item is held for review and cannot enter a publish-ready batch.
@@ -17,20 +17,19 @@ GitHub Actions runs the collector inside the Termux Docker environment on its cl
 ### TikTok
 - The free cloud-hosted adapter requests a few public hashtag pages directly from the phone network and parses only embedded metadata or canonical video links already present in returned HTML.
 - It does not log in, use cookies, bypass a CAPTCHA, use third-party proxies, download media, or pretend a blocked/empty page succeeded.
-- A public page can still return a challenge, empty HTML, or no canonical results. This adapter is a new route compared with the old search-engine path, but live results must be checked on the phone before claiming it works reliably.
+- صفحهٔ عمومی ممکن است challenge، HTML خالی یا نتیجهٔ canonical نداشته باشد. موفقیت زنده باید از گزارش گردش‌کار ابری ارزیابی شود؛ تست parser به‌تنهایی کارکرد واقعی منبع را ثابت نمی‌کند.
 
 ### YouTube
-- The Termux collector uses yt-dlp search with skip_download enabled and keeps eligible results with known durations up to 180 seconds.
-- It only submits metadata and Shorts URLs to the report. A GitHub runner download failure is not bypassed; the separate authorized-media relay remains a future download fallback.
+- آداپترهای discovery مربوط به YouTube در مخزن وجود دارند، اما گردش‌کار عادی پنج‌ساعتهٔ فعلی YouTube را به صف معمول وارد نمی‌کند.
+- دریافت رسانهٔ YouTube در runner ابری هنوز به آزمایش زنده و اتصال کامل به صف نیاز دارد؛ Relay اختیاری مجوزدار هنوز Deploy نشده است.
 
-### Instagram (free phone-side path)
-- Instagram discovery now runs on the phone against public hashtag pages using ordinary unauthenticated HTTPS; it does not use Apify, a paid API, cookies, login sessions, proxies or CAPTCHA/challenge bypasses.
-- The collector examines at most three hashtag pages and accepts at most two canonical video/Reel candidates per daily run. It extracts metadata only when the returned HTML exposes it; otherwise it reports zero/blocked rather than inventing candidates.
-- Instagram may still return a login wall or challenge to a phone. Parser tests prove the extractor handles fixture HTML, not that live discovery works on every phone/network. The first live run is required before treating this route as reliable.
-- No paid Apify adapter is part of the current daily flow. We will only evaluate a paid fallback if the live free-phone test fails and the owner chooses to consider it.
+### Instagram (not in the active scheduled intake)
+- کدهای آزمایشی Instagram در مخزن باقی مانده‌اند، اما مسیر زمان‌بندی‌شدهٔ فعلی از آن‌ها برای پرکردن صف انتشار استفاده نمی‌کند.
+- صفحات عمومی ممکن است login wall یا challenge برگردانند؛ وجود تست parser به معنی اثبات کشف زنده نیست.
+- فعلاً از Apify یا سرویس پولی استفاده نمی‌شود؛ افزودن Instagram به صف عادی به اتصال و آزمایش مستقل نیاز دارد.
 
-## What happens after the scheduled runner creates a report
-The discovery workflow validates the schema and canonical host/ID relationship, executes the collector in cloud-hosted Termux, and imports eligible TikTok rows into the persistent queue. The five-hour state is updated only after a successful queue-intake step; a successful HTTP response alone is not proof of useful discovery. The report is uploaded as an artifact for inspection.
+## What happens after the scheduled cloud runner creates a report
+گردش‌کار discovery ساختار گزارش و رابطهٔ host/ID canonical را بررسی می‌کند، collector را در Termux ابری اجرا می‌کند و metadata معتبر TikTok را به صف پایدار وارد می‌کند. وضعیت پنج‌ساعته فقط پس از موفقیت queue-intake به‌روزرسانی می‌شود؛ پاسخ HTTP به‌تنهایی اثبات موفقیت نیست. گزارش برای بررسی به‌صورت artifact نگهداری می‌شود.
 
 ## Official Mob Entertainment news
 - The official-source track accepts video, image and audio media independently of edit-style filtering.
@@ -45,10 +44,10 @@ The discovery workflow validates the schema and canonical host/ID relationship, 
 - The Rubka adapter uses the tested constructor and methods. It does not import or publish on module import.
 
 ## Remaining gaps before hands-off publishing
-- The cloud-hosted discovery route has parser tests, but real TikTok results still need to be monitored in scheduled-run logs.
+- مسیر کشف ابری تست parser دارد، اما نتیجه‌های زندهٔ TikTok باید در لاگ اجرای زمان‌بندی‌شده پایش شوند.
 - Free Instagram hashtag discovery may still return a challenge or no canonical video metadata; monitor the cloud runner's live report.
 - Automatic visual/audio judgement needs a real classifier integration. Until then, candidates are held as needs_review.
-- YouTube downloads in the cloud runner need a live test and reliable integration into the queue. Metadata collection alone is not download proof.
+- دریافت رسانهٔ YouTube در runner ابری به آزمایش زنده و ادغام مطمئن در صف نیاز دارد. Metadata collection alone is not download proof.
 - A full discovery -> permission check -> download -> inspect -> moderation -> MEGA/D1 -> delivery chain has not yet been validated end-to-end.
 - config/trusted_sources.json intentionally remains empty. The staging pipeline will not download or repost third-party material until explicit permission or a suitable license is recorded.
 - The production Worker is not deployed with new brain routes. Production publishing remains disabled while these requirements are incomplete.
