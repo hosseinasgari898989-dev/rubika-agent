@@ -59,13 +59,18 @@ def _parse_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _is_poppy_related(raw: Mapping[str, Any]) -> bool:
-    """Require game-specific evidence in the video's own metadata, not its search query."""
+def _visible_metadata_text(raw: Mapping[str, Any]) -> str:
+    """Return visible descriptive text without hashtags, queries, or creator handles."""
     parts = [raw.get("title"), raw.get("caption")]
-    hashtags = raw.get("hashtags")
-    if isinstance(hashtags, list):
-        parts.extend(value for value in hashtags if isinstance(value, str))
-    text = " ".join(value for value in parts if isinstance(value, str)).casefold()
+    visible = " ".join(value for value in parts if isinstance(value, str))
+    visible = re.sub(r"https?://\\S+", " ", visible, flags=re.IGNORECASE)
+    visible = re.sub(r"(?<!\\w)#[^\\s#]+", " ", visible)
+    return re.sub(r"\\s+", " ", visible).strip().casefold()
+
+
+def _is_poppy_related(raw: Mapping[str, Any]) -> bool:
+    """Hashtags alone do not prove the actual clip is about Poppy Playtime."""
+    text = _visible_metadata_text(raw)
     return any(term in text for term in POPPY_RELEVANCE_TERMS)
 
 
@@ -105,8 +110,9 @@ def candidates_for_queue(
     *,
     max_items: int = MAX_ENQUEUE_ITEMS,
     now: datetime | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Validate and map fresh, relevant candidate metadata without media bytes."""
+    """Validate fresh queue metadata and optionally summarize rejection reasons."""
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         raise ValueError("now_must_be_timezone_aware")
@@ -117,36 +123,75 @@ def candidates_for_queue(
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     lifecycle_policy = load_lifecycle_policy()
+
+    def reject(reason: str, source: str) -> None:
+        if diagnostics is None:
+            return
+        by_reason = diagnostics.setdefault("rejected_by_reason", {})
+        by_source = diagnostics.setdefault("rejected_by_source", {})
+        by_reason[reason] = int(by_reason.get(reason, 0)) + 1
+        by_source[source] = int(by_source.get(source, 0)) + 1
+
+    if diagnostics is not None:
+        diagnostics.setdefault("input_count", 0)
+        diagnostics.setdefault("rejected_by_reason", {})
+        diagnostics.setdefault("rejected_by_source", {})
+        diagnostics.setdefault("input_by_source", {})
+
     for platform in PLATFORMS:
         raw_rows = payload.get("candidates", {}).get(platform, [])
         if not isinstance(raw_rows, list):
             continue
         for raw in raw_rows:
-            if (
-                not isinstance(raw, dict)
-                or not _is_poppy_related(raw)
-                or not _has_edit_signal(raw)
-            ):
+            source_value = (
+                raw.get("author") or raw.get("source_key") or raw.get("channel") or "unknown"
+            ) if isinstance(raw, dict) else "unknown"
+            source_name = str(source_value).strip()[:100] or "unknown"
+            if diagnostics is not None:
+                diagnostics["input_count"] += 1
+                inputs = diagnostics["input_by_source"]
+                inputs[source_name] = int(inputs.get(source_name, 0)) + 1
+
+            if not isinstance(raw, dict):
+                reject("invalid_candidate_shape", source_name)
                 continue
+            if not _is_poppy_related(raw):
+                reject("poppy_relevance_not_verified_in_visible_text", source_name)
+                continue
+            if not _has_edit_signal(raw):
+                reject("edit_signal_missing", source_name)
+                continue
+
             allowed_by_birth, _birth_reason = candidate_passes_birth_cutoff(
                 raw, policy=lifecycle_policy
             )
             if not allowed_by_birth:
+                reject("lifecycle_cutoff_rejected", source_name)
                 continue
 
             published_at = _parse_timestamp(raw.get("published_at"))
-            if published_at is None or published_at < oldest_allowed or published_at > future_allowed:
+            if published_at is None:
+                reject("published_timestamp_missing_or_invalid", source_name)
+                continue
+            if published_at < oldest_allowed:
+                reject("candidate_stale", source_name)
+                continue
+            if published_at > future_allowed:
+                reject("published_timestamp_in_future", source_name)
                 continue
 
             external_id = raw.get("id") or raw.get("external_id")
             url = raw.get("url") or raw.get("canonical_url")
             if not isinstance(external_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
+                reject("external_id_invalid", source_name)
                 continue
             if not isinstance(url, str) or not url.startswith("https://"):
+                reject("canonical_url_invalid", source_name)
                 continue
 
             identity = (platform, external_id)
             if identity in seen:
+                reject("duplicate_within_report", source_name)
                 continue
             seen.add(identity)
             source_key = str(
@@ -170,9 +215,17 @@ def candidates_for_queue(
                 "method": str(raw.get("method") or "termux_phone")[:100],
             })
             if len(rows) >= max_items:
-                return rows
-    return rows
+                break
+        if len(rows) >= max_items:
+            break
 
+    if diagnostics is not None:
+        diagnostics["eligible_count"] = len(rows)
+        diagnostics["rejected_count"] = sum(diagnostics["rejected_by_reason"].values())
+        diagnostics["duplicate_within_report_count"] = int(
+            diagnostics["rejected_by_reason"].get("duplicate_within_report", 0)
+        )
+    return rows
 
 def fair_round_robin(
     rows: list[dict[str, Any]],
@@ -256,7 +309,8 @@ def run_intake(
     token = os.getenv("AGENT_API_TOKEN", "").strip()
     cloud = CloudState(base_url, token=token, timeout_seconds=25)
     payload = load_report(report_path)
-    candidates = candidates_for_queue(payload)
+    filter_diagnostics: dict[str, Any] = {}
+    candidates = candidates_for_queue(payload, diagnostics=filter_diagnostics)
     existing_ids, last_source_key = _existing_queue_inventory(cloud)
 
     # The separate media ledger may know about sends from an older pipeline version.
@@ -311,7 +365,14 @@ def run_intake(
         "ok": True,
         "status": "enqueued" if inserted_items else "no_new_candidates",
         "report_generated_at": str(payload.get("generated_at") or "")[:80],
+        "discovered_candidate_count": filter_diagnostics.get("input_count", 0),
         "candidate_pool_count": len(candidates),
+        "filter_eligible_count": filter_diagnostics.get("eligible_count", len(candidates)),
+        "filter_rejected_count": filter_diagnostics.get("rejected_count", 0),
+        "filter_rejected_by_reason": filter_diagnostics.get("rejected_by_reason", {}),
+        "filter_rejected_by_source": filter_diagnostics.get("rejected_by_source", {}),
+        "filter_input_by_source": filter_diagnostics.get("input_by_source", {}),
+        "duplicate_within_report_count": filter_diagnostics.get("duplicate_within_report_count", 0),
         "ordered_candidate_count": len(ordered),
         "received_count": api_received_count,
         "inserted_count": len(inserted_items),
