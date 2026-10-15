@@ -163,6 +163,13 @@ jobs:
               summary.write(f"- Context files: {', '.join(report.get('selected_files', [])) or 'none'}\n")
               summary.write(f"- Confidence: {report.get('confidence', 'low')}\n")
               summary.write(f"- Explanation: {str(report.get('summary', ''))[:500]}\n")
+              failures = report.get("provider_failures", [])
+              if report.get("provider_failure"):
+                  failures = [*failures, report["provider_failure"]]
+              if failures:
+                  # The repair engine records only allowlisted status/reason codes
+                  # and redacted short messages, never raw responses or secrets.
+                  summary.write(f"- Safe provider diagnostics: {str(failures)[:1800]}\n")
               summary.write("- The model never receives the GitHub token; no patch is auto-merged.\n")
           PY
 
