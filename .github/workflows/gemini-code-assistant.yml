@@ -43,7 +43,7 @@ jobs:
           current_sha="$(git rev-parse origin/main)"
           if [[ "$failed_sha" != "$current_sha" ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipped: main has advanced since the failed run; no Gemini request was sent." >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped: main has advanced since the failed run; no AI provider request was sent." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -51,14 +51,14 @@ jobs:
           runs_json="$(gh api -H "Accept: application/vnd.github+json" \
             "repos/$GITHUB_REPOSITORY/actions/workflows/gemini-code-assistant.yml/runs?per_page=100&created=$today..$today")"
           today_count="$(python -c 'import json,sys; print(int(json.load(sys.stdin).get("total_count", 0)))' <<< "$runs_json")"
-          if [[ "$today_count" -ge 5 ]]; then
+          if [[ "$today_count" -ge 3 ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipped: conservative daily Gemini request budget has been reached." >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped: conservative daily multi-AI workflow budget has been reached." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           short_sha="$(printf '%s' "$UPSTREAM_SHA" | cut -c1-12)"
-          branch="agent-fix/gemini-$short_sha"
+          branch="agent-fix/multi-ai-$short_sha"
           open_pr_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main --head "$branch" --json number --jq 'length')"
           if [[ "$open_pr_count" -gt 0 ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -71,7 +71,7 @@ jobs:
             exit 0
           fi
           echo "should_run=true" >> "$GITHUB_OUTPUT"
-          echo "Preflight passed; one Gemini request is permitted for this failed commit."
+          echo "Preflight passed; one bounded three-provider repair attempt is permitted for this failed commit."
 
       - name: Download the failed CI log to a temporary file
         if: steps.preflight.outputs.should_run == 'true'
@@ -124,10 +124,10 @@ jobs:
           python -m agent.brain.multi_ai_code_repair \
             --repo-root "$GITHUB_WORKSPACE" \
             --failure-log "$RUNNER_TEMP/upstream-failure.log" \
-            --report-path "$RUNNER_TEMP/gemini-code-proposal.json" \
-            --patch-path "$RUNNER_TEMP/gemini-code-proposal.diff" \
+            --report-path "$RUNNER_TEMP/multi-ai-code-proposal.json" \
+            --patch-path "$RUNNER_TEMP/multi-ai-code-proposal.diff" \
             | tee "$RUNNER_TEMP/multi-ai-code-agent-result.json"
-          python - "$RUNNER_TEMP/gemini-code-proposal.json" "$GITHUB_STEP_SUMMARY" <<'PY'
+          python - "$RUNNER_TEMP/multi-ai-code-proposal.json" "$GITHUB_STEP_SUMMARY" <<'PY'
           import json, sys
           from pathlib import Path
           report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -150,7 +150,7 @@ jobs:
         shell: bash
         run: |
           set -u
-          patch="$RUNNER_TEMP/gemini-code-proposal.diff"
+          patch="$RUNNER_TEMP/multi-ai-code-proposal.diff"
           if [[ ! -s "$patch" ]]; then
             echo "tests_passed=false" >> "$GITHUB_OUTPUT"
             echo "No high-confidence, allowlisted patch was produced; no repository branch was changed." >> "$GITHUB_STEP_SUMMARY"
@@ -204,18 +204,18 @@ jobs:
           set -euo pipefail
           python -m agent.brain.gemini_code_agent --repo-root "$GITHUB_WORKSPACE" --validate-working-tree
           short_sha="$(printf '%s' "$UPSTREAM_SHA" | cut -c1-12)"
-          branch="agent-fix/gemini-$short_sha"
+          branch="agent-fix/multi-ai-$short_sha"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git diff --name-only -z | xargs -0 git add --
-          git commit -m "Propose bounded Gemini repair for CI $short_sha"
+          git commit -m "Propose bounded multi-AI repair for CI $short_sha"
           gh auth setup-git
           git push origin "HEAD:refs/heads/$branch"
           gh pr create \
             --repo "$GITHUB_REPOSITORY" \
             --base main \
             --head "$branch" \
-            --title "Gemini proposal: bounded CI repair for $short_sha" \
+            --title "Multi-AI proposal: bounded CI repair for $short_sha" \
             --body "Automated multi-provider proposal after a failed Cloud bootstrap checks run. Groq diagnoses, Gemini proposes, and Anthropic independently reviews before deterministic tests. The patch was restricted to the code-repair allowlist; compileall, the full Python tests, the project self-test, and Worker unit tests passed in a clean runner. Human review is required. This PR is not auto-merged and does not change production or publishing gates."
 
       - name: Upload sanitized proposal only
@@ -224,8 +224,8 @@ jobs:
         with:
           name: multi-ai-code-repair-${{ github.event.workflow_run.head_sha }}
           path: |
-            ${{ runner.temp }}/gemini-code-proposal.json
-            ${{ runner.temp }}/gemini-code-proposal.diff
-            ${{ runner.temp }}/gemini-code-agent-result.json
+            ${{ runner.temp }}/multi-ai-code-proposal.json
+            ${{ runner.temp }}/multi-ai-code-proposal.diff
+            ${{ runner.temp }}/multi-ai-code-agent-result.json
           if-no-files-found: warn
           retention-days: 7
