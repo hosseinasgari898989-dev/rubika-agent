@@ -50,36 +50,17 @@ jobs:
           today="$(date -u +%F)"
           ci_runs_json="$(gh api -H "Accept: application/vnd.github+json" \
             "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?per_page=100&created=$today..$today")"
-          ci_runs_total="$(python -c 'import json,sys; print(int(json.load(sys.stdin).get("total_count", 0)))' <<< "$ci_runs_json")"
+          budget_result="$(python scripts/gemini_budget.py --max-run-records 100 --max-failed-pushes 5 <<< "$ci_runs_json")"
+          budget_allow="$(python -c 'import json,sys; print("true" if json.load(sys.stdin).get("allow") is True else "false")' <<< "$budget_result")"
+          budget_reason="$(python -c 'import json,sys; print(json.load(sys.stdin).get("reason", "budget_input_unverifiable"))' <<< "$budget_result")"
+          failed_pushes_today="$(python -c 'import json,sys; value=json.load(sys.stdin).get("eligible_failed_main_pushes"); print("unknown" if value is None else value)' <<< "$budget_result")"
 
-          # Fail closed if the first page cannot prove the full daily count.
-          if [[ "$ci_runs_total" -gt 100 ]]; then
+          if [[ "$budget_allow" != "true" ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipped fail-closed: more than 100 CI run records today; the daily repair budget cannot be safely evaluated." >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped by fail-closed daily repair guard: $budget_reason; eligible failed main-push CI runs today: $failed_pushes_today (limit: 5)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-
-          failed_pushes_today="$(python -c '
-          import json, sys
-          runs = json.load(sys.stdin).get("workflow_runs", [])
-          eligible = (
-              run for run in runs
-              if run.get("conclusion") == "failure"
-              and run.get("event") == "push"
-              and run.get("head_branch") == "main"
-          )
-          print(sum(1 for _ in eligible))
-          ' <<< "$ci_runs_json")"
-
-          # Count only eligible failed CI triggers, not successful workflow_run events.
-          # This is a conservative upper bound: one permitted model step can make at most
-          # one Gemini request, while some eligible failures may be rejected before a request.
-          if [[ "$failed_pushes_today" -gt 5 ]]; then
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipped: five prior failed main-push CI runs have reached today's conservative repair-attempt limit." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
+          echo "Daily repair guard passed: $failed_pushes_today eligible failed main-push CI run(s) today; maximum: 5." >> "$GITHUB_STEP_SUMMARY"
           short_sha="$(printf '%s' "$UPSTREAM_SHA" | cut -c1-12)"
           branch="agent-fix/gemini-$short_sha"
           open_pr_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main --head "$branch" --json number --jq 'length')"
