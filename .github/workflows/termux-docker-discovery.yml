@@ -247,7 +247,7 @@ jobs:
           payload = json.loads(path.read_text(encoding="utf-8"))
           if payload.get("schema_version") != 1:
               raise SystemExit("invalid_schema_version")
-          if payload.get("source") != "termux_phone":
+          if payload.get("source") != "termux_cloud_runner":
               raise SystemExit("invalid_report_source")
           if payload.get("mode") != "metadata_only_no_download_no_publish":
               raise SystemExit("report_not_metadata_only")
