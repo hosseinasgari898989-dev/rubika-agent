@@ -52,7 +52,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,groq",
                 "CODE_AI_PROPOSER_PROVIDER": "gemini",
-                "CODE_AI_REVIEWER_PROVIDER": "openrouter",
+                "CODE_AI_REVIEWER_PROVIDERS": "mistral,openrouter",
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
                 multi, "provider_config"
