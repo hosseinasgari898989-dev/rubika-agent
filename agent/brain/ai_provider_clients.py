@@ -23,6 +23,9 @@ ROLES = frozenset({"diagnose", "propose_patch", "review_patch"})
 SAFE_MODEL = re.compile(r"[@A-Za-z0-9._:/-]{1,160}")
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_PROMPT_CHARS = 160_000
+# Groq Free Plan publishes an 8K-token-per-minute limit for gpt-oss-20b.
+# This conservative character cap leaves room for output tokens and wrapper text.
+GROQ_MAX_PROMPT_CHARS = 17_000
 MAX_OUTPUT_TOKENS = 8192
 
 _PROVIDER_CONFIG = {
@@ -217,7 +220,8 @@ def invoke_provider(
     call_id: str | None = None,
 ) -> ProviderResult:
     """Make exactly one provider request; no retries and no tool execution."""
-    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
+    prompt_limit = GROQ_MAX_PROMPT_CHARS if config.provider == "groq" else MAX_PROMPT_CHARS
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > prompt_limit:
         raise ProviderClientError("provider_prompt_invalid")
     if type(max_output_tokens) is not int or not 1 <= max_output_tokens <= MAX_OUTPUT_TOKENS:
         raise ProviderClientError("provider_output_limit_invalid")
@@ -354,6 +358,13 @@ def call_provider_with_ledger(
     """Fail closed: validate config, reserve budget, call once, record outcome."""
     if role not in ROLES:
         raise ProviderClientError("provider_role_invalid")
+    if provider not in PROVIDERS:
+        raise ProviderClientError("provider_not_enabled")
+    prompt_limit = GROQ_MAX_PROMPT_CHARS if provider == "groq" else MAX_PROMPT_CHARS
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > prompt_limit:
+        # Fail before reserving a quota slot when the request cannot fit the
+        # configured provider budget; no provider API request will be attempted.
+        raise ProviderClientError("provider_prompt_invalid")
     config = provider_config(provider)
     ledger = usage_client or CodeAIUsageLedger.from_env()
     reservation = ledger.reserve(provider=provider, role=role, run_id=run_id)
