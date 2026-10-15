@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   propose-repair:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    if: ${{ github.run_attempt == 1 && github.event.workflow_run.run_attempt == 1 && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -48,15 +48,19 @@ jobs:
           fi
 
           today="$(date -u +%F)"
-          runs_json="$(gh api -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/gemini-code-assistant.yml/runs?per_page=100&created=$today..$today")"
-          today_count="$(python -c 'import json,sys; print(int(json.load(sys.stdin).get("total_count", 0)))' <<< "$runs_json")"
-          if [[ "$today_count" -ge 5 ]]; then
+          ci_runs_json="$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?per_page=100&created=$today..$today")"
+          budget_result="$(python scripts/gemini_budget.py --max-run-records 100 --max-failed-pushes 5 <<< "$ci_runs_json")"
+          budget_allow="$(python -c 'import json,sys; print("true" if json.load(sys.stdin).get("allow") is True else "false")' <<< "$budget_result")"
+          budget_reason="$(python -c 'import json,sys; print(json.load(sys.stdin).get("reason", "budget_input_unverifiable"))' <<< "$budget_result")"
+          failed_pushes_today="$(python -c 'import json,sys; value=json.load(sys.stdin).get("eligible_failed_main_pushes"); print("unknown" if value is None else value)' <<< "$budget_result")"
+
+          if [[ "$budget_allow" != "true" ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipped: conservative daily Gemini request budget has been reached." >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped by fail-closed daily repair guard: $budget_reason; eligible failed main-push CI runs today: $failed_pushes_today (limit: 5)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-
+          echo "Daily repair guard passed: $failed_pushes_today eligible failed main-push CI run(s) today; maximum: 5." >> "$GITHUB_STEP_SUMMARY"
           short_sha="$(printf '%s' "$UPSTREAM_SHA" | cut -c1-12)"
           branch="agent-fix/gemini-$short_sha"
           open_pr_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main --head "$branch" --json number --jq 'length')"
