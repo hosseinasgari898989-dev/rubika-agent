@@ -268,5 +268,17 @@ class InteractiveAgentTests(unittest.TestCase):
             self.assertIn("متوقف", api.sent[-1][1])
 
 
+    def test_assistant_is_not_wired_into_cloud_workflows_or_mutation_tools(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "termux" / "interactive_agent.py").read_text(encoding="utf-8")
+        for forbidden in ("subprocess", "os.system", "RubikaPublisher", "send_video(", "os.popen", "eval("):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+        workflows = root / ".github" / "workflows"
+        for path in workflows.glob("*.yml"):
+            with self.subTest(workflow=path.name):
+                self.assertNotIn("python -m termux.interactive_agent", path.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
