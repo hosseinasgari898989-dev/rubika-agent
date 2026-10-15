@@ -1,61 +1,75 @@
-# Multi-provider code-repair request ledger
+# دفتر سهمیهٔ هوش مصنوعی برای تعمیر کد
 
-The durable ledger is used only by the **code-repair workflow**. The default four-provider ensemble is:
-1. **Groq + Mistral + OpenRouter Free — diagnose in parallel:** collect independent views of sanitized CI logs and read-only test context.
-2. **Gemini — propose:** produce one constrained patch using the existing strict prompt and allowlisted unified-diff validator.
-3. **Mistral + OpenRouter Free — review independently:** both reviewers must approve; a veto, malformed response, or reviewer outage stops promotion.
+این دفتر فقط به **گردش‌کار تعمیر کد** تعلق دارد. هوش مصنوعی گفتگو که قرار است در آینده از طریق ربات خصوصی و با فرمان Termux گوشی فعال شود، باید مسیر و سهمیهٔ جداگانه داشته باشد و از سهمیه‌های این مجموعه استفاده نکند.
 
-This is a cooperative multi-model pipeline, not a single giant model. Each response is untrusted evidence; no model can execute commands or tools. A reviewer cannot authorize deployment, bypass fixed tests, merge a pull request, or publish to Rubika. Cloudflare Workers AI remains separate for its existing unrelated jobs; the code-repair provider module never calls `env.AI.run`.
+## تقسیم مسئولیت فعلی
 
-## Ledger and budget
+1. **Groq و OpenRouter Free — تشخیص مستقل:** خطای CI و بخش مرتبط از تست‌ها را بررسی می‌کنند.
+2. **Gemini — پیشنهاد اصلاح:** یک patch محدود مطابق قالب تعیین‌شده پیشنهاد می‌دهد.
+3. **Groq و OpenRouter Free — بازبینی مستقل:** هر دو باید patch را تأیید کنند؛ مخالفت یا در دسترس نبودن یکی از آن‌ها مانع ادامه می‌شود.
 
-All requests must reserve a slot through the authenticated Worker API before contacting a provider, then record the final outcome. The server enforces both a provider-specific limit of **6 reservations per provider per UTC day** and a shared total of **18 reservations per UTC day**. A complete ensemble normally uses six calls (three parallel diagnoses, one proposal, and two reviews), leaving a conservative maximum of three complete repair cycles per day. A reservation counts even when the result is unknown. Requests are never automatically retried.
+این مجموعه معمولاً پنج درخواست می‌فرستد: دو تشخیص، یک پیشنهاد و دو بازبینی. خروجی مدل‌ها مدرک قابل‌اعتماد قطعی نیست. مدل‌ها فرمان اجرا نمی‌کنند، Worker را Deploy نمی‌کنند، کد را Merge نمی‌کنند و چیزی به روبیکا منتشر نمی‌کنند. پیشنهاد باید از تست‌های قطعی و بررسی انسانی عبور کند.
 
-- `GET /api/brain/ai-provider/status?provider=gemini` (also `groq`, `mistral`, or `openrouter`): reports provider usage, shared usage, remaining slots, cooldown, and readiness.
-- `POST /api/brain/ai-provider/reserve`: accepts `provider`, role (`diagnose`, `propose_patch`, or `review_patch`), a unique `call_id`, and optional `run_id`.
-- `POST /api/brain/ai-provider/finish`: records `succeeded`, `failed`, or `unknown`, plus optional safe error code and token counts.
+## سهمیه و ثبت درخواست
 
-Every endpoint is behind the existing `Authorization: Bearer <AGENT_API_TOKEN>` check. Provider names outside the explicit allowlist are rejected. The reservation SQL checks the provider and shared budgets in one conditional insert, preventing concurrent requests from passing a stale count. Reused call IDs are rejected and each reservation can be finished only once. A rate-limited response records a persistent five-minute cooldown by default (up to 24 hours).
+هر درخواست باید قبل از تماس با ارائه‌دهنده در Worker/D1 سهمیه رزرو کند و پس از آن نتیجه ثبت شود. Worker فعلی محدودیت هر ارائه‌دهنده را روی **۶ رزرو در هر روز UTC** و سقف مجموع را روی **۱۸ رزرو در هر روز UTC** تنظیم می‌کند. یک رزرو حتی اگر نتیجه نامشخص باشد مصرف‌شده حساب می‌شود. درخواست مبهم یا ناموفق به‌طور خودکار تکرار نمی‌شود.
 
-The accounting client sends only identifiers, role, outcome, safe error code, and token counters. It does not send prompts, source code, model output, credentials other than its ledger bearer token, or raw provider exceptions to the accounting endpoints.
+- `GET /api/brain/ai-provider/status?provider=gemini` و همچنین `groq` و `openrouter`: وضعیت سهمیه، زمان cooldown و آمادگی را می‌خواند.
+- `POST /api/brain/ai-provider/reserve`: ارائه‌دهنده، نقش، شناسهٔ یکتا و شناسهٔ اجرای اختیاری را رزرو می‌کند.
+- `POST /api/brain/ai-provider/finish`: نتیجهٔ موفق، ناموفق یا نامشخص، کد خطای امن، شمارندهٔ توکن و در صورت لازم مدت cooldown را ثبت می‌کند.
 
-## API configuration
+هر سه endpoint نیاز به `Authorization: Bearer <AGENT_API_TOKEN>` دارند. رزرو اتمی است، شناسهٔ درخواست دوباره قابل‌استفاده نیست و هر رزرو فقط یک‌بار به وضعیت نهایی می‌رود. دفتر سهمیه فقط شناسه‌ها، نقش، نتیجه، کدهای خطای امن و شمارنده‌ها را می‌گیرد؛ prompt، متن خام کد، خروجی خام مدل یا کلید ارائه‌دهنده به دفتر ارسال نمی‌شود.
 
-The multi-AI workflow reads credentials from GitHub Actions secrets; keys must never be committed to the repository or pasted into chat. Required secrets:
+## تنظیمات مخفی موردنیاز
+
+گردش‌کار تعمیر کد از GitHub Actions Secrets استفاده می‌کند. این نام‌ها باید در تنظیمات مخزن تعریف شده باشند و هیچ‌وقت در کد یا پیام عمومی قرار نگیرند:
+
 - `GEMINI_API_KEY`
 - `GROQ_API_KEY`
-- `MISTRAL_API_KEY` (Mistral Studio must remain in its no-card Free mode)
 - `OPENROUTER_API_KEY`
-- `AGENT_API_TOKEN` (existing ledger authorization secret)
+- `AGENT_API_TOKEN` برای دسترسی امن به دفتر سهمیه
 
-The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`, `GEMINI_MODEL=gemini-3.8-flash`, `MISTRAL_MODEL=mistral-small-latest`, and `OPENROUTER_MODEL=openrouter/free`. OpenRouter's `openrouter/free` router selects from available zero-price models; the model can vary between calls. Groq, Gemini, and Mistral have their own service-side limits. Mistral documents a no-card Free mode with limited usage: https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key. Configure Mistral in that free mode only. The code validates all four provider credentials before any model request, so a missing key cannot cause a partial run.
+مدل‌های پیش‌فرض:
+- Gemini: `gemini-3.8-flash`
+- Groq: `openai/gpt-oss-20b`
+- OpenRouter: `openrouter/free`
 
-## Fail-closed protections
+مدل `openrouter/free` از مدل‌های رایگان موجود انتخاب می‌کند؛ مدل و ظرفیت آن ممکن است تغییر کنند. رایگان‌بودن قیمت به معنی سهمیهٔ نامحدود یا تضمین دسترس‌پذیری نیست. یک متغیر کنترل جداگانه، `RUBIKA_AGENT_AI_FREE_TIER_APPROVED`، قبل از هر درخواست API بررسی می‌شود. اگر مقدارش دقیقاً `true` نباشد، گردش‌کار باید بدون ارسال درخواست مدل متوقف شود. این مستند یا تغییر کد به‌تنهایی آن متغیر را فعال نمی‌کند.
 
-- No model request occurs if its ledger reservation cannot be confirmed.
-- If writing the result to the ledger fails, the result is blocked from progressing.
-- Uncertain network outcomes consume their reservation and are not retried automatically.
-- Any provider failure, invalid proposal JSON, unsafe diff, or reviewer veto stops promotion.
-- Proposed patches remain untrusted; the existing fixed checks run in a disposable runner and a human must review the opened PR.
-- Publishing to Rubika remains disabled.
+## خطاهای Gemini: چه چیزی را می‌توان فهمید؟
 
-## Current rollout checkpoint — 2026-10-15
+اجرای تاریخی [`38736998429`](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38736998429) نشان داد که رزرو Gemini در دفتر ثبت شد، اما پاسخ معتبر از شبکه دریافت نشد و نتیجه به‌صورت `provider_network_result_unknown` ثبت شد. این نتیجه به‌تنهایی ثابت نمی‌کند مشکل از کلید API، سهمیه، مدل یا خود شبکه بوده است؛ بنابراین نباید آن را با قطعیت به یک علت نسبت داد.
 
-- PR #13 was merged into `main` as commit `042a0ecb2fea0c9ebe4a247388ff2951b7fecb92`.
-- Production Worker `rubika-agent` version 62 was deployed at 100% traffic from that commit. The existing `AGENT_API_TOKEN`, `GEMINI_API_KEY`, `AI`, and `DB` bindings were preserved.
-- Public `/health` smoke check returned `ok: true`, `database: connected`, and `publishing: false`.
-- PR #14 fixed the Python ledger client's provider allowlist to match the four active providers and added a safe live smoke workflow. Its CI test suite passed before merge.
-- Live provider smoke run [#38736998429](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38736998429) validated all four key/model configurations and ledger credentials before sending any model requests.
-- The run attempted exactly one ledger-accounted request for each provider. Groq succeeded (249 tokens reported); OpenRouter Free succeeded (188 tokens reported); Mistral returned HTTP 429 and was recorded as `rate_limited` with a five-minute cooldown; Gemini resulted in `provider_network_result_unknown` and was recorded as unknown without retrying.
-- Cloudflare D1 confirms all four reservations were recorded. The test did not print API keys or raw model responses, apply a patch, create a repair PR, deploy code, or trigger Rubika publishing.
-- Result: **Groq and OpenRouter are confirmed responding; Mistral is currently rate-limited; Gemini's network-level outcome is inconclusive.** The full diagnosis → proposal → independent-review ensemble has not yet been proven end-to-end. It remains fail-closed if Gemini or either required reviewer is unavailable.
+نسخهٔ پیشنهادی این شاخه بهتر است سه حالت را از هم جدا کند:
 
-## Model identifier maintenance
+- **خطای HTTP همراه جزئیات امن:** کد HTTP، وضعیت provider، دلیل‌های مجاز از جزئیات Google و زمان `Retry-After` ثبت می‌شود. متن کامل پاسخ خام یا مقادیر محرمانه وارد گزارش نمی‌شوند.
+- **خطای شبکه با نتیجهٔ مبهم:** کد محدود مانند `dns_resolution_failed`، `network_timeout`، `tls_handshake_failed` یا `network_error_unknown` ثبت می‌شود؛ چون ممکن است درخواست به سرویس رسیده باشد، درخواست تکرار نمی‌شود.
+- **محدودیت سهمیه:** فقط زمانی `quota_exhausted` ثبت می‌شود که شواهد پاسخ Google به سهمیهٔ روزانه اشاره کند. خطای 429 به‌تنهایی برای اثبات تمام‌شدن سهمیهٔ روزانه کافی نیست. برای محدودیت روزانه، cooldown حداکثر ۲۴ساعته ثبت می‌شود؛ برای محدودیت موقت، زمان انتظار امن و اعلام‌شده رعایت می‌شود. این رفتار درخواست را دوباره اجرا نمی‌کند.
 
-The default model IDs in the workflow were checked against provider documentation on 2026-10-15:
-- Gemini: `gemini-3.8-flash` — https://ai.google.dev/gemini-api/docs/models
-- Groq: `openai/gpt-oss-20b` — https://console.groq.com/docs/models. The previous `llama-3.3-70b-versatile` model was marked deprecated for free/developer tiers with an August 16, 2026 shutdown date: https://console.groq.com/docs/deprecations
-- Mistral: `mistral-small-latest` via the no-card Free mode, with limited usage: https://docs.mistral.ai/api/endpoint/chat and https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key
-- OpenRouter: `openrouter/free` — routes to currently available zero-price models: https://openrouter.ai/openrouter/free/. Free-model limits depend on account eligibility and current limits: https://openrouter.ai/pricing/
+### پارامترهای درخواست Gemini
 
-These values are configurable, not guaranteed permanent. Re-check provider/model availability before the first live request; never use that check as permission to create or spend on an API account automatically.
+در مدل `gemini-3.8-flash` تنظیم پارامترهای نمونه‌برداری قدیمی مثل `temperature` و `top_p` ممکن است با قرارداد نسل مدل سازگار نباشد. در این شاخه این پارامترها از `generationConfig` برداشته شده‌اند و `thinkingConfig.thinkingLevel` حفظ شده است. این اصلاح مانع یک علت محتمل `400 INVALID_ARGUMENT` می‌شود، اما علت خطای شبکهٔ تاریخی را اثبات نمی‌کند.
+
+### کلید و سطح دسترسی
+
+مستندات Google دربارهٔ مهاجرت و مدیریت API key باید ملاک بررسی باشد. اگر خطای 401/403 دریافت شود، مالک باید در کنسول رسمی مطمئن شود کلید، نوع احراز هویت و مجوزهای مربوط به Gemini API هنوز معتبرند. اگر لازم شد کلید تازه‌ای بسازد، آن را فقط در GitHub Actions Secrets جایگزین کند؛ کلید را در مخزن یا گفتگو نگذارد. این روند نباید بدون اجازهٔ مالک کلید بسازد، تنظیمات حساب را تغییر دهد یا هزینه‌ای ایجاد کند.
+
+منابع رسمی:
+- https://ai.google.dev/gemini-api/docs/troubleshooting
+- https://ai.google.dev/gemini-api/docs/errors
+- https://ai.google.dev/gemini-api/docs/api-key
+- https://ai.google.dev/gemini-api/docs/models
+- https://ai.google.dev/gemini-api/docs/pricing
+
+## محافظت‌های حفظ‌شده
+
+- نبود رزرو موفق یعنی درخواست مدل نباید ارسال شود.
+- اگر ثبت نتیجه در دفتر سهمیه شکست خورد، خروجی مدل نباید اجازهٔ پیشروی بگیرد.
+- پاسخ نامشخص، HTTP 5xx و شکست شبکه خودکار تکرار نمی‌شوند.
+- هر patch پیشنهادی در محیط موقت با فهرست مجاز فایل‌ها و تست‌های قطعی بررسی می‌شود.
+- هیچ مدلی اجازهٔ Merge خودکار یا انتشار به روبیکا ندارد.
+- آزمایش زندهٔ اتصال API دستی و جداگانه است و نیاز به تأیید صریح دارد؛ CI عادی نباید صرفاً برای آزمودن مدل‌ها سهمیه مصرف کند.
+
+## نقطهٔ بررسی تاریخی — ۱۵ اکتبر ۲۰۲۶
+
+در آزمایش واقعی ثبت‌شده، Groq و OpenRouter پاسخ موفق داشتند، Mistral به HTTP 429 رسید و Gemini با نتیجهٔ شبکه‌ای نامشخص پایان یافت. این نتیجه فقط مربوط به همان اجرای تاریخی است، نه سلامت فعلی کلیدها. گردش‌کار کامل تشخیص → پیشنهاد → دو بازبینی مستقل هنوز باید در یک اجرای کنترل‌شده و مجاز اثبات شود.
