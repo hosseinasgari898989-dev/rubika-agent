@@ -1,0 +1,127 @@
+name: MEGA Python ledger integration test
+
+on:
+  push:
+    branches:
+      - agent-brain-mega-v1
+    paths:
+      - "agent/brain/ledger.py"
+      - "agent/storage/mega.py"
+      - ".github/workflows/mega-ledger-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ledger-roundtrip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Check MEGA secrets are present without printing them
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          if [ -z "$MEGA_EMAIL" ] || [ -z "$MEGA_PASSWORD" ]; then
+            echo "::error::MEGA_EMAIL or MEGA_PASSWORD secret missing; no storage operation was run."
+            exit 2
+          fi
+      - name: Install official MEGAcmd
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/megacmd-xUbuntu_24.04_amd64.deb"
+          curl --fail --silent --show-error --location             "https://mega.nz/linux/repo/xUbuntu_24.04/amd64/megacmd-xUbuntu_24.04_amd64.deb"             --output "$package"
+          sudo apt-get update
+          sudo apt-get install --yes "$package"
+      - name: Login to MEGA without logging credentials
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          mega-whoami >/dev/null
+          echo "MEGA session verified."
+      - name: Persist and reload the Python brain ledger
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import uuid
+          from agent.brain.ledger import MegaLedger, new_state
+          from agent.storage.mega import MegaStorage
+
+          storage = MegaStorage(root="/Rubika-Agent", timeout_seconds=180)
+          ledger = MegaLedger(storage, state_directory="state", keep_versions=5)
+
+          # Existing state is loaded; only an operational verification event is added.
+          state = ledger.load()
+          run_id = "mega-ledger-check-" + uuid.uuid4().hex[:12]
+          MegaLedger.start_run(state, run_id, "storage-smoke")
+          MegaLedger.add_event(
+              state,
+              "python_mega_ledger_roundtrip_verified",
+              level="info",
+              details={"test": "roundtrip", "result": "ok"},
+          )
+          MegaLedger.finish_run(
+              state,
+              run_id,
+              status="ok",
+              found_count=0,
+              eligible_count=0,
+              sent_count=0,
+              skipped_count=0,
+              failed_count=0,
+              summary="MEGA ledger upload/download/hash verification passed.",
+          )
+          saved = ledger.save(state)
+          loaded = ledger.load()
+
+          if not saved.get("ok"):
+              raise SystemExit("ledger_save_not_confirmed")
+          if not any(
+              isinstance(event, dict)
+              and event.get("code") == "python_mega_ledger_roundtrip_verified"
+              for event in loaded.get("events", [])
+          ):
+              raise SystemExit("ledger_event_not_found_after_reload")
+          if not any(
+              isinstance(run, dict) and run.get("id") == run_id and run.get("status") == "ok"
+              for run in loaded.get("runs", [])
+          ):
+              raise SystemExit("ledger_run_not_found_after_reload")
+
+          print(json.dumps({
+              "ok": True,
+              "save_verified": True,
+              "reload_verified": True,
+              "run_history_verified": True,
+              "items_count": len(loaded.get("items", {})),
+              "runs_count": len(loaded.get("runs", [])),
+              "events_count": len(loaded.get("events", [])),
+              "sha256_present": bool(saved.get("sha256")),
+              "publishing": False,
+          }, ensure_ascii=False, sort_keys=True))
+          summary = __import__("os").environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as output:
+                  output.write("\n## MEGA Python ledger integration\n\n")
+                  output.write("- Load existing ledger: ✅\n")
+                  output.write("- Save new snapshot: ✅\n")
+                  output.write("- Download and verify snapshot: ✅\n")
+                  output.write("- Verify run/event history after reload: ✅\n")
+                  output.write("- Rubika publishing: not attempted\n")
+          PY
+      - name: Logout and stop MEGAcmd
+        if: always()
+        run: |
+          mega-logout >/dev/null 2>&1 || true
+          mega-quit >/dev/null 2>&1 || true

@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "official_sources": [
+    {
+      "id": "mob_x",
+      "kind": "public_search_plus_x_syndication",
+      "platform": "mob_official",
+      "source_platform": "x",
+      "source_name": "Mob Entertainment on X",
+      "handle": "mobgamesstudios",
+      "url": "https://x.com/mobgamesstudios",
+      "enabled": true,
+      "api_credits_required": false,
+      "seed_urls": [
+        "https://x.com/mobgamesstudios/status/2110370731628298519",
+        "https://x.com/mobgamesstudios/status/2109690712006533267",
+        "https://x.com/mobgamesstudios/status/2101713521020912076",
+        "https://x.com/mobgamesstudios/status/2107878755079213476"
+      ],
+      "note": "Verified owner-provided seeds prioritize recent official X posts because free public indexes are blocked. Each seed is re-verified through X syndication; only the real post caption, timestamp and actual media are accepted. No paid X API."
+    },
+    {
+      "id": "mob_newsroom",
+      "kind": "html_newsroom",
+      "platform": "mob_official",
+      "source_platform": "website",
+      "source_name": "Mob Entertainment newsroom",
+      "url": "https://mobentertainment.com/",
+      "enabled": true,
+      "note": "Primary source when a complete post includes its real caption and original media."
+    },
+    {
+      "id": "poppyplaytime_news",
+      "kind": "atom",
+      "platform": "mob_official",
+      "source_platform": "website",
+      "source_name": "Poppy Playtime official news",
+      "url": "https://poppyplaytime.com/blogs/news.atom",
+      "enabled": false,
+      "note": "Not part of the primary-plus-two-fallback plan for the first official Mob trial."
+    },
+    {
+      "id": "mob_youtube",
+      "kind": "youtube_atom",
+      "platform": "mob_official",
+      "source_platform": "youtube",
+      "source_name": "Mob Entertainment YouTube",
+      "channel_id": "UCXqV4yoyC_mmZye6VbKFPeQ",
+      "url": "https://www.youtube.com/channel/UCXqV4yoyC_mmZye6VbKFPeQ",
+      "enabled": true,
+      "note": "Fallback using the official channel feed and genuine video description; never substitutes the thumbnail for media."
+    },
+    {
+      "id": "mob_tiktok",
+      "kind": "yt_dlp_profile",
+      "platform": "mob_official",
+      "source_platform": "tiktok",
+      "source_name": "Mob Entertainment TikTok",
+      "url": "https://www.tiktok.com/@mob.entertainment",
+      "enabled": false
+    },
+    {
+      "id": "poppy_instagram",
+      "kind": "yt_dlp_profile",
+      "platform": "mob_official",
+      "source_platform": "instagram",
+      "source_name": "Poppy Playtime Instagram",
+      "url": "https://www.instagram.com/poppyplaytimeco/",
+      "enabled": false
+    },
+    {
+      "id": "mob_x",
+      "kind": "profile_reference",
+      "platform": "mob_official",
+      "source_platform": "x",
+      "source_name": "Mob Games Studios on X",
+      "url": "https://x.com/mobgamesstudios",
+      "enabled": false
+    },
+    {
+      "id": "steam_news",
+      "kind": "steam_news_api",
+      "platform": "mob_official",
+      "source_platform": "steam",
+      "source_name": "Poppy Playtime official Steam news",
+      "app_id": 1721470,
+      "feed_name": "steam_community_announcements",
+      "url": "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/",
+      "enabled": true,
+      "note": "Fallback limited to official developer announcements with original post text and embedded post media."
+    }
+  ],
+  "dedupe": {
+    "prefer_earliest_verified_timestamp": true,
+    "caption_fingerprint": true,
+    "never_claim_first_source_without_comparable_timestamps": true
+  },
+  "publishing": {
+    "enabled": true,
+    "mode": "test_channel_only",
+    "target_channel_guid": "c0EFohK0f3174377fb6fa422d3ccb230",
+    "max_posts_per_run": 1,
+    "production_enabled": false,
+    "reason": "Explicitly enabled for a one-post official-source trial in the hard-locked Rubika test channel only. Production publishing remains disabled."
+  }
+}

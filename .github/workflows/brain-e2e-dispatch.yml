@@ -1,0 +1,203 @@
+name: Discovery to Brain, MEGA/D1 and Rubika batch test
+
+on:
+  # A request-file commit must never start a real-media workflow automatically.
+  # Run manually only after the separate publication gate has been deliberately approved.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  batch-e2e:
+    if: ${{ vars.RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014 == 'approved' }}
+    runs-on: ubuntu-24.04
+    env:
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+      MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+      RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
+      COBALT_API_URL: http://127.0.0.1:9000/
+      RELAY_BASE_URL: ${{ secrets.RELAY_BASE_URL }}
+      RELAY_API_TOKEN: ${{ secrets.RELAY_API_TOKEN }}
+
+    steps:
+      - name: Check required secrets without printing them
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in AGENT_API_TOKEN RUBIKA_TOKEN MEGA_EMAIL MEGA_PASSWORD; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing Actions secret: $key. No media has been downloaded or published."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 2; fi
+
+      - name: Check out experimental brain branch
+        uses: actions/checkout@v4
+
+      - name: Validate the batch request and phone discovery report
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          request_path = Path("artifacts/brain-e2e-request.json")
+          report_path = Path("artifacts/termux_discovery.json")
+          if not request_path.is_file():
+              raise SystemExit("E2E request file missing; no media action attempted.")
+          if not report_path.is_file():
+              raise SystemExit("Discovery report missing; run the Termux collector first.")
+          request = json.loads(request_path.read_text(encoding="utf-8"))
+          platform = request.get("platform", "tiktok")
+          candidate_limit = request.get("candidate_limit", 4)
+          if platform not in {"tiktok", "youtube", "both"}:
+              raise SystemExit("platform must be tiktok, youtube, or both.")
+          if type(candidate_limit) is not int or not 1 <= candidate_limit <= 4:
+              raise SystemExit("candidate_limit must be an integer from 1 to 4.")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          candidate_map = report.get("candidates", {})
+          if platform == "both":
+              rows = []
+              for source_platform in ("tiktok", "youtube"):
+                  platform_rows = candidate_map.get(source_platform, [])
+                  if isinstance(platform_rows, list):
+                      rows.extend(platform_rows)
+          else:
+              rows = candidate_map.get(platform, [])
+          if not isinstance(rows, list) or not rows:
+              raise SystemExit("No candidates for the requested platform(s) in the latest report.")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write("PLATFORM=" + platform + "\n")
+              env_file.write("CANDIDATE_LIMIT=" + str(candidate_limit) + "\n")
+          print(
+              f"Discovery report OK: platform={platform}, candidates={len(rows)}, "
+              f"daily_limit={candidate_limit}"
+          )
+          PY
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.6.0"
+
+      - name: Install Python dependencies and ffmpeg
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffprobe -version | head -n 1
+
+      - name: Check out pinned Cobalt source
+        uses: actions/checkout@v4
+        with:
+          repository: imputnet/cobalt
+          ref: a636575b09de1fc55d9b8cd98cac88f5f2f16b42
+          path: cobalt-src
+          persist-credentials: false
+
+      - name: Install Cobalt dependencies
+        working-directory: cobalt-src
+        run: pnpm install --frozen-lockfile
+
+      - name: Start temporary Cobalt API
+        working-directory: cobalt-src
+        env:
+          API_URL: http://127.0.0.1:9000/
+          API_PORT: "9000"
+          API_LISTEN_ADDRESS: 127.0.0.1
+          CORS_WILDCARD: "1"
+        run: |
+          pnpm --filter @imput/cobalt-api start > "$RUNNER_TEMP/cobalt-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/cobalt-api.pid"
+          for attempt in $(seq 1 45); do
+            if curl --silent --show-error --fail http://127.0.0.1:9000/ -o "$RUNNER_TEMP/cobalt-health.json"; then
+              echo "Temporary Cobalt API is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Cobalt did not start; safe diagnostics follow:"
+          tail -n 60 "$RUNNER_TEMP/cobalt-api.log"
+          exit 1
+
+      - name: Install MEGAcmd
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/megacmd-xUbuntu_24.04_amd64.deb"
+          curl --fail --silent --show-error --location \
+            "https://mega.nz/linux/repo/xUbuntu_24.04/amd64/megacmd-xUbuntu_24.04_amd64.deb" \
+            --output "$package"
+          sudo apt-get update
+          sudo apt-get install --yes "$package"
+          command -v mega-login
+          command -v mega-put
+          command -v mega-get
+          command -v mega-rm
+
+      - name: Log in to MEGA securely
+        id: mega_login
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          mega-ls /Rubika-Agent >/dev/null
+          echo "MEGA login and project folder verified."
+
+      - name: Run bounded discovery-to-brain-to-MEGA/D1-to-Rubika batch
+        run: |
+          python -m agent.brain.e2e_batch_from_report \
+            --report artifacts/termux_discovery.json \
+            --platform "$PLATFORM" \
+            --daily-limit "$CANDIDATE_LIMIT" \
+            --output-report artifacts/brain-e2e-report.json
+
+      - name: Safely reclaim stale confirmed-sent MEGA media
+        if: always() && steps.mega_login.outcome == 'success'
+        run: |
+          set -uo pipefail
+          python -m agent.brain.storage_cleanup \
+            --apply \
+            --min-age-hours 24 \
+            --max-delete 25 \
+            --output-report artifacts/storage-cleanup-report.json || {
+              result=$?
+              echo "::warning::MEGA cleanup did not fully complete (exit $result). Unknown, failed, and uncertain items are protected."
+              if [ ! -f artifacts/storage-cleanup-report.json ]; then
+                printf '{"ok":false,"status":"failed_closed","deleted_count":0}\n' > artifacts/storage-cleanup-report.json
+              fi
+            }
+
+      - name: Upload safe end-to-end and storage cleanup reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-e2e-report
+          path: |
+            artifacts/brain-e2e-report.json
+            artifacts/storage-cleanup-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop temporary services and log out
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/cobalt-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/cobalt-api.pid")" 2>/dev/null || true
+          fi
+          mega-logout >/dev/null 2>&1 || true
+          mega-quit >/dev/null 2>&1 || true

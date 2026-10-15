@@ -1,0 +1,232 @@
+name: Rubika TikTok + Instagram publish smoke test
+
+on:
+  push:
+    branches:
+      - media-download-smoke-test
+    paths:
+      - ".github/workflows/rubika-publish-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-two-test-media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Require the existing Rubika token secret
+        env:
+          RUBIKA_BOT_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+        run: |
+          if [ -z "$RUBIKA_BOT_TOKEN" ]; then
+            echo "::error::Repository secret RUBIKA_TOKEN is not set. No media was downloaded or posted."
+            exit 2
+          fi
+
+      - name: Check out Rubika-Agent
+        uses: actions/checkout@v4
+
+      - name: Check out pinned Cobalt source
+        uses: actions/checkout@v4
+        with:
+          repository: imputnet/cobalt
+          ref: a636575b09de1fc55d9b8cd98cac88f5f2f16b42
+          path: cobalt-src
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.6.0"
+
+      - name: Install Cobalt dependencies
+        working-directory: cobalt-src
+        run: pnpm install --frozen-lockfile
+
+      - name: Install pinned project dependencies and ffmpeg
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffprobe -version | head -n 1
+
+      - name: Run existing safety/unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Start local Cobalt API
+        working-directory: cobalt-src
+        env:
+          API_URL: "http://127.0.0.1:9000/"
+          API_PORT: "9000"
+          API_LISTEN_ADDRESS: "127.0.0.1"
+          CORS_WILDCARD: "1"
+        run: |
+          pnpm --filter @imput/cobalt-api start > "$RUNNER_TEMP/cobalt-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/cobalt-api.pid"
+          for attempt in $(seq 1 45); do
+            if curl --silent --show-error --fail http://127.0.0.1:9000/ -o "$RUNNER_TEMP/cobalt-health.json"; then
+              echo "Local Cobalt API is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Cobalt API did not start; safe diagnostics follow:"
+          tail -n 60 "$RUNNER_TEMP/cobalt-api.log"
+          exit 1
+
+      - name: Download, validate, then publish one TikTok and one Instagram video
+        env:
+          RUBIKA_BOT_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+          COBALT_API_URL: "http://127.0.0.1:9000/"
+          # TikTok sample not present in the previously confirmed successful test-post set.
+          TIKTOK_URL: "https://www.tiktok.com/@fame.yt.editx/video/7610592632179297558"
+          # Public Instagram video URL previously downloaded and validated by the smoke test.
+          INSTAGRAM_URL: "https://www.instagram.com/p/CmCVWoIr9OH/"
+          RUBIKA_CHANNEL_GUID: "c0EFohK0f3174377fb6fa422d3ccb230"
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, sys, tempfile
+          from pathlib import Path
+          from rubka import Bot
+          from agent.media_smoke_test import (
+              SmokeError, _request_cobalt, _download_stream, _probe_media,
+              validate_public_video_url,
+          )
+
+          def response_dict(value):
+              if isinstance(value, dict):
+                  return value
+              if isinstance(value, str):
+                  try:
+                      parsed = json.loads(value)
+                      return parsed if isinstance(parsed, dict) else {}
+                  except json.JSONDecodeError:
+                      return {}
+              return {}
+
+          token = os.environ.get("RUBIKA_BOT_TOKEN", "").strip()
+          if not token:
+              print("STOP: Rubika token secret missing; nothing was posted.")
+              sys.exit(2)
+
+          api_url = os.environ["COBALT_API_URL"]
+          channel_guid = os.environ["RUBIKA_CHANNEL_GUID"]
+          sources = [
+              ("TikTok", "tiktok", os.environ["TIKTOK_URL"]),
+              ("Instagram", "instagram", os.environ["INSTAGRAM_URL"]),
+          ]
+
+          temp_base = os.environ.get("RUNNER_TEMP")
+          with tempfile.TemporaryDirectory(prefix="rubika-publish-smoke-", dir=temp_base) as temp_dir:
+              root = Path(temp_dir)
+              staged = []
+              digests = set()
+
+              # Stage both sources first. If either download/validation fails, publish nothing.
+              for label, platform, url in sources:
+                  valid, detail = validate_public_video_url(platform, url)
+                  if not valid:
+                      print(f"STAGING_FAILED: {label}: {detail}; nothing was posted.")
+                      sys.exit(3)
+                  try:
+                      payload = _request_cobalt(api_url, url)
+                      path = root / f"{platform}_smoke.mp4"
+                      size = _download_stream(payload["url"], path)
+                      media = _probe_media(path)
+                      if size < 50_000:
+                          raise SmokeError("file_too_small")
+                      digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                      if digest in digests:
+                          print("STAGING_FAILED: duplicate media; nothing was posted.")
+                          sys.exit(3)
+                      digests.add(digest)
+                      staged.append((label, path, media, size))
+                      print(
+                          f"STAGED_OK: {label}; bytes={size}; "
+                          f"duration={media['duration_seconds']}s; "
+                          f"video={media['video_codec']} {media['width']}x{media['height']}; "
+                          f"audio={media['audio_codec'] or 'none'}"
+                      )
+                  except SmokeError as exc:
+                      print(f"STAGING_FAILED: {label}; error={exc.code}; nothing was posted.")
+                      sys.exit(3)
+                  except Exception as exc:
+                      print(f"STAGING_FAILED: {label}; error_type={type(exc).__name__}; nothing was posted.")
+                      sys.exit(3)
+
+              bot = Bot(token=token, timeout=30, show_progress=True)
+              try:
+                  me = response_dict(bot.get_me())
+                  chat = response_dict(bot.get_chat(channel_guid))
+                  if me.get("status") != "OK" or chat.get("status") != "OK":
+                      print("PREFLIGHT_FAILED: Rubika authentication/channel check failed; nothing was posted.")
+                      sys.exit(4)
+              except Exception as exc:
+                  print(f"PREFLIGHT_FAILED: error_type={type(exc).__name__}; nothing was posted.")
+                  sys.exit(4)
+
+              sent = []
+              for label, path, media, size in staged:
+                  # Caption deliberately says only the source platform, as requested.
+                  caption = f"منبع: {label}"
+                  try:
+                      raw = bot.send_video(
+                          chat_id=channel_guid,
+                          path=str(path),
+                          text=caption,
+                          file_name=path.name,
+                          disable_notification=False,
+                      )
+                      result = response_dict(raw)
+                      if result.get("status") != "OK":
+                          print(
+                              f"UPLOAD_NOT_CONFIRMED: {label}; status={result.get('status', 'unknown')}; "
+                              "stopping without retry to prevent duplicates."
+                          )
+                          print(f"Published before stop: {', '.join(sent) if sent else 'none'}")
+                          sys.exit(5)
+                      message_id = (
+                          result.get("data", {}).get("message_id")
+                          if isinstance(result.get("data"), dict) else result.get("message_id")
+                      )
+                      sent.append(label)
+                      print(f"UPLOAD_OK: {label}; caption='{caption}'; message_id={message_id or 'not-returned'}")
+                  except SystemExit:
+                      raise
+                  except Exception as exc:
+                      print(
+                          f"UPLOAD_UNCERTAIN: {label}; error_type={type(exc).__name__}; "
+                          "stopping without retry to prevent duplicates."
+                      )
+                      print(f"Published before stop: {', '.join(sent) if sent else 'none'}")
+                      sys.exit(6)
+
+              print("RESULT: both staged videos received Rubika status OK.")
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary:
+                  with open(summary, "a", encoding="utf-8") as f:
+                      f.write("\n## Rubika source-upload smoke test\n\n")
+                      f.write("- TikTok: sent with caption `منبع: TikTok`\n")
+                      f.write("- Instagram: sent with caption `منبع: Instagram`\n")
+                      f.write("- Temporary media files are removed when the job ends.\n")
+
+      - name: Stop local Cobalt API
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/cobalt-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/cobalt-api.pid")" 2>/dev/null || true
+          fi
