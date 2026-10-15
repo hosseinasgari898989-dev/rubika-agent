@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,6 +51,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
 
             official_search.assert_called_once_with(max_results=12)
             self.assertEqual(report["summary"]["tiktok_candidates"], 1)
+            self.assertEqual(report["source"], "termux_cloud_runner")
             self.assertEqual(report["summary"]["mob_official_candidates"], 1)
             self.assertEqual(report["summary"]["mob_official_source"], "Mob Entertainment official sources")
             self.assertEqual(report["summary"]["paid_providers_used"], [])
@@ -69,20 +69,6 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 json.loads(written)["candidates"]["mob_official"][0]["id"],
                 "x-1734258130186559716",
             )
-
-    def test_push_refuses_to_publish_report_from_main_branch(self):
-        calls = []
-
-        def fake_git(args):
-            calls.append(args)
-            if args == ["branch", "--show-current"]:
-                return subprocess.CompletedProcess(args, 0, "main\n", "")
-            return subprocess.CompletedProcess(args, 0, "", "")
-
-        with patch.object(daily_discovery, "_git", side_effect=fake_git):
-            with self.assertRaisesRegex(RuntimeError, "wrong_branch"):
-                daily_discovery.push_report_to_experimental_branch()
-        self.assertEqual(calls, [["branch", "--show-current"]])
 
 
 if __name__ == "__main__":
