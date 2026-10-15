@@ -889,8 +889,9 @@ async function superviseError(env, body) {
     }
   });
 
+  let result;
   try {
-    const result = await env.AI.run(AI_SUPERVISOR_MODEL, {
+    result = await env.AI.run(AI_SUPERVISOR_MODEL, {
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -898,6 +899,13 @@ async function superviseError(env, body) {
       temperature: 0,
       max_tokens: 220
     });
+  } catch {
+    // Do not persist provider exception text; it could contain internals.
+    // Keep the safe error category distinct from invalid model-generated JSON.
+    return await supervisorFallback(env, normalized, "unknown_error");
+  }
+
+  try {
     const raw = result && result.response;
     if (typeof raw !== "string" || raw.length > 1200) {
       return await supervisorFallback(env, normalized, "model_output_invalid");
