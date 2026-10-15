@@ -61,5 +61,14 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertTrue((ROOT / "docs" / "CLOUD_DISCOVERY.md").is_file())
 
 
+    def test_retired_worker_error_supervisor_workflows_are_removed(self):
+        self.assertFalse((ROOT / ".github" / "workflows" / "supervisor-live-smoke.yml").exists())
+        self.assertFalse((ROOT / ".github" / "workflows" / "supervisor-inference-probe.yml").exists())
+        # The deterministic local advisor remains the supported error fallback.
+        local_advisor = (ROOT / "agent" / "brain" / "error_supervisor.py").read_text(encoding="utf-8")
+        self.assertIn("Deterministic local error guidance", local_advisor)
+        self.assertNotIn("/api/brain/supervise-error", local_advisor)
+
+
 if __name__ == "__main__":
     unittest.main()
