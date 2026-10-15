@@ -70,10 +70,6 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             self.assertFalse(report["request_sent"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class MultiAIEnsembleFlowTests(unittest.TestCase):
     def _run_flow(self, review_decisions):
         with tempfile.TemporaryDirectory() as directory:
@@ -179,3 +175,7 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
         self.assertEqual(report["review"]["decision"], "reject")
         self.assertFalse(patch_exists)
         self.assertNotIn(("openrouter", "review_patch"), calls)
+
+
+if __name__ == "__main__":
+    unittest.main()
