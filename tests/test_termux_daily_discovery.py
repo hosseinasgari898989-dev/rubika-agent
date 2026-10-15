@@ -51,7 +51,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
 
             official_search.assert_called_once_with(max_results=12)
             self.assertEqual(report["summary"]["tiktok_candidates"], 1)
-            self.assertEqual(report["source"], "termux_cloud_runner")
+            self.assertEqual(report["source"], "termux_phone")
             self.assertEqual(report["summary"]["mob_official_candidates"], 1)
             self.assertEqual(report["summary"]["mob_official_source"], "Mob Entertainment official sources")
             self.assertEqual(report["summary"]["paid_providers_used"], [])
