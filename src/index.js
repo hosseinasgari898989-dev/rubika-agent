@@ -951,6 +951,231 @@ async function superviseError(env, body) {
   }
 }
 
+
+const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 5 });
+const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch"]);
+const CODE_AI_MAX_COOLDOWN_SECONDS = 86400;
+const CODE_AI_DEFAULT_COOLDOWN_SECONDS = 300;
+const CODE_AI_MAX_TOKEN_COUNT = 10000000;
+
+function validCodeAiProvider(value) {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(CODE_AI_PROVIDER_LIMITS, value)
+    ? value : null;
+}
+
+function validCodeAiCallId(value) {
+  return typeof value === "string" &&
+    value.length >= 16 && value.length <= 100 &&
+    /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function validCodeAiRunId(value) {
+  return value == null || (
+    typeof value === "string" &&
+    value.length >= 8 && value.length <= 100 &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
+}
+
+function optionalCodeAiTokenCount(body, key) {
+  if (!Object.prototype.hasOwnProperty.call(body, key)) return { ok: true, value: null };
+  const value = body[key];
+  if (!Number.isInteger(value) || value < 0 || value > CODE_AI_MAX_TOKEN_COUNT) {
+    return { ok: false, value: null };
+  }
+  return { ok: true, value };
+}
+
+async function codeAiProviderSnapshot(env, provider, usageDay = new Date().toISOString().slice(0, 10)) {
+  const [usage, state] = await Promise.all([
+    env.DB.prepare(
+      "SELECT COUNT(*) AS request_count FROM ai_provider_calls WHERE usage_day = ? AND provider = ?"
+    ).bind(usageDay, provider).first(),
+    env.DB.prepare(
+      "SELECT cooldown_until, last_error_code FROM ai_provider_state WHERE provider = ?"
+    ).bind(provider).first()
+  ]);
+  const callsUsed = Number(usage && usage.request_count || 0);
+  const dailyLimit = CODE_AI_PROVIDER_LIMITS[provider];
+  const now = new Date().toISOString();
+  const cooldownActive = Boolean(state && typeof state.cooldown_until === "string" &&
+    state.cooldown_until > now);
+  const budgetAvailable = callsUsed < dailyLimit;
+  return {
+    provider,
+    usage_day: usageDay,
+    calls_used: callsUsed,
+    daily_limit: dailyLimit,
+    remaining: Math.max(0, dailyLimit - callsUsed),
+    cooldown_until: state ? state.cooldown_until : null,
+    cooldown_active: cooldownActive,
+    last_error_code: state && cooldownActive ? state.last_error_code : null,
+    ready: !cooldownActive && budgetAvailable,
+    status: cooldownActive ? "cooldown_active" : budgetAvailable ? "ready" : "daily_budget_exhausted"
+  };
+}
+
+async function codeAiProviderStatus(env, url) {
+  const provider = validCodeAiProvider(url.searchParams.get("provider") || "gemini");
+  if (!provider) return json({ ok: false, error: "code_ai_provider_not_enabled" }, 400);
+  try {
+    return json({ ok: true, ...(await codeAiProviderSnapshot(env, provider)) });
+  } catch {
+    return json({ ok: false, error: "code_ai_ledger_unavailable" }, 503);
+  }
+}
+
+async function reserveCodeAiProviderCall(env, body) {
+  const allowedKeys = new Set(["provider", "role", "call_id", "run_id"]);
+  if (Object.keys(body).some(key => !allowedKeys.has(key))) {
+    return json({ ok: false, error: "code_ai_reservation_fields_invalid" }, 400);
+  }
+  const provider = validCodeAiProvider(body.provider);
+  const role = text(body.role, 40);
+  const callId = body.call_id;
+  const runId = body.run_id == null ? null : body.run_id;
+  if (!provider) return json({ ok: false, error: "code_ai_provider_not_enabled" }, 400);
+  if (!CODE_AI_ROLES.has(role)) return json({ ok: false, error: "code_ai_role_invalid" }, 400);
+  if (!validCodeAiCallId(callId)) return json({ ok: false, error: "code_ai_call_id_invalid" }, 400);
+  if (!validCodeAiRunId(runId)) return json({ ok: false, error: "code_ai_run_id_invalid" }, 400);
+
+  const now = new Date().toISOString();
+  const usageDay = now.slice(0, 10);
+  try {
+    // Count and reservation are one conditional INSERT, so concurrent callers
+    // cannot each pass the daily budget check based on stale counts.
+    const reservation = await env.DB.prepare(
+      "INSERT INTO ai_provider_calls (call_id, usage_day, provider, role, run_id, status, started_at) " +
+      "SELECT ?, ?, ?, ?, ?, 'reserved', ? " +
+      "WHERE (SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ? AND provider = ?) < ? " +
+      "AND NOT EXISTS (SELECT 1 FROM ai_provider_state WHERE provider = ? AND cooldown_until > ?) " +
+      "ON CONFLICT(call_id) DO NOTHING " +
+      "RETURNING call_id, usage_day, provider, role, status, started_at"
+    ).bind(
+      callId, usageDay, provider, role, runId, now,
+      usageDay, provider, CODE_AI_PROVIDER_LIMITS[provider], provider, now
+    ).first();
+
+    if (reservation) {
+      const snapshot = await codeAiProviderSnapshot(env, provider, usageDay);
+      return json({ ok: true, reserved: true, call_id: callId, ...snapshot }, 201);
+    }
+
+    const existing = await env.DB.prepare(
+      "SELECT status FROM ai_provider_calls WHERE call_id = ?"
+    ).bind(callId).first();
+    if (existing) {
+      return json({ ok: false, error: "code_ai_call_id_already_used" }, 409);
+    }
+
+    const snapshot = await codeAiProviderSnapshot(env, provider, usageDay);
+    if (snapshot.cooldown_active) {
+      return json({ ok: false, error: "code_ai_provider_cooldown_active", ...snapshot }, 429);
+    }
+    if (snapshot.calls_used >= snapshot.daily_limit) {
+      return json({ ok: false, error: "code_ai_daily_budget_exhausted", ...snapshot }, 429);
+    }
+    return json({ ok: false, error: "code_ai_reservation_denied", ...snapshot }, 503);
+  } catch {
+    return json({ ok: false, error: "code_ai_ledger_unavailable" }, 503);
+  }
+}
+
+async function finishCodeAiProviderCall(env, body) {
+  const allowedKeys = new Set([
+    "provider", "call_id", "outcome", "error_code",
+    "prompt_tokens", "output_tokens", "total_tokens", "retry_after_seconds"
+  ]);
+  if (Object.keys(body).some(key => !allowedKeys.has(key))) {
+    return json({ ok: false, error: "code_ai_finish_fields_invalid" }, 400);
+  }
+  const provider = validCodeAiProvider(body.provider);
+  const callId = body.call_id;
+  const outcome = text(body.outcome, 20);
+  const errorCode = body.error_code == null ? "" : text(body.error_code, 80).toLowerCase();
+  if (!provider) return json({ ok: false, error: "code_ai_provider_not_enabled" }, 400);
+  if (!validCodeAiCallId(callId)) return json({ ok: false, error: "code_ai_call_id_invalid" }, 400);
+  if (!new Set(["succeeded", "failed", "unknown"]).has(outcome)) {
+    return json({ ok: false, error: "code_ai_outcome_invalid" }, 400);
+  }
+  if (body.error_code != null && !/^[a-z0-9_-]{1,80}$/.test(errorCode)) {
+    return json({ ok: false, error: "code_ai_error_code_invalid" }, 400);
+  }
+  if (outcome === "succeeded" && errorCode) {
+    return json({ ok: false, error: "successful_code_ai_call_must_not_have_error" }, 400);
+  }
+  const requestsCooldown = errorCode === "rate_limited" || errorCode === "quota_exhausted";
+  if (requestsCooldown && outcome !== "failed") {
+    return json({ ok: false, error: "code_ai_quota_error_requires_failed_outcome" }, 400);
+  }
+  if (body.retry_after_seconds !== undefined &&
+      (!requestsCooldown || !Number.isInteger(body.retry_after_seconds) ||
+       body.retry_after_seconds < 1 || body.retry_after_seconds > CODE_AI_MAX_COOLDOWN_SECONDS)) {
+    return json({ ok: false, error: "code_ai_retry_after_invalid" }, 400);
+  }
+
+  const promptTokens = optionalCodeAiTokenCount(body, "prompt_tokens");
+  const outputTokens = optionalCodeAiTokenCount(body, "output_tokens");
+  const totalTokens = optionalCodeAiTokenCount(body, "total_tokens");
+  if (!promptTokens.ok || !outputTokens.ok || !totalTokens.ok) {
+    return json({ ok: false, error: "code_ai_token_count_invalid" }, 400);
+  }
+
+  const now = new Date().toISOString();
+  const finishMarker = crypto.randomUUID();
+  const cooldownSeconds = requestsCooldown
+    ? (body.retry_after_seconds === undefined ? CODE_AI_DEFAULT_COOLDOWN_SECONDS : body.retry_after_seconds)
+    : null;
+  const cooldownUntil = cooldownSeconds == null
+    ? null : new Date(Date.now() + cooldownSeconds * 1000).toISOString();
+
+  const updateCall = env.DB.prepare(
+    "UPDATE ai_provider_calls SET status = ?, error_code = ?, prompt_tokens = ?, output_tokens = ?, " +
+    "total_tokens = ?, cooldown_until = ?, finish_marker = ?, finished_at = ? " +
+    "WHERE call_id = ? AND provider = ? AND status = 'reserved'"
+  ).bind(
+    outcome, errorCode || null, promptTokens.value, outputTokens.value, totalTokens.value,
+    cooldownUntil, finishMarker, now, callId, provider
+  );
+
+  try {
+    let updateResult;
+    if (requestsCooldown) {
+      const updateCooldown = env.DB.prepare(
+        "INSERT INTO ai_provider_state (provider, cooldown_until, last_error_code, updated_at) " +
+        "SELECT ?, ?, ?, ? WHERE EXISTS (" +
+        "SELECT 1 FROM ai_provider_calls WHERE call_id = ? AND provider = ? " +
+        "AND status = 'failed' AND error_code IN ('rate_limited', 'quota_exhausted') AND finish_marker = ?) " +
+        "ON CONFLICT(provider) DO UPDATE SET " +
+        "cooldown_until = CASE WHEN ai_provider_state.cooldown_until < excluded.cooldown_until " +
+        "THEN excluded.cooldown_until ELSE ai_provider_state.cooldown_until END, " +
+        "last_error_code = excluded.last_error_code, updated_at = excluded.updated_at"
+      ).bind(provider, cooldownUntil, errorCode, now, callId, provider, finishMarker);
+      const results = await env.DB.batch([updateCall, updateCooldown]);
+      updateResult = results && results[0];
+    } else {
+      updateResult = await updateCall.run();
+    }
+
+    if (!updateResult || !updateResult.meta || !updateResult.meta.changes) {
+      const existing = await env.DB.prepare(
+        "SELECT status FROM ai_provider_calls WHERE call_id = ? AND provider = ?"
+      ).bind(callId, provider).first();
+      if (!existing) return json({ ok: false, error: "code_ai_call_not_found" }, 404);
+      return json({ ok: false, error: "code_ai_call_already_finished" }, 409);
+    }
+    return json({
+      ok: true,
+      provider,
+      call_id: callId,
+      outcome,
+      cooldown_until: cooldownUntil
+    });
+  } catch {
+    return json({ ok: false, error: "code_ai_ledger_unavailable" }, 503);
+  }
+}
+
 const QUEUE_PLATFORMS = new Set(["tiktok", "youtube", "instagram"]);
 const QUEUE_STATUSES = new Set(["queued", "processing", "sent", "failed", "uncertain", "skipped"]);
 
@@ -1130,6 +1355,22 @@ export default {
       return json({ ok: false, error: "unauthorized" }, 401);
     }
 
+    if (path === "/api/brain/ai-provider/status") {
+      if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
+      return codeAiProviderStatus(env, url);
+    }
+    if (path === "/api/brain/ai-provider/reserve") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedReservation = await readJson(request);
+      if (!parsedReservation.ok) return json({ ok: false, error: parsedReservation.error }, parsedReservation.status);
+      return reserveCodeAiProviderCall(env, parsedReservation.value);
+    }
+    if (path === "/api/brain/ai-provider/finish") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedFinish = await readJson(request);
+      if (!parsedFinish.ok) return json({ ok: false, error: parsedFinish.error }, parsedFinish.status);
+      return finishCodeAiProviderCall(env, parsedFinish.value);
+    }
     if (path === "/api/brain/automation-queue" && request.method === "GET") {
       return automationQueueList(env, url);
     }
