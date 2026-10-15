@@ -95,7 +95,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
     report = {
         "schema_version": 1,
         "generated_at": now.isoformat(),
-        "source": "termux_phone",
+        "source": "termux_cloud_runner",
         "mode": "metadata_only_no_download_no_publish",
         "lifecycle": {
             "mode": lifecycle_policy["mode"],
