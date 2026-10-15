@@ -208,6 +208,42 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
                     )
                 self.assertEqual(result["call_id"], CALL_ID)
 
+    def test_ledger_finish_sends_explicit_bounded_cooldown(self):
+        client = CodeAIUsageLedger(
+            "https://example.invalid",
+            "fake-ledger-token-for-offline-test-1234567890",
+        )
+        response = FakeResponse({"ok": True, "call_id": CALL_ID, "outcome": "failed"})
+        captured = {}
+        def open_request(request, timeout):
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            return response
+        with patch.object(client._opener, "open", side_effect=open_request):
+            client.finish(
+                provider="gemini",
+                call_id=CALL_ID,
+                outcome="failed",
+                error_code="rate_limited",
+                retry_after_seconds=7200,
+            )
+        self.assertEqual(captured["payload"]["retry_after_seconds"], 7200)
+
+    def test_ledger_finish_rejects_invalid_cooldown_before_network(self):
+        client = CodeAIUsageLedger(
+            "https://example.invalid",
+            "fake-ledger-token-for-offline-test-1234567890",
+        )
+        with patch.object(client._opener, "open") as opener:
+            with self.assertRaisesRegex(UsageLedgerError, "code_ai_retry_after_invalid"):
+                client.finish(
+                    provider="gemini",
+                    call_id=CALL_ID,
+                    outcome="failed",
+                    error_code="rate_limited",
+                    retry_after_seconds=90000,
+                )
+        opener.assert_not_called()
+
     def test_ledger_client_never_follows_a_429_budget_response(self):
         client = CodeAIUsageLedger(
             "https://example.invalid",
