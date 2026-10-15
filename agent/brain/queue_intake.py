@@ -41,7 +41,7 @@ POPPY_RELEVANCE_TERMS = (
     "lily lovebraids", "lilylovebraids",
 )
 EDIT_MARKER_RE = re.compile(
-    r"(?:^|[^a-z0-9])(?:edit(?:s|ed|ing)?|aep|amv|fan[\\s_-]?edit|"
+    r"(?:^|[^a-z0-9])(?:edit(?:s|ed|ing)?|aep|amv|fan[\s_-]?edit|"
     r"capcut|velocity|transitions?|slowed|reverbed|vfx)(?:$|[^a-z0-9])"
 )
 EDIT_HASHTAG_SUFFIXES = ("edit", "edits", "aep", "amv")
