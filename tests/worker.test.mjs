@@ -748,7 +748,9 @@ function supervisorInput(extra = {}) {
 {
   const state = env();
   state.AI = { run: async () => { throw new Error("mock-provider-internal-message"); } };
-  const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
+  const response = await read(await worker.fetch(supervisorRequest(
+    supervisorInput({ error_code: "nontransient_test_failure" })
+  ), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.source, "deterministic_fallback");
   assert.equal(response.body.recommendation.reason_code, "unknown_error");
