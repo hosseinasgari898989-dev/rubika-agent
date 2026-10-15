@@ -1,0 +1,36 @@
+name: Gemini repair end-to-end rehearsal
+
+on:
+  pull_request:
+    paths:
+      - "agent/brain/gemini_code_agent.py"
+      - ".github/workflows/gemini-code-assistant.yml"
+      - ".github/workflows/gemini-repair-e2e.yml"
+      - "tests/test_gemini_repair_e2e.py"
+      - "scripts/gemini_budget.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-e2e-rehearsal:
+    name: Offline repair path and promotion gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run isolated repair rehearsal
+        env:
+          # This workflow must never invoke a live Gemini endpoint.
+          GEMINI_API_KEY: ""
+        run: python -m unittest discover -s tests -p "test_gemini_repair_e2e.py" -v
