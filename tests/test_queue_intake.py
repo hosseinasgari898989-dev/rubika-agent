@@ -257,6 +257,23 @@ class QueueIntakeTests(unittest.TestCase):
         hashtag_only["caption"] = "#poppyplaytime #huggywuggy #edit"
         hashtag_only["hashtags"] = ["poppyplaytime", "huggywuggy", "edit"]
 
+        # Regression: the literal letter "s" must not defeat hashtag removal.
+        smiling_hashtag_only = _row(
+            "smilinghashtag001", "creator",
+            title="#smilingcritters #edit",
+        )
+        smiling_hashtag_only["caption"] = "#smilingcritters #edit"
+        smiling_hashtag_only["hashtags"] = ["smilingcritters", "edit"]
+
+        # URLs are not evidence that the clip itself is relevant.
+        linked_relevance_only = _row(
+            "linkedrelevance001", "creator",
+            title="https://example.com/smilingcritters",
+        )
+        linked_relevance_only["caption"] = "https://example.com/smilingcritters"
+        linked_relevance_only["hashtags"] = ["edit"]
+
+
         handle_only = _row("handleonly0001", "poppyplaytimeofficial", title="Funny unrelated clip")
         handle_only["caption"] = "Funny unrelated clip"
         handle_only["hashtags"] = ["edit"]
@@ -282,6 +299,8 @@ class QueueIntakeTests(unittest.TestCase):
                 "candidates": {
                     "tiktok": [
                         hashtag_only,
+                        smiling_hashtag_only,
+                        linked_relevance_only,
                         handle_only,
                         generic_prototype,
                         no_edit_signal,
@@ -294,12 +313,12 @@ class QueueIntakeTests(unittest.TestCase):
         )
 
         self.assertEqual([row["external_id"] for row in rows], ["validhuggy001"])
-        self.assertEqual(diagnostics["input_count"], 6)
+        self.assertEqual(diagnostics["input_count"], 8)
         self.assertEqual(diagnostics["eligible_count"], 1)
-        self.assertEqual(diagnostics["rejected_count"], 5)
+        self.assertEqual(diagnostics["rejected_count"], 7)
         self.assertEqual(
             diagnostics["rejected_by_reason"]["poppy_relevance_not_verified_in_visible_text"],
-            3,
+            5,
         )
         self.assertEqual(diagnostics["rejected_by_reason"]["edit_signal_missing"], 1)
         self.assertEqual(diagnostics["duplicate_within_report_count"], 1)
