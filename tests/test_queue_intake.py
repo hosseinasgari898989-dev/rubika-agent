@@ -304,5 +304,56 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertEqual(diagnostics["rejected_by_reason"]["edit_signal_missing"], 1)
         self.assertEqual(diagnostics["duplicate_within_report_count"], 1)
 
+
+    def test_owner_selected_tiktok_profile_uses_lighter_but_nonzero_filter(self):
+        known_tag_only = _row("knownrelevance0001", "meloaep_", title="Fresh upload")
+        known_tag_only["caption"] = "Fresh upload"
+        known_tag_only["hashtags"] = ["poppyplaytime"]
+
+        known_edit_only = _row("knowneditonly0001", "smyxae", title="Fan edit")
+        known_edit_only["caption"] = "New transitions"
+        known_edit_only["hashtags"] = ["velocity"]
+
+        unrelated = _row("knownunrelated0001", "meloaep_", title="Travel vlog")
+        unrelated["caption"] = "City walk"
+        unrelated["hashtags"] = []
+
+        rows = candidates_for_queue({
+            "candidates": {"tiktok": [known_tag_only, known_edit_only, unrelated]}
+        })
+
+        self.assertEqual(
+            [row["external_id"] for row in rows],
+            ["knownrelevance0001", "knowneditonly0001"],
+        )
+
+    def test_unknown_creator_still_needs_visible_poppy_relevance_and_edit_signal(self):
+        hashtag_only = _row("unknownhashtag0001", "unlisted_creator", title="#smilingcritters #edit")
+        hashtag_only["caption"] = "#smilingcritters #edit"
+        hashtag_only["hashtags"] = ["smilingcritters", "edit"]
+
+        unrelated = _row("unknownunrelated0001", "unlisted_creator", title="Fan edit")
+        unrelated["caption"] = "Fan edit"
+        unrelated["hashtags"] = ["edit"]
+
+        rows = candidates_for_queue({
+            "candidates": {"tiktok": [hashtag_only, unrelated]}
+        })
+        self.assertEqual(rows, [])
+
+    def test_report_cannot_spoof_owner_selected_source_policy(self):
+        forged = _row("spoofedpolicy0001", "unlisted_creator", title="Fan edit")
+        forged["caption"] = "Fan edit"
+        forged["hashtags"] = ["edit"]
+        forged["source_policy"] = {"known_source": True, "trust_tier": "owner_selected"}
+
+        self.assertEqual(candidates_for_queue({"candidates": {"tiktok": [forged]}}), [])
+
+    def test_tiktok_url_video_id_must_match_report_identity(self):
+        mismatched = _row("7690102000000000000", "meloaep_", title="Poppy Playtime edit")
+        mismatched["url"] = "https://www.tiktok.com/@meloaep_/video/7690102000000000001"
+
+        self.assertEqual(candidates_for_queue({"candidates": {"tiktok": [mismatched]}}), [])
+
 if __name__ == "__main__":
     unittest.main()
