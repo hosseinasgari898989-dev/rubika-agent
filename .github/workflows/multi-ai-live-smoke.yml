@@ -40,6 +40,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install the project's pinned runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
       - name: Validate every credential and model configuration before any AI request
         shell: bash
         run: |
