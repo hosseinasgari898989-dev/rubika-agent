@@ -214,10 +214,11 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
         self.assertIn("GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}", workflow)
         self.assertIn("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}", workflow)
+        self.assertIn("MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}", workflow)
         self.assertIn("OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}", workflow)
-        self.assertIn("CODE_AI_DIAGNOSER_PROVIDER: groq", workflow)
+        self.assertIn("CODE_AI_DIAGNOSER_PROVIDERS: groq,mistral,openrouter", workflow)
         self.assertIn("CODE_AI_PROPOSER_PROVIDER: gemini", workflow)
-        self.assertIn("CODE_AI_REVIEWER_PROVIDER: openrouter", workflow)
+        self.assertIn("CODE_AI_REVIEWER_PROVIDERS: mistral,openrouter", workflow)
         self.assertNotIn("AI.run", workflow)
         provider_source = (root / "agent" / "brain" / "ai_provider_clients.py").read_text(encoding="utf-8")
         helper_source = provider_source.split("def call_provider_with_ledger(", 1)[1]
