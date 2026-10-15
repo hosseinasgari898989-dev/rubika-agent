@@ -81,7 +81,7 @@ class ProviderClientTests(unittest.TestCase):
 
         openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
         self.assertEqual(openrouter.model, "openrouter/free")
-        self.assertEqual(openrouter.url, "https://api.openrouter.com/v1/messages")
+        self.assertEqual(openrouter.url, "https://openrouter.ai/api/v1/chat/completions")
 
         gemini = clients.provider_config("gemini", environ={"GEMINI_API_KEY": "m" * 32})
         self.assertEqual(gemini.model, "gemini-3.8-flash")
@@ -200,7 +200,7 @@ class ProviderClientTests(unittest.TestCase):
         ledger = FakeLedger(fail_finish=True)
         result = clients.ProviderResult("openrouter", "model", "answer", {})
         with patch.object(clients, "provider_config", return_value=clients.ProviderConfig(
-            "openrouter", "a" * 32, "model", "https://api.openrouter.com/v1/messages"
+            "openrouter", "a" * 32, "model", "https://openrouter.ai/api/v1/chat/completions"
         )), patch.object(clients, "invoke_provider", return_value=result):
             with self.assertRaises(clients.ProviderClientError) as caught:
                 clients.call_provider_with_ledger(
