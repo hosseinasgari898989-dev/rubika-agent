@@ -323,59 +323,11 @@ class CloudStateTests(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer " + TOKEN)
 
 
-    def test_supervise_error_sends_only_structured_advisory_input(self):
-        state = CloudState("https://worker.example", TOKEN)
-        captured = {}
 
-        def fake_open(request, timeout):
-            captured["url"] = request.full_url
-            captured["method"] = request.method
-            captured["auth"] = request.get_header("Authorization")
-            captured["payload"] = json.loads(request.data.decode("utf-8"))
-            return io.BytesIO(json.dumps({
-                "ok": True,
-                "source": "workers_ai",
-                "recommendation": {
-                    "action": "retry_next_scheduled_run",
-                    "reason_code": "temporary_network",
-                    "next_step_code": "wait_for_next_schedule",
-                    "human_review": False,
-                },
-                "applied": False,
-                "daily_ai_limit": 4,
-            }).encode("utf-8"))
-
-        with patch("urllib.request.urlopen", side_effect=fake_open):
-            result = state.supervise_error(
-                event_code="queue_intake_failed",
-                stage="queue_intake",
-                error_code="control_api_unreachable",
-                platform="tiktok",
-                attempt_count=1,
-                counts={"queued": 12, "sent_today": 1},
-            )
-
-        self.assertEqual(result["recommendation"]["action"], "retry_next_scheduled_run")
-        self.assertFalse(result["applied"])
-        self.assertTrue(captured["url"].endswith("/api/brain/supervise-error"))
-        self.assertEqual(captured["method"], "POST")
-        self.assertEqual(captured["auth"], "Bearer " + TOKEN)
-        self.assertEqual(set(captured["payload"]), {
-            "event_code", "stage", "error_code", "platform", "attempt_count", "counts"
-        })
-        self.assertNotIn("token", json.dumps(captured["payload"]).lower())
-        self.assertNotIn("url", json.dumps(captured["payload"]).lower())
-
-    def test_supervise_error_rejects_unlisted_codes_without_network(self):
-        state = CloudState("https://worker.example", TOKEN)
-        with patch("urllib.request.urlopen") as opener:
-            with self.assertRaises(ValueError):
-                state.supervise_error(
-                    event_code="queue_intake_failed;token=secret",
-                    stage="queue_intake",
-                    error_code="control_api_unreachable",
-                )
-        opener.assert_not_called()
+    def test_removed_worker_supervisor_route_has_no_stale_remote_client_method(self):
+        # Error supervision is local and deterministic; Worker AI is reserved for
+        # music-presence checks and official-news translation.
+        self.assertFalse(hasattr(CloudState, "supervise_error"))
 
 
 if __name__ == "__main__":
