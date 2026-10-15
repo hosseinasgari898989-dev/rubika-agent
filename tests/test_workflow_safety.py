@@ -17,6 +17,8 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("RUBIKA_TOKEN", workflow)
         # Merely changing the request file must not launch downloads or publication.
         self.assertNotIn("\n  push:\n", workflow)
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("github.com/rhysd/actionlint/cmd/actionlint@v1.7.12", ci)
 
     def test_official_news_publishing_is_locked_to_test_channel_only(self):
         config = json.loads((ROOT / "config" / "mob_official_sources.json").read_text(encoding="utf-8"))
