@@ -185,9 +185,11 @@ class ProviderClientTests(unittest.TestCase):
         ledger = FakeLedger()
         result = clients.ProviderResult("groq", "model", "answer", {"totalTokenCount": 4})
         sequence = []
+        timeouts = []
 
-        def invoke(config, prompt, *, max_output_tokens):
+        def invoke(config, prompt, *, max_output_tokens, timeout_seconds=45):
             sequence.append("request")
+            timeouts.append(timeout_seconds)
             return result
 
         with patch.object(clients, "provider_config", return_value=clients.ProviderConfig(
@@ -202,6 +204,7 @@ class ProviderClientTests(unittest.TestCase):
             )
         self.assertIs(actual, result)
         self.assertEqual(sequence, ["reserved", "request"])
+        self.assertEqual(timeouts, [45])
         self.assertEqual(ledger.events[0][0], "reserve")
         self.assertEqual(ledger.events[1][0:3], ("finish", "groq", "succeeded"))
 
