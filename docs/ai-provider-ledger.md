@@ -1,27 +1,29 @@
-# Durable code-repair AI provider ledger
+# Durable Gemini code-repair request ledger
 
-This feature is separate from the Workers AI features used for translation, media moderation, and operational recommendations. For the **code-repair engine**, Gemini is the only enabled provider today.
+This ledger is exclusively for the **code-repair workflow**. Gemini is currently the only model enabled for code repair. Cloudflare Workers AI's existing jobs elsewhere in Rubika-Agent (such as translation, music moderation, or operational recommendations) remain separate and are not called by this code-repair request flow.
 
-## Why this exists
+## How it works
 
-The Gemini repair workflow already has a conservative GitHub Actions trigger budget, but workflow-run counting is not the same as counting actual provider requests and it is not a durable shared provider ledger. This Worker-side ledger records every reserved code-repair request in D1, including requests whose final result is unknown. A reservation consumes budget before a model request is made, and duplicate call IDs are rejected.
+Before the production Gemini workflow sends a prompt to Google's Gemini API, `agent/brain/gemini_usage_client.py` reserves one request through the existing authenticated Worker API. If D1 cannot reserve it, the Gemini request is not made. When the model call returns, the client records success, failure, or an uncertain outcome. Token counts are persisted when Gemini provides them. A failure to record the final outcome blocks the proposal from continuing.
 
-## Authenticated endpoints
+## Endpoints
 
 All endpoints use the existing `Authorization: Bearer <AGENT_API_TOKEN>` protection for `/api/brain/*`.
 
 - `GET /api/brain/ai-provider/status?provider=gemini`: returns today's UTC request count, daily limit, remaining count, cooldown, and whether another request may be reserved.
-- `POST /api/brain/ai-provider/reserve`: body keys are `provider`, `role`, `call_id`, and optional `run_id`. Roles are exactly `diagnose`, `propose_patch`, or `review_patch`. The current hard-coded Gemini budget is 5 reservations per UTC day.
-- `POST /api/brain/ai-provider/finish`: body keys are `provider`, `call_id`, `outcome`, and optional `error_code`, token counts, and `retry_after_seconds`. Outcomes are `succeeded`, `failed`, and `unknown`. The exact error codes `rate_limited` and `quota_exhausted` set a persisted cooldown; the default is 300 seconds and any explicit value must be between 1 second and 24 hours.
+- `POST /api/brain/ai-provider/reserve`: accepts `provider`, `role`, `call_id`, and optional `run_id`. Roles are exactly `diagnose`, `propose_patch`, or `review_patch`. The current hard-coded Gemini budget is 5 reservations per UTC day.
+- `POST /api/brain/ai-provider/finish`: accepts `provider`, `call_id`, `outcome`, and optional `error_code`, token counts, and `retry_after_seconds`. Outcomes are `succeeded`, `failed`, and `unknown`. The exact `rate_limited` and `quota_exhausted` error codes set a persisted cooldown; the default is five minutes and the maximum is 24 hours.
 
-Provider names not explicitly enabled by the Worker are rejected. Do not send prompts, source code, model outputs, credentials, or raw exception messages to these accounting endpoints. The ledger stores only identifiers, role, status, safe error code, timestamps, cooldown, and bounded token counts.
+Unknown provider names are rejected. The accounting client sends only request identifiers, role, outcome, safe error code, and usage counters. It never sends prompts, source code, model output, credentials other than its bearer token, or raw exception details to accounting endpoints.
 
-## Fail-closed behavior
+## Fail-closed protections
 
-The request is not allowed if the D1 ledger cannot reserve it. The daily limit is checked inside the reservation SQL statement, so concurrent reservations cannot all pass using a stale count. Every reservation counts toward the daily limit even if the provider call later times out or the response is unknown. A call can transition out of `reserved` only once. Cooldown writes are tied to that exact finish transition.
+The limit is checked inside the reservation SQL statement, preventing concurrent calls from passing a stale count. Every reservation counts toward the daily limit even when the result is unknown. Reused call IDs are rejected. A reservation can be finished only once. Cooldown changes are tied to that exact finish transition. If the ledger is unavailable, the code-repair engine stops before Gemini is called or prevents the resulting proposal from continuing.
 
-The ledger does not itself call Gemini or other providers and does not modify code, open pull requests, deploy the Worker, run migrations, or publish to Rubika.
+The workflow still has its conservative GitHub Actions run-count guard as a second protective limit. The durable D1 ledger enforces the actual Gemini request-reservation budget.
 
-## Activation steps still required
+## Activation
 
-This PR only prepares code and schema. It is not live until an owner reviews/merges the PR, applies migration `0005_ai_provider_ledger.sql` to the configured D1 database, and deploys the Worker. The GitHub Actions Gemini workflow must then be separately integrated with reserve/finish calls and the existing `AGENT_API_TOKEN` must be configured as a repository secret. No live migration, deployment, or secret operation was performed by this PR.
+The code and workflow are prepared in draft PR #12. It is not live until an owner reviews/merges the PR, applies migration `0005_ai_provider_ledger.sql` to the configured D1 database, deploys the Worker, and confirms the GitHub Actions secrets `GEMINI_API_KEY` and `AGENT_API_TOKEN` exist. Live migration and deployment are not performed by this PR.
+
+The ledger APIs do not call `env.AI.run` or any Cloudflare AI model, and do not deploy Workers, execute model output, modify repository files, create repair PRs, or publish to Rubika. All patches remain untrusted until the existing fixed checks pass and a human reviews the resulting PR.
