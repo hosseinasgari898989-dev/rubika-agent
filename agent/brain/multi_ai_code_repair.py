@@ -1,10 +1,12 @@
 """Bounded multi-model code-repair ensemble with diagnosis and review quorum.
 
-The default free-tier ensemble gathers independent diagnoses from Groq,
-Mistral, and OpenRouter's free-model router; Gemini proposes one constrained
-patch; Mistral and OpenRouter independently review it. All model outputs are
-untrusted, ledger-accounted, and subject to deterministic tests and human PR
-review. No model can execute tools, publish to Rubika, or merge code.
+The active ensemble gathers independent diagnoses from Groq and OpenRouter,
+uses the existing Cloudflare Workers AI binding to propose one constrained
+patch, and requires Groq and OpenRouter to independently review it. Gemini
+remains available for explicitly dispatched diagnostics; Mistral is disabled.
+All model outputs are untrusted, ledger-accounted, and subject to deterministic
+tests and human PR review. No model can execute tools, publish to Rubika, or
+merge code.
 """
 from __future__ import annotations
 
@@ -120,9 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 2
 
     try:
-        diagnosers = _provider_list("CODE_AI_DIAGNOSER_PROVIDERS", "groq,mistral,openrouter")
-        proposer = (os.getenv("CODE_AI_PROPOSER_PROVIDER", "gemini") or "").strip().lower()
-        reviewers = _provider_list("CODE_AI_REVIEWER_PROVIDERS", "mistral,openrouter")
+        diagnosers = _provider_list("CODE_AI_DIAGNOSER_PROVIDERS", "groq,openrouter")
+        proposer = (os.getenv("CODE_AI_PROPOSER_PROVIDER", "workers_ai") or "").strip().lower()
+        reviewers = _provider_list("CODE_AI_REVIEWER_PROVIDERS", "groq,openrouter")
         if proposer not in PROVIDERS or proposer in diagnosers:
             raise ProviderClientError("provider_role_configuration_invalid")
         if len(diagnosers) < 2 or len(reviewers) < 2:
@@ -168,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         raw = args.failure_log.read_bytes()[:gemini.MAX_LOG_BYTES].decode("utf-8", errors="replace")
         secret_values = tuple(
             str(os.getenv(key, "") or "")
-            for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY")
+            for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "AGENT_API_TOKEN")
         )
         log = gemini.sanitize_failure_log(raw, secrets=secret_values)
         selected = gemini.extract_candidate_paths(raw, root)
