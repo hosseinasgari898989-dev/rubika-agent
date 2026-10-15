@@ -73,9 +73,9 @@ TEST_SOURCE_HINTS = {
 MAX_READONLY_TEST_FILES = 2
 MAX_READONLY_TEST_CHARS = 7_000
 _FAILED_TEST_MODULE = re.compile(
-    r"(?m)^(?:FAIL|ERROR):\\s+.*?\\((?:tests\\.)?(test_[A-Za-z0-9_]+)(?:\\.|\\))"
+    r"(?m)^(?:FAIL|ERROR):\s+.*?\((?:tests\.)?(test_[A-Za-z0-9_]+)(?:\.|\))"
 )
-_READONLY_TEST_PATH = re.compile(r"tests/test_[A-Za-z0-9_]+\\.py")
+_READONLY_TEST_PATH = re.compile(r"tests/test_[A-Za-z0-9_]+\.py")
 
 _TRACEBACK_FILE = re.compile(r"""File\s+["']([^"']+\.py)["']""")
 _REPO_PATH = re.compile(
