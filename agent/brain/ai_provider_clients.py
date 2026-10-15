@@ -7,9 +7,12 @@ ledger reservation.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
+import socket
+import ssl
 import urllib.error
 import urllib.request
 import uuid
@@ -172,14 +175,99 @@ def _provider_http_diagnostics(exc: urllib.error.HTTPError, provider: str) -> di
     details = error.get("details")
     if isinstance(details, list):
         reasons = []
+        retry_delays = []
         for item in details[:8]:
-            if isinstance(item, dict):
-                candidate = item.get("reason")
-                if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", candidate):
-                    reasons.append(candidate)
+            if not isinstance(item, dict):
+                continue
+            candidate = item.get("reason")
+            if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", candidate):
+                reasons.append(candidate)
+            # Google may expose a structured google.rpc.RetryInfo delay even
+            # when the HTTP Retry-After header is absent.
+            delay = item.get("retryDelay")
+            if isinstance(delay, str):
+                match = re.fullmatch(r"(\\d+(?:\\.\\d+)?)s", delay.strip())
+                if match:
+                    try:
+                        seconds = int(float(match.group(1)))
+                    except (ValueError, OverflowError):
+                        seconds = 0
+                    if 1 <= seconds <= 86400:
+                        retry_delays.append(seconds)
+            metadata = item.get("metadata")
+            if isinstance(metadata, dict):
+                # Read only quota category fields; never expose project/consumer
+                # identifiers or arbitrary metadata in diagnostic output.
+                quota_values = " ".join(
+                    str(metadata.get(key, ""))[:160]
+                    for key in ("quota_metric", "quota_limit", "quota_location")
+                    if isinstance(metadata.get(key), str)
+                ).lower()
+                if quota_values:
+                    if re.search(r"per[-_ ]day|daily|requestsperday|tokensperday", quota_values):
+                        reasons.append("DAILY_QUOTA_LIMIT")
+                    elif re.search(r"per[-_ ]minute|per[-_ ]second|requestsperminute|tokensperminute", quota_values):
+                        reasons.append("RATE_LIMIT")
         if reasons:
-            result["detail_reasons"] = reasons[:4]
+            result["detail_reasons"] = list(dict.fromkeys(reasons))[:4]
+        if retry_delays:
+            result["retry_after_seconds"] = max(
+                int(result.get("retry_after_seconds", 0)),
+                max(retry_delays),
+            )
     return result
+
+
+def _network_failure_reason(exc: BaseException) -> str:
+    """Map transport failures to stable, non-sensitive diagnostics."""
+    root = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(root, (TimeoutError, socket.timeout)):
+        return "network_timeout"
+    if isinstance(root, ssl.SSLError):
+        return "tls_handshake_failed"
+    if isinstance(root, socket.gaierror) or (
+        isinstance(root, OSError) and getattr(root, "errno", None) in {
+            getattr(socket, "EAI_AGAIN", -3), getattr(socket, "EAI_NONAME", -2)
+        }
+    ):
+        return "dns_resolution_failed"
+    if isinstance(root, ConnectionRefusedError):
+        return "connection_refused"
+    if isinstance(root, ConnectionResetError):
+        return "connection_reset"
+    if isinstance(root, OSError) and getattr(root, "errno", None) == errno.ETIMEDOUT:
+        return "network_timeout"
+    rendered = str(root).lower() if isinstance(root, str) else ""
+    if "timed out" in rendered or "timeout" in rendered:
+        return "network_timeout"
+    if "name or service not known" in rendered or "getaddrinfo failed" in rendered or "temporary failure in name resolution" in rendered:
+        return "dns_resolution_failed"
+    if "certificate verify failed" in rendered or "ssl" in rendered or "tls" in rendered:
+        return "tls_handshake_failed"
+    if "connection refused" in rendered:
+        return "connection_refused"
+    if "connection reset" in rendered or "remote end closed" in rendered:
+        return "connection_reset"
+    if "tunnel connection failed" in rendered or "proxy" in rendered:
+        return "proxy_tunnel_failed"
+    return "network_error_unknown"
+
+
+def _is_daily_quota_error(exc: "ProviderClientError") -> bool:
+    """Recognize explicit daily quota signals without guessing from HTTP 429 alone."""
+    details = exc.diagnostics.get("detail_reasons", [])
+    message = str(exc.diagnostics.get("provider_message", "")).lower()
+    reason = str(exc.diagnostics.get("provider_reason", "")).upper()
+    if "DAILY_QUOTA_LIMIT" in details:
+        return True
+    return (
+        reason == "QUOTA_EXCEEDED"
+        or "per day" in message
+        or "per-day" in message
+        or "daily quota" in message
+        or "quota has been exceeded" in message
+        or "exceeded your current quota" in message
+    )
 
 
 def _normalize_usage(*, prompt: Any = None, output: Any = None, total: Any = None) -> dict[str, int]:
@@ -235,7 +323,6 @@ def invoke_provider(
                 "thinkingConfig": {"thinkingLevel": "low"},
                 "maxOutputTokens": max_output_tokens,
                 "responseMimeType": "application/json",
-                "temperature": 0.1,
             },
         }
         headers = {
@@ -287,8 +374,18 @@ def invoke_provider(
         ) from None
     except ProviderClientError:
         raise
-    except (urllib.error.URLError, TimeoutError, OSError):
-        raise ProviderClientError("provider_network_result_unknown", outcome="unknown") from None
+    except urllib.error.URLError as exc:
+        raise ProviderClientError(
+            "provider_network_result_unknown",
+            outcome="unknown",
+            diagnostics={"provider_reason": _network_failure_reason(exc)},
+        ) from None
+    except (TimeoutError, OSError) as exc:
+        raise ProviderClientError(
+            "provider_network_result_unknown",
+            outcome="unknown",
+            diagnostics={"provider_reason": _network_failure_reason(exc)},
+        ) from None
 
     answer = ""
     usage: dict[str, int] = {}
@@ -385,15 +482,28 @@ def call_provider_with_ledger(
         )
     except ProviderClientError as exc:
         outcome = exc.outcome
-        error_code = "rate_limited" if exc.code == "provider_http_429" else (
-            "provider_result_unknown" if outcome == "unknown" else exc.code
-        )
+        retry_after_seconds = None
+        if exc.code == "provider_http_429":
+            error_code = "quota_exhausted" if _is_daily_quota_error(exc) else "rate_limited"
+            if error_code == "quota_exhausted":
+                # The ledger supports at most a one-day cooldown; don't hammer a
+                # known daily quota limit on every scheduled CI run.
+                retry_after_seconds = 86400
+            else:
+                indicated = exc.diagnostics.get("retry_after_seconds")
+                if type(indicated) is int and 1 <= indicated <= 86400:
+                    # Keep the existing minimum cooldown while honoring longer
+                    # provider-directed backoff when explicitly supplied.
+                    retry_after_seconds = max(300, indicated)
+        else:
+            error_code = "provider_result_unknown" if outcome == "unknown" else exc.code
         try:
             ledger.finish(
                 provider=provider,
                 call_id=call_id,
                 outcome=outcome,
                 error_code=error_code,
+                retry_after_seconds=retry_after_seconds,
             )
         except UsageLedgerError:
             raise ProviderClientError("usage_ledger_finish_failed", outcome="unknown") from None
