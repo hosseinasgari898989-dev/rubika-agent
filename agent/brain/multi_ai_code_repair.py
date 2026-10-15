@@ -428,8 +428,9 @@ def main(argv: list[str] | None = None) -> int:
             else "provider_unavailable",
             error_code=exc.code,
         )
-        active_role = "propose_patch" if report.get("request_roles_started") else "provider_preflight"
-        report["provider_failure"] = _safe_provider_failure(exc, role=active_role)
+        report["provider_failure"] = _safe_provider_failure(
+            exc, role=active_role, provider=active_provider
+        )
     except gemini.GeminiAssistantError as exc:
         report.update(status="proposal_invalid", error_code=str(exc))
     except gemini.PatchValidationError as exc:
