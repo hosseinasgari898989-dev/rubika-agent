@@ -169,11 +169,13 @@ jobs:
                       safe, ensure_ascii=False, sort_keys=True
                   ))
 
-          total = safe_summary["tiktok_candidates"] + safe_summary["mob_official_candidates"]
-          if total == 0:
+          # The persistent normal edit queue currently accepts TikTok only.
+          # Mob official candidates belong to a separate lane and must not make an
+          # empty TikTok intake look successful or refresh the five-hour marker.
+          if safe_summary["tiktok_candidates"] == 0:
               raise SystemExit(
-                  "Both live discovery lanes returned zero candidates; refusing to replace "
-                  "the last report or update the queue with an empty run."
+                  "Live TikTok discovery returned zero candidates; refusing to replace "
+                  "the last report or update the edit queue with a Mob-only run."
               )
           if safe_summary["media_downloads"] != 0 or safe_summary["rubika_posts"] != 0:
               raise SystemExit("Safety violation: this job must remain metadata-only.")
