@@ -22,6 +22,7 @@ from typing import Any
 from . import gemini_code_agent as gemini
 from .ai_provider_clients import (
     PROVIDERS,
+    GROQ_MAX_PROMPT_CHARS,
     ProviderClientError,
     call_provider_with_ledger,
     provider_config,
@@ -69,10 +70,10 @@ Return concise plain text with likely root cause, evidence, and areas to inspect
 If evidence is insufficient, say so.
 
 <untrusted_failure_log>
-{log[:12000]}
+{log[:7000]}
 </untrusted_failure_log>
 <read_only_test_context>
-{readonly_test_context[:12000] or "No matching failed-test source was available."}
+{readonly_test_context[:7000] or "No matching failed-test source was available."}
 </read_only_test_context>
 """
 
@@ -289,10 +290,41 @@ def main(argv: list[str] | None = None) -> int:
         # malformed review, or provider outage blocks promotion.
         review_summary = []
         for reviewer in reviewers:
+            review_prompt = _build_review_prompt(proposal, selected, diagnostic_summary)
+            if reviewer == "groq" and len(review_prompt) > GROQ_MAX_PROMPT_CHARS:
+                # Never ask a reviewer to approve only a truncated portion of a patch.
+                # Preserve the validated diff for a human instead of spending a provider slot.
+                args.patch_path.parent.mkdir(parents=True, exist_ok=True)
+                args.patch_path.write_text(patch, encoding="utf-8")
+                report.update(
+                    ok=True,
+                    status="human_review_required",
+                    error_code="review_prompt_exceeds_free_plan_budget",
+                    manual_review=True,
+                    patch_path=str(args.patch_path),
+                    patch_files=changed,
+                    review={
+                        "decision": "not_run",
+                        "blocking_reasons": "full_patch_exceeds_groq_free_plan_prompt_budget",
+                        "provider": reviewer,
+                    },
+                )
+                _write_report(args.report_path, report)
+                print(json.dumps({
+                    "ok": True,
+                    "status": report["status"],
+                    "request_sent": report["request_sent"],
+                    "selected_files": report["selected_files"],
+                    "patch_ready": False,
+                    "model": report["model"],
+                    "provider_roles": report["provider_roles"],
+                }, ensure_ascii=False, sort_keys=True))
+                return 0
+
             review_result = call_provider_with_ledger(
                 provider=reviewer,
                 role="review_patch",
-                prompt=_build_review_prompt(proposal, selected, diagnostic_summary),
+                prompt=review_prompt,
                 run_id=run_id,
                 max_output_tokens=1200,
                 on_reserved=lambda reviewer=reviewer: mark_request("review_patch", reviewer),
