@@ -181,6 +181,41 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.outcome, "failed")
         self.assertNotIn("secret response body", str(caught.exception))
 
+    def test_gemini_503_includes_sanitized_provider_diagnostics(self):
+        config = clients.ProviderConfig(
+            "gemini", "g" * 32, "gemini-3.8-flash",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        )
+        exposed_key = "AIza" + "A" * 32
+        body = {
+            "error": {
+                "code": 503,
+                "message": f"The model is overloaded; debug marker {exposed_key}",
+                "status": "UNAVAILABLE",
+                "details": [{"reason": "SERVICE_UNAVAILABLE"}],
+            }
+        }
+        error = HTTPError(
+            config.url,
+            503,
+            "unavailable",
+            {"Retry-After": "13"},
+            io.BytesIO(json.dumps(body).encode("utf-8")),
+        )
+        opener = FakeOpener(error=error)
+        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.invoke_provider(config, "safe prompt")
+        self.assertEqual(caught.exception.code, "provider_http_503")
+        self.assertEqual(caught.exception.outcome, "unknown")
+        self.assertEqual(caught.exception.diagnostics["http_status"], 503)
+        self.assertEqual(caught.exception.diagnostics["provider_reason"], "UNAVAILABLE")
+        self.assertEqual(caught.exception.diagnostics["retry_after_seconds"], 13)
+        self.assertEqual(caught.exception.diagnostics["detail_reasons"], ["SERVICE_UNAVAILABLE"])
+        self.assertIn("The model is overloaded", caught.exception.diagnostics["provider_message"])
+        self.assertNotIn(exposed_key, json.dumps(caught.exception.diagnostics))
+        self.assertNotIn(exposed_key, str(caught.exception))
+
     def test_ledger_reservation_happens_before_provider_request_and_result_is_finished(self):
         ledger = FakeLedger()
         result = clients.ProviderResult("groq", "model", "answer", {"totalTokenCount": 4})
