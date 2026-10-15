@@ -15,6 +15,12 @@ class FakeResponse:
         self.status = status
         self.raw = json.dumps(payload).encode("utf-8")
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
     def read(self, size=-1):
         return self.raw[:size]
 
