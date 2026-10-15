@@ -135,6 +135,8 @@ jobs:
               summary.write("## Multi-AI code repair proposal\n")
               summary.write(f"- Status: {report.get('status', 'unknown')}\n")
               summary.write(f"- Model: {report.get('model', 'unknown')}\n")
+              summary.write(f"- Provider roles: {report.get('provider_roles', {})}\n")
+              summary.write(f"- Independent review: {report.get('review', {}).get('decision', 'not run')}\n")
               summary.write(f"- Request sent: {bool(report.get('request_sent'))}\n")
               summary.write(f"- Context files: {', '.join(report.get('selected_files', [])) or 'none'}\n")
               summary.write(f"- Confidence: {report.get('confidence', 'low')}\n")
@@ -220,7 +222,7 @@ jobs:
         if: always() && steps.preflight.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: gemini-code-repair-${{ github.event.workflow_run.head_sha }}
+          name: multi-ai-code-repair-${{ github.event.workflow_run.head_sha }}
           path: |
             ${{ runner.temp }}/gemini-code-proposal.json
             ${{ runner.temp }}/gemini-code-proposal.diff
