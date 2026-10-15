@@ -51,7 +51,7 @@ jobs:
           )
           body = {
               "contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500},
+              "generationConfig": {"thinkingConfig": {"thinkingLevel": "low"}, "maxOutputTokens": 900},
           }
           request = urllib.request.Request(
               "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -95,6 +95,8 @@ jobs:
               sys.exit(1)
 
           usage = payload.get("usageMetadata", {})
+          finish_reason = (payload.get("candidates") or [{}])[0].get("finishReason", "unknown")
+          print(f"Finish reason: {finish_reason}")
           print("Gemini API request succeeded.")
           print(f"Model: {model}")
           print("Response from Gemini:")
