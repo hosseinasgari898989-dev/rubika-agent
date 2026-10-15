@@ -82,18 +82,11 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(groq.model, "openai/gpt-oss-20b")
         self.assertEqual(groq.url, "https://api.groq.com/openai/v1/chat/completions")
 
-        workers_ai = clients.provider_config("workers_ai", environ={
-            "AGENT_API_TOKEN": "t" * 40,
-            "AGENT_API_BASE_URL": "https://rubika-agent.h98609294.workers.dev",
+        github_models = clients.provider_config("github_models", environ={
+            "GITHUB_TOKEN": "g" * 40,
         })
-        self.assertEqual(workers_ai.model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
-        self.assertEqual(workers_ai.url, "https://rubika-agent.h98609294.workers.dev/api/brain/ai-provider/invoke")
-        with self.assertRaises(clients.ProviderClientError) as caught:
-            clients.provider_config("workers_ai", environ={
-                "AGENT_API_TOKEN": "t" * 40,
-                "AGENT_API_BASE_URL": "https://attacker.example",
-            })
-        self.assertEqual(caught.exception.code, "workers_ai_endpoint_invalid")
+        self.assertEqual(github_models.model, "openai/gpt-4o")
+        self.assertEqual(github_models.url, "https://models.github.ai/inference/chat/completions")
 
         openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
         self.assertEqual(openrouter.model, "openrouter/free")
@@ -146,31 +139,25 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
 
-    def test_workers_ai_response_uses_reserved_request_and_authorized_worker_endpoint(self):
+    def test_github_models_openai_compatible_response_is_normalized(self):
         config = clients.ProviderConfig(
-            "workers_ai", "t" * 40, "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-            "https://rubika-agent.h98609294.workers.dev/api/brain/ai-provider/invoke",
+            "github_models", "g" * 40, "openai/gpt-4o",
+            "https://models.github.ai/inference/chat/completions",
         )
         opener = FakeOpener(FakeResponse({
-            "ok": True,
-            "provider": "workers_ai",
-            "model": config.model,
-            "text": '{"summary":"safe"}',
+            "choices": [{"message": {"content": '{"summary":"safe"}'}}],
+            "usage": {"prompt_tokens": 22, "completion_tokens": 11, "total_tokens": 33},
         }))
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
-            result = clients.invoke_provider(
-                config, "safe prompt", role="propose_patch",
-                call_id="workers-ai-call-identifier-01",
-            )
+            result = clients.invoke_provider(config, "safe prompt")
         self.assertEqual(result.text, '{"summary":"safe"}')
-        self.assertEqual(result.provider, "workers_ai")
+        self.assertEqual(result.provider, "github_models")
+        self.assertEqual(result.usage["totalTokenCount"], 33)
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
         body = json.loads(opener.request.data.decode("utf-8"))
-        self.assertEqual(body["provider"], "workers_ai")
-        self.assertEqual(body["role"], "propose_patch")
-        self.assertEqual(body["call_id"], "workers-ai-call-identifier-01")
-        self.assertEqual(body["prompt"], "safe prompt")
+        self.assertEqual(body["model"], "openai/gpt-4o")
+        self.assertEqual(body["messages"][1]["content"], "safe prompt")
 
     def test_openrouter_chat_completion_response_is_normalized(self):
         config = clients.ProviderConfig(
