@@ -17,7 +17,7 @@ concurrency:
 jobs:
   live-provider-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -116,6 +116,7 @@ jobs:
                       prompt=prompt,
                       run_id=run_id,
                       max_output_tokens=96,
+                      timeout_seconds=90,
                       usage_client=ledger,
                   )
                   row = {
@@ -149,7 +150,7 @@ jobs:
           with summary.open("a", encoding="utf-8") as handle:
               handle.write("## Multi-AI live API smoke test\n")
               handle.write(f"- Providers with usable live responses: **{successes}/{len(providers)}**\n")
-              handle.write("- Maximum provider requests: **one per provider**; every attempted call is recorded in the Cloudflare D1 ledger.\n")
+              handle.write("- Maximum provider requests: **one per provider**, with a **90-second timeout per request**; every attempted call is recorded in the Cloudflare D1 ledger.\n")
               handle.write("- Raw model response text and all secret values were omitted from logs.\n")
               handle.write("- No patch was applied, no branch/PR was created, and no Rubika action was triggered.\n\n")
               handle.write("| Provider | Model | Status | Response characters | Total tokens |\n|---|---|---|---:|---:|\n")
