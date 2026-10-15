@@ -87,9 +87,11 @@ class AIProviderLedgerTests(unittest.TestCase):
                 ("other-provider", "2026-10-15T12:05:00.000Z", "secret_leaked"),
             )
 
-    def test_worker_has_single_active_gemini_provider_and_five_call_limit(self):
+    def test_worker_has_three_explicit_providers_and_shared_daily_cap(self):
         source = WORKER.read_text(encoding="utf-8")
-        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 5 });", source)
+        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 3, groq: 3, anthropic: 3 });", source)
+        self.assertIn("const CODE_AI_TOTAL_DAILY_LIMIT = 9;", source)
+        self.assertIn("CODE_AI_TOTAL_DAILY_LIMIT", source)
         self.assertIn('"code_ai_provider_not_enabled"', source)
         self.assertIn("CODE_AI_PROVIDER_LIMITS[provider]", source)
 
@@ -103,6 +105,7 @@ class AIProviderLedgerTests(unittest.TestCase):
             "NOT EXISTS (SELECT 1 FROM ai_provider_state WHERE provider = ? AND cooldown_until > ?)",
             source,
         )
+        self.assertIn("SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ?", source)
         self.assertIn("ON CONFLICT(call_id) DO NOTHING", source)
         self.assertIn("RETURNING call_id, usage_day, provider, role, status, started_at", source)
 
