@@ -87,6 +87,22 @@ jobs:
           fi
           echo "Raw logs are temporary only and will not be uploaded as artifacts."
 
+      - name: Set up Python for proposal and test execution
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the project's pinned runtime dependencies
+        if: steps.preflight.outputs.should_run == 'true'
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Set up Node.js for Worker tests
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Ask Gemini for one bounded repair proposal
         id: proposal
         if: steps.preflight.outputs.should_run == 'true'
