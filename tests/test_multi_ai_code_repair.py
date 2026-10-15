@@ -28,23 +28,9 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
                 "MISTRAL_API_KEY": "m" * 32,
                 "OPENROUTER_API_KEY": "a" * 32,
             }
-            with (
-                patch.dict(os.environ, environment, clear=True),
-                patch.object(
-                    multi, "provider_config",
-                    side_effect=lambda provider: type(
-                        "FakeConfig", (), {"provider": provider, "model": provider + "-test-model"}
-                    )(),
-                ),
-                patch.object(multi, "call_provider_with_ledger", side_effect=fake_call),
-                patch.object(multi.gemini, "sanitize_failure_log", return_value="sanitized failure"),
-                patch.object(multi.gemini, "extract_candidate_paths", return_value=["src/app.py"]),
-                patch.object(multi.gemini, "extract_readonly_test_paths", return_value=[]),
-                patch.object(multi.gemini, "collect_readonly_test_context", return_value="read-only test context"),
-                patch.object(multi.gemini, "collect_code_context", return_value="source context"),
-                patch.object(multi.gemini, "build_prompt", return_value="constrained patch prompt"),
-                patch.object(multi.gemini, "validate_patch", return_value=["src/app.py"]),
-            ):
+            with patch.dict(os.environ, environment, clear=True), patch.object(
+                multi, "call_provider_with_ledger"
+            ) as call:
                 code = multi.main([
                     "--repo-root", str(root),
                     "--failure-log", str(failure_log),
