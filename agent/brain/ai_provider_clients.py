@@ -134,10 +134,10 @@ def _safe_diagnostic_text(value: str) -> str:
     """Keep only short error text; redact key-like strings and control characters."""
     text = " ".join(str(value).split())
     text = re.sub(r"AIza[0-9A-Za-z_-]{20,}", "[redacted-key]", text)
-    text = re.sub(r"(?i)\\bBearer\\s+[^\\s,;]+", "Bearer [redacted]", text)
+    text = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [redacted]", text)
     text = re.sub(
-        r"(?i)(api[_ -]?key\\s*[:=]\\s*)[^\\s,;]+",
-        r"\\1[redacted]",
+        r"(?i)(api[_ -]?key\s*[:=]\s*)[^\s,;]+",
+        r"\1[redacted]",
         text,
     )
     return text[:240]
