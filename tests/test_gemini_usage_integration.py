@@ -8,7 +8,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 from agent.brain import gemini_code_agent as gemini
-from agent.brain.gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
+from agent.brain.gemini_usage_client import ALLOWED_PROVIDERS, CodeAIUsageLedger, UsageLedgerError
 
 
 CALL_ID = "test-call-identifier-123456"
@@ -186,6 +186,27 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertNotIn(client.token, request.full_url)
         self.assertEqual(headers["authorization"], "Bearer " + client.token)
         self.assertEqual(result["call_id"], CALL_ID)
+
+    def test_ledger_client_allowlist_matches_all_four_live_providers(self):
+        expected = {"gemini", "groq", "mistral", "openrouter"}
+        self.assertEqual(ALLOWED_PROVIDERS, expected)
+        client = CodeAIUsageLedger(
+            "https://example.invalid",
+            "fake-ledger-token-for-offline-test-1234567890",
+        )
+        for provider in sorted(expected):
+            with self.subTest(provider=provider):
+                response = FakeResponse(
+                    {"ok": True, "reserved": True, "call_id": CALL_ID},
+                    status=201,
+                )
+                with patch.object(client._opener, "open", return_value=response):
+                    result = client.reserve(
+                        provider=provider,
+                        role="diagnose",
+                        call_id=CALL_ID,
+                    )
+                self.assertEqual(result["call_id"], CALL_ID)
 
     def test_ledger_client_never_follows_a_429_budget_response(self):
         client = CodeAIUsageLedger(
