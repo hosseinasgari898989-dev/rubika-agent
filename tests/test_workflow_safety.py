@@ -50,6 +50,9 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("packages-cf.termux.dev", workflow)
         self.assertIn("mirror/apt/termux-main stable main", workflow)
         self.assertIn("Termux package index could not be refreshed from official mirrors.", workflow)
+        # Mob official items are a separate lane and cannot mask an empty TikTok queue intake.
+        self.assertIn('if safe_summary["tiktok_candidates"] == 0:', workflow)
+        self.assertIn('with a Mob-only run.', workflow)
 
 if __name__ == "__main__":
     unittest.main()
