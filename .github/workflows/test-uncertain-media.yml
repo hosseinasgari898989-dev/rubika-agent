@@ -93,7 +93,7 @@ jobs:
           channel = os.environ["RUBIKA_CHANNEL_GUID"]
           if channel != "c0EFohK0f3174377fb6fa422d3ccb230":
               raise SystemExit("test_channel_guard_failed")
-          destination = Path(os.environ["RUNNER_TEMP"]) / (external_id + ".mp4")
+          destination = Path(os.environ["RUNNER_TEMP"]) / Path(remote_path).name
           media = MegaStorage().download(remote_path, destination.parent)
           if media != destination or not media.is_file():
               raise SystemExit("downloaded_media_path_mismatch")
