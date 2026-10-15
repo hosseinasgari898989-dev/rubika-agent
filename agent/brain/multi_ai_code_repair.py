@@ -1,7 +1,7 @@
 """Three-provider, human-reviewed code-repair proposal pipeline.
 
 The role sequence is diagnose (Groq), propose (Gemini), and independently
-review (Anthropic). A reviewer can veto a proposal but can never authorize a
+review (OpenRouter free-model router). A reviewer can veto a proposal but can never authorize a
 merge or bypass deterministic tests. All model requests require durable D1
 reservations and outcome accounting.
 """
@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     roles = {
         "diagnose": os.getenv("CODE_AI_DIAGNOSER_PROVIDER", "groq").strip().lower(),
         "propose_patch": os.getenv("CODE_AI_PROPOSER_PROVIDER", "gemini").strip().lower(),
-        "review_patch": os.getenv("CODE_AI_REVIEWER_PROVIDER", "anthropic").strip().lower(),
+        "review_patch": os.getenv("CODE_AI_REVIEWER_PROVIDER", "openrouter").strip().lower(),
     }
     report: dict[str, Any] = {
         "ok": False,
@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         raw = args.failure_log.read_bytes()[:gemini.MAX_LOG_BYTES].decode("utf-8", errors="replace")
         secret_values = tuple(
             str(os.getenv(key, "") or "")
-            for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY")
+            for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY")
         )
         log = gemini.sanitize_failure_log(raw, secrets=secret_values)
         selected = gemini.extract_candidate_paths(raw, root)
