@@ -38,5 +38,12 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertTrue({"mob_newsroom", "mob_youtube", "steam_news", "mob_x"}.issubset(enabled))
 
 
+    def test_cloud_runner_is_the_only_supported_scheduled_collection_path(self):
+        self.assertTrue((ROOT / "termux" / "daily_discovery.py").is_file())
+        self.assertFalse((ROOT / "termux" / "daily.sh").exists())
+        self.assertFalse((ROOT / "termux" / "bootstrap.sh").exists())
+        self.assertFalse((ROOT / "docs" / "TERMUX_DAILY_DISCOVERY.md").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
