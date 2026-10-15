@@ -28,7 +28,6 @@ TikTok و YouTube در مرحلهٔ کشف فقط metadata می‌فرستند؛
 
 ## جمع‌آوری اطلاعات از گوشی (Termux)
 - مسیر جدید و رایگان در شاخهٔ آزمایشی: اجرای `bash termux/daily.sh` در Termux، برای به‌روزرسانی امن شاخه، جمع‌آوری metadata عمومی TikTok/Instagram/YouTube و ارسال فقط گزارش JSON به GitHub. هیچ ویدیویی در این مرحله دانلود یا در روبیکا منتشر نمی‌شود.
-- راهنمای نصب ایجنت در Termux: [docs/INSTALL_AGENT_FA.md](docs/INSTALL_AGENT_FA.md).
 - شرح مسیر کشف و فرمان روزانه: [docs/TERMUX_DAILY_DISCOVERY.md](docs/TERMUX_DAILY_DISCOVERY.md).
 
 ## وظایف اصلی
