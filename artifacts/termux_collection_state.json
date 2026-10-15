@@ -1,11 +1,11 @@
 {
-  "candidate_pool_count": 21,
-  "candidate_pool_size": 21,
-  "completed_at": "2026-10-15T17:45:29+00:00",
+  "candidate_pool_count": 36,
+  "candidate_pool_size": 36,
+  "completed_at": "2026-10-15T23:52:06+00:00",
   "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 21,
+  "filter_eligible_count": 36,
   "filter_input_by_source": {
     "meloaep_": 8,
     "menezxl9": 8,
@@ -15,24 +15,22 @@
     "smyxae": 8
   },
   "filter_rejected_by_reason": {
-    "edit_signal_missing": 1,
-    "poppy_relevance_not_verified_in_visible_text": 26
+    "edit_signal_missing": 4,
+    "poppy_relevance_not_verified_in_visible_text": 8
   },
   "filter_rejected_by_source": {
-    "meloaep_": 8,
-    "menezxl9": 6,
+    "menezxl9": 4,
     "rickkzn_": 1,
-    "saylex.aep812": 5,
     "smyxae": 7
   },
-  "filter_rejected_count": 27,
+  "filter_rejected_count": 12,
   "inserted_count": 4,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 1,
     "processing": 0,
-    "queued": 60,
+    "queued": 64,
     "sent": 2,
     "sent_today": 1,
     "skipped": 6,
@@ -41,24 +39,24 @@
   },
   "queue_status": "enqueued",
   "received_count": 4,
-  "report_generated_at": "2026-10-15T17:45:19.103053+00:00",
+  "report_generated_at": "2026-10-15T23:51:57.103935+00:00",
   "schema_version": 1,
   "selected_external_ids": [
-    "7696947046560828686",
-    "7691730352603139329",
-    "7693538721173441806",
-    "7685506230663564562"
+    "7696815102422535445",
+    "7691346934396636468",
+    "7685044831130799367",
+    "7690974075333774612"
   ],
   "selected_source_distribution": {
-    "menezxl9": 1,
-    "rickkzn_": 1,
-    "saylex.aep812": 2
+    "meloaep_": 1,
+    "poppytv_ae": 2,
+    "rickkzn_": 1
   },
   "selected_urls": [
-    "https://www.tiktok.com/@saylex.aep812/video/7696947046560828686",
-    "https://www.tiktok.com/@menezxl9/video/7691730352603139329",
-    "https://www.tiktok.com/@saylex.aep812/video/7693538721173441806",
-    "https://www.tiktok.com/@rickkzn_/video/7685506230663564562"
+    "https://www.tiktok.com/@meloaep_/video/7696815102422535445",
+    "https://www.tiktok.com/@poppytv_ae/video/7691346934396636468",
+    "https://www.tiktok.com/@rickkzn_/video/7685044831130799367",
+    "https://www.tiktok.com/@poppytv_ae/video/7690974075333774612"
   ],
-  "skipped_existing_count": 13
+  "skipped_existing_count": 31
 }
