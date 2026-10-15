@@ -73,15 +73,21 @@ class ProviderClientTests(unittest.TestCase):
         with self.assertRaises(clients.ProviderClientError) as caught:
             clients.provider_config("openrouter", environ={})
         self.assertEqual(caught.exception.code, "openrouter_api_key_missing")
+        with self.assertRaises(clients.ProviderClientError) as caught:
+            clients.provider_config("mistral", environ={"MISTRAL_API_KEY": "m" * 32})
+        self.assertEqual(caught.exception.code, "provider_not_enabled")
 
     def test_current_provider_defaults_are_explicit_and_configurable(self):
         groq = clients.provider_config("groq", environ={"GROQ_API_KEY": "g" * 32})
         self.assertEqual(groq.model, "openai/gpt-oss-20b")
         self.assertEqual(groq.url, "https://api.groq.com/openai/v1/chat/completions")
 
-        mistral = clients.provider_config("mistral", environ={"MISTRAL_API_KEY": "s" * 32})
-        self.assertEqual(mistral.model, "mistral-small-latest")
-        self.assertEqual(mistral.url, "https://api.mistral.ai/v1/chat/completions")
+        workers_ai = clients.provider_config("workers_ai", environ={
+            "AGENT_API_TOKEN": "t" * 40,
+            "AGENT_API_BASE_URL": "https://rubika-agent.example.workers.dev",
+        })
+        self.assertEqual(workers_ai.model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+        self.assertEqual(workers_ai.url, "https://rubika-agent.example.workers.dev/api/brain/ai-provider/invoke")
 
         openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
         self.assertEqual(openrouter.model, "openrouter/free")
@@ -134,21 +140,31 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
 
-    def test_mistral_free_mode_chat_completion_response_is_normalized(self):
+    def test_workers_ai_response_uses_reserved_request_and_authorized_worker_endpoint(self):
         config = clients.ProviderConfig(
-            "mistral", "m" * 32, "mistral-small-latest",
-            "https://api.mistral.ai/v1/chat/completions",
+            "workers_ai", "t" * 40, "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            "https://rubika-agent.example.workers.dev/api/brain/ai-provider/invoke",
         )
         opener = FakeOpener(FakeResponse({
-            "choices": [{"message": {"content": "independent review"}}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19},
+            "ok": True,
+            "provider": "workers_ai",
+            "model": config.model,
+            "text": '{"summary":"safe"}',
         }))
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
-            result = clients.invoke_provider(config, "review request")
-        self.assertEqual(result.text, "independent review")
-        self.assertEqual(result.usage["totalTokenCount"], 19)
+            result = clients.invoke_provider(
+                config, "safe prompt", role="propose_patch",
+                call_id="workers-ai-call-identifier-01",
+            )
+        self.assertEqual(result.text, '{"summary":"safe"}')
+        self.assertEqual(result.provider, "workers_ai")
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
+        body = json.loads(opener.request.data.decode("utf-8"))
+        self.assertEqual(body["provider"], "workers_ai")
+        self.assertEqual(body["role"], "propose_patch")
+        self.assertEqual(body["call_id"], "workers-ai-call-identifier-01")
+        self.assertEqual(body["prompt"], "safe prompt")
 
     def test_openrouter_chat_completion_response_is_normalized(self):
         config = clients.ProviderConfig(
