@@ -1,17 +1,17 @@
 # Multi-provider code-repair request ledger
 
-The durable ledger is used only by the **code-repair workflow**. The intended three-role pipeline is:
-1. **Groq — diagnose:** summarize likely causes from sanitized CI logs and read-only test context.
-2. **Gemini — propose_patch:** use the existing strict repair prompt and allowlisted unified-diff validator.
-3. **OpenRouter free-model router — review_patch:** routes an independent review to an available zero-price model before deterministic checks run.
+The durable ledger is used only by the **code-repair workflow**. The default four-provider ensemble is:
+1. **Groq + Mistral + OpenRouter Free — diagnose in parallel:** collect independent views of sanitized CI logs and read-only test context.
+2. **Gemini — propose:** produce one constrained patch using the existing strict prompt and allowlisted unified-diff validator.
+3. **Mistral + OpenRouter Free — review independently:** both reviewers must approve; a veto, malformed response, or reviewer outage stops promotion.
 
-The roles must use three distinct providers. A reviewer cannot edit code, run tools, authorize deployment, bypass fixed tests, merge a pull request, or publish to Rubika. Cloudflare Workers AI remains separate for its existing unrelated jobs; the code-repair provider module never calls `env.AI.run`.
+This is a cooperative multi-model pipeline, not a single giant model. Each response is untrusted evidence; no model can execute commands or tools. A reviewer cannot authorize deployment, bypass fixed tests, merge a pull request, or publish to Rubika. Cloudflare Workers AI remains separate for its existing unrelated jobs; the code-repair provider module never calls `env.AI.run`.
 
 ## Ledger and budget
 
-All requests must reserve a slot through the authenticated Worker API before contacting a provider, then record the final outcome. The server enforces both a provider-specific limit of **3 reservations per provider per UTC day** and a shared total of **9 reservations per UTC day**. This allows at most three full diagnose/propose/review cycles per day. A reservation counts even when the result is unknown. Requests are never automatically retried.
+All requests must reserve a slot through the authenticated Worker API before contacting a provider, then record the final outcome. The server enforces both a provider-specific limit of **6 reservations per provider per UTC day** and a shared total of **18 reservations per UTC day**. A complete ensemble normally uses six calls (three parallel diagnoses, one proposal, and two reviews), leaving a conservative maximum of three complete repair cycles per day. A reservation counts even when the result is unknown. Requests are never automatically retried.
 
-- `GET /api/brain/ai-provider/status?provider=gemini` (also `groq` or `openrouter`): reports provider usage, shared usage, remaining slots, cooldown, and readiness.
+- `GET /api/brain/ai-provider/status?provider=gemini` (also `groq`, `mistral`, or `openrouter`): reports provider usage, shared usage, remaining slots, cooldown, and readiness.
 - `POST /api/brain/ai-provider/reserve`: accepts `provider`, role (`diagnose`, `propose_patch`, or `review_patch`), a unique `call_id`, and optional `run_id`.
 - `POST /api/brain/ai-provider/finish`: records `succeeded`, `failed`, or `unknown`, plus optional safe error code and token counts.
 
@@ -24,10 +24,11 @@ The accounting client sends only identifiers, role, outcome, safe error code, an
 The multi-AI workflow reads credentials from GitHub Actions secrets; keys must never be committed to the repository or pasted into chat. Required secrets:
 - `GEMINI_API_KEY`
 - `GROQ_API_KEY`
+- `MISTRAL_API_KEY` (Mistral Studio must remain in its no-card Free mode)
 - `OPENROUTER_API_KEY`
 - `AGENT_API_TOKEN` (existing ledger authorization secret)
 
-The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`, `GEMINI_MODEL=gemini-3.8-flash`, and `OPENROUTER_MODEL=openrouter/free`. OpenRouter's `openrouter/free` router selects from zero-price models; the available model can vary between calls, and free capacity and request limits apply. Groq and Gemini also have service-side free-tier limits. The code validates that all three provider credentials exist before reserving or sending any request, so a missing key cannot cause a partial three-role run.
+The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`, `GEMINI_MODEL=gemini-3.8-flash`, `MISTRAL_MODEL=mistral-small-latest`, and `OPENROUTER_MODEL=openrouter/free`. OpenRouter's `openrouter/free` router selects from available zero-price models; the model can vary between calls. Groq, Gemini, and Mistral have their own service-side limits. Mistral documents a no-card Free mode with limited usage: https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key. Configure Mistral in that free mode only. The code validates all four provider credentials before any model request, so a missing key cannot cause a partial run.
 
 ## Fail-closed protections
 
@@ -38,13 +39,14 @@ The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`
 - Proposed patches remain untrusted; the existing fixed checks run in a disposable runner and a human must review the opened PR.
 - Publishing to Rubika remains disabled.
 
-The implementation is introduced in a separate draft PR. Until its review, merge, Worker version rollout and secrets setup are complete, the new three-provider workflow has not made any live model request.
+The implementation is in a separate draft PR. Until its review, merge, Worker version rollout and secrets setup are complete, the four-provider ensemble has not made any live model request.
 
 ## Model identifier maintenance
 
 The default model IDs in the workflow were checked against provider documentation on 2026-10-15:
 - Gemini: `gemini-3.8-flash` — https://ai.google.dev/gemini-api/docs/models
 - Groq: `openai/gpt-oss-20b` — https://console.groq.com/docs/models. The previous `llama-3.3-70b-versatile` model was marked deprecated for free/developer tiers with an August 16, 2026 shutdown date: https://console.groq.com/docs/deprecations
-- OpenRouter: `openrouter/free` — routes to currently available zero-price models: https://openrouter.ai/openrouter/free/. OpenRouter currently documents a free-model limit of 50 requests per day and 20 per minute; available capacity can vary: https://openrouter.ai/pricing/
+- Mistral: `mistral-small-latest` via the no-card Free mode, with limited usage: https://docs.mistral.ai/api/endpoint/chat and https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key
+- OpenRouter: `openrouter/free` — routes to currently available zero-price models: https://openrouter.ai/openrouter/free/. Free-model limits depend on account eligibility and current limits: https://openrouter.ai/pricing/
 
 These values are configurable, not guaranteed permanent. Re-check provider/model availability before the first live request; never use that check as permission to create or spend on an API account automatically.
