@@ -46,8 +46,9 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn('"$AGENT_API_BASE_URL/health"', workflow)
         self.assertIn('payload.get("database") != "connected"', workflow)
         # A rate-limited community mirror must not permanently block the five-hour run.
-        self.assertIn("packages.termux.dev/apt/termux-main", workflow)
-        self.assertIn("packages-cf.termux.dev/apt/termux-main", workflow)
+        self.assertIn("packages.termux.dev", workflow)
+        self.assertIn("packages-cf.termux.dev", workflow)
+        self.assertIn("mirror/apt/termux-main stable main", workflow)
         self.assertIn("Termux package index could not be refreshed from official mirrors.", workflow)
 
 if __name__ == "__main__":
