@@ -73,7 +73,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
 
 
 class MultiAIEnsembleFlowTests(unittest.TestCase):
-    def _run_flow(self, review_decisions):
+    def _run_flow(self, review_decisions, proposal_patch=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             failure_log = root / "failure.log"
@@ -81,14 +81,15 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
             report_path = root / "report.json"
             patch_path = root / "proposal.diff"
             calls = []
-            proposal_patch = (
-                "diff --git a/src/app.py b/src/app.py\n"
-                "--- a/src/app.py\n"
-                "+++ b/src/app.py\n"
-                "@@ -1 +1 @@\n"
-                "-old\n"
-                "+new\n"
-            )
+            if proposal_patch is None:
+                proposal_patch = (
+                    "diff --git a/src/app.py b/src/app.py\n"
+                    "--- a/src/app.py\n"
+                    "+++ b/src/app.py\n"
+                    "@@ -1 +1 @@\n"
+                    "-old\n"
+                    "+new\n"
+                )
             proposal_json = json.dumps({
                 "summary": "Minimal repair",
                 "root_cause": "A synthetic fixture failure",
@@ -166,6 +167,25 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
                 ("openrouter", "review_patch"),
             ],
         )
+
+    def test_oversized_patch_is_preserved_for_human_review_without_reviewer_request(self):
+        oversized_patch = (
+            "diff --git a/src/app.py b/src/app.py\n"
+            "--- a/src/app.py\n"
+            "+++ b/src/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+" + ("x" * (GROQ_MAX_PROMPT_CHARS + 100)) + "\n"
+        )
+        code, report, calls, patch_exists = self._run_flow({}, proposal_patch=oversized_patch)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["status"], "human_review_required")
+        self.assertEqual(report["error_code"], "review_prompt_exceeds_free_plan_budget")
+        self.assertTrue(report["manual_review"])
+        self.assertEqual(report["review"]["decision"], "not_run")
+        self.assertTrue(patch_exists)
+        self.assertNotIn(("groq", "review_patch"), calls)
+        self.assertNotIn(("openrouter", "review_patch"), calls)
 
     def test_one_reviewer_veto_blocks_patch_promotion(self):
         code, report, calls, patch_exists = self._run_flow({"groq": "reject"})
