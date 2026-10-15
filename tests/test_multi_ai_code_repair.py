@@ -20,12 +20,11 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             report_path = root / "report.json"
             patch_path = root / "proposal.diff"
             environment = {
-                "CODE_AI_DIAGNOSER_PROVIDERS": "groq,mistral,openrouter",
-                "CODE_AI_PROPOSER_PROVIDER": "gemini",
-                "CODE_AI_REVIEWER_PROVIDERS": "mistral,openrouter",
+                "CODE_AI_DIAGNOSER_PROVIDERS": "groq,openrouter",
+                "CODE_AI_PROPOSER_PROVIDER": "workers_ai",
+                "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
                 "GROQ_API_KEY": "",
                 "GEMINI_API_KEY": "g" * 32,
-                "MISTRAL_API_KEY": "m" * 32,
                 "OPENROUTER_API_KEY": "a" * 32,
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
@@ -52,8 +51,8 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             report_path = root / "report.json"
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,groq",
-                "CODE_AI_PROPOSER_PROVIDER": "gemini",
-                "CODE_AI_REVIEWER_PROVIDERS": "mistral,openrouter",
+                "CODE_AI_PROPOSER_PROVIDER": "workers_ai",
+                "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
                 multi, "provider_config"
@@ -102,7 +101,7 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
                 if role == "diagnose":
                     return ProviderResult(provider, provider + "-test-model", provider + " diagnosis", {})
                 if role == "propose_patch":
-                    return ProviderResult(provider, "gemini-test-model", proposal_json, {})
+                    return ProviderResult(provider, "workers-ai-test-model", proposal_json, {})
                 decision = review_decisions.get(provider, "approve")
                 review_json = json.dumps({
                     "decision": decision,
@@ -112,12 +111,11 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
                 return ProviderResult(provider, provider + "-test-model", review_json, {})
 
             environment = {
-                "CODE_AI_DIAGNOSER_PROVIDERS": "groq,mistral,openrouter",
-                "CODE_AI_PROPOSER_PROVIDER": "gemini",
-                "CODE_AI_REVIEWER_PROVIDERS": "mistral,openrouter",
+                "CODE_AI_DIAGNOSER_PROVIDERS": "groq,openrouter",
+                "CODE_AI_PROPOSER_PROVIDER": "workers_ai",
+                "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
                 "GEMINI_API_KEY": "g" * 32,
                 "GROQ_API_KEY": "r" * 32,
-                "MISTRAL_API_KEY": "m" * 32,
                 "OPENROUTER_API_KEY": "o" * 32,
             }
             with (
@@ -147,12 +145,12 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
             report = json.loads(report_path.read_text(encoding="utf-8"))
             return code, report, calls, patch_path.exists()
 
-    def test_three_diagnoses_one_proposer_and_two_reviewers_are_required(self):
+    def test_two_diagnoses_one_proposer_and_two_reviewers_are_required(self):
         code, report, calls, patch_exists = self._run_flow({})
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "patch_ready")
         self.assertTrue(report["review"]["unanimous"])
-        self.assertEqual(report["diagnostics_used"], 3)
+        self.assertEqual(report["diagnostics_used"], 2)
         self.assertEqual(report["reviewers_approved"], 2)
         self.assertTrue(patch_exists)
         self.assertEqual(len(calls), 6)
@@ -160,16 +158,15 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
             calls,
             [
                 ("groq", "diagnose"),
-                ("mistral", "diagnose"),
                 ("openrouter", "diagnose"),
-                ("gemini", "propose_patch"),
-                ("mistral", "review_patch"),
+                ("workers_ai", "propose_patch"),
+                ("groq", "review_patch"),
                 ("openrouter", "review_patch"),
             ],
         )
 
     def test_one_reviewer_veto_blocks_patch_promotion(self):
-        code, report, calls, patch_exists = self._run_flow({"mistral": "reject"})
+        code, report, calls, patch_exists = self._run_flow({"groq": "reject"})
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "human_review_required")
         self.assertEqual(report["review"]["decision"], "reject")
