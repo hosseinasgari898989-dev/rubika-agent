@@ -265,6 +265,7 @@ def call_provider_with_ledger(
     prompt: str,
     run_id: str | None = None,
     max_output_tokens: int = 2048,
+    timeout_seconds: int = 45,
     usage_client: CodeAIUsageLedger | None = None,
     on_reserved: Callable[[], None] | None = None,
 ) -> ProviderResult:
@@ -281,7 +282,12 @@ def call_provider_with_ledger(
     if on_reserved is not None:
         on_reserved()
     try:
-        result = invoke_provider(config, prompt, max_output_tokens=max_output_tokens)
+        result = invoke_provider(
+            config,
+            prompt,
+            max_output_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds,
+        )
     except ProviderClientError as exc:
         outcome = exc.outcome
         error_code = "rate_limited" if exc.code == "provider_http_429" else (
