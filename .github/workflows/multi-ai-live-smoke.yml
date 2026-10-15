@@ -134,7 +134,13 @@ jobs:
                   # Fail closed; do not call another provider when ledger state is uncertain.
                   break
               except ProviderClientError as exc:
-                  row = {"provider": provider, "status": "provider_error", "error_code": exc.code}
+                  row = {
+                      "provider": provider,
+                      "status": "provider_error",
+                      "error_code": exc.code,
+                      "outcome": exc.outcome,
+                      "diagnostics": dict(exc.diagnostics),
+                  }
                   results.append(row)
                   print(json.dumps(row, sort_keys=True))
                   if exc.code == "usage_ledger_finish_failed":
@@ -161,6 +167,10 @@ jobs:
                       f" ({row.get('error_code', 'no error code')}) | {row.get('response_chars', 0)}"
                       f" | {usage.get('totalTokenCount', 0)} |\n"
                   )
+                  diagnostics = row.get("diagnostics")
+                  if diagnostics:
+                      safe_diagnostics = json.dumps(diagnostics, sort_keys=True)[:800]
+                      handle.write(f"- {row['provider']} safe diagnostics: `{safe_diagnostics}`\n")
 
           if len(results) != len(providers) or successes != len(providers):
               sys.exit(1)
