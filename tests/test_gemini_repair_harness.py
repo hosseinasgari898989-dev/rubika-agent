@@ -5,6 +5,7 @@ temporary Git repository. They never call Gemini, GitHub, Cloudflare, or Rubika.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import runpy
@@ -14,7 +15,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent.brain import gemini_code_agent as gemini
+# Load this standard-library-only module directly. Importing agent.brain would
+# execute its package initializer and unnecessarily require every runtime dependency.
+_MODULE_PATH = Path(__file__).resolve().parents[1] / "agent/brain/gemini_code_agent.py"
+_MODULE_SPEC = importlib.util.spec_from_file_location(
+    "gemini_code_agent_harness_target", _MODULE_PATH
+)
+if _MODULE_SPEC is None or _MODULE_SPEC.loader is None:
+    raise ImportError("Could not load the Gemini repair engine for the offline harness")
+gemini = importlib.util.module_from_spec(_MODULE_SPEC)
+_MODULE_SPEC.loader.exec_module(gemini)
 
 
 REPAIR_PATCH = """diff --git a/agent/discovery/tavily.py b/agent/discovery/tavily.py
