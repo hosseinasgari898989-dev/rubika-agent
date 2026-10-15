@@ -14,7 +14,9 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
+
+from .gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
 
 DEFAULT_MODEL = "gemini-3.8-flash"
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -419,6 +421,82 @@ def call_gemini(*, api_key: str, model: str, prompt: str, timeout_seconds: int =
     return proposal, counts
 
 
+
+def call_gemini_with_ledger(
+    *,
+    api_key: str,
+    model: str,
+    prompt: str,
+    required: bool,
+    run_id: str | None = None,
+    usage_client: CodeAIUsageLedger | None = None,
+    on_reserved: Callable[[], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Reserve before a real Gemini request, then persist its outcome fail-closed."""
+    if not required:
+        if on_reserved is not None:
+            on_reserved()
+        return call_gemini(api_key=api_key, model=model, prompt=prompt)
+
+    ledger = usage_client or CodeAIUsageLedger.from_env()
+    reservation = ledger.reserve(
+        provider="gemini",
+        role="propose_patch",
+        run_id=run_id,
+    )
+    call_id = reservation.get("call_id")
+    if not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", call_id):
+        raise UsageLedgerError("usage_ledger_reservation_unconfirmed")
+
+    if on_reserved is not None:
+        on_reserved()
+    try:
+        proposal, usage = call_gemini(api_key=api_key, model=model, prompt=prompt)
+    except GeminiAssistantError as exc:
+        code = str(exc)
+        if code == "gemini_http_429":
+            outcome, ledger_error = "failed", "rate_limited"
+        elif code in {"gemini_network_error", "gemini_response_invalid_json"}:
+            # The request may have reached Google even if no valid response arrived.
+            outcome, ledger_error = "unknown", "provider_result_unknown"
+        else:
+            outcome, ledger_error = "failed", code
+        try:
+            ledger.finish(
+                provider="gemini",
+                call_id=call_id,
+                outcome=outcome,
+                error_code=ledger_error,
+            )
+        except UsageLedgerError:
+            raise GeminiAssistantError("usage_ledger_finish_failed") from None
+        raise
+    except Exception:
+        try:
+            ledger.finish(
+                provider="gemini",
+                call_id=call_id,
+                outcome="unknown",
+                error_code="provider_internal_error",
+            )
+        except UsageLedgerError:
+            raise GeminiAssistantError("usage_ledger_finish_failed") from None
+        raise GeminiAssistantError("gemini_internal_error") from None
+
+    try:
+        ledger.finish(
+            provider="gemini",
+            call_id=call_id,
+            outcome="succeeded",
+            usage=usage,
+        )
+    except UsageLedgerError:
+        # Never allow a proposed patch to progress if accounting the model request
+        # failed; its cost/outcome would otherwise be untracked.
+        raise GeminiAssistantError("usage_ledger_finish_failed") from None
+    return proposal, usage
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -499,11 +577,20 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         context = collect_code_context(root, selected)
         readonly_test_context = collect_readonly_test_context(root, readonly_tests)
-        report["request_sent"] = True
-        proposal, usage = call_gemini(
+        ledger_required = os.getenv("GEMINI_LEDGER_REQUIRED", "").strip().lower() == "true"
+        run_id = None
+        if os.getenv("GITHUB_RUN_ID", "").strip():
+            run_id = os.getenv("GITHUB_RUN_ID", "").strip()
+            attempt = os.getenv("GITHUB_RUN_ATTEMPT", "").strip()
+            if attempt.isdigit():
+                run_id = run_id + "_" + attempt
+        proposal, usage = call_gemini_with_ledger(
             api_key=key,
             model=report["model"],
             prompt=build_prompt(log, context, selected, readonly_test_context),
+            required=ledger_required,
+            run_id=run_id,
+            on_reserved=lambda: report.__setitem__("request_sent", True),
         )
         report["usage"] = usage
         for field in ("summary", "root_cause", "confidence", "manual_review"):
@@ -518,6 +605,16 @@ def main(argv: list[str] | None = None) -> int:
             args.patch_path.parent.mkdir(parents=True, exist_ok=True)
             args.patch_path.write_text(patch, encoding="utf-8")
             report.update(ok=True, status="patch_ready", patch_path=str(args.patch_path), patch_files=changed)
+    except UsageLedgerError as exc:
+        blocked = exc.code in {
+            "code_ai_daily_budget_exhausted",
+            "code_ai_provider_cooldown_active",
+            "code_ai_provider_not_enabled",
+        }
+        report.update(
+            status="usage_ledger_blocked" if blocked else "usage_ledger_unavailable",
+            error_code=exc.code,
+        )
     except GeminiAssistantError as exc:
         report.update(status="assistant_unavailable", error_code=str(exc))
     except PatchValidationError as exc:
