@@ -952,7 +952,8 @@ async function superviseError(env, body) {
 }
 
 
-const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 5 });
+const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 5, groq: 5, anthropic: 5 });
+const CODE_AI_TOTAL_DAILY_LIMIT = 5;
 const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch"]);
 const CODE_AI_MAX_COOLDOWN_SECONDS = 86400;
 const CODE_AI_DEFAULT_COOLDOWN_SECONDS = 300;
@@ -987,31 +988,43 @@ function optionalCodeAiTokenCount(body, key) {
 }
 
 async function codeAiProviderSnapshot(env, provider, usageDay = new Date().toISOString().slice(0, 10)) {
-  const [usage, state] = await Promise.all([
+  const [usage, state, totalUsage] = await Promise.all([
     env.DB.prepare(
       "SELECT COUNT(*) AS request_count FROM ai_provider_calls WHERE usage_day = ? AND provider = ?"
     ).bind(usageDay, provider).first(),
     env.DB.prepare(
       "SELECT cooldown_until, last_error_code FROM ai_provider_state WHERE provider = ?"
-    ).bind(provider).first()
+    ).bind(provider).first(),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS request_count FROM ai_provider_calls WHERE usage_day = ?"
+    ).bind(usageDay).first()
   ]);
   const callsUsed = Number(usage && usage.request_count || 0);
+  const totalCallsUsed = Number(totalUsage && totalUsage.request_count || 0);
   const dailyLimit = CODE_AI_PROVIDER_LIMITS[provider];
   const now = new Date().toISOString();
   const cooldownActive = Boolean(state && typeof state.cooldown_until === "string" &&
     state.cooldown_until > now);
-  const budgetAvailable = callsUsed < dailyLimit;
+  const providerBudgetAvailable = callsUsed < dailyLimit;
+  const totalBudgetAvailable = totalCallsUsed < CODE_AI_TOTAL_DAILY_LIMIT;
+  const budgetAvailable = providerBudgetAvailable && totalBudgetAvailable;
   return {
     provider,
     usage_day: usageDay,
     calls_used: callsUsed,
     daily_limit: dailyLimit,
-    remaining: Math.max(0, dailyLimit - callsUsed),
+    remaining: Math.max(0, Math.min(dailyLimit - callsUsed, CODE_AI_TOTAL_DAILY_LIMIT - totalCallsUsed)),
+    total_calls_used: totalCallsUsed,
+    total_daily_limit: CODE_AI_TOTAL_DAILY_LIMIT,
+    total_remaining: Math.max(0, CODE_AI_TOTAL_DAILY_LIMIT - totalCallsUsed),
     cooldown_until: state ? state.cooldown_until : null,
     cooldown_active: cooldownActive,
     last_error_code: state && cooldownActive ? state.last_error_code : null,
     ready: !cooldownActive && budgetAvailable,
-    status: cooldownActive ? "cooldown_active" : budgetAvailable ? "ready" : "daily_budget_exhausted"
+    status: cooldownActive ? "cooldown_active"
+      : !totalBudgetAvailable ? "global_daily_budget_exhausted"
+      : !providerBudgetAvailable ? "provider_daily_budget_exhausted"
+      : "ready"
   };
 }
 
@@ -1048,12 +1061,14 @@ async function reserveCodeAiProviderCall(env, body) {
       "INSERT INTO ai_provider_calls (call_id, usage_day, provider, role, run_id, status, started_at) " +
       "SELECT ?, ?, ?, ?, ?, 'reserved', ? " +
       "WHERE (SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ? AND provider = ?) < ? " +
+      "AND (SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ?) < ? " +
       "AND NOT EXISTS (SELECT 1 FROM ai_provider_state WHERE provider = ? AND cooldown_until > ?) " +
       "ON CONFLICT(call_id) DO NOTHING " +
       "RETURNING call_id, usage_day, provider, role, status, started_at"
     ).bind(
       callId, usageDay, provider, role, runId, now,
-      usageDay, provider, CODE_AI_PROVIDER_LIMITS[provider], provider, now
+      usageDay, provider, CODE_AI_PROVIDER_LIMITS[provider],
+      usageDay, CODE_AI_TOTAL_DAILY_LIMIT, provider, now
     ).first();
 
     if (reservation) {
@@ -1072,7 +1087,8 @@ async function reserveCodeAiProviderCall(env, body) {
     if (snapshot.cooldown_active) {
       return json({ ok: false, error: "code_ai_provider_cooldown_active", ...snapshot }, 429);
     }
-    if (snapshot.calls_used >= snapshot.daily_limit) {
+    if (snapshot.calls_used >= snapshot.daily_limit ||
+        snapshot.total_calls_used >= snapshot.total_daily_limit) {
       return json({ ok: false, error: "code_ai_daily_budget_exhausted", ...snapshot }, 429);
     }
     return json({ ok: false, error: "code_ai_reservation_denied", ...snapshot }, 503);
