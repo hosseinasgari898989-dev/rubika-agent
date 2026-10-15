@@ -285,7 +285,12 @@ jobs:
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           if payload.get("ok") is not True:
               raise SystemExit("queue_intake_not_confirmed")
-          for key in ("received_count", "inserted_count", "duplicate_count", "invalid_count"):
+          for key in (
+              "received_count", "inserted_count", "duplicate_count", "invalid_count",
+              "skipped_existing_count", "discovered_candidate_count",
+              "filter_eligible_count", "filter_rejected_count",
+              "duplicate_within_report_count",
+          ):
               value = payload.get(key, 0)
               if type(value) is not int or value < 0:
                   value = 0
@@ -317,11 +322,27 @@ jobs:
               "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "report_generated_at": report.get("generated_at"),
               "queue_status": queue_result.get("status"),
-              "inserted_count": queue_result.get("inserted_count", 0),
+              "discovered_candidate_count": queue_result.get("discovered_candidate_count", 0),
               "candidate_pool_count": queue_result.get("candidate_pool_count", 0),
+              "filter_eligible_count": queue_result.get("filter_eligible_count", queue_result.get("candidate_pool_count", 0)),
+              "filter_rejected_count": queue_result.get("filter_rejected_count", 0),
+              "filter_rejected_by_reason": queue_result.get("filter_rejected_by_reason", {}),
+              "filter_rejected_by_source": queue_result.get("filter_rejected_by_source", {}),
+              "filter_input_by_source": queue_result.get("filter_input_by_source", {}),
+              "duplicate_within_report_count": queue_result.get("duplicate_within_report_count", 0),
+              "duplicate_count": queue_result.get("duplicate_count", 0),
+              "skipped_existing_count": queue_result.get("skipped_existing_count", 0),
+              "invalid_count": queue_result.get("invalid_count", 0),
+              "received_count": queue_result.get("received_count", 0),
+              "inserted_count": queue_result.get("inserted_count", 0),
+              "candidate_pool_size": queue_result.get("candidate_pool_count", 0),
+              "queue_counts": queue_result.get("queue_counts", {}),
               "selected_source_distribution": queue_result.get("selected_source_distribution", {}),
               "selected_external_ids": [
                   str(row.get("external_id")) for row in selected if isinstance(row, dict)
+              ],
+              "selected_urls": [
+                  str(row.get("url")) for row in selected if isinstance(row, dict) and row.get("url")
               ],
               "mode": "metadata_only_no_download_no_publish"
           }
@@ -410,8 +431,11 @@ jobs:
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
             echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
+            echo "- Live candidates evaluated by intake filter: ${{ steps.queue_intake.outputs.discovered_candidate_count || 'n/a' }}"
+            echo "- Eligible candidates after content/edit/freshness checks: ${{ steps.queue_intake.outputs.filter_eligible_count || 'n/a' }}"
+            echo "- Rejected by filter: ${{ steps.queue_intake.outputs.filter_rejected_count || 'n/a' }}"
             echo "- Newly inserted into queue: ${{ steps.queue_intake.outputs.inserted_count || 'n/a' }}"
-            echo "- Duplicates skipped: ${{ steps.queue_intake.outputs.duplicate_count || 'n/a' }}"
+            echo "- Duplicates skipped in D1/ledger/API: ${{ steps.queue_intake.outputs.duplicate_count || 'n/a' }} API duplicates; ${{ steps.queue_intake.outputs.skipped_existing_count || 'n/a' }} already-existing"
             echo "- This workflow never downloads media or publishes to Rubika"
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ -s "$RUNNER_TEMP/queue-intake-result.json" ]]; then
