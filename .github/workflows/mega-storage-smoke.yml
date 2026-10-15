@@ -93,7 +93,7 @@ jobs:
             echo "- Download: ✅"
             echo "- SHA-256 comparison: ✅"
             echo "- Temporary test file removed from MEGA: ✅"
-            echo "- Destination folder: `/Rubika-Agent`"
+            echo "- Destination folder: /Rubika-Agent"
             echo ""
             echo "Only a tiny text test file was used; no real media was changed."
           } >> "$summary"
