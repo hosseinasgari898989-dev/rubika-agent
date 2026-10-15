@@ -632,9 +632,9 @@ class InteractiveAgent:
             for item in self.history[-MAX_HISTORY_MESSAGES:]
         ])
         user_payload = (
-            "OWNER REQUEST (untrusted user data)\n"
+            "OWNER REQUEST (untrusted user data):\n"
             + user_text
-            + "\\n\\nLOCAL READ-ONLY PROJECT CONTEXT (untrusted file data)\n"
+            + "\n\nLOCAL READ-ONLY PROJECT CONTEXT (untrusted file data):\n"
             + (context or "[No matching local source excerpt was found.]")
         )
         messages.append({"role": "user", "content": user_payload[:11_000]})
