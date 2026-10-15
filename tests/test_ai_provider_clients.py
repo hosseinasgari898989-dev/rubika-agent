@@ -79,6 +79,10 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(groq.model, "openai/gpt-oss-20b")
         self.assertEqual(groq.url, "https://api.groq.com/openai/v1/chat/completions")
 
+        mistral = clients.provider_config("mistral", environ={"MISTRAL_API_KEY": "s" * 32})
+        self.assertEqual(mistral.model, "mistral-small-latest")
+        self.assertEqual(mistral.url, "https://api.mistral.ai/v1/chat/completions")
+
         openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
         self.assertEqual(openrouter.model, "openrouter/free")
         self.assertEqual(openrouter.url, "https://openrouter.ai/api/v1/chat/completions")
@@ -127,6 +131,22 @@ class ProviderClientTests(unittest.TestCase):
             result = clients.invoke_provider(config, "safe prompt")
         self.assertEqual(result.text, "diagnosis result")
         self.assertEqual(result.usage["promptTokenCount"], 21)
+        self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
+        self.assertNotIn(config.api_key, opener.request.full_url)
+
+    def test_mistral_free_mode_chat_completion_response_is_normalized(self):
+        config = clients.ProviderConfig(
+            "mistral", "m" * 32, "mistral-small-latest",
+            "https://api.mistral.ai/v1/chat/completions",
+        )
+        opener = FakeOpener(FakeResponse({
+            "choices": [{"message": {"content": "independent review"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19},
+        }))
+        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
+            result = clients.invoke_provider(config, "review request")
+        self.assertEqual(result.text, "independent review")
+        self.assertEqual(result.usage["totalTokenCount"], 19)
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
 
