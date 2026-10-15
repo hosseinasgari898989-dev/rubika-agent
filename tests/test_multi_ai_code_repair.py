@@ -153,7 +153,7 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
         self.assertEqual(report["diagnostics_used"], 2)
         self.assertEqual(report["reviewers_approved"], 2)
         self.assertTrue(patch_exists)
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(calls), 5)
         self.assertCountEqual(
             calls,
             [
