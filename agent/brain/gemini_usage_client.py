@@ -145,6 +145,7 @@ class CodeAIUsageLedger:
         outcome: str,
         error_code: str | None = None,
         usage: Mapping[str, int] | None = None,
+        retry_after_seconds: int | None = None,
     ) -> dict[str, Any]:
         if provider not in ALLOWED_PROVIDERS:
             raise UsageLedgerError("code_ai_provider_not_enabled")
@@ -176,7 +177,12 @@ class CodeAIUsageLedger:
             if type(value) is int and 0 <= value <= 10_000_000:
                 payload[field] = value
         if clean_error in {"rate_limited", "quota_exhausted"}:
-            payload["retry_after_seconds"] = 300
+            retry_after = retry_after_seconds if type(retry_after_seconds) is int else 300
+            if not 1 <= retry_after <= 86400:
+                raise UsageLedgerError("code_ai_retry_after_invalid")
+            payload["retry_after_seconds"] = retry_after
+        elif retry_after_seconds is not None:
+            raise UsageLedgerError("code_ai_retry_after_invalid")
 
         result = self._post("/api/brain/ai-provider/finish", payload)
         if result.get("call_id") != call_id or result.get("outcome") != outcome:
