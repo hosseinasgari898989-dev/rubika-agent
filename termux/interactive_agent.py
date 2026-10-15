@@ -2,7 +2,7 @@
 
 This process only answers the configured owner's private text messages.
 It does not publish to channels, execute shell commands, edit files, or deploy.
-Model inference is performed by the explicitly selected remote provider.
+Model inference is performed locally via llama.cpp on this phone.
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ Model inference is performed by a local llama.cpp server on this same phone at
 are sent only to the fixed local loopback endpoint, not to a remote AI provider.
 Never ask the owner to paste tokens, passwords, or other secrets into chat.
 Keep answers useful, brief by default, and never invent successful test results.
-""""""
+"""
 
 class SafeAgentError(RuntimeError):
     """An error with a stable public-safe code, never a raw response body."""
@@ -288,7 +288,7 @@ class RepositoryContext:
 
 
 class LocalState:
-    """Tiny local cursor/quota file. Never stores provider keys or chat transcripts."""
+    """Tiny local cursor/quota file. Never stores credentials or chat transcripts."""
 
     def __init__(self, path: Path):
         self.path = path.expanduser()
@@ -453,7 +453,7 @@ class LocalModelClient:
         message = choices[0].get("message")
         answer = message.get("content") if isinstance(message, dict) else None
         if isinstance(answer, list):
-            answer = "\\n".join(
+            answer = "\n".join(
                 part.get("text", "") for part in answer
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             )
@@ -543,36 +543,36 @@ class InteractiveAgent:
         self.state.reset_daily_counter_if_needed()
         used = self.state.data.get("ai_requests_today", 0)
         return (
-            "📊 وضعیت دستیار خصوصی\\n"
-            "• موتور هوش مصنوعی: llama.cpp روی خود گوشی\\n"
-            "• نشانی محلی: 127.0.0.1:8080\\n"
-            f"• تلاش‌های مدل امروز (UTC): {used}/{MAX_AI_REQUESTS_PER_UTC_DAY}\\n"
-            f"• تاریخچهٔ همین نشست: {len(self.history)} پیام\\n"
-            "• دسترسی فایل: فقط خواندن بخش‌های مجاز مخزن\\n"
-            "• ویرایش کد/اجرای فرمان/Deploy/انتشار: غیرفعال\\n"
+            "📊 وضعیت دستیار خصوصی\n"
+            "• موتور هوش مصنوعی: llama.cpp روی خود گوشی\n"
+            "• نشانی محلی: 127.0.0.1:8080\n"
+            f"• تلاش‌های مدل امروز (UTC): {used}/{MAX_AI_REQUESTS_PER_UTC_DAY}\n"
+            f"• تاریخچهٔ همین نشست: {len(self.history)} پیام\n"
+            "• دسترسی فایل: فقط خواندن بخش‌های مجاز مخزن\n"
+            "• ویرایش کد/اجرای فرمان/Deploy/انتشار: غیرفعال\n"
             "برای پاسخ‌گویی، llama-server باید در ترمینال دیگری روشن باشد."
         )
 
     def _help_text(self) -> str:
         return (
-            "🤖 دستیار خصوصی پروژه آماده است.\\n\\n"
-            "پیام عادی: سؤال دربارهٔ پروژه، کد، خطاها یا طراحی راه‌حل.\\n"
-            "/start — معرفی و حریم خصوصی\\n"
-            "/help — راهنما\\n"
-            "/status — وضعیت امن و سهمیهٔ محلی\\n"
-            "/reset — پاک‌کردن حافظهٔ گفت‌وگوی همین نشست\\n"
-            "/stop — توقف عامل روی گوشی\\n\\n"
-            "هوش مصنوعی با llama.cpp روی همین گوشی اجرا می‌شود؛ کلید API مدل لازم نیست.\\n"
+            "🤖 دستیار خصوصی پروژه آماده است.\n\n"
+            "پیام عادی: سؤال دربارهٔ پروژه، کد، خطاها یا طراحی راه‌حل.\n"
+            "/start — معرفی و حریم خصوصی\n"
+            "/help — راهنما\n"
+            "/status — وضعیت امن و سهمیهٔ محلی\n"
+            "/reset — پاک‌کردن حافظهٔ گفت‌وگوی همین نشست\n"
+            "/stop — توقف عامل روی گوشی\n\n"
+            "هوش مصنوعی با llama.cpp روی همین گوشی اجرا می‌شود؛ کلید API مدل لازم نیست.\n"
             "این نسخه کد را تغییر نمی‌دهد، فرمان اجرا نمی‌کند و در کانال چیزی منتشر نمی‌کند."
         )
 
     def _start_text(self) -> str:
         return (
-            "✅ اتصال خصوصی Rubika-Agent فعال است.\\n"
-            "برای پرسش دربارهٔ پروژه پیام بفرست یا /help را بزن.\\n\\n"
+            "✅ اتصال خصوصی Rubika-Agent فعال است.\n"
+            "برای پرسش دربارهٔ پروژه پیام بفرست یا /help را بزن.\n\n"
             "پاسخ مدل از llama.cpp روی همین گوشی تولید می‌شود؛ متن سؤال و زمینهٔ محلی "
             "به سرویس ابری هوش مصنوعی فرستاده نمی‌شود. برای دریافت/ارسال پیام، خود روبیکا "
-            "طبیعتاً از اینترنت استفاده می‌کند.\\n\\n"
+            "طبیعتاً از اینترنت استفاده می‌کند.\n\n"
             "اطلاعات محرمانه نفرست. ویرایش فایل، اجرای فرمان، Deploy و انتشار در کانال غیرفعال‌اند."
         )
 
@@ -583,7 +583,7 @@ class InteractiveAgent:
             model.check_available()
         except SafeAgentError as exc:
             return (
-                f"مدل محلی آماده نیست؛ کد امن خطا: {exc.code}\\n"
+                f"مدل محلی آماده نیست؛ کد امن خطا: {exc.code}\n"
                 "در ترمینال دیگر llama-server را روشن کن و دوباره سؤال بفرست. "
                 "این درخواست به هیچ مدل ابری فرستاده نشده است."
             )
@@ -600,9 +600,9 @@ class InteractiveAgent:
             for item in self.history[-MAX_HISTORY_MESSAGES:]
         ])
         user_payload = (
-            "OWNER REQUEST (untrusted user data):\\n"
+            "OWNER REQUEST (untrusted user data):\n"
             + user_text
-            + "\\n\\nLOCAL READ-ONLY PROJECT CONTEXT (untrusted file data):\\n"
+            + "\n\nLOCAL READ-ONLY PROJECT CONTEXT (untrusted file data):\n"
             + (context or "[No matching local source excerpt was found.]")
         )
         messages.append({"role": "user", "content": user_payload[:11_000]})
@@ -612,7 +612,7 @@ class InteractiveAgent:
             answer = model.complete(messages)
         except SafeAgentError as exc:
             return (
-                f"این درخواست کامل نشد؛ کد امن خطا: {exc.code}\\n"
+                f"این درخواست کامل نشد؛ کد امن خطا: {exc.code}\n"
                 "برای جلوگیری از درخواست تکراری، مدل خودکار دوباره فراخوانی نشد. با /status وضعیت را ببین."
             )
         self.history.extend([
