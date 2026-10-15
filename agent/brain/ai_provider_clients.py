@@ -142,6 +142,10 @@ def _safe_diagnostic_text(value: str) -> str:
         r"\1[redacted]",
         text,
     )
+    text = re.sub(r"(?i)([?&](?:key|token|signature|auth|password|secret)=)[^&\s]+",
+                  r"\1[redacted]", text)
+    text = re.sub(r"(https?://[^\s?]+)\?[^\s]+",
+                  r"\1?[redacted-query]", text)
     return text[:240]
 
 
@@ -186,7 +190,7 @@ def _provider_http_diagnostics(exc: urllib.error.HTTPError, provider: str) -> di
             # when the HTTP Retry-After header is absent.
             delay = item.get("retryDelay")
             if isinstance(delay, str):
-                match = re.fullmatch(r"(\\d+(?:\\.\\d+)?)s", delay.strip())
+                match = re.fullmatch(r"(\d+(?:\.\d+)?)s", delay.strip())
                 if match:
                     try:
                         seconds = int(float(match.group(1)))
