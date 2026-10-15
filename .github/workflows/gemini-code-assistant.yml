@@ -37,6 +37,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          AI_FREE_TIER_APPROVED: ${{ vars.RUBIKA_AGENT_AI_FREE_TIER_APPROVED }}
         shell: bash
         run: |
           set -euo pipefail
@@ -46,6 +47,12 @@ jobs:
           if [[ "$failed_sha" != "$current_sha" ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             echo "Skipped: main has advanced since the failed run; no AI provider request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "${AI_FREE_TIER_APPROVED:-}" != "true" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped: the owner has not confirmed provider free-tier/billing settings; no AI provider request was sent." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
