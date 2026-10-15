@@ -20,21 +20,6 @@ class FakeStatement {
     return this;
   }
   async first() {
-    if (this.sql.startsWith("INSERT INTO brain_events") && this.sql.includes("ai_supervisor_reserved")) {
-      const [detailsJson, start, end, limit] = this.values;
-      const reserved = this.db.events.filter(event => {
-        const code = event.code || (event.values && event.sql && event.sql.includes("ai_supervisor_reserved") ? "ai_supervisor_reserved" : "");
-        const createdAt = event.created_at || new Date().toISOString();
-        return code === "ai_supervisor_reserved" && createdAt >= start && createdAt < end;
-      }).length;
-      if (reserved >= limit) return null;
-      const id = this.db.events.length + 1;
-      this.db.events.push({
-        id, code: "ai_supervisor_reserved", created_at: new Date().toISOString(),
-        details_json: detailsJson, sql: this.sql, values: this.values,
-      });
-      return { id };
-    }
     if (this.sql.startsWith("INSERT INTO ai_usage_daily")) {
       const [day] = this.values;
       const current = this.db.aiUsageDaily.get(day) || 0;
@@ -646,131 +631,13 @@ function makeTranslationAI(response = "ماب انترتینمنت خبر رسم
 
 
 
-// The diagnostic helper is advisory only: it never gets tools, credentials, URLs,
-// media bytes, or authority to publish/delete/change configuration.
-function makeSupervisorAI(response) {
-  return {
-    run: async (model, input) => {
-      assert.equal(model, "@cf/meta/llama-3.1-8b-instruct-fast");
-      assert.equal(input.temperature, 0);
-      assert.equal(input.max_tokens, 220);
-      assert.equal(Array.isArray(input.messages), true);
-      const prompt = input.messages.map(message => message.content).join("\\n");
-      assert.equal(prompt.includes("LEAKED_TEST_SECRET"), false);
-      assert.equal(prompt.includes("https://"), false);
-      assert.equal(prompt.includes("raw_log"), false);
-      return { response };
-    },
-  };
-}
-function supervisorRequest(body, options = {}) {
-  return request("/api/brain/supervise-error", { method: "POST", body, ...options });
-}
-function supervisorInput(extra = {}) {
-  return {
-    event_code: "queue_intake_failed",
-    stage: "queue_intake",
-    error_code: "control_api_unreachable",
-    platform: "tiktok",
-    attempt_count: 1,
-    counts: { queued: 12, processing: 0, sent: 3, failed: 1, uncertain: 0, skipped: 2, sent_today: 1 },
-    ...extra,
-  };
-}
+// Error guidance now runs locally in Python. The Worker has no AI supervisor endpoint.
 {
-  const state = env();
-  state.AI = makeSupervisorAI(JSON.stringify({
-    action: "retry_next_scheduled_run",
-    reason_code: "temporary_network",
-    next_step_code: "wait_for_next_schedule",
-    human_review: false,
-  }));
-  const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
-  assert.equal(response.status, 200);
-  assert.equal(response.body.ok, true);
-  assert.equal(response.body.source, "workers_ai");
-  assert.equal(response.body.recommendation.action, "retry_next_scheduled_run");
-  assert.equal(response.body.recommendation.next_step_code, "wait_for_next_schedule");
-  assert.equal(response.body.applied, false);
-  assert.equal(JSON.stringify(response.body).includes("LEAKED_TEST_SECRET"), false);
-  assert.equal(state.DB.events.filter(event => event.code === "ai_supervisor_reserved").length, 1);
-  assert.equal(state.DB.events.some(event => event.code === "ai_supervisor_decision"), true);
-}
-{
-  const state = env();
-  state.AI = { run: async () => { throw new Error("LEAKED_TEST_SECRET"); } };
-  const today = new Date().toISOString().slice(0, 10);
-  for (let i = 0; i < 4; i++) {
-    state.DB.events.push({
-      code: "ai_supervisor_reserved",
-      created_at: today + "T12:00:00.000Z",
-    });
-  }
-  const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
-  assert.equal(response.status, 200);
-  assert.equal(response.body.source, "deterministic_fallback");
-  assert.equal(response.body.recommendation.action, "retry_next_scheduled_run");
-  assert.equal(response.body.recommendation.next_step_code, "wait_for_next_schedule");
-  assert.equal(state.DB.events.filter(event => event.code === "ai_supervisor_reserved").length, 4);
-  assert.equal(JSON.stringify(response.body).includes("LEAKED_TEST_SECRET"), false);
-}
-{
-  const state = env();
-  state.AI = makeSupervisorAI("Here is the JSON result: ```json " + JSON.stringify({
-    action: "skip_source_and_continue",
-    reason_code: "source_blocked",
-    next_step_code: "continue_with_other_sources",
-    human_review: false,
-  }) + " ```");
-  const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
-  assert.equal(response.status, 200);
-  assert.equal(response.body.source, "workers_ai");
-  assert.equal(response.body.recommendation.action, "skip_source_and_continue");
-  assert.equal(response.body.recommendation.next_step_code, "continue_with_other_sources");
-  assert.equal(response.body.applied, false);
-}
-{
-  const state = env();
-  state.AI = makeSupervisorAI(JSON.stringify({
-    action: "publish_now",
-    shell_command: "mega-rm --force",
-    reason_code: "unknown",
-    next_step_code: "delete_everything",
-    human_review: false,
-  }));
-  const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
-  assert.equal(response.status, 200);
-  assert.equal(response.body.source, "deterministic_fallback");
-  assert.equal(response.body.recommendation.action, "retry_next_scheduled_run");
-  assert.equal(JSON.stringify(response.body).includes("shell_command"), false);
-  assert.equal(JSON.stringify(response.body).includes("delete_everything"), false);
-}
-{
-  const state = env();
-  state.AI = { run: async () => { throw new Error("mock-provider-internal-message"); } };
-  const response = await read(await worker.fetch(supervisorRequest(
-    supervisorInput({ error_code: "nontransient_test_failure" })
-  ), state));
-  assert.equal(response.status, 200);
-  assert.equal(response.body.source, "deterministic_fallback");
-  assert.equal(response.body.recommendation.reason_code, "unknown_error");
-  assert.equal(response.body.applied, false);
-  assert.equal(JSON.stringify(response.body).includes("mock-provider-internal-message"), false);
-  const decision = state.DB.events.find(event => event.code === "ai_supervisor_decision");
-  assert.equal(JSON.parse(decision.details_json).reason_code, "unknown_error");
-}
-{
-  const state = env();
-  state.AI = makeSupervisorAI("{}");
-  const response = await read(await worker.fetch(supervisorRequest(supervisorInput({
-    event_code: "arbitrary",
-    token: "LEAKED_TEST_SECRET",
-  })), state));
-  assert.equal(response.status, 400);
-  assert.equal(state.DB.events.length, 0);
-}
-{
-  const response = await read(await worker.fetch(supervisorRequest(supervisorInput(), { token: null }), env()));
-  assert.equal(response.status, 401);
+  const response = await read(await worker.fetch(request("/api/brain/supervise-error", {
+    method: "POST",
+    body: { event_code: "queue_intake_failed", stage: "queue_intake", error_code: "network_error" },
+  }), env()));
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, "not_found");
 }
 
