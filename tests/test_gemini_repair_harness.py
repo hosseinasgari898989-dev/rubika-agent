@@ -196,5 +196,83 @@ class GeminiRepairHarnessTests(unittest.TestCase):
             self.assertFalse(_run_git(root, "status", "--porcelain").stdout.strip())
 
 
+    def test_rate_limit_stops_after_one_attempt_and_emits_no_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root, failure_log, report_path, patch_path = _make_sandbox(parent)
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "GEMINI_API_KEY": "synthetic-only-key-never-sent",
+                        "GEMINI_MODEL": gemini.DEFAULT_MODEL,
+                    },
+                ),
+                patch.object(
+                    gemini,
+                    "call_gemini",
+                    side_effect=gemini.GeminiAssistantError("gemini_http_429"),
+                ) as mocked_model,
+                patch("urllib.request.urlopen") as mocked_http,
+            ):
+                exit_code = gemini.main([
+                    "--repo-root", str(root),
+                    "--failure-log", str(failure_log),
+                    "--report-path", str(report_path),
+                    "--patch-path", str(patch_path),
+                ])
+
+            self.assertEqual(exit_code, 0)
+            mocked_model.assert_called_once()
+            mocked_http.assert_not_called()
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "assistant_unavailable")
+            self.assertEqual(report["error_code"], "gemini_http_429")
+            self.assertTrue(report["request_sent"])
+            self.assertFalse(patch_path.exists())
+            self.assertFalse(_run_git(root, "status", "--porcelain").stdout.strip())
+
+    def test_low_confidence_proposal_is_never_written_as_a_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root, failure_log, report_path, patch_path = _make_sandbox(parent)
+            proposal = {
+                "summary": "Synthetic uncertain suggestion.",
+                "root_cause": "The fixture evidence is not decisive.",
+                "patch": REPAIR_PATCH,
+                "confidence": "low",
+                "manual_review": True,
+            }
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "GEMINI_API_KEY": "synthetic-only-key-never-sent",
+                        "GEMINI_MODEL": gemini.DEFAULT_MODEL,
+                    },
+                ),
+                patch.object(
+                    gemini,
+                    "call_gemini",
+                    return_value=(proposal, {"totalTokenCount": 7}),
+                ) as mocked_model,
+                patch("urllib.request.urlopen") as mocked_http,
+            ):
+                exit_code = gemini.main([
+                    "--repo-root", str(root),
+                    "--failure-log", str(failure_log),
+                    "--report-path", str(report_path),
+                    "--patch-path", str(patch_path),
+                ])
+
+            self.assertEqual(exit_code, 0)
+            mocked_model.assert_called_once()
+            mocked_http.assert_not_called()
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "human_review_required")
+            self.assertFalse(patch_path.exists())
+            self.assertFalse(_run_git(root, "status", "--porcelain").stdout.strip())
+
+
 if __name__ == "__main__":
     unittest.main()
