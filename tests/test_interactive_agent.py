@@ -353,6 +353,9 @@ class InteractiveAgentTests(unittest.TestCase):
                     "python -m termux.interactive_agent",
                     path.read_text(encoding="utf-8"),
                 )
+        launcher = (root / "termux" / "interactive-start.sh").read_text(encoding="utf-8")
+        self.assertNotIn(r"\${", launcher)
+        self.assertIn('CONFIG_FILE="${CONFIG_DIR}/interactive.env"', launcher)
 
 
 if __name__ == "__main__":
