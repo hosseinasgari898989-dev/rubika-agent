@@ -249,5 +249,60 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertEqual(result[0]["external_id"], "huggy-edit")
 
 
+    def test_hashtag_only_does_not_prove_relevance_and_filter_reasons_are_counted(self):
+        hashtag_only = _row(
+            "hashtagonly0001", "creator",
+            title="#poppyplaytime #huggywuggy #edit",
+        )
+        hashtag_only["caption"] = "#poppyplaytime #huggywuggy #edit"
+        hashtag_only["hashtags"] = ["poppyplaytime", "huggywuggy", "edit"]
+
+        handle_only = _row("handleonly0001", "poppyplaytimeofficial", title="Funny unrelated clip")
+        handle_only["caption"] = "Funny unrelated clip"
+        handle_only["hashtags"] = ["edit"]
+
+        generic_prototype = _row("prototype0001", "creator", title="Prototype edit")
+        generic_prototype["caption"] = "Prototype edit"
+        generic_prototype["hashtags"] = ["poppyplaytime"]
+
+        no_edit_signal = _row("noedit000001", "creator", title="Huggy Wuggy news")
+        no_edit_signal["caption"] = "Huggy Wuggy news"
+        no_edit_signal["hashtags"] = []
+
+        valid = _row("validhuggy001", "creator", title="Huggy Wuggy edit")
+        valid["caption"] = "Huggy Wuggy edit"
+        valid["hashtags"] = []
+
+        duplicate = dict(valid)
+        duplicate["author"] = "other_creator"
+
+        diagnostics = {}
+        rows = candidates_for_queue(
+            {
+                "candidates": {
+                    "tiktok": [
+                        hashtag_only,
+                        handle_only,
+                        generic_prototype,
+                        no_edit_signal,
+                        valid,
+                        duplicate,
+                    ]
+                }
+            },
+            diagnostics=diagnostics,
+        )
+
+        self.assertEqual([row["external_id"] for row in rows], ["validhuggy001"])
+        self.assertEqual(diagnostics["input_count"], 6)
+        self.assertEqual(diagnostics["eligible_count"], 1)
+        self.assertEqual(diagnostics["rejected_count"], 5)
+        self.assertEqual(
+            diagnostics["rejected_by_reason"]["poppy_relevance_not_verified_in_visible_text"],
+            3,
+        )
+        self.assertEqual(diagnostics["rejected_by_reason"]["edit_signal_missing"], 1)
+        self.assertEqual(diagnostics["duplicate_within_report_count"], 1)
+
 if __name__ == "__main__":
     unittest.main()
