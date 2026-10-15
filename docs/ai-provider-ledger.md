@@ -39,3 +39,12 @@ The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`
 - Publishing to Rubika remains disabled.
 
 The implementation is introduced in a separate draft PR. Until its review, merge, Worker version rollout and secrets setup are complete, the new three-provider workflow has not made any live model request.
+
+## Model identifier maintenance
+
+The default model IDs in the workflow were checked against provider documentation on 2026-10-15:
+- Gemini: `gemini-3.8-flash` — https://ai.google.dev/gemini-api/docs/models
+- Groq: `openai/gpt-oss-20b` — https://console.groq.com/docs/models. The previous `llama-3.3-70b-versatile` model was marked deprecated for free/developer tiers with an August 16, 2026 shutdown date: https://console.groq.com/docs/deprecations
+- Anthropic: `claude-haiku-4-5-20251001` — listed as active in https://docs.anthropic.com/en/docs/about-claude/model-deprecations
+
+These values are configurable, not guaranteed permanent. Re-check provider model availability before the first live request; never use that check as permission to create or spend on an API account automatically.
