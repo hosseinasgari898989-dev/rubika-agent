@@ -243,7 +243,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertIn("CODE_AI_REVIEWER_PROVIDERS: groq,openrouter", workflow)
         self.assertIn("status?provider=gemini", workflow)
         smoke = (root / ".github" / "workflows" / "multi-ai-live-smoke.yml").read_text(encoding="utf-8")
-        self.assertNotIn("\\n  push:", smoke)
+        self.assertNotRegex(smoke, r"(?m)^  push:")
         self.assertIn("confirm_model_requests", smoke)
         self.assertIn("default: false", smoke)
         self.assertIn('expected = {"gemini", "groq", "openrouter"}', smoke)
