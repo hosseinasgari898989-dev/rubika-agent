@@ -33,6 +33,8 @@ jobs:
       - name: Install and test the real Termux Docker environment
         shell: bash
         run: |
+          # shellcheck disable=SC2016
+          # Single-quoted nested shell is intentional; its variables expand in Termux.
           set -euo pipefail
           timeout 240s docker pull termux/termux-docker:x86_64
 
