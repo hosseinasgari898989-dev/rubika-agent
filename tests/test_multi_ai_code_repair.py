@@ -19,11 +19,12 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             report_path = root / "report.json"
             patch_path = root / "proposal.diff"
             environment = {
-                "CODE_AI_DIAGNOSER_PROVIDER": "groq",
+                "CODE_AI_DIAGNOSER_PROVIDERS": "groq,mistral,openrouter",
                 "CODE_AI_PROPOSER_PROVIDER": "gemini",
-                "CODE_AI_REVIEWER_PROVIDER": "openrouter",
+                "CODE_AI_REVIEWER_PROVIDERS": "mistral,openrouter",
                 "GROQ_API_KEY": "",
                 "GEMINI_API_KEY": "g" * 32,
+                "MISTRAL_API_KEY": "m" * 32,
                 "OPENROUTER_API_KEY": "a" * 32,
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
@@ -49,7 +50,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             failure_log.write_text("ERROR: test failed", encoding="utf-8")
             report_path = root / "report.json"
             environment = {
-                "CODE_AI_DIAGNOSER_PROVIDER": "gemini",
+                "CODE_AI_DIAGNOSER_PROVIDERS": "groq,groq",
                 "CODE_AI_PROPOSER_PROVIDER": "gemini",
                 "CODE_AI_REVIEWER_PROVIDER": "openrouter",
             }
@@ -64,7 +65,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             configure.assert_not_called()
             call.assert_not_called()
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            self.assertEqual(report["error_code"], "provider_roles_must_be_independent")
+            self.assertEqual(report["error_code"], "provider_list_invalid")
             self.assertFalse(report["request_sent"])
 
 
