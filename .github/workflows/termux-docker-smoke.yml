@@ -90,13 +90,13 @@ jobs:
           print("SAFETY=metadata_only; no media downloads; no GitHub push; no Rubika publishing")
           PY
 
+          # shellcheck disable=SC2016
+          # The entire nested script is intentionally single-quoted for execution inside Termux.
           timeout 20m docker run --rm -i \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -w /workspace \
             -e PYTHONPATH=/workspace \
             termux/termux-docker:x86_64 \
-            # shellcheck disable=SC2016
-            # Single-quoted nested shell is intentional; its variables expand in Termux.
             sh -lc '
               set -eu
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
