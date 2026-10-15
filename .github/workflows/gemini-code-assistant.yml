@@ -12,7 +12,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: rubika-agent-gemini-code-repair
+  group: rubika-agent-multi-ai-code-repair
   cancel-in-progress: false
 
 jobs:
@@ -71,7 +71,7 @@ jobs:
             exit 0
           fi
           echo "should_run=true" >> "$GITHUB_OUTPUT"
-          echo "Preflight passed; one bounded four-provider ensemble repair attempt is permitted for this failed commit."
+          echo "Preflight passed; one bounded three-provider ensemble repair attempt is permitted for this failed commit."
 
       - name: Download the failed CI log to a temporary file
         if: steps.preflight.outputs.should_run == 'true'
@@ -107,17 +107,13 @@ jobs:
         id: proposal
         if: steps.preflight.outputs.should_run == 'true'
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.8-flash
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: openai/gpt-oss-20b
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-          MISTRAL_MODEL: mistral-small-latest
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: openrouter/free
-          CODE_AI_DIAGNOSER_PROVIDERS: groq,mistral,openrouter
-          CODE_AI_PROPOSER_PROVIDER: gemini
-          CODE_AI_REVIEWER_PROVIDERS: mistral,openrouter
+          CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter
+          CODE_AI_PROPOSER_PROVIDER: workers_ai
+          CODE_AI_REVIEWER_PROVIDERS: groq,openrouter
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
@@ -218,7 +214,7 @@ jobs:
             --base main \
             --head "$branch" \
             --title "Multi-AI proposal: bounded CI repair for $short_sha" \
-            --body "Automated multi-provider proposal after a failed Cloud bootstrap checks run. Groq, Mistral, and OpenRouter's free-model router diagnose independently; Gemini proposes; Mistral and OpenRouter must both approve before deterministic tests. The patch was restricted to the code-repair allowlist; compileall, the full Python tests, the project self-test, and Worker unit tests passed in a clean runner. Human review is required. This PR is not auto-merged and does not change production or publishing gates."
+            --body "Automated multi-provider proposal after a failed Cloud bootstrap checks run. Groq and OpenRouter diagnose independently; Cloudflare Workers AI proposes; Groq and OpenRouter must both approve before deterministic tests. Gemini remains available for its separately dispatched diagnostic smoke test, while Mistral is disabled. The patch is restricted to the code-repair allowlist; deterministic tests and human review remain mandatory. This PR is not auto-merged and does not change production or publishing gates."
 
       - name: Upload sanitized proposal only
         if: always() && steps.preflight.outputs.should_run == 'true'
