@@ -1,0 +1,122 @@
+name: One-request Gemini API smoke test
+
+on:
+  push:
+    branches:
+      - agent-brain-mega-v1
+    paths:
+      - ".github/workflows/gemini-api-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rubika-agent-gemini-api-smoke
+  cancel-in-progress: false
+
+jobs:
+  one-request-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - name: Send one minimal request and report safe diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          key = os.environ.get("GEMINI_API_KEY", "").strip()
+          if len(key) < 20:
+              print("GEMINI_API_KEY is missing or looks invalid; no request was sent.")
+              sys.exit(2)
+
+          model = "gemini-3.8-flash"
+          prompt = (
+              "به فارسی پاسخ بده. این فقط آزمایش یک درخواست API است. "
+              "ابتدا بگو آیا درخواست به مدل رسیده و پاسخ تولید شده است. "
+              "سپس RPM را (درخواست در دقیقه)، TPM را (توکن ورودی در دقیقه)، "
+              "و RPD را (درخواست در روز) توضیح بده. "
+              "مهم: تو به داشبورد Google AI Studio یا سهمیه واقعی این پروژه دسترسی نداری؛ "
+              "برای سهمیه اختصاصی این حساب عدد نساز و حدس نزن. واضح بگو که اعداد واقعی "
+              "باید در صفحه Rate limits در AI Studio دیده شوند و محدودیت‌ها به مدل و پروژه "
+              "وابسته‌اند. طبق مستندات گوگل، سهمیه RPD در نیمه‌شب منطقه زمانی Pacific reset می‌شود. "
+              "اگر نمی‌توانی موردی را تأیید کنی، صادقانه بگو."
+          )
+          body = {
+              "contents": [{"parts": [{"text": prompt}]}],
+              "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500},
+          }
+          request = urllib.request.Request(
+              "https://generativelanguage.googleapis.com/v1beta/models/"
+              + model + ":generateContent",
+              data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "x-goog-api-key": key,
+              },
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=40) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+                  http_status = response.status
+          except urllib.error.HTTPError as exc:
+              try:
+                  error_payload = json.loads(exc.read().decode("utf-8"))
+                  error = error_payload.get("error", {})
+                  code = str(error.get("status", "API_ERROR"))[:80]
+              except Exception:
+                  code = "API_ERROR"
+              print(f"Gemini API request failed: HTTP {exc.code}; code={code}")
+              print("API key value and full response body were not printed.")
+              sys.exit(1)
+          except Exception as exc:
+              # Emit only the exception type; never dump request headers or key.
+              print(f"Gemini API request failed before a valid response: {type(exc).__name__}")
+              sys.exit(1)
+
+          pieces = []
+          for candidate in payload.get("candidates", []):
+              for part in candidate.get("content", {}).get("parts", []):
+                  text = part.get("text")
+                  if isinstance(text, str) and text.strip():
+                      pieces.append(text.strip())
+          answer = "\n".join(pieces).strip()
+          if http_status != 200 or not answer:
+              print(f"Gemini returned HTTP {http_status} but no usable text answer.")
+              sys.exit(1)
+
+          usage = payload.get("usageMetadata", {})
+          print("Gemini API request succeeded.")
+          print(f"Model: {model}")
+          print("Response from Gemini:")
+          print(answer[:6000])
+          print(
+              "Usage metadata: "
+              + json.dumps(
+                  {
+                      "promptTokenCount": usage.get("promptTokenCount"),
+                      "candidatesTokenCount": usage.get("candidatesTokenCount"),
+                      "totalTokenCount": usage.get("totalTokenCount"),
+                  },
+                  ensure_ascii=False,
+              )
+          )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Gemini API smoke test\n")
+              summary.write("- API request: **success**\n")
+              summary.write(f"- Model: `{model}`\n")
+              summary.write("- Exactly one generation request was sent.\n")
+              summary.write("- API key was not printed or written to the repository.\n")
+              summary.write("- The model cannot inspect account-specific quota counters; view them at [Google AI Studio Rate limits](https://aistudio.google.com/rate-limit?timeRange=last-28-days).\n\n")
+              summary.write("### Model response\n\n")
+              summary.write(answer[:6000] + "\n")
+          PY
