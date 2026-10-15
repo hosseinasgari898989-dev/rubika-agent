@@ -222,7 +222,7 @@ class QueueIntakeTests(unittest.TestCase):
 
     def test_search_query_and_creator_metadata_cannot_fake_relevance(self):
         unrelated = {
-            **_row("unrelated", "smyxae", title="I think Carlos is my ideal type"),
+            **_row("unrelated", "unlisted_creator", title="I think Carlos is my ideal type"),
             "caption": "Resident Evil edit",
             "hashtags": ["carlosoliveira", "residenteviledit"],
             "query": "poppyplaytime",
