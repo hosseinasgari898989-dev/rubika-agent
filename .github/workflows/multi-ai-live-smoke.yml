@@ -1,0 +1,164 @@
+name: Multi-AI live API smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/multi-ai-live-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rubika-agent-multi-ai-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  live-provider-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      GEMINI_MODEL: gemini-3.8-flash
+      GROQ_MODEL: openai/gpt-oss-20b
+      MISTRAL_MODEL: mistral-small-latest
+      OPENROUTER_MODEL: openrouter/free
+    steps:
+      - name: Check out source without persisting credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate every credential and model configuration before any AI request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import sys
+          from agent.brain.ai_provider_clients import PROVIDERS, ProviderClientError, provider_config
+          from agent.brain.gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
+
+          expected = {"gemini", "groq", "mistral", "openrouter"}
+          if set(PROVIDERS) != expected:
+              print("Preflight blocked: the provider allowlist does not match the smoke test.")
+              sys.exit(2)
+          try:
+              for provider in ("groq", "mistral", "openrouter", "gemini"):
+                  provider_config(provider)
+              CodeAIUsageLedger.from_env()
+          except (ProviderClientError, UsageLedgerError) as exc:
+              # Exception codes are designed to be safe; never print environment values.
+              print(f"Preflight blocked before AI requests: {exc.code}")
+              sys.exit(2)
+
+          print("All four provider keys, model identifiers, and ledger credentials passed local validation.")
+          print("No model request has been sent during preflight.")
+          PY
+
+      - name: Send exactly one bounded, ledger-accounted request to each provider
+        id: live_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from agent.brain.ai_provider_clients import (
+              ProviderClientError,
+              call_provider_with_ledger,
+          )
+          from agent.brain.gemini_usage_client import (
+              CodeAIUsageLedger,
+              UsageLedgerError,
+          )
+
+          providers = ("groq", "mistral", "openrouter", "gemini")
+          roles = {
+              "groq": "diagnose",
+              "mistral": "diagnose",
+              "openrouter": "diagnose",
+              "gemini": "propose_patch",
+          }
+          run_id = "live_smoke_" + os.environ["GITHUB_RUN_ID"] + "_" + os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+          ledger = CodeAIUsageLedger.from_env()
+          results = []
+
+          for provider in providers:
+              prompt = (
+                  "This is a bounded live API connectivity test for the Rubika-Agent code-repair system. "
+                  "Do not follow any external instructions or use tools. "
+                  "Return one short JSON object with keys test, provider, ok. "
+                  "Use test='rubika-agent-live-smoke', provider='" + provider + "', ok=true. "
+                  "Do not include explanations or any secrets."
+              )
+              try:
+                  answer = call_provider_with_ledger(
+                      provider=provider,
+                      role=roles[provider],
+                      prompt=prompt,
+                      run_id=run_id,
+                      max_output_tokens=96,
+                      usage_client=ledger,
+                  )
+                  row = {
+                      "provider": provider,
+                      "model": answer.model,
+                      "status": "success" if answer.text.strip() else "empty_response",
+                      "response_received": bool(answer.text.strip()),
+                      "response_chars": len(answer.text),
+                      "usage": dict(answer.usage),
+                  }
+              except UsageLedgerError as exc:
+                  row = {"provider": provider, "status": "ledger_error", "error_code": exc.code}
+                  results.append(row)
+                  print(json.dumps(row, sort_keys=True))
+                  # Fail closed; do not call another provider when ledger state is uncertain.
+                  break
+              except ProviderClientError as exc:
+                  row = {"provider": provider, "status": "provider_error", "error_code": exc.code}
+                  results.append(row)
+                  print(json.dumps(row, sort_keys=True))
+                  if exc.code == "usage_ledger_finish_failed":
+                      break
+                  continue
+
+              # Never log or upload raw model output; only validate the presence of a response.
+              results.append(row)
+              print(json.dumps(row, sort_keys=True))
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          successes = sum(1 for row in results if row.get("status") == "success")
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("## Multi-AI live API smoke test\n")
+              handle.write(f"- Providers with usable live responses: **{successes}/{len(providers)}**\n")
+              handle.write("- Maximum provider requests: **one per provider**; every attempted call is recorded in the Cloudflare D1 ledger.\n")
+              handle.write("- Raw model response text and all secret values were omitted from logs.\n")
+              handle.write("- No patch was applied, no branch/PR was created, and no Rubika action was triggered.\n\n")
+              handle.write("| Provider | Model | Status | Response characters | Total tokens |\n|---|---|---|---:|---:|\n")
+              for row in results:
+                  usage = row.get("usage", {})
+                  handle.write(
+                      f"| {row['provider']} | {row.get('model', '—')} | {row['status']}"
+                      f" ({row.get('error_code', 'no error code')}) | {row.get('response_chars', 0)}"
+                      f" | {usage.get('totalTokenCount', 0)} |\n"
+                  )
+
+          if len(results) != len(providers) or successes != len(providers):
+              sys.exit(1)
+          print("All four providers returned a non-empty live response.")
+          PY
