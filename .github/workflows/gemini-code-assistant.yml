@@ -65,6 +65,11 @@ jobs:
             echo "Skipped: a review PR for this failed commit already exists." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped: a repair branch for this failed commit already exists; it was not overwritten." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           echo "should_run=true" >> "$GITHUB_OUTPUT"
           echo "Preflight passed; one Gemini request is permitted for this failed commit."
 
@@ -178,7 +183,7 @@ jobs:
           git diff --name-only -z | xargs -0 git add --
           git commit -m "Propose bounded Gemini repair for CI $short_sha"
           gh auth setup-git
-          git push origin "$branch"
+          git push origin "HEAD:refs/heads/$branch"
           gh pr create \
             --repo "$GITHUB_REPOSITORY" \
             --base main \
