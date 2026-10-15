@@ -87,6 +87,20 @@ class AIProviderLedgerTests(unittest.TestCase):
                 ("other-provider", "2026-10-15T12:05:00.000Z", "secret_leaked"),
             )
 
+    def test_ledger_schema_accepts_each_explicit_code_repair_provider(self):
+        for provider in ("gemini", "groq", "anthropic"):
+            with self.subTest(provider=provider):
+                self.add_call("call-" + provider + "-accepted-0001", provider=provider)
+                self.db.execute(
+                    "INSERT INTO ai_provider_state (provider, cooldown_until, last_error_code) "
+                    "VALUES (?, ?, ?)",
+                    (provider, "2026-10-15T12:05:00.000Z", "rate_limited"),
+                )
+        providers = {
+            row[0] for row in self.db.execute("SELECT provider FROM ai_provider_state")
+        }
+        self.assertEqual(providers, {"gemini", "groq", "anthropic"})
+
     def test_worker_has_three_explicit_providers_and_shared_daily_cap(self):
         source = WORKER.read_text(encoding="utf-8")
         self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 3, groq: 3, anthropic: 3 });", source)
