@@ -8,10 +8,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain import multi_ai_code_repair as multi
-from agent.brain.ai_provider_clients import ProviderResult
+from agent.brain.ai_provider_clients import GROQ_MAX_PROMPT_CHARS, ProviderResult
 
 
 class MultiAIRepairPreflightTests(unittest.TestCase):
+    def test_diagnosis_prompt_fits_groq_free_plan_budget(self):
+        prompt = multi._build_diagnosis_prompt("L" * 12000, "T" * 12000)
+        self.assertLessEqual(len(prompt), GROQ_MAX_PROMPT_CHARS)
+
     def test_missing_provider_secret_stops_before_any_request(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
