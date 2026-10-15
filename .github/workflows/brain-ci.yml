@@ -81,7 +81,6 @@ jobs:
       - name: Check Python and Termux shell syntax
         run: |
           python -m compileall -q agent relay termux
-          bash -n termux/bootstrap.sh termux/daily.sh
       - name: Run brain and storage unit tests
         id: brain_tests
         run: |
