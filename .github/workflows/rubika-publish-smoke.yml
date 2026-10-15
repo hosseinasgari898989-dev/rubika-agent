@@ -223,6 +223,7 @@ jobs:
                       f.write("- TikTok: sent with caption `منبع: TikTok`\n")
                       f.write("- Instagram: sent with caption `منبع: Instagram`\n")
                       f.write("- Temporary media files are removed when the job ends.\n")
+          PY
 
       - name: Stop local Cobalt API
         if: always()
