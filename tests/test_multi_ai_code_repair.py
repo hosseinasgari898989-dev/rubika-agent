@@ -24,7 +24,6 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
                 "CODE_AI_PROPOSER_PROVIDER": "workers_ai",
                 "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
                 "GROQ_API_KEY": "",
-                "GEMINI_API_KEY": "g" * 32,
                 "OPENROUTER_API_KEY": "a" * 32,
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
@@ -114,7 +113,6 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,openrouter",
                 "CODE_AI_PROPOSER_PROVIDER": "workers_ai",
                 "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
-                "GEMINI_API_KEY": "g" * 32,
                 "GROQ_API_KEY": "r" * 32,
                 "OPENROUTER_API_KEY": "o" * 32,
             }
