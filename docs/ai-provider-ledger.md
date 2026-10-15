@@ -39,7 +39,14 @@ The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`
 - Proposed patches remain untrusted; the existing fixed checks run in a disposable runner and a human must review the opened PR.
 - Publishing to Rubika remains disabled.
 
-The implementation is in a separate draft PR. Until its review, merge, Worker version rollout and secrets setup are complete, the four-provider ensemble has not made any live model request.
+## Current rollout checkpoint — 2026-10-15
+
+- PR #13 was merged into `main` as commit `042a0ecb2fea0c9ebe4a247388ff2951b7fecb92`.
+- Production Worker `rubika-agent` version 62 was deployed at 100% traffic from that commit. The existing `AGENT_API_TOKEN`, `GEMINI_API_KEY`, `AI`, and `DB` bindings were preserved.
+- The public `/health` smoke test returned `ok: true`, `database: connected`, and `publishing: false`.
+- Deployment and smoke testing did not call any external model API. The repair workflow only proceeds after a failed `Cloud bootstrap checks` run caused by a push to `main`, and only after its freshness, duplicate-PR, and daily-budget checks pass.
+- Required GitHub Actions secret names remain `GEMINI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, and `AGENT_API_TOKEN`. Secret values are never stored in this repository or exposed in this documentation. This connector cannot independently inspect their registration; missing credentials cause the repair pipeline to stop safely before model calls.
+- The first real multi-provider repair attempt has not yet been exercised end-to-end. Worker health is confirmed, but live provider credentials, quotas, and successful external inference remain unverified until an eligible repair run occurs.
 
 ## Model identifier maintenance
 
