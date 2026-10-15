@@ -952,8 +952,8 @@ async function superviseError(env, body) {
 }
 
 
-const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 5, groq: 5, anthropic: 5 });
-const CODE_AI_TOTAL_DAILY_LIMIT = 5;
+const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 3, groq: 3, anthropic: 3 });
+const CODE_AI_TOTAL_DAILY_LIMIT = 9;
 const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch"]);
 const CODE_AI_MAX_COOLDOWN_SECONDS = 86400;
 const CODE_AI_DEFAULT_COOLDOWN_SECONDS = 300;
