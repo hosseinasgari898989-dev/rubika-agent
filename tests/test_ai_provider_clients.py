@@ -84,10 +84,16 @@ class ProviderClientTests(unittest.TestCase):
 
         workers_ai = clients.provider_config("workers_ai", environ={
             "AGENT_API_TOKEN": "t" * 40,
-            "AGENT_API_BASE_URL": "https://rubika-agent.example.workers.dev",
+            "AGENT_API_BASE_URL": "https://rubika-agent.h98609294.workers.dev",
         })
         self.assertEqual(workers_ai.model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
-        self.assertEqual(workers_ai.url, "https://rubika-agent.example.workers.dev/api/brain/ai-provider/invoke")
+        self.assertEqual(workers_ai.url, "https://rubika-agent.h98609294.workers.dev/api/brain/ai-provider/invoke")
+        with self.assertRaises(clients.ProviderClientError) as caught:
+            clients.provider_config("workers_ai", environ={
+                "AGENT_API_TOKEN": "t" * 40,
+                "AGENT_API_BASE_URL": "https://attacker.example",
+            })
+        self.assertEqual(caught.exception.code, "workers_ai_endpoint_invalid")
 
         openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
         self.assertEqual(openrouter.model, "openrouter/free")
@@ -143,7 +149,7 @@ class ProviderClientTests(unittest.TestCase):
     def test_workers_ai_response_uses_reserved_request_and_authorized_worker_endpoint(self):
         config = clients.ProviderConfig(
             "workers_ai", "t" * 40, "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-            "https://rubika-agent.example.workers.dev/api/brain/ai-provider/invoke",
+            "https://rubika-agent.h98609294.workers.dev/api/brain/ai-provider/invoke",
         )
         opener = FakeOpener(FakeResponse({
             "ok": True,
