@@ -33,8 +33,6 @@ jobs:
       - name: Install and test the real Termux Docker environment
         shell: bash
         run: |
-          # shellcheck disable=SC2016
-          # Single-quoted nested shell is intentional; its variables expand in Termux.
           set -euo pipefail
           timeout 240s docker pull termux/termux-docker:x86_64
 
@@ -97,6 +95,8 @@ jobs:
             -w /workspace \
             -e PYTHONPATH=/workspace \
             termux/termux-docker:x86_64 \
+            # shellcheck disable=SC2016
+            # Single-quoted nested shell is intentional; its variables expand in Termux.
             sh -lc '
               set -eu
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
