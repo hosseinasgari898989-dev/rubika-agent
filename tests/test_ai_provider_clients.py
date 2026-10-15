@@ -151,6 +151,24 @@ class ProviderClientTests(unittest.TestCase):
         self.assertNotIn(config.api_key, opener.request.full_url)
         self.assertEqual(json.loads(opener.request.data.decode("utf-8"))["model"], "openrouter/free")
 
+    def test_groq_prompt_over_free_plan_budget_is_rejected_before_ledger_reservation(self):
+        ledger = FakeLedger()
+        oversized = "x" * (clients.GROQ_MAX_PROMPT_CHARS + 1)
+        with patch.object(clients, "provider_config") as configure, patch.object(
+            clients, "invoke_provider"
+        ) as invoke:
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.call_provider_with_ledger(
+                    provider="groq",
+                    role="diagnose",
+                    prompt=oversized,
+                    usage_client=ledger,
+                )
+        self.assertEqual(caught.exception.code, "provider_prompt_invalid")
+        self.assertEqual(ledger.events, [])
+        configure.assert_not_called()
+        invoke.assert_not_called()
+
     def test_provider_429_is_a_safe_rate_limited_error_without_raw_body(self):
         config = clients.ProviderConfig(
             "groq", "r" * 32, "model",
