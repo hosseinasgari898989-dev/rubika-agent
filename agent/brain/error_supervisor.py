@@ -1,19 +1,13 @@
-"""Bounded advisory error supervisor.
-
-Workers AI can recommend a next diagnostic step, but cannot execute it. If the
-remote API or model is unavailable, use a deterministic fail-closed fallback.
-"""
+"""Deterministic local error guidance. Makes no remote or Workers AI requests."""
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
-from agent.brain.cloud_state import CloudState
 
 EVENT_CODES = {
     "source_blocked", "discovery_failed", "report_push_failed",
@@ -98,27 +92,7 @@ def local_recommendation(*, event_code: str, stage: str, error_code: str) -> dic
         "source": "local_fallback",
         "recommendation": decision,
         "applied": False,
-        "daily_ai_limit": 4,
     }
-
-
-def _valid_cloud_response(value: Any, *, event_code: str) -> bool:
-    if not isinstance(value, dict) or value.get("ok") is not True or value.get("applied") is not False:
-        return False
-    if value.get("source") not in {"workers_ai", "deterministic_fallback"}:
-        return False
-    recommendation = value.get("recommendation")
-    if not isinstance(recommendation, dict):
-        return False
-    if (
-        recommendation.get("action") not in ACTIONS
-        or recommendation.get("reason_code") not in REASONS
-        or recommendation.get("next_step_code") not in NEXT_STEPS
-        or type(recommendation.get("human_review")) is not bool
-        or (recommendation.get("action") == "human_review") != recommendation.get("human_review")
-    ):
-        return False
-    return event_code != "rubika_delivery_uncertain" or recommendation.get("action") == "human_review"
 
 
 def recommend_error(
@@ -129,9 +103,8 @@ def recommend_error(
     platform: str = "none",
     attempt_count: int = 0,
     counts: Mapping[str, int] | None = None,
-    client_factory: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """Request a bounded remote recommendation and never raise to the main workflow."""
+    """Return deterministic local guidance without contacting Cloudflare or an LLM."""
     counts_valid = counts is None or (
         isinstance(counts, Mapping)
         and all(
@@ -149,53 +122,14 @@ def recommend_error(
         or not 0 <= attempt_count <= 3
         or not counts_valid
     ):
-        # Invalid raw input must never be sent to the remote model.
-        return local_recommendation(event_code="unknown_error", stage="unknown", error_code="unknown_error")
-
-    safe_event = event_code
-    safe_stage = stage
-    safe_code = error_code.lower()
-    safe_platform = platform
-    safe_attempts = attempt_count
-    safe_counts: dict[str, int] = {
-        key: value for key, value in (counts or {}).items()
-    }
-
-    fallback = local_recommendation(event_code=safe_event, stage=safe_stage, error_code=safe_code)
-    # An LLM cannot resolve uncertainty about whether a post was sent.
-    if safe_event == "rubika_delivery_uncertain":
-        return fallback
-
-    factory = client_factory or CloudState
-    try:
-        client = factory(
-            os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
-            token=os.getenv("AGENT_API_TOKEN", "").strip(),
-            timeout_seconds=12,
+        return local_recommendation(
+            event_code="unknown_error", stage="unknown", error_code="unknown_error"
         )
-        remote = client.supervise_error(
-            event_code=safe_event,
-            stage=safe_stage,
-            error_code=safe_code,
-            platform=safe_platform,
-            attempt_count=safe_attempts,
-            counts=safe_counts,
-        )
-        if _valid_cloud_response(remote, event_code=safe_event) and remote.get("source") == "workers_ai":
-            return {
-                "ok": True,
-                "source": "workers_ai",
-                "recommendation": dict(remote["recommendation"]),
-                "applied": False,
-                "daily_ai_limit": 4,
-            }
-        # Prefer the repository's current deterministic rules over a possibly
-        # older deterministic fallback bundled on the deployed Worker.
-
-    except Exception:
-        # Do not copy exceptions/provider bodies, headers or request inputs into logs.
-        pass
-    return fallback
+    # The supervisor never determines whether a Rubika post was delivered.
+    # Uncertain delivery is always sent to a human.
+    return local_recommendation(
+        event_code=event_code, stage=stage, error_code=error_code.lower()
+    )
 
 
 def _write_report(path: Path, payload: Mapping[str, Any]) -> None:
