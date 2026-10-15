@@ -130,7 +130,11 @@ def provider_config(provider: str, *, environ: Mapping[str, str] | None = None) 
         parsed = urllib.parse.urlsplit(str(env.get("AGENT_API_BASE_URL", "") or "").strip())
         if (
             parsed.scheme != "https"
-            or not parsed.hostname
+            or parsed.hostname != "rubika-agent.h98609294.workers.dev"
+            or parsed.netloc.lower() not in {
+                "rubika-agent.h98609294.workers.dev",
+                "rubika-agent.h98609294.workers.dev:443",
+            }
             or parsed.username
             or parsed.password
             or parsed.path not in {"", "/"}
@@ -138,7 +142,8 @@ def provider_config(provider: str, *, environ: Mapping[str, str] | None = None) 
             or parsed.fragment
         ):
             raise ProviderClientError("workers_ai_endpoint_invalid")
-        endpoint = "https://" + parsed.netloc + "/api/brain/ai-provider/invoke"
+        # Keep the bearer token pinned to this project's exact Worker host.
+        endpoint = "https://rubika-agent.h98609294.workers.dev/api/brain/ai-provider/invoke"
     return ProviderConfig(
         provider=provider,
         api_key=key,
