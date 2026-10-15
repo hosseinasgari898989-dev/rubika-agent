@@ -78,7 +78,7 @@ class ProviderClientTests(unittest.TestCase):
         opener = FakeOpener(FakeResponse({
             "candidates": [{
                 "finishReason": "STOP",
-                "content": {"parts": [{"text": "{\\"ok\\": true}"}]},
+                "content": {"parts": [{"text": '{"ok": true}'}]},
             }],
             "usageMetadata": {
                 "promptTokenCount": 10,
