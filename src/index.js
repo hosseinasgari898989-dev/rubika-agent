@@ -669,7 +669,7 @@ async function translateOfficial(env, body) {
 }
 
 
-const AI_SUPERVISOR_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+const AI_SUPERVISOR_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 const AI_SUPERVISOR_DAILY_LIMIT = 4;
 
 const SUPERVISOR_EVENT_CODES = new Set([
