@@ -651,7 +651,7 @@ function makeTranslationAI(response = "ماب انترتینمنت خبر رسم
 function makeSupervisorAI(response) {
   return {
     run: async (model, input) => {
-      assert.equal(model, "@cf/meta/llama-3.1-8b-instruct");
+      assert.equal(model, "@cf/meta/llama-3.1-8b-instruct-fast");
       assert.equal(input.temperature, 0);
       assert.equal(input.max_tokens, 220);
       assert.equal(Array.isArray(input.messages), true);
