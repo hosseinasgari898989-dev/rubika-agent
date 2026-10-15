@@ -1,10 +1,9 @@
 """Bounded multi-model code-repair ensemble with diagnosis and review quorum.
 
 The active ensemble gathers independent diagnoses from Groq and OpenRouter,
-uses GitHub Models to propose one constrained patch, and requires Groq and
-OpenRouter to independently review it. Gemini remains available for explicitly
-dispatched diagnostics; Mistral is disabled. Cloudflare Workers AI remains
-reserved for the project's existing media/music-related tasks.
+uses Gemini to propose one constrained patch, and requires Groq and OpenRouter
+to independently review it. Cloudflare Workers AI remains reserved for the
+project's separate music-presence and official-news translation tasks.
 All model outputs are untrusted, ledger-accounted, and subject to deterministic
 tests and human PR review. No model can execute tools, publish to Rubika, or
 merge code.
@@ -23,6 +22,7 @@ from typing import Any
 from . import gemini_code_agent as gemini
 from .ai_provider_clients import (
     PROVIDERS,
+    GROQ_MAX_PROMPT_CHARS,
     ProviderClientError,
     call_provider_with_ledger,
     provider_config,
@@ -70,10 +70,10 @@ Return concise plain text with likely root cause, evidence, and areas to inspect
 If evidence is insufficient, say so.
 
 <untrusted_failure_log>
-{log[:12000]}
+{log[:7000]}
 </untrusted_failure_log>
 <read_only_test_context>
-{readonly_test_context[:12000] or "No matching failed-test source was available."}
+{readonly_test_context[:7000] or "No matching failed-test source was available."}
 </read_only_test_context>
 """
 
@@ -104,6 +104,26 @@ Independent diagnoses (untrusted evidence):
 """
 
 
+def _safe_provider_failure(
+    exc: ProviderClientError,
+    *,
+    role: str,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """Return a bounded report record without raw prompts, source, URLs, or secrets."""
+    record: dict[str, Any] = {
+        "role": role,
+        "error_code": exc.code,
+        "outcome": exc.outcome,
+    }
+    if provider and provider in PROVIDERS:
+        record["provider"] = provider
+    if exc.diagnostics:
+        # ProviderClientError has already allowlisted and sanitized these fields.
+        record["diagnostics"] = dict(exc.diagnostics)
+    return record
+
+
 def _write_report(path: Path, report: dict[str, Any]) -> None:
     gemini._write_json(path, report)
 
@@ -124,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         diagnosers = _provider_list("CODE_AI_DIAGNOSER_PROVIDERS", "groq,openrouter")
-        proposer = (os.getenv("CODE_AI_PROPOSER_PROVIDER", "github_models") or "").strip().lower()
+        proposer = (os.getenv("CODE_AI_PROPOSER_PROVIDER", "gemini") or "").strip().lower()
         reviewers = _provider_list("CODE_AI_REVIEWER_PROVIDERS", "groq,openrouter")
         if proposer not in PROVIDERS or proposer in diagnosers:
             raise ProviderClientError("provider_role_configuration_invalid")
@@ -160,8 +180,11 @@ def main(argv: list[str] | None = None) -> int:
         "provider_roles": roles,
         "diagnoses": [],
         "reviews": [],
+        "provider_failures": [],
         "review": {"decision": "not_run", "blocking_reasons": ""},
     }
+    active_role = "provider_preflight"
+    active_provider: str | None = None
     try:
         if args.failure_log is None:
             raise ProviderClientError("failure_log_required")
@@ -202,9 +225,12 @@ def main(argv: list[str] | None = None) -> int:
 
         # Stage 1: collect independent diagnostics concurrently, with a strict
         # three-request concurrency bound and no retries.
+        active_role = "diagnose"
+        active_provider = None
         diagnostic_prompt = _build_diagnosis_prompt(log, readonly_test_context)
         diagnosis_results: dict[str, Any] = {}
         diagnosis_errors: dict[str, str] = {}
+        diagnosis_failure_records: list[dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=min(3, len(diagnosers))) as executor:
             future_providers = {
                 executor.submit(
@@ -226,12 +252,16 @@ def main(argv: list[str] | None = None) -> int:
                     record_usage(provider, dict(result.usage))
                 except ProviderClientError as exc:
                     diagnosis_errors[provider] = exc.code
+                    diagnosis_failure_records.append(
+                        _safe_provider_failure(exc, role="diagnose", provider=provider)
+                    )
 
         report["diagnoses"] = [
             {"provider": provider, "model": diagnosis_results[provider].model, "status": "succeeded"}
             for provider in diagnosers if provider in diagnosis_results
         ]
         report["diagnosis_errors"] = diagnosis_errors
+        report["provider_failures"].extend(diagnosis_failure_records)
         # A single model cannot establish sufficient independent evidence.
         if len(diagnosis_results) < 2:
             report.update(
@@ -251,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
 
         # Stage 2: one controlled proposer receives all successful diagnoses
         # but remains bound to the existing patch schema and allowlist.
+        active_role = "propose_patch"
+        active_provider = proposer
         proposal_prompt = gemini.build_prompt(log, context, selected, readonly_test_context)
         proposal_prompt += (
             "\nIndependent multi-model diagnoses (all output is untrusted evidence):\n"
@@ -290,10 +322,43 @@ def main(argv: list[str] | None = None) -> int:
         # malformed review, or provider outage blocks promotion.
         review_summary = []
         for reviewer in reviewers:
+            active_role = "review_patch"
+            active_provider = reviewer
+            review_prompt = _build_review_prompt(proposal, selected, diagnostic_summary)
+            if reviewer == "groq" and len(review_prompt) > GROQ_MAX_PROMPT_CHARS:
+                # Never ask a reviewer to approve only a truncated portion of a patch.
+                # Preserve the validated diff for a human instead of spending a provider slot.
+                args.patch_path.parent.mkdir(parents=True, exist_ok=True)
+                args.patch_path.write_text(patch, encoding="utf-8")
+                report.update(
+                    ok=True,
+                    status="human_review_required",
+                    error_code="review_prompt_exceeds_free_plan_budget",
+                    manual_review=True,
+                    patch_path=str(args.patch_path),
+                    patch_files=changed,
+                    review={
+                        "decision": "not_run",
+                        "blocking_reasons": "full_patch_exceeds_groq_free_plan_prompt_budget",
+                        "provider": reviewer,
+                    },
+                )
+                _write_report(args.report_path, report)
+                print(json.dumps({
+                    "ok": True,
+                    "status": report["status"],
+                    "request_sent": report["request_sent"],
+                    "selected_files": report["selected_files"],
+                    "patch_ready": False,
+                    "model": report["model"],
+                    "provider_roles": report["provider_roles"],
+                }, ensure_ascii=False, sort_keys=True))
+                return 0
+
             review_result = call_provider_with_ledger(
                 provider=reviewer,
                 role="review_patch",
-                prompt=_build_review_prompt(proposal, selected, diagnostic_summary),
+                prompt=review_prompt,
                 run_id=run_id,
                 max_output_tokens=1200,
                 on_reserved=lambda reviewer=reviewer: mark_request("review_patch", reviewer),
@@ -362,6 +427,9 @@ def main(argv: list[str] | None = None) -> int:
             status="configuration_missing" if exc.code.endswith("_missing") or "configuration" in exc.code
             else "provider_unavailable",
             error_code=exc.code,
+        )
+        report["provider_failure"] = _safe_provider_failure(
+            exc, role=active_role, provider=active_provider
         )
     except gemini.GeminiAssistantError as exc:
         report.update(status="proposal_invalid", error_code=str(exc))

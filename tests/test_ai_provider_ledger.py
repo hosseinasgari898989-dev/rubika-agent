@@ -88,7 +88,7 @@ class AIProviderLedgerTests(unittest.TestCase):
             )
 
     def test_ledger_schema_accepts_each_explicit_code_repair_provider(self):
-        for provider in ("gemini", "groq", "openrouter", "github_models"):
+        for provider in ("gemini", "groq", "openrouter"):
             with self.subTest(provider=provider):
                 self.add_call("call-" + provider + "-accepted-0001", provider=provider)
                 self.db.execute(
@@ -99,11 +99,11 @@ class AIProviderLedgerTests(unittest.TestCase):
         providers = {
             row[0] for row in self.db.execute("SELECT provider FROM ai_provider_state")
         }
-        self.assertEqual(providers, {"gemini", "groq", "openrouter", "github_models"})
+        self.assertEqual(providers, {"gemini", "groq", "openrouter"})
 
-    def test_worker_enables_gemini_groq_openrouter_github_models_and_shared_daily_cap(self):
+    def test_worker_enables_gemini_groq_openrouter_and_shared_daily_cap(self):
         source = WORKER.read_text(encoding="utf-8")
-        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6, github_models: 6 });", source)
+        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6 });", source)
         self.assertIn("const CODE_AI_TOTAL_DAILY_LIMIT = 18;", source)
         self.assertIn("CODE_AI_TOTAL_DAILY_LIMIT", source)
         self.assertIn('"code_ai_provider_not_enabled"', source)

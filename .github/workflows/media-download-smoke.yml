@@ -81,7 +81,7 @@ jobs:
         run: |
           pnpm --filter @imput/cobalt-api start > "$RUNNER_TEMP/cobalt-api.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/cobalt-api.pid"
-          for attempt in $(seq 1 45); do
+          for _ in $(seq 1 45); do
             if curl --silent --show-error --fail http://127.0.0.1:9000/ -o "$RUNNER_TEMP/cobalt-health.json"; then
               echo "Local Cobalt API is ready."
               exit 0

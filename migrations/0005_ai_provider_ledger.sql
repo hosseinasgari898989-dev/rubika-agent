@@ -1,7 +1,7 @@
 -- Durable accounting for explicitly enabled code-repair AI provider requests.
--- The active ensemble uses Groq, OpenRouter, and GitHub Models.
--- Gemini remains enabled for its separately dispatched diagnostic smoke test;
--- Mistral is disabled. Cloudflare Workers AI remains for media/music tasks.
+-- The active code-repair ensemble uses Gemini, Groq, and OpenRouter.
+-- GitHub Models inference is retired; Mistral is disabled.
+-- Cloudflare Workers AI remains separate for music-presence and official-news translation.
 -- Reservations count even if the result is unknown.
 CREATE TABLE IF NOT EXISTS ai_provider_calls (
   call_id TEXT PRIMARY KEY CHECK (length(call_id) BETWEEN 16 AND 100),

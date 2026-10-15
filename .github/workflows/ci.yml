@@ -28,6 +28,12 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Set up Go for GitHub Actions workflow linting
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - name: Lint every GitHub Actions workflow with actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

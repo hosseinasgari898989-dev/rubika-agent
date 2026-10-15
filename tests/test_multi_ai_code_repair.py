@@ -8,10 +8,37 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain import multi_ai_code_repair as multi
-from agent.brain.ai_provider_clients import ProviderResult
+from agent.brain.ai_provider_clients import GROQ_MAX_PROMPT_CHARS, ProviderClientError, ProviderResult
 
+
+from agent.brain.multi_ai_code_repair import _safe_provider_failure
 
 class MultiAIRepairPreflightTests(unittest.TestCase):
+    def test_provider_failure_report_contains_only_sanitized_allowlisted_fields(self):
+        error = ProviderClientError(
+            "provider_http_400",
+            outcome="failed",
+            diagnostics={
+                "http_status": 400,
+                "provider_reason": "INVALID_ARGUMENT",
+                "provider_message": "Unsupported generation parameter temperature",
+                "detail_reasons": ["INVALID_GENERATION_CONFIG"],
+                "api_key": "must-not-appear",
+            },
+        )
+        report = _safe_provider_failure(error, role="propose_patch", provider="gemini")
+        self.assertEqual(report["role"], "propose_patch")
+        self.assertEqual(report["provider"], "gemini")
+        self.assertEqual(report["error_code"], "provider_http_400")
+        self.assertEqual(report["outcome"], "failed")
+        self.assertEqual(report["diagnostics"]["provider_reason"], "INVALID_ARGUMENT")
+        self.assertNotIn("api_key", json.dumps(report))
+        self.assertNotIn("must-not-appear", json.dumps(report))
+
+    def test_diagnosis_prompt_fits_groq_free_plan_budget(self):
+        prompt = multi._build_diagnosis_prompt("L" * 12000, "T" * 12000)
+        self.assertLessEqual(len(prompt), GROQ_MAX_PROMPT_CHARS)
+
     def test_missing_provider_secret_stops_before_any_request(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -21,7 +48,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             patch_path = root / "proposal.diff"
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,openrouter",
-                "CODE_AI_PROPOSER_PROVIDER": "github_models",
+                "CODE_AI_PROPOSER_PROVIDER": "gemini",
                 "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
                 "GROQ_API_KEY": "",
                 "OPENROUTER_API_KEY": "a" * 32,
@@ -50,7 +77,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             report_path = root / "report.json"
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,groq",
-                "CODE_AI_PROPOSER_PROVIDER": "github_models",
+                "CODE_AI_PROPOSER_PROVIDER": "gemini",
                 "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
@@ -69,7 +96,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
 
 
 class MultiAIEnsembleFlowTests(unittest.TestCase):
-    def _run_flow(self, review_decisions):
+    def _run_flow(self, review_decisions, proposal_patch=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             failure_log = root / "failure.log"
@@ -77,14 +104,15 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
             report_path = root / "report.json"
             patch_path = root / "proposal.diff"
             calls = []
-            proposal_patch = (
-                "diff --git a/src/app.py b/src/app.py\n"
-                "--- a/src/app.py\n"
-                "+++ b/src/app.py\n"
-                "@@ -1 +1 @@\n"
-                "-old\n"
-                "+new\n"
-            )
+            if proposal_patch is None:
+                proposal_patch = (
+                    "diff --git a/src/app.py b/src/app.py\n"
+                    "--- a/src/app.py\n"
+                    "+++ b/src/app.py\n"
+                    "@@ -1 +1 @@\n"
+                    "-old\n"
+                    "+new\n"
+                )
             proposal_json = json.dumps({
                 "summary": "Minimal repair",
                 "root_cause": "A synthetic fixture failure",
@@ -100,7 +128,7 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
                 if role == "diagnose":
                     return ProviderResult(provider, provider + "-test-model", provider + " diagnosis", {})
                 if role == "propose_patch":
-                    return ProviderResult(provider, "github-models-test-model", proposal_json, {})
+                    return ProviderResult(provider, "gemini-test-model", proposal_json, {})
                 decision = review_decisions.get(provider, "approve")
                 review_json = json.dumps({
                     "decision": decision,
@@ -111,7 +139,7 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
 
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,openrouter",
-                "CODE_AI_PROPOSER_PROVIDER": "github_models",
+                "CODE_AI_PROPOSER_PROVIDER": "gemini",
                 "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
                 "GROQ_API_KEY": "r" * 32,
                 "OPENROUTER_API_KEY": "o" * 32,
@@ -157,11 +185,30 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
             [
                 ("groq", "diagnose"),
                 ("openrouter", "diagnose"),
-                ("github_models", "propose_patch"),
+                ("gemini", "propose_patch"),
                 ("groq", "review_patch"),
                 ("openrouter", "review_patch"),
             ],
         )
+
+    def test_oversized_patch_is_preserved_for_human_review_without_reviewer_request(self):
+        oversized_patch = (
+            "diff --git a/src/app.py b/src/app.py\n"
+            "--- a/src/app.py\n"
+            "+++ b/src/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+" + ("x" * (GROQ_MAX_PROMPT_CHARS + 100)) + "\n"
+        )
+        code, report, calls, patch_exists = self._run_flow({}, proposal_patch=oversized_patch)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["status"], "human_review_required")
+        self.assertEqual(report["error_code"], "review_prompt_exceeds_free_plan_budget")
+        self.assertTrue(report["manual_review"])
+        self.assertEqual(report["review"]["decision"], "not_run")
+        self.assertTrue(patch_exists)
+        self.assertNotIn(("groq", "review_patch"), calls)
+        self.assertNotIn(("openrouter", "review_patch"), calls)
 
     def test_one_reviewer_veto_blocks_patch_promotion(self):
         code, report, calls, patch_exists = self._run_flow({"groq": "reject"})

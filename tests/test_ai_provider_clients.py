@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import socket
 import unittest
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
 from agent.brain import ai_provider_clients as clients
@@ -52,8 +53,8 @@ class FakeLedger:
             raise UsageLedgerError("code_ai_ledger_unavailable")
         return {"reserved": True, "call_id": "test-provider-call-0001"}
 
-    def finish(self, *, provider, call_id, outcome, error_code=None, usage=None):
-        self.events.append(("finish", provider, outcome, error_code, dict(usage or {})))
+    def finish(self, *, provider, call_id, outcome, error_code=None, usage=None, retry_after_seconds=None):
+        self.events.append(("finish", provider, outcome, error_code, dict(usage or {}), retry_after_seconds))
         if self.fail_finish:
             raise UsageLedgerError("usage_ledger_unreachable")
         return {"ok": True, "call_id": call_id, "outcome": outcome}
@@ -73,20 +74,15 @@ class ProviderClientTests(unittest.TestCase):
         with self.assertRaises(clients.ProviderClientError) as caught:
             clients.provider_config("openrouter", environ={})
         self.assertEqual(caught.exception.code, "openrouter_api_key_missing")
-        with self.assertRaises(clients.ProviderClientError) as caught:
-            clients.provider_config("mistral", environ={"MISTRAL_API_KEY": "m" * 32})
-        self.assertEqual(caught.exception.code, "provider_not_enabled")
+        for retired_provider in ("mistral", "github_models"):
+            with self.subTest(provider=retired_provider), self.assertRaises(clients.ProviderClientError) as caught:
+                clients.provider_config(retired_provider, environ={"GITHUB_TOKEN": "g" * 40})
+            self.assertEqual(caught.exception.code, "provider_not_enabled")
 
     def test_current_provider_defaults_are_explicit_and_configurable(self):
         groq = clients.provider_config("groq", environ={"GROQ_API_KEY": "g" * 32})
         self.assertEqual(groq.model, "openai/gpt-oss-20b")
         self.assertEqual(groq.url, "https://api.groq.com/openai/v1/chat/completions")
-
-        github_models = clients.provider_config("github_models", environ={
-            "GITHUB_TOKEN": "g" * 40,
-        })
-        self.assertEqual(github_models.model, "openai/gpt-4o")
-        self.assertEqual(github_models.url, "https://models.github.ai/inference/chat/completions")
 
         openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
         self.assertEqual(openrouter.model, "openrouter/free")
@@ -122,6 +118,44 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("X-goog-api-key"), config.api_key)
         request_body = json.loads(opener.request.data.decode("utf-8"))
         self.assertEqual(request_body["generationConfig"]["responseMimeType"], "application/json")
+        self.assertEqual(request_body["generationConfig"]["thinkingConfig"]["thinkingLevel"], "low")
+        self.assertNotIn("temperature", request_body["generationConfig"])
+
+    def test_gemini_400_invalid_argument_preserves_safe_reason_and_message(self):
+        config = clients.ProviderConfig(
+            "gemini", "g" * 32, "gemini-3.8-flash",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        )
+        body = {"error": {
+            "code": 400,
+            "message": "Unsupported generation parameter temperature; see https://example.invalid/path?key=secret",
+            "status": "INVALID_ARGUMENT",
+            "details": [{"reason": "INVALID_GENERATION_CONFIG"}],
+        }}
+        error = HTTPError(config.url, 400, "bad request", {}, io.BytesIO(json.dumps(body).encode()))
+        opener = FakeOpener(error=error)
+        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.invoke_provider(config, "safe prompt")
+        self.assertEqual(caught.exception.code, "provider_http_400")
+        self.assertEqual(caught.exception.outcome, "failed")
+        self.assertEqual(caught.exception.diagnostics["provider_reason"], "INVALID_ARGUMENT")
+        self.assertEqual(caught.exception.diagnostics["detail_reasons"], ["INVALID_GENERATION_CONFIG"])
+        self.assertIn("Unsupported generation parameter temperature", caught.exception.diagnostics["provider_message"])
+        self.assertNotIn("secret", json.dumps(caught.exception.diagnostics))
+
+    def test_gemini_dns_failure_is_unknown_but_has_safe_network_diagnostic(self):
+        config = clients.ProviderConfig(
+            "gemini", "g" * 32, "gemini-3.8-flash",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        )
+        opener = FakeOpener(error=URLError(socket.gaierror(-2, "Name or service not known")))
+        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.invoke_provider(config, "safe prompt")
+        self.assertEqual(caught.exception.code, "provider_network_result_unknown")
+        self.assertEqual(caught.exception.outcome, "unknown")
+        self.assertEqual(caught.exception.diagnostics["provider_reason"], "dns_resolution_failed")
 
     def test_groq_openai_compatible_response_is_normalized(self):
         config = clients.ProviderConfig(
@@ -139,26 +173,6 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
 
-    def test_github_models_openai_compatible_response_is_normalized(self):
-        config = clients.ProviderConfig(
-            "github_models", "g" * 40, "openai/gpt-4o",
-            "https://models.github.ai/inference/chat/completions",
-        )
-        opener = FakeOpener(FakeResponse({
-            "choices": [{"message": {"content": '{"summary":"safe"}'}}],
-            "usage": {"prompt_tokens": 22, "completion_tokens": 11, "total_tokens": 33},
-        }))
-        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
-            result = clients.invoke_provider(config, "safe prompt")
-        self.assertEqual(result.text, '{"summary":"safe"}')
-        self.assertEqual(result.provider, "github_models")
-        self.assertEqual(result.usage["totalTokenCount"], 33)
-        self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
-        self.assertNotIn(config.api_key, opener.request.full_url)
-        body = json.loads(opener.request.data.decode("utf-8"))
-        self.assertEqual(body["model"], "openai/gpt-4o")
-        self.assertEqual(body["messages"][1]["content"], "safe prompt")
-
     def test_openrouter_chat_completion_response_is_normalized(self):
         config = clients.ProviderConfig(
             "openrouter", "o" * 32, "openrouter/free",
@@ -175,6 +189,24 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
         self.assertEqual(json.loads(opener.request.data.decode("utf-8"))["model"], "openrouter/free")
+
+    def test_groq_prompt_over_free_plan_budget_is_rejected_before_ledger_reservation(self):
+        ledger = FakeLedger()
+        oversized = "x" * (clients.GROQ_MAX_PROMPT_CHARS + 1)
+        with patch.object(clients, "provider_config") as configure, patch.object(
+            clients, "invoke_provider"
+        ) as invoke:
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.call_provider_with_ledger(
+                    provider="groq",
+                    role="diagnose",
+                    prompt=oversized,
+                    usage_client=ledger,
+                )
+        self.assertEqual(caught.exception.code, "provider_prompt_invalid")
+        self.assertEqual(ledger.events, [])
+        configure.assert_not_called()
+        invoke.assert_not_called()
 
     def test_provider_429_is_a_safe_rate_limited_error_without_raw_body(self):
         config = clients.ProviderConfig(
@@ -251,6 +283,55 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(timeouts, [45])
         self.assertEqual(ledger.events[0][0], "reserve")
         self.assertEqual(ledger.events[1][0:3], ("finish", "groq", "succeeded"))
+
+    def test_daily_quota_error_uses_long_cooldown_without_retrying(self):
+        ledger = FakeLedger()
+        config = clients.ProviderConfig(
+            "gemini", "g" * 32, "gemini-3.8-flash",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        )
+        failure = clients.ProviderClientError(
+            "provider_http_429",
+            outcome="failed",
+            diagnostics={
+                "http_status": 429,
+                "provider_reason": "RESOURCE_EXHAUSTED",
+                "detail_reasons": ["DAILY_QUOTA_LIMIT"],
+            },
+        )
+        with patch.object(clients, "provider_config", return_value=config), patch.object(
+            clients, "invoke_provider", side_effect=failure
+        ):
+            with self.assertRaises(clients.ProviderClientError):
+                clients.call_provider_with_ledger(
+                    provider="gemini", role="propose_patch", prompt="safe prompt", usage_client=ledger
+                )
+        finish = ledger.events[-1]
+        self.assertEqual(finish[3], "quota_exhausted")
+        self.assertEqual(finish[5], 86400)
+
+    def test_transient_rate_limit_honors_long_retry_after_without_retrying(self):
+        ledger = FakeLedger()
+        config = clients.ProviderConfig(
+            "gemini", "g" * 32, "gemini-3.8-flash",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        )
+        failure = clients.ProviderClientError(
+            "provider_http_429",
+            outcome="failed",
+            diagnostics={"http_status": 429, "retry_after_seconds": 7200},
+        )
+        with patch.object(clients, "provider_config", return_value=config), patch.object(
+            clients, "invoke_provider", side_effect=failure
+        ):
+            with self.assertRaises(clients.ProviderClientError):
+                clients.call_provider_with_ledger(
+                    provider="gemini", role="propose_patch", prompt="safe prompt", usage_client=ledger
+                )
+        finish = ledger.events[-1]
+        self.assertEqual(finish[3], "rate_limited")
+        self.assertEqual(finish[5], 7200)
+        self.assertEqual(sum(1 for event in ledger.events if event[0] == "reserve"), 1)
 
     def test_no_provider_request_occurs_when_reservation_fails(self):
         ledger = FakeLedger(fail_reserve=True)

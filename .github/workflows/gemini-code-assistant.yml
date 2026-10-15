@@ -10,7 +10,6 @@ permissions:
   actions: read
   contents: write
   pull-requests: write
-  models: read
 
 concurrency:
   group: rubika-agent-multi-ai-code-repair
@@ -38,6 +37,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          AI_FREE_TIER_APPROVED: ${{ vars.RUBIKA_AGENT_AI_FREE_TIER_APPROVED }}
         shell: bash
         run: |
           set -euo pipefail
@@ -47,6 +47,12 @@ jobs:
           if [[ "$failed_sha" != "$current_sha" ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             echo "Skipped: main has advanced since the failed run; no AI provider request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "${AI_FREE_TIER_APPROVED:-}" != "true" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped: the owner has not confirmed provider free-tier/billing settings; no AI provider request was sent." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -73,25 +79,20 @@ jobs:
             echo "Skipped: a repair branch for this failed commit already exists; it was not overwritten." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # Confirm the durable usage ledger recognizes GitHub Models and that
+          # Confirm the durable usage ledger recognizes Gemini and that
           # the provider/global daily budget is ready. This status request spends
           # no model tokens; failures skip the workflow before any model call.
           provider_status="$(curl --silent --show-error --connect-timeout 5 --max-time 10 \
             -H "Authorization: Bearer $AGENT_API_TOKEN" \
-            "${AGENT_API_BASE_URL%/}/api/brain/ai-provider/status?provider=github_models" 2>/dev/null || true)"
-          if ! printf '%s' "$provider_status" | python -c 'import json,sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-sys.exit(0 if data.get("ok") is True and data.get("provider") == "github_models" and data.get("ready") is True else 1)'; then
+            "${AGENT_API_BASE_URL%/}/api/brain/ai-provider/status?provider=gemini" 2>/dev/null || true)"
+          if ! printf '%s' "$provider_status" | python -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if data.get("ok") is True and data.get("provider") == "gemini" and data.get("ready") is True else 1)' 2>/dev/null; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipped: GitHub Models is not enabled in the production ledger or the bounded daily budget is exhausted; no model request was sent." >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped: Gemini is not enabled in the production ledger or the bounded daily budget is exhausted; no model request was sent." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           echo "should_run=true" >> "$GITHUB_OUTPUT"
-          echo "Preflight passed: GitHub Models and the bounded daily budget are ready; one limited multi-model repair attempt is permitted."
+          echo "Preflight passed: Gemini and the bounded daily budget are ready; one limited multi-model repair attempt is permitted."
 
       - name: Download the failed CI log to a temporary file
         if: steps.preflight.outputs.should_run == 'true'
@@ -132,9 +133,10 @@ sys.exit(0 if data.get("ok") is True and data.get("provider") == "github_models"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: openrouter/free
           CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter
-          CODE_AI_PROPOSER_PROVIDER: github_models
+          CODE_AI_PROPOSER_PROVIDER: gemini
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_MODELS_MODEL: openai/gpt-4o
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.8-flash
           CODE_AI_REVIEWER_PROVIDERS: groq,openrouter
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
@@ -161,6 +163,13 @@ sys.exit(0 if data.get("ok") is True and data.get("provider") == "github_models"
               summary.write(f"- Context files: {', '.join(report.get('selected_files', [])) or 'none'}\n")
               summary.write(f"- Confidence: {report.get('confidence', 'low')}\n")
               summary.write(f"- Explanation: {str(report.get('summary', ''))[:500]}\n")
+              failures = report.get("provider_failures", [])
+              if report.get("provider_failure"):
+                  failures = [*failures, report["provider_failure"]]
+              if failures:
+                  # The repair engine records only allowlisted status/reason codes
+                  # and redacted short messages, never raw responses or secrets.
+                  summary.write(f"- Safe provider diagnostics: {str(failures)[:1800]}\n")
               summary.write("- The model never receives the GitHub token; no patch is auto-merged.\n")
           PY
 
@@ -236,7 +245,7 @@ sys.exit(0 if data.get("ok") is True and data.get("provider") == "github_models"
             --base main \
             --head "$branch" \
             --title "Multi-AI proposal: bounded CI repair for $short_sha" \
-            --body "Automated multi-provider proposal after a failed Cloud bootstrap checks run. Groq and OpenRouter diagnose independently; GitHub Models proposes; Groq and OpenRouter must both approve before deterministic tests. Gemini remains available for its separately dispatched diagnostic smoke test, while Mistral is disabled. The patch is restricted to the code-repair allowlist; deterministic tests and human review remain mandatory. This PR is not auto-merged and does not change production or publishing gates."
+            --body "Automated multi-provider proposal after a failed Cloud bootstrap checks run. Groq and OpenRouter diagnose independently; Gemini proposes; Groq and OpenRouter must both approve before deterministic tests. Gemini remains available for its separately dispatched diagnostic smoke test, while Mistral is disabled. The patch is restricted to the code-repair allowlist; deterministic tests and human review remain mandatory. This PR is not auto-merged and does not change production or publishing gates."
 
       - name: Upload sanitized proposal only
         if: always() && steps.preflight.outputs.should_run == 'true'

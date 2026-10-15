@@ -188,7 +188,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertEqual(result["call_id"], CALL_ID)
 
     def test_ledger_client_allowlist_matches_enabled_providers(self):
-        expected = {"gemini", "groq", "openrouter", "github_models"}
+        expected = {"gemini", "groq", "openrouter"}
         self.assertEqual(ALLOWED_PROVIDERS, expected)
         client = CodeAIUsageLedger(
             "https://example.invalid",
@@ -207,6 +207,42 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
                         call_id=CALL_ID,
                     )
                 self.assertEqual(result["call_id"], CALL_ID)
+
+    def test_ledger_finish_sends_explicit_bounded_cooldown(self):
+        client = CodeAIUsageLedger(
+            "https://example.invalid",
+            "fake-ledger-token-for-offline-test-1234567890",
+        )
+        response = FakeResponse({"ok": True, "call_id": CALL_ID, "outcome": "failed"})
+        captured = {}
+        def open_request(request, timeout):
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            return response
+        with patch.object(client._opener, "open", side_effect=open_request):
+            client.finish(
+                provider="gemini",
+                call_id=CALL_ID,
+                outcome="failed",
+                error_code="rate_limited",
+                retry_after_seconds=7200,
+            )
+        self.assertEqual(captured["payload"]["retry_after_seconds"], 7200)
+
+    def test_ledger_finish_rejects_invalid_cooldown_before_network(self):
+        client = CodeAIUsageLedger(
+            "https://example.invalid",
+            "fake-ledger-token-for-offline-test-1234567890",
+        )
+        with patch.object(client._opener, "open") as opener:
+            with self.assertRaisesRegex(UsageLedgerError, "code_ai_retry_after_invalid"):
+                client.finish(
+                    provider="gemini",
+                    call_id=CALL_ID,
+                    outcome="failed",
+                    error_code="rate_limited",
+                    retry_after_seconds=90000,
+                )
+        opener.assert_not_called()
 
     def test_ledger_client_never_follows_a_429_budget_response(self):
         client = CodeAIUsageLedger(
@@ -228,22 +264,27 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(UsageLedgerError, "usage_ledger_token_missing_or_short"):
             CodeAIUsageLedger("https://example.invalid", "short")
 
-    def test_active_repair_workflow_uses_github_models_and_excludes_mistral_and_gemini(self):
+    def test_active_repair_workflow_uses_gemini_and_excludes_retired_providers(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github" / "workflows" / "gemini-code-assistant.yml").read_text(encoding="utf-8")
         self.assertIn("python -m agent.brain.multi_ai_code_repair", workflow)
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
-        self.assertIn("models: read", workflow)
         self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
-        self.assertIn("GITHUB_MODELS_MODEL: openai/gpt-4o", workflow)
+        self.assertIn("GEMINI_MODEL: gemini-3.8-flash", workflow)
+        self.assertIn("GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}", workflow)
         self.assertIn("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}", workflow)
         self.assertIn("OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}", workflow)
         self.assertIn("CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("CODE_AI_PROPOSER_PROVIDER: github_models", workflow)
+        self.assertIn("CODE_AI_PROPOSER_PROVIDER: gemini", workflow)
         self.assertIn("CODE_AI_REVIEWER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("status?provider=github_models", workflow)
+        self.assertIn("status?provider=gemini", workflow)
+        smoke = (root / ".github" / "workflows" / "multi-ai-live-smoke.yml").read_text(encoding="utf-8")
+        self.assertNotRegex(smoke, r"(?m)^  push:")
+        self.assertIn("confirm_model_requests", smoke)
+        self.assertIn("default: false", smoke)
+        self.assertIn('expected = {"gemini", "groq", "openrouter"}', smoke)
         self.assertNotIn("MISTRAL_API_KEY", workflow)
-        self.assertNotIn("GEMINI_API_KEY", workflow)
+        self.assertNotIn("GITHUB_MODELS_MODEL", workflow)
         self.assertNotIn("AI.run", workflow)
         provider_source = (root / "agent" / "brain" / "ai_provider_clients.py").read_text(encoding="utf-8")
         helper_source = provider_source.split("def call_provider_with_ledger(", 1)[1]
