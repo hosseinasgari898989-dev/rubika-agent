@@ -111,11 +111,11 @@ jobs:
           GEMINI_MODEL: gemini-3.8-flash
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: openai/gpt-oss-20b
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: openrouter/free
           CODE_AI_DIAGNOSER_PROVIDER: groq
           CODE_AI_PROPOSER_PROVIDER: gemini
-          CODE_AI_REVIEWER_PROVIDER: anthropic
+          CODE_AI_REVIEWER_PROVIDER: openrouter
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
@@ -216,7 +216,7 @@ jobs:
             --base main \
             --head "$branch" \
             --title "Multi-AI proposal: bounded CI repair for $short_sha" \
-            --body "Automated multi-provider proposal after a failed Cloud bootstrap checks run. Groq diagnoses, Gemini proposes, and Anthropic independently reviews before deterministic tests. The patch was restricted to the code-repair allowlist; compileall, the full Python tests, the project self-test, and Worker unit tests passed in a clean runner. Human review is required. This PR is not auto-merged and does not change production or publishing gates."
+            --body "Automated multi-provider proposal after a failed Cloud bootstrap checks run. Groq diagnoses, Gemini proposes, and OpenRouter's free-model router independently reviews before deterministic tests. The patch was restricted to the code-repair allowlist; compileall, the full Python tests, the project self-test, and Worker unit tests passed in a clean runner. Human review is required. This PR is not auto-merged and does not change production or publishing gates."
 
       - name: Upload sanitized proposal only
         if: always() && steps.preflight.outputs.should_run == 'true'
