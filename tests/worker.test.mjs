@@ -747,6 +747,18 @@ function supervisorInput(extra = {}) {
 }
 {
   const state = env();
+  state.AI = { run: async () => { throw new Error("mock-provider-internal-message"); } };
+  const response = await read(await worker.fetch(supervisorRequest(supervisorInput()), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.source, "deterministic_fallback");
+  assert.equal(response.body.recommendation.reason_code, "unknown_error");
+  assert.equal(response.body.applied, false);
+  assert.equal(JSON.stringify(response.body).includes("mock-provider-internal-message"), false);
+  const decision = state.DB.events.find(event => event.code === "ai_supervisor_decision");
+  assert.equal(JSON.parse(decision.details_json).reason_code, "unknown_error");
+}
+{
+  const state = env();
   state.AI = makeSupervisorAI("{}");
   const response = await read(await worker.fetch(supervisorRequest(supervisorInput({
     event_code: "arbitrary",
