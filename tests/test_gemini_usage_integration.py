@@ -188,7 +188,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertEqual(result["call_id"], CALL_ID)
 
     def test_ledger_client_allowlist_matches_enabled_providers(self):
-        expected = {"gemini", "groq", "openrouter", "workers_ai"}
+        expected = {"gemini", "groq", "openrouter", "github_models"}
         self.assertEqual(ALLOWED_PROVIDERS, expected)
         client = CodeAIUsageLedger(
             "https://example.invalid",
@@ -228,17 +228,19 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(UsageLedgerError, "usage_ledger_token_missing_or_short"):
             CodeAIUsageLedger("https://example.invalid", "short")
 
-    def test_active_repair_workflow_uses_workers_ai_and_excludes_mistral_and_gemini(self):
+    def test_active_repair_workflow_uses_github_models_and_excludes_mistral_and_gemini(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github" / "workflows" / "gemini-code-assistant.yml").read_text(encoding="utf-8")
         self.assertIn("python -m agent.brain.multi_ai_code_repair", workflow)
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
+        self.assertIn("models: read", workflow)
+        self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
         self.assertIn("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}", workflow)
         self.assertIn("OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}", workflow)
         self.assertIn("CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("CODE_AI_PROPOSER_PROVIDER: workers_ai", workflow)
+        self.assertIn("CODE_AI_PROPOSER_PROVIDER: github_models", workflow)
         self.assertIn("CODE_AI_REVIEWER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("status?provider=workers_ai", workflow)
+        self.assertIn("status?provider=github_models", workflow)
         self.assertNotIn("MISTRAL_API_KEY", workflow)
         self.assertNotIn("GEMINI_API_KEY", workflow)
         self.assertNotIn("AI.run", workflow)
