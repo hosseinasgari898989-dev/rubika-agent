@@ -223,7 +223,7 @@ class AIRoleCoordinator:
             raise CoordinatorInputError("review_requires_patch_proposal")
 
         context = _encode_json_object(
-            initial_context or {}, max_bytes=MAX_INPUT_BYTES,
+            ( {} if initial_context is None else initial_context), max_bytes=MAX_INPUT_BYTES,
             error_code="initial_context_invalid_or_too_large",
         )
         clean_steps = [
