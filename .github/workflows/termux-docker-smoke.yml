@@ -1,0 +1,116 @@
+name: Termux Docker compatibility smoke test
+
+on:
+  push:
+    branches:
+      - agent-brain-mega-v1
+    paths:
+      - .github/workflows/termux-docker-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: termux-docker-smoke-final-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  termux-runtime-and-live-discovery:
+    name: Verify Termux runtime and metadata-only discovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out the experimental project code
+        uses: actions/checkout@v4
+        with:
+          ref: agent-brain-mega-v1
+          persist-credentials: false
+
+      - name: Verify the hosted runner provides Docker
+        run: docker version
+
+      - name: Install and test the real Termux Docker environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 240s docker pull termux/termux-docker:x86_64
+
+          cat > "$RUNNER_TEMP/termux_docker_live_smoke.py" <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          from termux.daily_discovery import collect_daily_report
+
+          report_path = Path.home() / "tmp" / "termux-docker-smoke-report.json"
+          report = collect_daily_report(output_path=report_path)
+          summary = report.get("summary", {})
+          candidates = report.get("candidates", {})
+          tiktok = candidates.get("tiktok", [])
+          mob = candidates.get("mob_official", [])
+
+          print("TERMUX_DOCKER_RUNTIME=ready")
+          print("LIVE_METADATA_SUMMARY=" + json.dumps({
+              "generated_at": report.get("generated_at"),
+              "tiktok_candidates": len(tiktok) if isinstance(tiktok, list) else 0,
+              "mob_official_candidates": len(mob) if isinstance(mob, list) else 0,
+              "paid_providers_used": summary.get("paid_providers_used", []),
+              "media_downloads": summary.get("media_downloads", 0),
+              "rubika_posts": summary.get("rubika_posts", 0),
+          }, ensure_ascii=False, sort_keys=True))
+
+          for attempt in report.get("attempts", []):
+              if not isinstance(attempt, dict):
+                  continue
+              safe = {}
+              for key in ("source", "method", "status", "result_count", "candidate_count",
+                          "http_status", "error", "reason"):
+                  value = attempt.get(key)
+                  if value is not None:
+                      safe[key] = value
+              if safe:
+                  print("SOURCE_ATTEMPT=" + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+
+          total = (len(tiktok) if isinstance(tiktok, list) else 0) + (
+              len(mob) if isinstance(mob, list) else 0
+          )
+          if total == 0:
+              raise SystemExit(
+                  "Termux runtime installed, but both live discovery lanes returned zero candidates. "
+                  "Do not enable scheduled collection until source access is diagnosed."
+              )
+          if not isinstance(tiktok, list) or not tiktok:
+              print("LIVE_DISCOVERY_STATUS=partial_tiktok_zero")
+          elif not isinstance(mob, list) or not mob:
+              print("LIVE_DISCOVERY_STATUS=partial_mob_zero")
+          else:
+              print("LIVE_DISCOVERY_STATUS=both_lanes_returned_candidates")
+          print("SAFETY=metadata_only; no media downloads; no GitHub push; no Rubika publishing")
+          PY
+
+          timeout 20m docker run --rm -i \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -w /workspace \
+            -e PYTHONPATH=/workspace \
+            termux/termux-docker:x86_64 \
+            sh -lc '
+              set -eu
+              echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
+              timeout 180s pkg update -y
+              timeout 240s pkg install -y python git
+              mkdir -p "$HOME/.venvs"
+              VENV_DIR="$HOME/.venvs/termux-docker"
+              python -m venv "$VENV_DIR"
+              export PATH="$VENV_DIR/bin:$PATH"
+              timeout 240s python -m pip install --disable-pip-version-check --retries 2 --timeout 20 requests yt-dlp==2026.08.19
+              python --version
+              echo "PYTHON_DEPENDENCIES=ready"
+              python -c "import requests, yt_dlp; print(requests.__version__, yt_dlp.version.__version__)"
+              timeout 90s python -m unittest discover -s tests -p "test_termux_sources.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_termux_instagram.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
+              timeout 90s python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
+              timeout 12m python -
+            ' < "$RUNNER_TEMP/termux_docker_live_smoke.py"

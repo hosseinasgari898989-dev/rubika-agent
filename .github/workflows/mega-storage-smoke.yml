@@ -1,0 +1,105 @@
+name: MEGA storage upload-download smoke test
+
+on:
+  push:
+    branches:
+      - media-download-smoke-test
+    paths:
+      - ".github/workflows/mega-storage-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-mega-storage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check required MEGA credentials without printing them
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          if [ -z "$MEGA_EMAIL" ] || [ -z "$MEGA_PASSWORD" ]; then
+            echo "::error::Add repository Actions secrets MEGA_EMAIL and MEGA_PASSWORD first. No MEGA login or file operation was attempted."
+            exit 2
+          fi
+
+      - name: Install official MEGAcmd package
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/megacmd-xUbuntu_24.04_amd64.deb"
+          curl --fail --silent --show-error --location \
+            "https://mega.nz/linux/repo/xUbuntu_24.04/amd64/megacmd-xUbuntu_24.04_amd64.deb" \
+            --output "$package"
+          sudo apt-get update
+          sudo apt-get install --yes "$package"
+          command -v mega-login
+          command -v mega-put
+          command -v mega-get
+
+      - name: Log in securely
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          mega-whoami >/dev/null
+          echo "MEGA login verified; account details are not printed."
+
+      - name: Upload, download, compare, and remove a tiny test file
+        run: |
+          set -euo pipefail
+          remote_dir="/Rubika-Agent"
+          test_name="mega-storage-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          remote_file="$remote_dir/$test_name"
+          local_file="$RUNNER_TEMP/$test_name"
+          download_dir="$RUNNER_TEMP/mega-roundtrip"
+          uploaded="false"
+
+          cleanup() {
+            if [ "$uploaded" = "true" ]; then
+              mega-rm "$remote_file" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          mkdir -p "$download_dir"
+          printf 'Rubika-Agent MEGA round-trip test\nrun=%s\nattempt=%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$local_file"
+          expected_sha="$(sha256sum "$local_file" | awk '{print $1}')"
+
+          mega-ls "$remote_dir" >/dev/null
+          echo "Existing MEGA destination folder is accessible."
+          mega-put "$local_file" "$remote_dir/"
+          uploaded="true"
+
+          mega-get "$remote_file" "$download_dir/"
+          cmp --silent "$local_file" "$download_dir/$test_name"
+          actual_sha="$(sha256sum "$download_dir/$test_name" | awk '{print $1}')"
+          test "$expected_sha" = "$actual_sha"
+
+          echo "MEGA_UPLOAD_OK=true"
+          echo "MEGA_DOWNLOAD_OK=true"
+          echo "SHA256_MATCH=true"
+          echo "TEST_FILE_CLEANUP=true"
+
+          summary="$GITHUB_STEP_SUMMARY"
+          {
+            echo "## MEGA storage round-trip"
+            echo ""
+            echo "- Upload: ✅"
+            echo "- Download: ✅"
+            echo "- SHA-256 comparison: ✅"
+            echo "- Temporary test file removed from MEGA: ✅"
+            echo "- Destination folder: `/Rubika-Agent`"
+            echo ""
+            echo "Only a tiny text test file was used; no real media was changed."
+          } >> "$summary"
+
+      - name: Log out and stop MEGAcmd
+        if: always()
+        run: |
+          mega-logout >/dev/null 2>&1 || true
+          mega-quit >/dev/null 2>&1 || true

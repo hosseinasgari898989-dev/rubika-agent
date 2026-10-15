@@ -1,0 +1,107 @@
+name: Add Termux discoveries to persistent queue
+
+on:
+  # Manual recovery only: the scheduled collector already performs one capped intake.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: rubika-agent-queue-intake
+  cancel-in-progress: false
+
+jobs:
+  enqueue-metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+    steps:
+      - name: Check out submitted metadata report
+        uses: actions/checkout@v4
+        with:
+          ref: agent-brain-mega-v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Validate and enqueue metadata
+        run: |
+          set -euo pipefail
+          if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 ]]; then
+            echo "::error::Missing AGENT_API_TOKEN secret; no queue records were added."
+            exit 2
+          fi
+          python -m agent.brain.queue_intake --report artifacts/termux_discovery.json
+
+      - name: Start the daily queue worker now
+        id: dispatch_daily
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/daily-queue-processor.yml"
+          headers=(-H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28")
+
+          metadata_code="$(curl --silent --show-error --output "$RUNNER_TEMP/daily-workflow-metadata.json" --write-out '%{http_code}' "${headers[@]}" "$workflow_api" || true)"
+          echo "workflow_metadata_http=${metadata_code:-request_failed}"
+          if [[ "$metadata_code" == "200" ]]; then
+            jq -r '"workflow_name=\(.name // "n/a") workflow_path=\(.path // "n/a") workflow_state=\(.state // "n/a")"' "$RUNNER_TEMP/daily-workflow-metadata.json" || echo "workflow_metadata_parse=failed"
+          else
+            jq -r '"workflow_metadata_message=\((.message // "n/a" | tostring)[:180])"' "$RUNNER_TEMP/daily-workflow-metadata.json" 2>/dev/null || echo "workflow_metadata_body=unavailable"
+          fi
+
+          response_code="$(curl --silent --show-error --output "$RUNNER_TEMP/dispatch-response.json" --write-out '%{http_code}' \
+            --request POST "${headers[@]}" \
+            -H "Content-Type: application/json" \
+            --data '{"ref":"main"}' \
+            "$workflow_api/dispatches" || true)"
+          echo "dispatch_http=${response_code:-request_failed}"
+          if [[ "$response_code" != "204" ]]; then
+            jq -r '[
+              ((.message // "n/a") | tostring | .[0:200] | gsub("[\r\n]"; " ")),
+              ((.documentation_url // "n/a") | tostring | .[0:200])
+            ] | "dispatch_error_message=\(.[0])\ndispatch_error_documentation_url=\(.[1])"' "$RUNNER_TEMP/dispatch-response.json" 2>/dev/null || echo "dispatch_error_body=unavailable"
+            echo "::warning::Queue was saved, but immediate processing dispatch failed; see the sanitized GitHub API diagnostic above."
+            exit 1
+          fi
+          echo "The saved queue was dispatched; the processor's fail-closed release gate must be explicitly approved before any publishing can occur."
+      - name: Notify owner if immediate processing dispatch failed
+        if: steps.dispatch_daily.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify \
+            --event workflow_failed \
+            --workflow "Queue intake: immediate dispatch" \
+            --reason "daily_queue_dispatch_failed"
+
+      - name: Notify owner if intake failed
+        if: failure()
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify \
+            --event workflow_failed \
+            --workflow "Queue intake" \
+            --reason "queue_intake_failed"
+
+      - name: Upload intake report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-queue-intake
+          path: artifacts/termux_discovery.json
+          if-no-files-found: warn
+          retention-days: 7

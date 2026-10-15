@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "completed_at": "2026-10-14T23:29:30+00:00",
+  "report_generated_at": "2026-10-14T23:29:19.664337+00:00",
+  "queue_status": "enqueued",
+  "inserted_count": 4,
+  "candidate_pool_count": 40,
+  "selected_source_distribution": {
+    "saylex.aep812": 1,
+    "poppytv_ae": 1,
+    "meloaep_": 1,
+    "menezxl9": 1
+  },
+  "selected_external_ids": [
+    "7694281183424695566",
+    "7692118289916366100",
+    "7692305726496050484",
+    "7693269088096800020"
+  ],
+  "mode": "metadata_only_no_download_no_publish",
+  "verification": {
+    "workflow_run_id": 38654154614,
+    "workflow_run_url": "https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38654154614",
+    "note": "Created from the verified successful run because that run started before the five-hour state-marker step was added."
+  }
+}

@@ -1,0 +1,28 @@
+"""Rubika-Agent's modular Python decision layer.
+
+Importing this package never publishes anything. Delivery requires an explicit caller.
+"""
+from .models import Candidate, InspectionResult, Evaluation
+from .policy import evaluate_edit_candidate, format_official_mob_caption
+from .official import evaluate_official_media
+from .inspector import inspect_media, sha256_file
+from .pipeline import BatchResult, StagedMedia, stage_edit_batch
+from .ledger import MegaLedger, new_state
+from .cloud_state import CloudState, CloudStateError
+from .relay_client import AuthorizedYouTubeRelay, RelayClientError
+from .authorization import SourceRegistry, SourceRegistryError, PermissionDecision
+from .orchestrator import StagingOrchestrator, StageJobResult, candidates_from_report
+from .official_stage import stage_official_media
+from .vision_moderator import CloudflareVideoModerator, VisionModeratorError
+
+__all__ = [
+    "Candidate", "InspectionResult", "Evaluation",
+    "evaluate_edit_candidate", "format_official_mob_caption",
+    "evaluate_official_media", "inspect_media", "sha256_file",
+    "BatchResult", "StagedMedia", "stage_edit_batch",
+    "MegaLedger", "new_state", "CloudState", "CloudStateError",
+    "AuthorizedYouTubeRelay", "RelayClientError",
+    "SourceRegistry", "SourceRegistryError", "PermissionDecision",
+    "StagingOrchestrator", "StageJobResult", "candidates_from_report",
+    "stage_official_media", "CloudflareVideoModerator", "VisionModeratorError",
+]

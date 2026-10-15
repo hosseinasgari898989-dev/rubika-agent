@@ -1,0 +1,991 @@
+"""One-item official Mob post trial: discover, translate, validate, dedupe, then optionally publish.
+
+Publishing is opt-in with --publish. The default mode is a dry-run and never sends
+anything to Rubika. Ambiguous delivery is never retried automatically.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import mimetypes
+import os
+import re
+import shutil
+import socket
+import tempfile
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import requests
+
+from agent.brain.cloud_state import CloudState, CloudStateError
+from agent.brain.inspector import inspect_media
+from agent.brain.mob_translation import format_mob_post
+from agent.brain.rubika_publisher import RubikaPublisher
+from agent.discovery.mob_official_complete import discover_all_official_posts
+from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
+
+MAX_MEDIA_BYTES = 100 * 1024 * 1024
+MAX_VIDEO_SECONDS = 600
+HTTP_TIMEOUT = (15, 45)
+USER_AGENT = "RubikaAgent-MobOfficialTrial/1.0"
+
+PREVIEW_MAX_AGE_DAYS = 90
+
+
+def preview_freshness_rejection(
+    candidate: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    max_age_days: int = PREVIEW_MAX_AGE_DAYS,
+) -> str | None:
+    """Keep old or undated items out of test previews; production has a stricter birth cutoff."""
+    if max_age_days < 1:
+        return "preview_age_policy_invalid"
+    raw = candidate.get("published_at")
+    if not isinstance(raw, str) or not raw.strip():
+        return "publication_time_unverified"
+    try:
+        published = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "publication_time_unverified"
+    if published.tzinfo is None:
+        return "publication_time_unverified"
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        return "preview_clock_timezone_required"
+    published = published.astimezone(timezone.utc)
+    current = current.astimezone(timezone.utc)
+    if published > current + timedelta(days=1):
+        return "publication_time_in_future"
+    if published < current - timedelta(days=max_age_days):
+        return "preview_candidate_older_than_90_days"
+    return None
+
+
+TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
+
+
+def _official_publishing_policy() -> dict[str, Any]:
+    config_path = Path(__file__).resolve().parents[2] / "config" / "mob_official_sources.json"
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    policy = payload.get("publishing") if isinstance(payload, dict) else None
+    return policy if isinstance(policy, dict) else {}
+
+
+def _official_publishing_config_enabled() -> bool:
+    policy = _official_publishing_policy()
+    return policy.get("enabled") is True and policy.get("mode") == "production"
+
+
+def _test_channel_publishing_config_enabled() -> bool:
+    policy = _official_publishing_policy()
+    return (
+        policy.get("enabled") is True
+        and policy.get("mode") == "test_channel_only"
+        and policy.get("target_channel_guid") == TEST_CHANNEL_GUID
+        and policy.get("max_posts_per_run") == 1
+    )
+
+
+
+def _safe_public_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if parsed.scheme != "https" or not host or parsed.username or parsed.password:
+            return False
+        if parsed.port not in {None, 443}:
+            return False
+        try:
+            address = __import__("ipaddress").ip_address(host)
+            return address.is_global
+        except ValueError:
+            # Source pages/CDNs are domain names. Do not follow explicit local names.
+            if host in {"localhost", "metadata.google.internal"} or host.endswith(".local"):
+                return False
+            return True
+    except ValueError:
+        return False
+
+
+def _youtube_or_vimeo(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return (
+        host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+        or host == "vimeo.com" or host.endswith(".vimeo.com")
+    )
+
+
+def _host_is_under(host: str, root: str) -> bool:
+    clean = str(host or "").lower().rstrip(".")
+    return clean == root or clean.endswith("." + root)
+
+
+def _direct_media_host_allowed(host: str, kind: str, source_platform: str) -> bool:
+    """Allow only media CDNs expected for that verified official source."""
+    clean = str(host or "").lower().rstrip(".")
+    if kind not in {"image", "video"}:
+        return False
+    if source_platform == "x":
+        root = "pbs.twimg.com" if kind == "image" else "video.twimg.com"
+        return _host_is_under(clean, root)
+    if source_platform == "website":
+        return any(
+            _host_is_under(clean, root)
+            for root in ("mobentertainment.com", "poppyplaytime.com")
+        )
+    if source_platform == "steam":
+        return any(_host_is_under(clean, root) for root in ("steamstatic.com", "akamaihd.net"))
+    return False
+
+
+def _download_direct(
+    url: str,
+    kind: str,
+    output_dir: Path,
+    *,
+    source_platform: str = "x",
+) -> Path:
+    if not _safe_public_url(url):
+        raise RuntimeError("media_url_rejected")
+    initial_host = (urlparse(url).hostname or "").lower().rstrip(".")
+    if not _direct_media_host_allowed(initial_host, kind, source_platform):
+        raise RuntimeError("official_media_host_not_allowed")
+    session = requests.Session()
+    partial = output_dir / "official_media.part"
+    try:
+        with session.get(
+            url,
+            headers={"User-Agent": USER_AGENT, "Accept": "image/*, video/*;q=0.9, */*;q=0.1"},
+            stream=True,
+            timeout=HTTP_TIMEOUT,
+            allow_redirects=True,
+        ) as response:
+            if response.status_code != 200:
+                raise RuntimeError("media_http_" + str(response.status_code))
+            final_url = str(getattr(response, "url", url) or url)
+            final_host = (urlparse(final_url).hostname or "").lower().rstrip(".")
+            if not _safe_public_url(final_url) or not _direct_media_host_allowed(final_host, kind, source_platform):
+                raise RuntimeError("media_redirect_rejected")
+            content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if content_type in {"text/html", "application/json", "text/plain"}:
+                raise RuntimeError("source_returned_non_media")
+            if kind == "image" and not content_type.startswith("image/"):
+                raise RuntimeError("expected_image_media")
+            if kind == "video" and not content_type.startswith("video/") and content_type != "application/octet-stream":
+                raise RuntimeError("expected_video_media")
+            declared = response.headers.get("Content-Length")
+            if declared:
+                try:
+                    if int(declared) > MAX_MEDIA_BYTES:
+                        raise RuntimeError("media_size_limit")
+                except ValueError:
+                    raise RuntimeError("media_invalid_content_length") from None
+            count = 0
+            with partial.open("wb") as output:
+                for chunk in response.iter_content(256 * 1024):
+                    if not chunk:
+                        continue
+                    count += len(chunk)
+                    if count > MAX_MEDIA_BYTES:
+                        raise RuntimeError("media_size_limit")
+                    output.write(chunk)
+            if count <= 1024:
+                raise RuntimeError("media_too_small")
+            guessed = mimetypes.guess_extension(content_type) or ""
+            suffix = Path(urlparse(final_url).path).suffix.lower()
+            allowed = {".jpg", ".jpeg", ".png", ".webp"} if kind == "image" else {".mp4", ".m4v", ".mov", ".webm", ".mkv"}
+            if suffix not in allowed:
+                suffix = guessed if guessed in allowed else (".jpg" if kind == "image" and content_type in {"image/jpeg", "image/jpg"} else ".png" if kind == "image" and content_type == "image/png" else ".webp" if kind == "image" and content_type == "image/webp" else ".mp4" if kind == "video" and content_type == "video/mp4" else "")
+            if suffix not in allowed:
+                raise RuntimeError("media_format_unsupported")
+            destination = output_dir / ("official_media" + suffix)
+            partial.replace(destination)
+            return destination
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
+    finally:
+        session.close()
+
+
+class _QuietYtDlpLogger:
+    """Keep extractor/challenge details out of workflow logs; reports use safe error codes."""
+
+    def debug(self, _message: str) -> None:
+        pass
+
+    def info(self, _message: str) -> None:
+        pass
+
+    def warning(self, _message: str) -> None:
+        pass
+
+    def error(self, _message: str) -> None:
+        pass
+
+
+def _download_video_page(url: str, output_dir: Path) -> Path:
+    if not _safe_public_url(url) or not _youtube_or_vimeo(url):
+        raise RuntimeError("video_page_host_not_allowed")
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("yt_dlp_not_installed") from None
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": _QuietYtDlpLogger(),
+        "noplaylist": True,
+        "ignoreerrors": False,
+        "socket_timeout": 20,
+        "retries": 1,
+        "extractor_retries": 1,
+        "max_filesize": MAX_MEDIA_BYTES,
+        "match_filter": yt_dlp.utils.match_filter_func("duration <= 600"),
+        "format": "best[ext=mp4][height<=1080]/best[ext=mp4]/best",
+        "merge_output_format": "mp4",
+        "outtmpl": str(output_dir / "official_video.%(ext)s"),
+        "overwrites": False,
+        "cachedir": False,
+    }
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.download([url])
+    except Exception as exc:
+        # Keep the report actionable without exposing URLs, query parameters or provider bodies.
+        raise RuntimeError("official_video_download_" + type(exc).__name__) from None
+    candidates = [
+        path for path in output_dir.glob("official_video.*")
+        if path.is_file() and path.suffix.lower() in {".mp4", ".m4v", ".mov", ".webm", ".mkv"}
+    ]
+    candidates = [path for path in candidates if path.stat().st_size > 0]
+    if not candidates:
+        raise RuntimeError("official_video_file_missing")
+    chosen = max(candidates, key=lambda path: path.stat().st_size)
+    if chosen.stat().st_size > MAX_MEDIA_BYTES:
+        raise RuntimeError("media_size_limit")
+    return chosen
+
+
+def download_and_validate(item: dict[str, Any], output_dir: Path) -> tuple[Path, dict[str, Any]]:
+    kind = str(item.get("media_type") or "")
+    media_url = str(item.get("media_url") or "")
+    if kind not in {"image", "video"} or not media_url:
+        raise RuntimeError("original_media_unavailable")
+    if kind == "video" and _youtube_or_vimeo(media_url):
+        path = _download_video_page(media_url, output_dir)
+    else:
+        path = _download_direct(media_url, kind, output_dir, source_platform=str(item.get("source_platform") or ""))
+
+    inspection = inspect_media(path, kind, max_bytes=MAX_MEDIA_BYTES)
+    if not inspection.ok:
+        path.unlink(missing_ok=True)
+        raise RuntimeError("media_validation_failed_" + (inspection.errors[0] if inspection.errors else "unknown"))
+    if kind == "video" and inspection.duration_seconds and inspection.duration_seconds > MAX_VIDEO_SECONDS:
+        path.unlink(missing_ok=True)
+        raise RuntimeError("video_duration_limit")
+    if kind != inspection.media_type:
+        path.unlink(missing_ok=True)
+        raise RuntimeError("media_type_mismatch")
+    return path, {
+        "ok": inspection.ok,
+        "media_type": inspection.media_type,
+        "sha256": inspection.sha256,
+        "size_bytes": inspection.size_bytes,
+        "mime_type": inspection.mime_type,
+        "width": inspection.width,
+        "height": inspection.height,
+        "duration_seconds": inspection.duration_seconds,
+        "has_audio": inspection.has_audio,
+        "video_codec": inspection.video_codec,
+        "audio_codec": inspection.audio_codec,
+        "errors": list(inspection.errors),
+        "warnings": list(inspection.warnings),
+    }
+
+
+def _parse_send_response(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _report(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def filter_candidates_by_birth_for_trial(
+    candidates: list[dict[str, Any]],
+    lifecycle_policy: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    allowed: list[dict[str, Any]] = []
+    rejected: list[dict[str, str]] = []
+    for candidate in candidates:
+        passes, reason = candidate_passes_birth_cutoff(candidate, policy=lifecycle_policy)
+        if passes:
+            allowed.append(candidate)
+        else:
+            rejected.append({
+                "id": str(candidate.get("external_id") or candidate.get("id") or "")[:120],
+                "reason": reason,
+            })
+    return allowed, rejected
+
+
+def _youtube_video_id(url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host == "youtu.be":
+        match = re.fullmatch(r"/([A-Za-z0-9_-]{11})/?", parsed.path)
+        return match.group(1) if match else ""
+    if host == "youtube.com" or host.endswith(".youtube.com"):
+        match = re.fullmatch(r"/(?:embed|shorts|live)/([A-Za-z0-9_-]{11})/?", parsed.path)
+        if match:
+            return match.group(1)
+        from urllib.parse import parse_qs
+        video_id = (parse_qs(parsed.query).get("v") or [""])[0]
+        return video_id if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id) else ""
+    return ""
+
+
+def load_official_candidates_from_report(report_path: Path) -> tuple[list[dict[str, Any]], str]:
+    """Accept official-source candidates only when their identity and original media URL agree."""
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], "termux_report_unreadable"
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or payload.get("source") != "termux_phone"
+        or payload.get("mode") != "metadata_only_no_download_no_publish"
+    ):
+        return [], "termux_report_invalid"
+
+    candidate_map = payload.get("candidates")
+    rows = candidate_map.get("mob_official", []) if isinstance(candidate_map, dict) else []
+    if not isinstance(rows, list):
+        return [], "mob_official_candidates_invalid"
+
+    valid: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        external_id = str(row.get("external_id") or row.get("id") or "")
+        canonical_url = str(row.get("canonical_url") or row.get("url") or "")
+        media_url = str(row.get("media_url") or "")
+        media_type = str(row.get("media_type") or "").lower()
+        source_platform = str(row.get("source_platform") or "").lower()
+        caption = str(row.get("original_caption") or row.get("caption") or "").strip()
+        try:
+            canonical = urlparse(canonical_url)
+            media = urlparse(media_url)
+        except ValueError:
+            continue
+        canonical_host = (canonical.hostname or "").lower().rstrip(".")
+        media_host = (media.hostname or "").lower().rstrip(".")
+        if (
+            row.get("platform") != "mob_official"
+            or row.get("official_source") is not True
+            or source_platform not in {"x", "website", "youtube", "steam"}
+            or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id)
+            or canonical.scheme != "https"
+            or not canonical_host
+            or canonical.username or canonical.password or canonical.fragment
+            or media.scheme != "https"
+            or not media_host or media.username or media.password or media.fragment
+            or media_type not in {"image", "video"}
+            or not caption
+        ):
+            continue
+
+        if source_platform == "x":
+            match = re.fullmatch(r"/mobgamesstudios/status/([0-9]{15,22})/?", canonical.path)
+            if (
+                canonical_host not in {"x.com", "www.x.com"}
+                or str(row.get("author") or "").lstrip("@").casefold() != "mobgamesstudios"
+                or not match
+                or external_id != "x-" + match.group(1)
+                or not _direct_media_host_allowed(media_host, media_type, "x")
+            ):
+                continue
+        elif source_platform == "website":
+            if not any(_host_is_under(canonical_host, root) for root in ("mobentertainment.com", "poppyplaytime.com")):
+                continue
+            if canonical.path in {"", "/"}:
+                continue
+            if media_type == "video" and not _youtube_or_vimeo(media_url):
+                if not _direct_media_host_allowed(media_host, media_type, "website"):
+                    continue
+            elif media_type == "image" and not _direct_media_host_allowed(media_host, media_type, "website"):
+                continue
+        elif source_platform == "youtube":
+            video_id = _youtube_video_id(canonical_url)
+            if (
+                not video_id
+                or external_id != "yt-" + video_id
+                or not (canonical_host == "youtu.be" or _host_is_under(canonical_host, "youtube.com"))
+                or media_type != "video"
+                or _youtube_video_id(media_url) != video_id
+            ):
+                continue
+        elif source_platform == "steam":
+            match = re.fullmatch(r"/games/1721470/announcements/detail/([0-9]{5,30})/?", canonical.path)
+            if (
+                not _host_is_under(canonical_host, "steamcommunity.com")
+                or not match
+                or external_id != "steam-" + match.group(1)
+            ):
+                continue
+            if media_type == "video" and _youtube_or_vimeo(media_url):
+                pass
+            elif not _direct_media_host_allowed(media_host, media_type, "steam"):
+                continue
+
+        if source_platform not in {"x", "youtube"} and media_type == "video" and _youtube_or_vimeo(media_url):
+            # The video page must be served by an explicitly supported public provider.
+            media_host_allowed = _youtube_video_id(media_url) or _host_is_under(media_host, "vimeo.com")
+            if not media_host_allowed:
+                continue
+        valid.append(row)
+    return valid[:25], "ok" if valid else "no_verified_official_posts_in_termux_report"
+
+
+# Backwards-compatible name for existing tests and callers. The validator now accepts
+# verified official fallback sources as well as X, while keeping X's strict author check.
+def load_x_candidates_from_report(report_path: Path) -> tuple[list[dict[str, Any]], str]:
+    return load_official_candidates_from_report(report_path)
+
+
+OFFICIAL_SOURCE_PLATFORMS = frozenset({"x", "website", "youtube", "steam"})
+
+
+def filter_official_candidates_by_source(
+    candidates: list[dict[str, Any]],
+    source_platform: str | None = None,
+) -> list[dict[str, Any]]:
+    """Restrict an official-news run to one verified source lane without cross-lane fallback."""
+    if source_platform is None:
+        return list(candidates)
+    lane = str(source_platform).strip().casefold()
+    if lane not in OFFICIAL_SOURCE_PLATFORMS:
+        raise ValueError("invalid_official_source_platform")
+    return [
+        item for item in candidates
+        if isinstance(item, dict)
+        and str(item.get("source_platform") or "").strip().casefold() == lane
+    ]
+
+
+def run_trial(
+    *,
+    publish: bool,
+    limit: int,
+    output_report: Path,
+    output_dir: Path,
+    candidate_report: Path | None = None,
+    test_channel_publish: bool = False,
+    source_platform: str | None = None,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "mode": (
+            "publish_one" if publish
+            else "publish_test_channel_one" if test_channel_publish
+            else "dry_run"
+        ),
+        "status": "failed",
+        "publishing": False,
+        "candidate_count": 0,
+        "selected": None,
+        "attempts": [],
+        "error": None,
+    }
+    api_base = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
+    token = os.getenv("AGENT_API_TOKEN", "")
+    try:
+        cloud = CloudState(api_base, token=token, timeout_seconds=20)
+        seen = cloud.get_seen_index()
+    except Exception as exc:
+        report["error"] = "cloud_state_unavailable_" + type(exc).__name__
+        _report(output_report, report)
+        return report
+
+    lifecycle_policy = load_lifecycle_policy()
+    if publish and test_channel_publish:
+        report["error"] = "conflicting_publish_modes"
+        _report(output_report, report)
+        return report
+
+    if publish:
+        if lifecycle_policy["mode"] != "production":
+            report["error"] = "publishing_requires_production_lifecycle"
+            report["lifecycle"] = {
+                "mode": lifecycle_policy["mode"],
+                "birth_cutoff_enabled": False,
+            }
+            _report(output_report, report)
+            return report
+        if not _official_publishing_config_enabled():
+            report["error"] = "official_publishing_config_disabled"
+            report["lifecycle"] = {
+                "mode": lifecycle_policy["mode"],
+                "born_at": lifecycle_policy["born_at"],
+                "birth_cutoff_enabled": True,
+            }
+            _report(output_report, report)
+            return report
+
+    if test_channel_publish:
+        if lifecycle_policy["mode"] != "test":
+            report["error"] = "test_channel_publish_requires_test_lifecycle"
+            report["lifecycle"] = {
+                "mode": lifecycle_policy["mode"],
+                "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+            }
+            _report(output_report, report)
+            return report
+        if not _test_channel_publishing_config_enabled():
+            report["error"] = "test_channel_publishing_config_disabled"
+            _report(output_report, report)
+            return report
+        if os.getenv("RUBIKA_CHANNEL_GUID", "").strip() != TEST_CHANNEL_GUID:
+            report["error"] = "test_channel_target_mismatch"
+            _report(output_report, report)
+            return report
+        if not os.getenv("RUBIKA_TOKEN", "").strip():
+            report["error"] = "rubika_credentials_missing"
+            _report(output_report, report)
+            return report
+
+    if candidate_report is not None:
+        candidates, source_result = load_official_candidates_from_report(candidate_report)
+        source_attempts = [{
+            "source": "termux_discovery_report",
+            "result": source_result,
+            "candidate_count": len(candidates),
+        }]
+    else:
+        candidates, source_attempts = discover_all_official_posts(max_results=12)
+
+    # Source-lane filtering happens before freshness, deduplication and media download.
+    # If the requested lane has no usable new post, do not silently backfill from
+    # another official account/platform (for example YouTube instead of X).
+    source_filter_input_count = len(candidates)
+    candidates = filter_official_candidates_by_source(candidates, source_platform)
+    if source_platform is not None:
+        report["source_platform_filter"] = source_platform
+        source_attempts.append({
+            "source": "official_source_lane_filter",
+            "requested_lane": source_platform,
+            "input_candidate_count": source_filter_input_count,
+            "candidate_count": len(candidates),
+            "result": "lane_candidates_found" if candidates else "no_candidates_in_requested_lane",
+        })
+
+    candidates, birth_rejections = filter_candidates_by_birth_for_trial(candidates, lifecycle_policy)
+    preview_rejections: list[dict[str, str]] = []
+    if not publish:
+        recent_candidates: list[dict[str, Any]] = []
+        preview_now = datetime.now(timezone.utc)
+        for item in candidates:
+            reason = preview_freshness_rejection(item, now=preview_now)
+            if reason:
+                preview_rejections.append({
+                    "id": str(item.get("external_id") or item.get("id") or "")[:120],
+                    "reason": reason,
+                })
+            else:
+                recent_candidates.append(item)
+        candidates = recent_candidates
+        report["preview_freshness"] = {
+            "max_age_days": PREVIEW_MAX_AGE_DAYS,
+            "rejected_count": len(preview_rejections),
+            "rejections": preview_rejections[:25],
+        }
+    report["lifecycle"] = {
+        "mode": lifecycle_policy["mode"],
+        "born_at": lifecycle_policy["born_at"],
+        "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+        "rejected_before_or_unverified": len(birth_rejections),
+    }
+    report["attempts"] = [
+        *source_attempts,
+        {
+            "source": "agent_lifecycle",
+            "mode": lifecycle_policy["mode"],
+            "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+            "rejected_count": len(birth_rejections),
+        },
+        *([{
+            "source": "preview_freshness",
+            "max_age_days": PREVIEW_MAX_AGE_DAYS,
+            "rejected_count": len(preview_rejections),
+        }] if not publish else []),
+    ]
+    report["candidate_count"] = len(candidates)
+    if not candidates:
+        # Old or undated items are never used as a test-preview fallback.
+        report["status"] = "nothing_new"
+        report["error"] = (
+            "no_recent_verified_official_mob_posts_found"
+            if preview_rejections
+            else "no_verified_official_posts_in_" + source_platform + "_lane"
+            if source_platform is not None
+            else "no_verified_official_mob_posts_found"
+        )
+        _report(output_report, report)
+        return report
+
+    ready_candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    unseen_candidate_count = 0
+    report["candidate_evaluations"] = []
+    for item in candidates:
+        external_id = str(item.get("external_id") or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
+            report["candidate_evaluations"].append({
+                "source_platform": item.get("source_platform"),
+                "result": "invalid_external_id",
+            })
+            continue
+        identity = "mob_official:" + external_id
+        if identity in seen["ids"] or external_id in seen["ids"]:
+            continue
+        unseen_candidate_count += 1
+
+        candidate_formatted = format_mob_post(
+            {
+                "source_name": "ماب انترتینمنت",
+                "original_caption": item.get("original_caption"),
+                "canonical_url": item.get("canonical_url"),
+                "title": item.get("title"),
+            }
+        )
+        original = str(candidate_formatted.get("original_caption") or "")
+        translated = str(candidate_formatted.get("persian_translation") or "")
+        outgoing = str(candidate_formatted.get("caption") or "")
+        if not original.strip():
+            result = "original_caption_unavailable"
+        elif candidate_formatted.get("translation_status") != "translated" or not translated.strip():
+            result = "persian_translation_unavailable"
+        elif re.search(
+            r"https?://|www\.|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?",
+            outgoing,
+            flags=re.IGNORECASE,
+        ):
+            result = "caption_contains_url"
+        else:
+            result = "ready"
+        report["candidate_evaluations"].append({
+            "source_platform": item.get("source_platform"),
+            "external_id": external_id,
+            "result": result,
+            "original_caption_chars": len(original),
+            "persian_translation_chars": len(translated),
+        })
+        if result == "ready":
+            ready_candidates.append((item, candidate_formatted))
+
+    if not ready_candidates:
+        if unseen_candidate_count == 0:
+            report["status"] = "nothing_new"
+            report["error"] = "all_complete_official_posts_already_known"
+        else:
+            report["status"] = "failed"
+            report["error"] = "no_new_official_post_had_a_verified_translation_and_link_free_caption"
+        _report(output_report, report)
+        return report
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    selected: dict[str, Any] | None = None
+    formatted: dict[str, Any] | None = None
+    media_path: Path | None = None
+    validation: dict[str, Any] | None = None
+    media_failures: list[dict[str, str]] = []
+    try:
+        # A bad or temporarily unreachable video must not block another valid official
+        # post. Each candidate gets an isolated directory so a partial download can
+        # never be mistaken for a later candidate's media.
+        for index, (item, candidate_formatted) in enumerate(ready_candidates[:12], start=1):
+            external_id = str(item.get("external_id") or "")
+            safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", external_id)[:80] or f"candidate-{index}"
+            candidate_dir = output_dir / f".candidate-{index:02d}-{safe_id}"
+            shutil.rmtree(candidate_dir, ignore_errors=True)
+            candidate_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                downloaded, candidate_validation = download_and_validate(item, candidate_dir)
+            except Exception as exc:
+                if isinstance(exc, RuntimeError):
+                    safe_detail = re.sub(r"[^A-Za-z0-9_-]", "", str(exc))[:80]
+                else:
+                    safe_detail = ""
+                error_code = "media_" + (
+                    safe_detail or re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "download_failed"
+                )
+                media_failures.append({
+                    "source_platform": str(item.get("source_platform") or "unknown")[:30],
+                    "external_id": external_id[:120],
+                    "error": error_code,
+                })
+                for evaluation in report["candidate_evaluations"]:
+                    if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
+                        evaluation["result"] = error_code
+                        break
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+                continue
+
+            if candidate_validation["sha256"] in seen["hashes"]:
+                for evaluation in report["candidate_evaluations"]:
+                    if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
+                        evaluation["result"] = "duplicate_media_hash"
+                        break
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+                continue
+
+            final_path = output_dir / (
+                f"official_{safe_id}_{candidate_validation['sha256'][:10]}{downloaded.suffix.lower()}"
+            )
+            if final_path.exists():
+                final_path.unlink()
+            downloaded.replace(final_path)
+            shutil.rmtree(candidate_dir, ignore_errors=True)
+            selected = item
+            formatted = candidate_formatted
+            media_path = final_path
+            validation = candidate_validation
+            for evaluation in report["candidate_evaluations"]:
+                if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
+                    evaluation["result"] = "selected_media_validated"
+                    break
+            break
+
+        if selected is None or formatted is None or media_path is None or validation is None:
+            report["media_candidate_failures"] = media_failures[:12]
+            if media_failures:
+                report["status"] = "failed"
+                report["error"] = "no_official_candidate_media_validated"
+            else:
+                report["status"] = "nothing_new"
+                report["error"] = "all_unseen_official_posts_had_known_media"
+            _report(output_report, report)
+            return report
+
+        report["selected"] = {
+            "source": selected.get("source_name"),
+            "source_platform": selected.get("source_platform"),
+            "external_id": selected.get("external_id"),
+            "title": selected.get("title"),
+            "published_at": selected.get("published_at"),
+            "media_type": selected.get("media_type"),
+        }
+        original_caption = str(formatted.get("original_caption") or "")
+        persian_translation = str(formatted.get("persian_translation") or "")
+        report["translation"] = {
+            "original_caption_available": bool(original_caption.strip()),
+            "original_caption_chars": len(original_caption),
+            "translation_status": str(formatted.get("translation_status") or "unknown"),
+            "persian_translation_available": bool(persian_translation.strip()),
+            "persian_translation_chars": len(persian_translation),
+        }
+        report["media"] = {
+            "file_name": media_path.name,
+            "size_bytes": media_path.stat().st_size,
+            "sha256": validation["sha256"],
+            "validation": validation,
+        }
+        caption = str(formatted["caption"])
+
+        payload = {
+            "platform": "mob_official",
+            "source_key": str(selected.get("source_key") or "mobentertainment.com"),
+            "external_id": str(selected["external_id"]),
+            "canonical_url": str(selected["canonical_url"]),
+            "title": str(selected.get("title") or ""),
+            "caption": caption,
+            "original_caption": str(formatted["original_caption"]),
+            "persian_translation": str(formatted["persian_translation"]),
+            "published_at": selected.get("published_at"),
+            "status": "ready",
+            "review_state": "pending",
+            "media_type": validation["media_type"],
+            "source_tier": "official",
+            "media_sha256": validation["sha256"],
+            "media_bytes": validation["size_bytes"],
+            "media_mime": validation["mime_type"],
+            "validation": validation,
+            "moderation": None,
+            "storage_key": None,
+        }
+        report["caption"] = caption
+        if not (publish or test_channel_publish):
+            report["status"] = "validated_preview"
+            report["publishing"] = False
+            _report(output_report, report)
+            return report
+
+        try:
+            cloud.upsert_item(payload)
+        except Exception as exc:
+            raw_code = getattr(exc, "code", None)
+            safe_code = raw_code if isinstance(raw_code, str) else type(exc).__name__
+            safe_code = re.sub(r"[^A-Za-z0-9_-]", "", safe_code)[:100] or "unknown_error"
+            report["error"] = "cloud_item_record_failed_" + safe_code
+            _report(output_report, report)
+            return report
+
+        rubika_token = os.getenv("RUBIKA_TOKEN", "")
+        channel_guid = os.getenv("RUBIKA_CHANNEL_GUID", "")
+        if not rubika_token or not channel_guid:
+            report["error"] = "rubika_credentials_missing"
+            _report(output_report, report)
+            return report
+
+        publisher = RubikaPublisher(rubika_token, channel_guid)
+        item_id = "mob_official:" + str(selected["external_id"])
+        try:
+            cloud.record_attempt(item_id, 1, "started")
+        except Exception as exc:
+            report["error"] = "cloud_attempt_start_failed_" + type(exc).__name__
+            _report(output_report, report)
+            return report
+
+        try:
+            response = publisher.send_media(media_path, validation["media_type"], caption)
+        except Exception as exc:
+            # The request might have reached Rubika before a transport error.
+            try:
+                cloud.record_attempt(item_id, 1, "uncertain", error_code="publisher_" + type(exc).__name__)
+            except Exception:
+                pass
+            report["status"] = "uncertain"
+            report["error"] = "rubika_delivery_uncertain_" + type(exc).__name__
+            report["publishing"] = True
+            _report(output_report, report)
+            return report
+
+        result = _parse_send_response(response)
+        status = result.get("status")
+        if isinstance(status, str) and status.upper() == "OK":
+            data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            message_id = data.get("message_id") or result.get("message_id")
+            try:
+                cloud.record_attempt(item_id, 1, "sent", message_id=str(message_id) if message_id is not None else None)
+            except Exception as exc:
+                report["status"] = "published_ledger_update_failed"
+                report["error"] = "sent_but_cloud_update_failed_" + type(exc).__name__
+                report["publishing"] = True
+                _report(output_report, report)
+                return report
+            report["status"] = "published"
+            report["publishing"] = True
+            report["rubika_message_id_recorded"] = message_id is not None
+            # Keep the published local copy. The existing cleanup policy requires
+            # age and durable sent-state checks before removing retained media.
+            report["media_retained_for_age_based_cleanup"] = True
+        elif isinstance(status, str) and status:
+            try:
+                cloud.record_attempt(item_id, 1, "failed", error_code="rubika_rejected_" + re.sub(r"[^A-Za-z0-9_-]", "", status.lower())[:40])
+            except Exception:
+                pass
+            report["status"] = "rejected"
+            report["error"] = "rubika_rejected_" + re.sub(r"[^A-Za-z0-9_-]", "", status.lower())[:40]
+        else:
+            try:
+                cloud.record_attempt(item_id, 1, "uncertain", error_code="ambiguous_response")
+            except Exception:
+                pass
+            report["status"] = "uncertain"
+            report["error"] = "rubika_response_ambiguous"
+            report["publishing"] = True
+    except Exception as exc:
+        report["error"] = "official_trial_" + type(exc).__name__ + ":" + re.sub(r"[^A-Za-z0-9_-]", "", str(exc))[:80]
+    finally:
+        _report(output_report, report)
+    return report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--publish", action="store_true", help="Actually send one validated new official post to the approved production channel.")
+    parser.add_argument("--publish-test-channel", action="store_true", help="Send exactly one validated recent official post to the hard-locked Rubika test channel only.")
+    parser.add_argument("--limit", type=int, default=1, choices=[1], help="Each official-source run is limited to exactly one post.")
+    parser.add_argument("--report", type=Path, default=Path("artifacts/mob-official-trial-report.json"))
+    parser.add_argument("--candidate-report", type=Path, default=None, help="Use the verified official-source candidates found by Termux instead of searching again.")
+    parser.add_argument("--source-platform", choices=sorted(OFFICIAL_SOURCE_PLATFORMS), default=None, help="Restrict this run to a verified source lane; never fall back to another lane.")
+    parser.add_argument("--output-dir", type=Path, default=Path("artifacts/mob-official-media"))
+    args = parser.parse_args()
+    result = run_trial(
+        publish=args.publish,
+        test_channel_publish=args.publish_test_channel,
+        limit=args.limit,
+        output_report=args.report,
+        output_dir=args.output_dir,
+        candidate_report=args.candidate_report,
+        source_platform=args.source_platform,
+    )
+    if args.publish or args.publish_test_channel:
+        try:
+            from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
+            status = str(result.get("status") or "unknown")
+            selected = result.get("selected") if isinstance(result.get("selected"), dict) else {}
+            if status == "published":
+                inventory = ""
+                try:
+                    inventory = queue_inventory_lines(
+                        CloudState(
+                            os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
+                            token=os.getenv("AGENT_API_TOKEN", ""),
+                            timeout_seconds=15,
+                        ).get_automation_queue_summary()
+                    )
+                except Exception:
+                    inventory = "📦 موجودی صف در این لحظه در دسترس نبود."
+                message = (
+                    "✅ خبر رسمی ماب انترتینمنت منتشر شد.\n"
+                    f"عنوان: {str(selected.get('title') or 'بدون عنوان')[:280]}\n"
+                    f"رسانه: {str(selected.get('media_type') or 'unknown')}\n"
+                    + inventory
+                )
+                send_owner_notification(message)
+            elif status in {"uncertain", "rejected", "published_ledger_update_failed", "failed"}:
+                error = re.sub(r"[^A-Za-z0-9_-]", "", str(result.get("error") or status))[:80]
+                send_owner_notification(
+                    "🚨 هشدار انتشار خبر رسمی ماب\n"
+                    f"وضعیت: {status}\nکد خطا: {error or 'unknown_error'}\n"
+                    "برای جلوگیری از انتشار تکراری، اجرای نامشخص خودکار تکرار نمی‌شود."
+                )
+        except Exception:
+            # Notification failures never cause a second post attempt.
+            pass
+    print(json.dumps({
+        "status": result.get("status"),
+        "publishing": result.get("publishing"),
+        "candidate_count": result.get("candidate_count"),
+        "selected": result.get("selected"),
+        "error": result.get("error"),
+        "report": str(args.report),
+    }, ensure_ascii=False, sort_keys=True))
+    return 0 if result.get("status") in {"validated_preview", "published", "nothing_new"} else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

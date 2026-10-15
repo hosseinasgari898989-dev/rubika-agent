@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: rubika-agent-authorized-relay
+    runtime: docker
+    plan: free
+    dockerfilePath: ./relay/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: RELAY_API_TOKEN
+        sync: false
+      - key: PYTHONUNBUFFERED
+        value: "1"
