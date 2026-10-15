@@ -104,6 +104,26 @@ Independent diagnoses (untrusted evidence):
 """
 
 
+def _safe_provider_failure(
+    exc: ProviderClientError,
+    *,
+    role: str,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """Return a bounded report record without raw prompts, source, URLs, or secrets."""
+    record: dict[str, Any] = {
+        "role": role,
+        "error_code": exc.code,
+        "outcome": exc.outcome,
+    }
+    if provider and provider in PROVIDERS:
+        record["provider"] = provider
+    if exc.diagnostics:
+        # ProviderClientError has already allowlisted and sanitized these fields.
+        record["diagnostics"] = dict(exc.diagnostics)
+    return record
+
+
 def _write_report(path: Path, report: dict[str, Any]) -> None:
     gemini._write_json(path, report)
 
@@ -160,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         "provider_roles": roles,
         "diagnoses": [],
         "reviews": [],
+        "provider_failures": [],
         "review": {"decision": "not_run", "blocking_reasons": ""},
     }
     try:
@@ -205,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         diagnostic_prompt = _build_diagnosis_prompt(log, readonly_test_context)
         diagnosis_results: dict[str, Any] = {}
         diagnosis_errors: dict[str, str] = {}
+        diagnosis_failure_records: list[dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=min(3, len(diagnosers))) as executor:
             future_providers = {
                 executor.submit(
@@ -226,12 +248,16 @@ def main(argv: list[str] | None = None) -> int:
                     record_usage(provider, dict(result.usage))
                 except ProviderClientError as exc:
                     diagnosis_errors[provider] = exc.code
+                    diagnosis_failure_records.append(
+                        _safe_provider_failure(exc, role="diagnose", provider=provider)
+                    )
 
         report["diagnoses"] = [
             {"provider": provider, "model": diagnosis_results[provider].model, "status": "succeeded"}
             for provider in diagnosers if provider in diagnosis_results
         ]
         report["diagnosis_errors"] = diagnosis_errors
+        report["provider_failures"].extend(diagnosis_failure_records)
         # A single model cannot establish sufficient independent evidence.
         if len(diagnosis_results) < 2:
             report.update(
@@ -394,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
             else "provider_unavailable",
             error_code=exc.code,
         )
+        active_role = "propose_patch" if report.get("request_roles_started") else "provider_preflight"
+        report["provider_failure"] = _safe_provider_failure(exc, role=active_role)
     except gemini.GeminiAssistantError as exc:
         report.update(status="proposal_invalid", error_code=str(exc))
     except gemini.PatchValidationError as exc:
