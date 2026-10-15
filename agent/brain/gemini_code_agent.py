@@ -92,6 +92,11 @@ def redact(text: str, secrets: tuple[str, ...] = ()) -> str:
     value = re.sub(r"\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED_API_KEY]", value)
     value = re.sub(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b", "[REDACTED_GITHUB_TOKEN]", value)
     value = re.sub(r"\bsk-[A-Za-z0-9_-]{20,}\b", "[REDACTED_API_KEY]", value)
+    value = re.sub(
+        r"""(?im)^(\s*[A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY)\s*=\s*)(?:"[^"\n]*"|'[^'\n]*')\s*$""",
+        lambda m: m.group(1) + '"[REDACTED]"',
+        value,
+    )
     value = re.sub(r"(?i)([?&](?:token|key|auth|signature|password|secret)=)[^&\s]+",
                    lambda m: m.group(1) + "[REDACTED]", value)
     value = re.sub(r"(https?://[^\s?]+)\?[^\s]+",
@@ -230,8 +235,12 @@ def validate_patch(patch: str, selected_paths: list[str]) -> list[str]:
 
 
 def parse_model_json(text: str) -> dict[str, Any]:
+    rendered = text.strip()
+    if rendered.startswith("```"):
+        rendered = re.sub(r"^\\```(?:json)?\\s*", "", rendered, flags=re.IGNORECASE)
+        rendered = re.sub(r"\\s*\\```$", "", rendered)
     try:
-        value = json.loads(text.strip())
+        value = json.loads(rendered)
     except json.JSONDecodeError:
         raise GeminiAssistantError("gemini_output_invalid_json") from None
     expected = {"summary", "root_cause", "patch", "confidence", "manual_review"}
