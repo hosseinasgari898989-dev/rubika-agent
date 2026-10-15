@@ -54,11 +54,37 @@ _PROVIDER_CONFIG = {
 
 
 class ProviderClientError(RuntimeError):
-    """Safe provider failure; never contains response or credential text."""
+    """Safe provider failure; never contains raw response or credential text."""
 
-    def __init__(self, code: str, *, outcome: str = "failed"):
+    def __init__(
+        self,
+        code: str,
+        *,
+        outcome: str = "failed",
+        diagnostics: Mapping[str, Any] | None = None,
+    ):
         self.code = code if re.fullmatch(r"[a-z0-9_-]{1,80}", str(code or "")) else "provider_error"
         self.outcome = outcome if outcome in {"failed", "unknown"} else "failed"
+        # Only bounded, allowlisted diagnostic fields may cross into logs.
+        safe: dict[str, Any] = {}
+        for key in ("http_status", "retry_after_seconds"):
+            value = (diagnostics or {}).get(key)
+            if type(value) is int and 0 <= value <= 86400:
+                safe[key] = value
+        for key in ("provider_reason",):
+            value = (diagnostics or {}).get(key)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value):
+                safe[key] = value
+        value = (diagnostics or {}).get("provider_message")
+        if isinstance(value, str):
+            safe["provider_message"] = _safe_diagnostic_text(value)
+        reasons = (diagnostics or {}).get("detail_reasons")
+        if isinstance(reasons, list):
+            safe["detail_reasons"] = [
+                item for item in reasons
+                if isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", item)
+            ][:4]
+        self.diagnostics = safe
         super().__init__(self.code)
 
 
@@ -102,6 +128,59 @@ def provider_config(provider: str, *, environ: Mapping[str, str] | None = None) 
         model=model,
         url=spec["url"].format(model=model),
     )
+
+
+def _safe_diagnostic_text(value: str) -> str:
+    """Keep only short error text; redact key-like strings and control characters."""
+    text = " ".join(str(value).split())
+    text = re.sub(r"AIza[0-9A-Za-z_-]{20,}", "[redacted-key]", text)
+    text = re.sub(r"(?i)\\bBearer\\s+[^\\s,;]+", "Bearer [redacted]", text)
+    text = re.sub(
+        r"(?i)(api[_ -]?key\\s*[:=]\\s*)[^\\s,;]+",
+        r"\\1[redacted]",
+        text,
+    )
+    return text[:240]
+
+
+def _provider_http_diagnostics(exc: urllib.error.HTTPError, provider: str) -> dict[str, Any]:
+    """Extract a tiny, sanitized diagnostic summary; never return the raw body."""
+    status = int(exc.code)
+    result: dict[str, Any] = {"http_status": status}
+    headers = getattr(exc, "headers", None)
+    retry_after = headers.get("Retry-After") if headers is not None else None
+    if isinstance(retry_after, str) and retry_after.strip().isdigit():
+        seconds = int(retry_after.strip())
+        if 0 <= seconds <= 86400:
+            result["retry_after_seconds"] = seconds
+
+    if provider != "gemini":
+        return result
+    try:
+        raw = exc.read(8192)
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return result
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return result
+    reason = error.get("status")
+    if isinstance(reason, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", reason):
+        result["provider_reason"] = reason
+    message = error.get("message")
+    if isinstance(message, str) and message.strip():
+        result["provider_message"] = _safe_diagnostic_text(message)
+    details = error.get("details")
+    if isinstance(details, list):
+        reasons = []
+        for item in details[:8]:
+            if isinstance(item, dict):
+                candidate = item.get("reason")
+                if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", candidate):
+                    reasons.append(candidate)
+        if reasons:
+            result["detail_reasons"] = reasons[:4]
+    return result
 
 
 def _normalize_usage(*, prompt: Any = None, output: Any = None, total: Any = None) -> dict[str, int]:
@@ -193,12 +272,17 @@ def invoke_provider(
             payload = _read_response(response)
     except urllib.error.HTTPError as exc:
         status = int(exc.code)
+        diagnostics = _provider_http_diagnostics(exc, config.provider)
         if status == 429:
-            raise ProviderClientError("provider_http_429", outcome="failed") from None
+            raise ProviderClientError(
+                "provider_http_429", outcome="failed", diagnostics=diagnostics
+            ) from None
         # A server-side error can be returned after processing began; account for
         # the request as unknown rather than retrying or assuming no cost.
         outcome = "unknown" if status >= 500 or 300 <= status < 400 else "failed"
-        raise ProviderClientError("provider_http_" + str(status), outcome=outcome) from None
+        raise ProviderClientError(
+            "provider_http_" + str(status), outcome=outcome, diagnostics=diagnostics
+        ) from None
     except ProviderClientError:
         raise
     except (urllib.error.URLError, TimeoutError, OSError):
