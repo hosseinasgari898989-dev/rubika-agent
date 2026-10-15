@@ -61,7 +61,7 @@ def _parse_timestamp(value: Any) -> datetime | None:
 
 
 TIKTOK_CANONICAL_RE = re.compile(
-    r"^https://(?:www\\.)?tiktok\\.com/@([A-Za-z0-9._-]{1,40})/video/([A-Za-z0-9._-]{1,120})/?(?:[?#].*)?$",
+    r"^https://(?:www\.)?tiktok\.com/@([A-Za-z0-9._-]{1,40})/video/([A-Za-z0-9._-]{1,120})/?(?:[?#].*)?$",
     re.IGNORECASE,
 )
 
@@ -81,9 +81,9 @@ def _visible_metadata_text(raw: Mapping[str, Any]) -> str:
     """Return visible descriptive text without hashtags, URLs, or creator handles."""
     parts = [raw.get("title"), raw.get("caption")]
     visible = " ".join(value for value in parts if isinstance(value, str))
-    visible = re.sub(r"https?://\\S+", " ", visible, flags=re.IGNORECASE)
-    visible = re.sub(r"(?<!\\w)#[^\\s#]+", " ", visible)
-    return re.sub(r"\\s+", " ", visible).strip().casefold()
+    visible = re.sub(r"https?://\S+", " ", visible, flags=re.IGNORECASE)
+    visible = re.sub(r"(?<!\w)#[^\s#]+", " ", visible)
+    return re.sub(r"\s+", " ", visible).strip().casefold()
 
 
 def _is_poppy_related(raw: Mapping[str, Any]) -> bool:
@@ -99,8 +99,8 @@ def _owner_selected_poppy_signal(raw: Mapping[str, Any]) -> bool:
     if isinstance(hashtags, list):
         parts.extend(value for value in hashtags if isinstance(value, str))
     visible = " ".join(value for value in parts if isinstance(value, str))
-    visible = re.sub(r"https?://\\S+", " ", visible, flags=re.IGNORECASE)
-    visible = re.sub(r"\\s+", " ", visible).strip().casefold()
+    visible = re.sub(r"https?://\S+", " ", visible, flags=re.IGNORECASE)
+    visible = re.sub(r"\s+", " ", visible).strip().casefold()
     return any(term in visible for term in POPPY_RELEVANCE_TERMS)
 
 
