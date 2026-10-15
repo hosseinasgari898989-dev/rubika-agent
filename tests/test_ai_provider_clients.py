@@ -73,20 +73,15 @@ class ProviderClientTests(unittest.TestCase):
         with self.assertRaises(clients.ProviderClientError) as caught:
             clients.provider_config("openrouter", environ={})
         self.assertEqual(caught.exception.code, "openrouter_api_key_missing")
-        with self.assertRaises(clients.ProviderClientError) as caught:
-            clients.provider_config("mistral", environ={"MISTRAL_API_KEY": "m" * 32})
-        self.assertEqual(caught.exception.code, "provider_not_enabled")
+        for retired_provider in ("mistral", "github_models"):
+            with self.subTest(provider=retired_provider), self.assertRaises(clients.ProviderClientError) as caught:
+                clients.provider_config(retired_provider, environ={"GITHUB_TOKEN": "g" * 40})
+            self.assertEqual(caught.exception.code, "provider_not_enabled")
 
     def test_current_provider_defaults_are_explicit_and_configurable(self):
         groq = clients.provider_config("groq", environ={"GROQ_API_KEY": "g" * 32})
         self.assertEqual(groq.model, "openai/gpt-oss-20b")
         self.assertEqual(groq.url, "https://api.groq.com/openai/v1/chat/completions")
-
-        github_models = clients.provider_config("github_models", environ={
-            "GITHUB_TOKEN": "g" * 40,
-        })
-        self.assertEqual(github_models.model, "openai/gpt-4o")
-        self.assertEqual(github_models.url, "https://models.github.ai/inference/chat/completions")
 
         openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
         self.assertEqual(openrouter.model, "openrouter/free")
@@ -138,26 +133,6 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(result.usage["promptTokenCount"], 21)
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
-
-    def test_github_models_openai_compatible_response_is_normalized(self):
-        config = clients.ProviderConfig(
-            "github_models", "g" * 40, "openai/gpt-4o",
-            "https://models.github.ai/inference/chat/completions",
-        )
-        opener = FakeOpener(FakeResponse({
-            "choices": [{"message": {"content": '{"summary":"safe"}'}}],
-            "usage": {"prompt_tokens": 22, "completion_tokens": 11, "total_tokens": 33},
-        }))
-        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
-            result = clients.invoke_provider(config, "safe prompt")
-        self.assertEqual(result.text, '{"summary":"safe"}')
-        self.assertEqual(result.provider, "github_models")
-        self.assertEqual(result.usage["totalTokenCount"], 33)
-        self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
-        self.assertNotIn(config.api_key, opener.request.full_url)
-        body = json.loads(opener.request.data.decode("utf-8"))
-        self.assertEqual(body["model"], "openai/gpt-4o")
-        self.assertEqual(body["messages"][1]["content"], "safe prompt")
 
     def test_openrouter_chat_completion_response_is_normalized(self):
         config = clients.ProviderConfig(

@@ -1,10 +1,9 @@
 """Bounded multi-model code-repair ensemble with diagnosis and review quorum.
 
 The active ensemble gathers independent diagnoses from Groq and OpenRouter,
-uses GitHub Models to propose one constrained patch, and requires Groq and
-OpenRouter to independently review it. Gemini remains available for explicitly
-dispatched diagnostics; Mistral is disabled. Cloudflare Workers AI remains
-reserved for the project's existing media/music-related tasks.
+uses Gemini to propose one constrained patch, and requires Groq and OpenRouter
+to independently review it. Cloudflare Workers AI remains reserved for the
+project's separate music-presence and official-news translation tasks.
 All model outputs are untrusted, ledger-accounted, and subject to deterministic
 tests and human PR review. No model can execute tools, publish to Rubika, or
 merge code.
@@ -124,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         diagnosers = _provider_list("CODE_AI_DIAGNOSER_PROVIDERS", "groq,openrouter")
-        proposer = (os.getenv("CODE_AI_PROPOSER_PROVIDER", "github_models") or "").strip().lower()
+        proposer = (os.getenv("CODE_AI_PROPOSER_PROVIDER", "gemini") or "").strip().lower()
         reviewers = _provider_list("CODE_AI_REVIEWER_PROVIDERS", "groq,openrouter")
         if proposer not in PROVIDERS or proposer in diagnosers:
             raise ProviderClientError("provider_role_configuration_invalid")

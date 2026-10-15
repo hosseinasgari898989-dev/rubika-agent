@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping
 
 from .gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
 
-PROVIDERS = frozenset({"gemini", "groq", "openrouter", "github_models"})
+PROVIDERS = frozenset({"gemini", "groq", "openrouter"})
 ROLES = frozenset({"diagnose", "propose_patch", "review_patch"})
 SAFE_MODEL = re.compile(r"[@A-Za-z0-9._:/-]{1,160}")
 MAX_RESPONSE_BYTES = 1_000_000
@@ -37,12 +37,6 @@ _PROVIDER_CONFIG = {
         "model_env": "GROQ_MODEL",
         "default_model": "openai/gpt-oss-20b",
         "url": "https://api.groq.com/openai/v1/chat/completions",
-    },
-    "github_models": {
-        "key_env": "GITHUB_TOKEN",
-        "model_env": "GITHUB_MODELS_MODEL",
-        "default_model": "openai/gpt-4o",
-        "url": "https://models.github.ai/inference/chat/completions",
     },
     "openrouter": {
         "key_env": "OPENROUTER_API_KEY",
@@ -245,7 +239,7 @@ def invoke_provider(
             "x-goog-api-key": config.api_key,
             "User-Agent": "Rubika-Agent-Multi-AI-Repair/1.0",
         }
-    elif config.provider in {"groq", "openrouter", "github_models"}:
+    elif config.provider in {"groq", "openrouter"}:
         body = {
             "model": config.model,
             "messages": [
@@ -313,7 +307,7 @@ def invoke_provider(
                 output=counts.get("candidatesTokenCount"),
                 total=counts.get("totalTokenCount"),
             )
-    elif config.provider in {"groq", "openrouter", "github_models"}:
+    elif config.provider in {"groq", "openrouter"}:
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise ProviderClientError("provider_response_invalid", outcome="unknown")

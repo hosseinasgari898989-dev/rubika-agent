@@ -669,7 +669,7 @@ async function translateOfficial(env, body) {
 }
 
 
-const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6, github_models: 6 });
+const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6 });
 const CODE_AI_TOTAL_DAILY_LIMIT = 18;
 const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch"]);
 const CODE_AI_MAX_COOLDOWN_SECONDS = 86400;

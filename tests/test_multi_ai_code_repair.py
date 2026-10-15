@@ -21,7 +21,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             patch_path = root / "proposal.diff"
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,openrouter",
-                "CODE_AI_PROPOSER_PROVIDER": "github_models",
+                "CODE_AI_PROPOSER_PROVIDER": "gemini",
                 "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
                 "GROQ_API_KEY": "",
                 "OPENROUTER_API_KEY": "a" * 32,
@@ -50,7 +50,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             report_path = root / "report.json"
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,groq",
-                "CODE_AI_PROPOSER_PROVIDER": "github_models",
+                "CODE_AI_PROPOSER_PROVIDER": "gemini",
                 "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
@@ -100,7 +100,7 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
                 if role == "diagnose":
                     return ProviderResult(provider, provider + "-test-model", provider + " diagnosis", {})
                 if role == "propose_patch":
-                    return ProviderResult(provider, "github-models-test-model", proposal_json, {})
+                    return ProviderResult(provider, "gemini-test-model", proposal_json, {})
                 decision = review_decisions.get(provider, "approve")
                 review_json = json.dumps({
                     "decision": decision,
@@ -111,7 +111,7 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
 
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDERS": "groq,openrouter",
-                "CODE_AI_PROPOSER_PROVIDER": "github_models",
+                "CODE_AI_PROPOSER_PROVIDER": "gemini",
                 "CODE_AI_REVIEWER_PROVIDERS": "groq,openrouter",
                 "GROQ_API_KEY": "r" * 32,
                 "OPENROUTER_API_KEY": "o" * 32,
@@ -157,7 +157,7 @@ class MultiAIEnsembleFlowTests(unittest.TestCase):
             [
                 ("groq", "diagnose"),
                 ("openrouter", "diagnose"),
-                ("github_models", "propose_patch"),
+                ("gemini", "propose_patch"),
                 ("groq", "review_patch"),
                 ("openrouter", "review_patch"),
             ],
