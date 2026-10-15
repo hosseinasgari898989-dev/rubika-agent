@@ -21,10 +21,10 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDER": "groq",
                 "CODE_AI_PROPOSER_PROVIDER": "gemini",
-                "CODE_AI_REVIEWER_PROVIDER": "anthropic",
+                "CODE_AI_REVIEWER_PROVIDER": "openrouter",
                 "GROQ_API_KEY": "",
                 "GEMINI_API_KEY": "g" * 32,
-                "ANTHROPIC_API_KEY": "a" * 32,
+                "OPENROUTER_API_KEY": "a" * 32,
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
                 multi, "call_provider_with_ledger"
@@ -51,7 +51,7 @@ class MultiAIRepairPreflightTests(unittest.TestCase):
             environment = {
                 "CODE_AI_DIAGNOSER_PROVIDER": "gemini",
                 "CODE_AI_PROPOSER_PROVIDER": "gemini",
-                "CODE_AI_REVIEWER_PROVIDER": "anthropic",
+                "CODE_AI_REVIEWER_PROVIDER": "openrouter",
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
                 multi, "provider_config"
