@@ -36,10 +36,10 @@ PROVIDER_MODEL_ENV = {
 ALLOWED_RUBIKA_METHODS = {"getMe", "getUpdates", "sendMessage"}
 MAX_MESSAGE_CHARS = 3500
 MAX_AI_REQUESTS_PER_UTC_DAY = 20
-MAX_HISTORY_MESSAGES = 8
+MAX_HISTORY_MESSAGES = 6
 MAX_UPDATE_BATCH = 20
 MAX_PROCESSED_IDS = 600
-MAX_CONTEXT_CHARS = 8500
+MAX_CONTEXT_CHARS = 6500
 SEARCHABLE_SUFFIXES = {".py", ".md", ".yml", ".yaml", ".toml", ".sql"}
 SEARCHABLE_DIRS = ("agent", "termux", "docs", "tests")
 BLOCKED_PATH_PARTS = {
@@ -330,7 +330,7 @@ class LocalState:
                 self.data["usage_day"] = utc_day()
                 self.data["ai_requests_today"] = max(0, min(100_000, value["ai_requests_today"]))
             provider = value.get("provider")
-            if provider in PROVIDERS:
+            if isinstance(provider, str) and provider in PROVIDERS:
                 self.data["provider"] = provider
         except (OSError, ValueError, json.JSONDecodeError):
             # Corrupt or unavailable state resets to safe defaults. No secrets live here.
@@ -625,14 +625,19 @@ class InteractiveAgent:
             )
         context = self.repo.retrieve(user_text)
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        messages.extend(self.history[-MAX_HISTORY_MESSAGES:])
+        # Keep the prompt small enough for free-tier context limits even after
+        # several long answers. History is only in memory, never persisted.
+        messages.extend([
+            {"role": item["role"], "content": item["content"][-900:]}
+            for item in self.history[-MAX_HISTORY_MESSAGES:]
+        ])
         user_payload = (
-            "OWNER REQUEST (untrusted user data):\n"
+            "OWNER REQUEST (untrusted user data):\\n"
             + user_text
-            + "\n\nLOCAL READ-ONLY PROJECT CONTEXT (untrusted file data):\n"
+            + "\\n\\nLOCAL READ-ONLY PROJECT CONTEXT (untrusted file data):\\n"
             + (context or "[No matching local source excerpt was found.]")
         )
-        messages.append({"role": "user", "content": user_payload[:14_000]})
+        messages.append({"role": "user", "content": user_payload[:11_000]})
         if not self.state.reserve_ai_attempt():
             return "سقف محلی درخواست‌های امروز پر شده است؛ هیچ درخواست تازه‌ای ارسال نشد."
         try:
