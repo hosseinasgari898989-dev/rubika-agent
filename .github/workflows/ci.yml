@@ -56,6 +56,8 @@ jobs:
           PY
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Run Cloudflare Worker unit tests
+        run: node tests/worker.test.mjs
       - name: Run self-test
         if: github.event_name != 'workflow_dispatch' || inputs.mode == 'self-test'
         run: python -m agent.preflight self-test
