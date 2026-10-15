@@ -1,0 +1,36 @@
+name: Gemini repair sandbox harness
+
+on:
+  pull_request:
+    paths:
+      - "agent/brain/gemini_code_agent.py"
+      - "tests/test_gemini_code_agent.py"
+      - "tests/test_gemini_repair_harness.py"
+      - ".github/workflows/gemini-code-assistant.yml"
+      - ".github/workflows/gemini-repair-harness.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-harness:
+    name: Offline synthetic repair loop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run offline repair-loop tests
+        env:
+          # Explicitly empty: this workflow must never call the live model.
+          GEMINI_API_KEY: ""
+        run: python -m unittest discover -s tests -p "test_gemini_repair_harness.py" -v
