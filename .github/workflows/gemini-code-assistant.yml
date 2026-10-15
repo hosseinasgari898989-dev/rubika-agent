@@ -1,0 +1,220 @@
+name: Gemini bounded code repair
+
+on:
+  workflow_run:
+    workflows: ["Cloud bootstrap checks"]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: rubika-agent-gemini-code-repair
+  cancel-in-progress: false
+
+jobs:
+  propose-repair:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+      UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
+      UPSTREAM_BRANCH: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - name: Check out the exact failed commit without persisting credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Check freshness, duplicate proposals and daily request budget
+        id: preflight
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          failed_sha="$(git rev-parse HEAD)"
+          current_sha="$(git rev-parse origin/main)"
+          if [[ "$failed_sha" != "$current_sha" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped: main has advanced since the failed run; no Gemini request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          today="$(date -u +%F)"
+          runs_json="$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/gemini-code-assistant.yml/runs?per_page=100&created=$today..$today")"
+          today_count="$(python -c 'import json,sys; print(int(json.load(sys.stdin).get("total_count", 0)))' <<< "$runs_json")"
+          if [[ "$today_count" -ge 5 ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped: conservative daily Gemini request budget has been reached." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          short_sha="$(printf '%s' "$UPSTREAM_SHA" | cut -c1-12)"
+          branch="agent-fix/gemini-$short_sha"
+          open_pr_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main --head "$branch" --json number --jq 'length')"
+          if [[ "$open_pr_count" -gt 0 ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped: a review PR for this failed commit already exists." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped: a repair branch for this failed commit already exists; it was not overwritten." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Preflight passed; one Gemini request is permitted for this failed commit."
+
+      - name: Download the failed CI log to a temporary file
+        if: steps.preflight.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh run view "$UPSTREAM_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed \
+              > "$RUNNER_TEMP/upstream-failure.log" 2>/dev/null; then
+            printf '%s\n' "No sanitized CI log could be retrieved." > "$RUNNER_TEMP/upstream-failure.log"
+            echo "The failure log could not be retrieved; the assistant will not guess a fix." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "Raw logs are temporary only and will not be uploaded as artifacts."
+
+      - name: Set up Python for proposal and test execution
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the project's pinned runtime dependencies
+        if: steps.preflight.outputs.should_run == 'true'
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Set up Node.js for Worker tests
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Ask Gemini for one bounded repair proposal
+        id: proposal
+        if: steps.preflight.outputs.should_run == 'true'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.8-flash
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m agent.brain.gemini_code_agent \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --failure-log "$RUNNER_TEMP/upstream-failure.log" \
+            --report-path "$RUNNER_TEMP/gemini-code-proposal.json" \
+            --patch-path "$RUNNER_TEMP/gemini-code-proposal.diff" \
+            | tee "$RUNNER_TEMP/gemini-code-agent-result.json"
+          python - "$RUNNER_TEMP/gemini-code-proposal.json" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          with open(sys.argv[2], "a", encoding="utf-8") as summary:
+              summary.write("## Gemini code repair proposal\n")
+              summary.write(f"- Status: {report.get('status', 'unknown')}\n")
+              summary.write(f"- Model: {report.get('model', 'unknown')}\n")
+              summary.write(f"- Request sent: {bool(report.get('request_sent'))}\n")
+              summary.write(f"- Context files: {', '.join(report.get('selected_files', [])) or 'none'}\n")
+              summary.write(f"- Confidence: {report.get('confidence', 'low')}\n")
+              summary.write(f"- Explanation: {str(report.get('summary', ''))[:500]}\n")
+              summary.write("- The model never receives the GitHub token; no patch is auto-merged.\n")
+          PY
+
+      - name: Apply proposal in the disposable runner and run fixed tests
+        id: validation
+        if: steps.preflight.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set -u
+          patch="$RUNNER_TEMP/gemini-code-proposal.diff"
+          if [[ ! -s "$patch" ]]; then
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "No high-confidence, allowlisted patch was produced; no repository branch was changed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! git apply --check "$patch" 2>/dev/null; then
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "The proposed diff did not apply cleanly; it was not promoted." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! git apply "$patch"; then
+            git reset --hard HEAD >/dev/null
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "Patch application failed; working tree was reset." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! python -m agent.brain.gemini_code_agent --repo-root "$GITHUB_WORKSPACE" --validate-working-tree; then
+            git reset --hard HEAD >/dev/null
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "The changed-file allowlist check failed; working tree was reset." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          set +e
+          python -m compileall -q agent termux
+          compile_status=$?
+          if [[ "$compile_status" -eq 0 ]]; then python -m unittest discover -s tests -v; test_status=$?; else test_status=1; fi
+          if [[ "$test_status" -eq 0 ]]; then python -m agent.preflight self-test; preflight_status=$?; else preflight_status=1; fi
+          if [[ "$preflight_status" -eq 0 ]]; then node tests/worker.test.mjs; worker_status=$?; else worker_status=1; fi
+          set -e
+
+          if [[ "$compile_status" -ne 0 || "$test_status" -ne 0 || "$preflight_status" -ne 0 || "$worker_status" -ne 0 ]]; then
+            git reset --hard HEAD >/dev/null
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "The proposed patch failed fixed tests; it was discarded and no PR will be opened." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git diff --check
+          echo "tests_passed=true" >> "$GITHUB_OUTPUT"
+          echo "All fixed checks passed. The change may be sent to a review PR; it will not be merged automatically." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push tested patch to a repair branch and open a review PR
+        if: steps.validation.outputs.tests_passed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m agent.brain.gemini_code_agent --repo-root "$GITHUB_WORKSPACE" --validate-working-tree
+          short_sha="$(printf '%s' "$UPSTREAM_SHA" | cut -c1-12)"
+          branch="agent-fix/gemini-$short_sha"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git diff --name-only -z | xargs -0 git add --
+          git commit -m "Propose bounded Gemini repair for CI $short_sha"
+          gh auth setup-git
+          git push origin "HEAD:refs/heads/$branch"
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$branch" \
+            --title "Gemini proposal: bounded CI repair for $short_sha" \
+            --body "Automated proposal after a failed Cloud bootstrap checks run. The patch was restricted to the code-repair allowlist; compileall, the full Python tests, the project self-test, and Worker unit tests passed in a clean runner. Human review is required. This PR is not auto-merged and does not change production or publishing gates."
+
+      - name: Upload sanitized proposal only
+        if: always() && steps.preflight.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-code-repair-${{ github.event.workflow_run.head_sha }}
+          path: |
+            ${{ runner.temp }}/gemini-code-proposal.json
+            ${{ runner.temp }}/gemini-code-proposal.diff
+            ${{ runner.temp }}/gemini-code-agent-result.json
+          if-no-files-found: warn
+          retention-days: 7
