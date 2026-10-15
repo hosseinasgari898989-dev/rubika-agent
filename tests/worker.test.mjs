@@ -41,6 +41,10 @@ class FakeStatement {
       this.db.aiUsageDaily.set(day, current + 1);
       return { request_count: current + 1 };
     }
+    if (this.sql.includes("FROM ai_provider_calls WHERE call_id = ? AND provider = ?")) {
+      const [callId, provider] = this.values;
+      return this.db.aiProviderCalls.get(provider + ":" + callId) || null;
+    }
     if (this.sql.includes("SELECT 1 AS ok")) return { ok: 1 };
     if (this.sql.includes("FROM agent_config")) {
       return { enabled: 0, started_at: null, updated_at: null };
@@ -95,6 +99,15 @@ class FakeStatement {
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("UPDATE ai_provider_calls SET finish_marker = ?")) {
+      const [marker, callId, provider, role] = v;
+      const row = this.db.aiProviderCalls.get(provider + ":" + callId);
+      if (!row || row.status !== "reserved" || row.role !== role || row.finish_marker) {
+        return { meta: { changes: 0 } };
+      }
+      row.finish_marker = marker;
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("INSERT INTO automation_queue")) {
       const row = {
         id: v[0], platform: v[1], external_id: v[2], canonical_url: v[3],
@@ -188,6 +201,7 @@ class FakeDB {
     this.queueLimit = null;
     this.seenQuery = null;
     this.aiUsageDaily = new Map();
+    this.aiProviderCalls = new Map();
   }
   prepare(sql) {
     return new FakeStatement(this, sql);
@@ -772,4 +786,75 @@ function supervisorInput(extra = {}) {
 {
   const response = await read(await worker.fetch(supervisorRequest(supervisorInput(), { token: null }), env()));
   assert.equal(response.status, 401);
+}
+
+
+// Workers AI is an explicitly reserved code-repair provider. The endpoint
+// accepts only the fixed model and does not expose publishing or tool actions.
+function workersAiRequest(body, options = {}) {
+  return request("/api/brain/ai-provider/invoke", { method: "POST", body, ...options });
+}
+{
+  const state = env();
+  const callId = "workers-ai-propose-0001";
+  state.DB.aiProviderCalls.set("workers_ai:" + callId, {
+    call_id: callId, provider: "workers_ai", role: "propose_patch",
+    status: "reserved", finish_marker: null,
+  });
+  let called = false;
+  state.AI = {
+    run: async (model, input) => {
+      called = true;
+      assert.equal(model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+      assert.equal(input.max_tokens, 1500);
+      assert.equal(input.temperature, 0.1);
+      assert.equal(input.messages[1].content, "Return one tiny JSON object.");
+      return { response: "{\"ok\":true}" };
+    },
+  };
+  const body = {
+    provider: "workers_ai", role: "propose_patch", call_id: callId,
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    prompt: "Return one tiny JSON object.", max_output_tokens: 1500,
+  };
+  const response = await read(await worker.fetch(workersAiRequest(body), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.provider, "workers_ai");
+  assert.equal(response.body.text, "{\"ok\":true}");
+  assert.equal(called, true);
+  assert.ok(state.DB.aiProviderCalls.get("workers_ai:" + callId).finish_marker);
+  const duplicate = await read(await worker.fetch(workersAiRequest(body), state));
+  assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.body.error, "workers_ai_call_not_invokable");
+}
+{
+  const state = env();
+  let called = false;
+  state.AI = { run: async () => { called = true; return { response: "unexpected" }; } };
+  const response = await read(await worker.fetch(workersAiRequest({
+    provider: "workers_ai", role: "propose_patch", call_id: "workers-ai-not-reserved-01",
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    prompt: "safe prompt", max_output_tokens: 100,
+  }), state));
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, "code_ai_call_not_found");
+  assert.equal(called, false);
+}
+{
+  const state = env();
+  const callId = "workers-ai-propose-0002";
+  state.DB.aiProviderCalls.set("workers_ai:" + callId, {
+    call_id: callId, provider: "workers_ai", role: "propose_patch",
+    status: "reserved", finish_marker: null,
+  });
+  state.AI = { run: async () => { throw new Error("NEVER_LEAK_THIS"); } };
+  const response = await read(await worker.fetch(workersAiRequest({
+    provider: "workers_ai", role: "propose_patch", call_id: callId,
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    prompt: "safe prompt", max_output_tokens: 100,
+  }), state));
+  assert.equal(response.status, 502);
+  assert.equal(response.body.error, "workers_ai_inference_failed");
+  assert.equal(JSON.stringify(response.body).includes("NEVER_LEAK_THIS"), false);
 }
