@@ -323,5 +323,55 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertEqual(diagnostics["rejected_by_reason"]["edit_signal_missing"], 1)
         self.assertEqual(diagnostics["duplicate_within_report_count"], 1)
 
+
+    def test_owner_selected_source_accepts_poppy_hashtag_plus_edit_signal(self):
+        row = _row("knownhashtag0001", "meloaep_", title="A different kind of intro")
+        row["caption"] = "SONG: Sequencia Quebra (Slowed)"
+        row["hashtags"] = ["edit", "poppyplaytime", "chapter5"]
+
+        rows = candidates_for_queue({"candidates": {"tiktok": [row]}})
+        self.assertEqual([item["external_id"] for item in rows], ["knownhashtag0001"])
+        self.assertEqual(rows[0]["source_key"], "meloaep_")
+
+    def test_owner_selected_source_still_rejects_unrelated_franchise_edit(self):
+        unrelated = _row("knownunrelated0001", "smyxae", title="Carlos Oliveira edit")
+        unrelated["caption"] = "Resident Evil fan edit"
+        unrelated["hashtags"] = ["carlosoliveira", "residenteviledit", "smyxae"]
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [unrelated]}}),
+            [],
+        )
+
+    def test_report_author_cannot_spoof_owner_selected_source(self):
+        forged = _row("spoofedpolicy0001", "unlisted_creator", title="Fan edit")
+        forged["author"] = "meloaep_"
+        forged["caption"] = "Fan edit"
+        forged["hashtags"] = ["edit"]
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [forged]}}),
+            [],
+        )
+
+    def test_tiktok_canonical_url_video_id_must_match_report_id(self):
+        mismatched = _row("7690102000000000000", "meloaep_", title="Poppy Playtime edit")
+        mismatched["url"] = "https://www.tiktok.com/@meloaep_/video/7690102000000000001"
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [mismatched]}}),
+            [],
+        )
+
+    def test_unknown_source_cannot_use_poppy_hashtag_as_visible_relevance(self):
+        unknown = _row("unknownhashtag0001", "unlisted_creator", title="Fresh upload")
+        unknown["caption"] = "Fresh upload"
+        unknown["hashtags"] = ["poppyplaytime", "edit"]
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [unknown]}}),
+            [],
+        )
+
 if __name__ == "__main__":
     unittest.main()
