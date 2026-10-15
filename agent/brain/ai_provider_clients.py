@@ -35,13 +35,13 @@ _PROVIDER_CONFIG = {
     "groq": {
         "key_env": "GROQ_API_KEY",
         "model_env": "GROQ_MODEL",
-        "default_model": "llama-3.3-70b-versatile",
+        "default_model": "openai/gpt-oss-20b",
         "url": "https://api.groq.com/openai/v1/chat/completions",
     },
     "anthropic": {
         "key_env": "ANTHROPIC_API_KEY",
         "model_env": "ANTHROPIC_MODEL",
-        "default_model": "claude-haiku-5-5",
+        "default_model": "claude-haiku-4-5-20251001",
         "url": "https://api.anthropic.com/v1/messages",
     },
 }
@@ -147,6 +147,7 @@ def invoke_provider(
             "generationConfig": {
                 "thinkingConfig": {"thinkingLevel": "low"},
                 "maxOutputTokens": max_output_tokens,
+                "responseMimeType": "application/json",
                 "temperature": 0.1,
             },
         }
