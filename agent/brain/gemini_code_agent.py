@@ -237,8 +237,8 @@ def validate_patch(patch: str, selected_paths: list[str]) -> list[str]:
 def parse_model_json(text: str) -> dict[str, Any]:
     rendered = text.strip()
     if rendered.startswith("```"):
-        rendered = re.sub(r"^\\```(?:json)?\\s*", "", rendered, flags=re.IGNORECASE)
-        rendered = re.sub(r"\\s*\\```$", "", rendered)
+        rendered = re.sub(r"^```(?:json)?\s*", "", rendered, flags=re.IGNORECASE)
+        rendered = re.sub(r"\s*```$", "", rendered)
     try:
         value = json.loads(rendered)
     except json.JSONDecodeError:
