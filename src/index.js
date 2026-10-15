@@ -1092,13 +1092,16 @@ async function finishCodeAiProviderCall(env, body) {
   const provider = validCodeAiProvider(body.provider);
   const callId = body.call_id;
   const outcome = text(body.outcome, 20);
-  const errorCode = body.error_code == null ? "" : text(body.error_code, 80).toLowerCase();
+  const errorCode = body.error_code == null ? "" : body.error_code;
   if (!provider) return json({ ok: false, error: "code_ai_provider_not_enabled" }, 400);
   if (!validCodeAiCallId(callId)) return json({ ok: false, error: "code_ai_call_id_invalid" }, 400);
   if (!new Set(["succeeded", "failed", "unknown"]).has(outcome)) {
     return json({ ok: false, error: "code_ai_outcome_invalid" }, 400);
   }
-  if (body.error_code != null && !/^[a-z0-9_-]{1,80}$/.test(errorCode)) {
+  if (body.error_code != null &&
+      (typeof body.error_code !== "string" || body.error_code.length > 80 ||
+       body.error_code !== body.error_code.trim() || body.error_code !== body.error_code.toLowerCase() ||
+       !/^[a-z0-9_-]{1,80}$/.test(body.error_code))) {
     return json({ ok: false, error: "code_ai_error_code_invalid" }, 400);
   }
   if (outcome === "succeeded" && errorCode) {
