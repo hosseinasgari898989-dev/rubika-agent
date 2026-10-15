@@ -81,33 +81,34 @@ jobs:
         id: install_requirements
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
-      - name: Smoke-test deployed AI supervisor API without using an AI request
-        continue-on-error: true
+      - name: Check deployed Worker and D1 health without model inference
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
         shell: bash
         run: |
           set -euo pipefail
-          code="$(curl --silent --show-error --output "$RUNNER_TEMP/supervisor-smoke.json" --write-out '%{http_code}' \
-            --request POST \
-            --header "Authorization: Bearer $AGENT_API_TOKEN" \
-            --header "Content-Type: application/json" \
-            --data '{"event_code":"invalid_smoke_probe","stage":"unknown","error_code":"route_smoke_test","platform":"none","attempt_count":0,"counts":{}}' \
-            "$AGENT_API_BASE_URL/api/brain/supervise-error" || true)"
-          if [[ "$code" != "400" ]]; then
-            echo "::warning::AI supervisor live smoke did not confirm the expected validation response (HTTP ${code:-unknown}); collection continues with the deterministic local fallback."
+          code="$(curl --silent --show-error --connect-timeout 5 --max-time 15 \
+            --output "$RUNNER_TEMP/worker-health.json" --write-out '%{http_code}' \
+            "$AGENT_API_BASE_URL/health" || true)"
+          if [[ "$code" != "200" ]]; then
+            echo "::error::Control Worker/D1 health check failed (HTTP ${code:-unknown}); stopping before source discovery."
             exit 1
           fi
-          python - "$RUNNER_TEMP/supervisor-smoke.json" <<'PY'
+          python - "$RUNNER_TEMP/worker-health.json" <<'PY'
           import json, sys
           from pathlib import Path
+
           try:
               payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           except Exception:
-              raise SystemExit("supervisor_smoke_body_not_json")
-          if payload.get("error") != "supervisor_input_invalid":
-              raise SystemExit("supervisor_smoke_unexpected_validation_response")
-          print("Supervisor endpoint reachable and validates inputs; no Workers AI quota used.")
+              raise SystemExit("worker_health_body_not_json")
+          if (
+              payload.get("ok") is not True
+              or payload.get("service") != "rubika-agent"
+              or payload.get("database") != "connected"
+          ):
+              raise SystemExit("worker_or_d1_health_not_confirmed")
+          print("Worker and D1 are healthy; no model inference or quota was used.")
           PY
 
       - name: Run all repository unit tests
@@ -168,11 +169,13 @@ jobs:
                       safe, ensure_ascii=False, sort_keys=True
                   ))
 
-          total = safe_summary["tiktok_candidates"] + safe_summary["mob_official_candidates"]
-          if total == 0:
+          # The persistent normal edit queue currently accepts TikTok only.
+          # Mob official candidates belong to a separate lane and must not make an
+          # empty TikTok intake look successful or refresh the five-hour marker.
+          if safe_summary["tiktok_candidates"] == 0:
               raise SystemExit(
-                  "Both live discovery lanes returned zero candidates; refusing to replace "
-                  "the last report or update the queue with an empty run."
+                  "Live TikTok discovery returned zero candidates; refusing to replace "
+                  "the last report or update the edit queue with a Mob-only run."
               )
           if safe_summary["media_downloads"] != 0 or safe_summary["rubika_posts"] != 0:
               raise SystemExit("Safety violation: this job must remain metadata-only.")
@@ -190,7 +193,29 @@ jobs:
             sh -lc '
               set -eu
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
-              timeout 180s pkg update -y
+              # The image may select a community mirror that is temporarily rate-limited.
+              # Prefer the official repository and fall back to the official CDN endpoint.
+              mirror_ready=0
+              for mirror in packages.termux.dev packages-cf.termux.dev; do
+                for source_file in "$PREFIX/etc/apt/sources.list" "$PREFIX/etc/apt/sources.list.d/"*.list; do
+                  [ -f "$source_file" ] || continue
+                  sed -i -E "s#^deb https?://[^[:space:]]*/(apt/)?termux-main[[:space:]]+stable[[:space:]]+main#deb https://$mirror/apt/termux-main stable main#" "$source_file"
+                done
+                if ! grep -Rqs "deb https://$mirror/apt/termux-main stable main" "$PREFIX/etc/apt"; then
+                  printf "deb https://%s/apt/termux-main stable main\\n" "$mirror" > "$PREFIX/etc/apt/sources.list"
+                fi
+                echo "Refreshing Termux package indexes from $mirror."
+                if timeout 180s pkg update -y; then
+                  mirror_ready=1
+                  break
+                fi
+                echo "Package index refresh failed on $mirror; attempting the next official mirror."
+                sleep 3
+              done
+              if [ "$mirror_ready" -ne 1 ]; then
+                echo "Termux package index could not be refreshed from official mirrors."
+                exit 1
+              fi
               timeout 240s pkg install -y python git
               mkdir -p "$HOME/.venvs"
               VENV_DIR="$HOME/.venvs/termux-docker"
