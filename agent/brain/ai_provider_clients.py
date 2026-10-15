@@ -11,6 +11,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -18,9 +19,9 @@ from typing import Any, Callable, Mapping
 
 from .gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
 
-PROVIDERS = frozenset({"gemini", "groq", "mistral", "openrouter"})
+PROVIDERS = frozenset({"gemini", "groq", "openrouter", "workers_ai"})
 ROLES = frozenset({"diagnose", "propose_patch", "review_patch"})
-SAFE_MODEL = re.compile(r"[A-Za-z0-9._:/-]{1,160}")
+SAFE_MODEL = re.compile(r"[@A-Za-z0-9._:/-]{1,160}")
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_PROMPT_CHARS = 160_000
 MAX_OUTPUT_TOKENS = 8192
@@ -38,11 +39,11 @@ _PROVIDER_CONFIG = {
         "default_model": "openai/gpt-oss-20b",
         "url": "https://api.groq.com/openai/v1/chat/completions",
     },
-    "mistral": {
-        "key_env": "MISTRAL_API_KEY",
-        "model_env": "MISTRAL_MODEL",
-        "default_model": "mistral-small-latest",
-        "url": "https://api.mistral.ai/v1/chat/completions",
+    "workers_ai": {
+        "key_env": "AGENT_API_TOKEN",
+        "model_env": "WORKERS_AI_MODEL",
+        "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "url": "",
     },
     "openrouter": {
         "key_env": "OPENROUTER_API_KEY",
@@ -118,15 +119,31 @@ def provider_config(provider: str, *, environ: Mapping[str, str] | None = None) 
     spec = _PROVIDER_CONFIG[provider]
     key = str(env.get(spec["key_env"], "") or "").strip()
     model = str(env.get(spec["model_env"], spec["default_model"]) or "").strip()
-    if len(key) < 20:
+    minimum_key_length = 32 if provider == "workers_ai" else 20
+    if len(key) < minimum_key_length:
         raise ProviderClientError(provider + "_api_key_missing")
     if not SAFE_MODEL.fullmatch(model):
         raise ProviderClientError(provider + "_model_invalid")
+
+    endpoint = spec["url"].format(model=model)
+    if provider == "workers_ai":
+        parsed = urllib.parse.urlsplit(str(env.get("AGENT_API_BASE_URL", "") or "").strip())
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ProviderClientError("workers_ai_endpoint_invalid")
+        endpoint = "https://" + parsed.netloc + "/api/brain/ai-provider/invoke"
     return ProviderConfig(
         provider=provider,
         api_key=key,
         model=model,
-        url=spec["url"].format(model=model),
+        url=endpoint,
     )
 
 
@@ -217,6 +234,8 @@ def invoke_provider(
     *,
     max_output_tokens: int = 2048,
     timeout_seconds: int = 45,
+    role: str | None = None,
+    call_id: str | None = None,
 ) -> ProviderResult:
     """Make exactly one provider request; no retries and no tool execution."""
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
@@ -226,7 +245,23 @@ def invoke_provider(
     if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 90:
         raise ProviderClientError("provider_timeout_invalid")
 
-    if config.provider == "gemini":
+    if config.provider == "workers_ai":
+        if role not in ROLES or not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", call_id):
+            raise ProviderClientError("provider_reservation_required")
+        body = {
+            "provider": "workers_ai",
+            "role": role,
+            "call_id": call_id,
+            "model": config.model,
+            "prompt": prompt,
+            "max_output_tokens": max_output_tokens,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + config.api_key,
+            "User-Agent": "Rubika-Agent-Multi-AI-Repair/1.0",
+        }
+    elif config.provider == "gemini":
         body = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -241,7 +276,7 @@ def invoke_provider(
             "x-goog-api-key": config.api_key,
             "User-Agent": "Rubika-Agent-Multi-AI-Repair/1.0",
         }
-    elif config.provider in {"groq", "mistral", "openrouter"}:
+    elif config.provider in {"groq", "openrouter"}:
         body = {
             "model": config.model,
             "messages": [
@@ -290,7 +325,17 @@ def invoke_provider(
 
     answer = ""
     usage: dict[str, int] = {}
-    if config.provider == "gemini":
+    if config.provider == "workers_ai":
+        text_value = payload.get("text")
+        answer = text_value.strip() if isinstance(text_value, str) else ""
+        counts = payload.get("usage", {})
+        if isinstance(counts, dict):
+            usage = _normalize_usage(
+                prompt=counts.get("prompt_tokens"),
+                output=counts.get("completion_tokens"),
+                total=counts.get("total_tokens"),
+            )
+    elif config.provider == "gemini":
         candidates = payload.get("candidates")
         if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], dict):
             raise ProviderClientError("provider_response_invalid", outcome="unknown")
@@ -309,7 +354,7 @@ def invoke_provider(
                 output=counts.get("candidatesTokenCount"),
                 total=counts.get("totalTokenCount"),
             )
-    elif config.provider in {"groq", "mistral", "openrouter"}:
+    elif config.provider in {"groq", "openrouter"}:
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise ProviderClientError("provider_response_invalid", outcome="unknown")
@@ -371,6 +416,8 @@ def call_provider_with_ledger(
             prompt,
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
+            role=role,
+            call_id=call_id,
         )
     except ProviderClientError as exc:
         outcome = exc.outcome
