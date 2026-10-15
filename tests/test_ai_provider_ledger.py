@@ -88,7 +88,7 @@ class AIProviderLedgerTests(unittest.TestCase):
             )
 
     def test_ledger_schema_accepts_each_explicit_code_repair_provider(self):
-        for provider in ("gemini", "groq", "openrouter", "workers_ai"):
+        for provider in ("gemini", "groq", "openrouter", "github_models"):
             with self.subTest(provider=provider):
                 self.add_call("call-" + provider + "-accepted-0001", provider=provider)
                 self.db.execute(
@@ -99,11 +99,11 @@ class AIProviderLedgerTests(unittest.TestCase):
         providers = {
             row[0] for row in self.db.execute("SELECT provider FROM ai_provider_state")
         }
-        self.assertEqual(providers, {"gemini", "groq", "openrouter", "workers_ai"})
+        self.assertEqual(providers, {"gemini", "groq", "openrouter", "github_models"})
 
-    def test_worker_enables_gemini_groq_openrouter_workers_ai_and_shared_daily_cap(self):
+    def test_worker_enables_gemini_groq_openrouter_github_models_and_shared_daily_cap(self):
         source = WORKER.read_text(encoding="utf-8")
-        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6, workers_ai: 6 });", source)
+        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6, github_models: 6 });", source)
         self.assertIn("const CODE_AI_TOTAL_DAILY_LIMIT = 18;", source)
         self.assertIn("CODE_AI_TOTAL_DAILY_LIMIT", source)
         self.assertIn('"code_ai_provider_not_enabled"', source)
@@ -129,11 +129,9 @@ class AIProviderLedgerTests(unittest.TestCase):
         status_route = source.index('if (path === "/api/brain/ai-provider/status")')
         reserve_route = source.index('if (path === "/api/brain/ai-provider/reserve")')
         finish_route = source.index('if (path === "/api/brain/ai-provider/finish")')
-        invoke_route = source.index('if (path === "/api/brain/ai-provider/invoke")')
         self.assertLess(auth, status_route)
         self.assertLess(auth, reserve_route)
         self.assertLess(auth, finish_route)
-        self.assertLess(auth, invoke_route)
 
     def test_finish_uses_single_use_state_transition_and_marker_gated_cooldown(self):
         source = WORKER.read_text(encoding="utf-8")
@@ -143,7 +141,6 @@ class AIProviderLedgerTests(unittest.TestCase):
         self.assertIn("await env.DB.batch([updateCall, updateCooldown])", source)
         self.assertIn("code_ai_call_already_finished", source)
         self.assertIn("finish_marker IS NULL", source)
-        self.assertIn("workers_ai_call_not_invokable", source)
 
     def test_worker_fail_closed_when_ledger_database_is_unavailable(self):
         source = WORKER.read_text(encoding="utf-8")
