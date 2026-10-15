@@ -1,26 +1,64 @@
 {
-  "schema_version": 1,
-  "completed_at": "2026-10-14T23:29:30+00:00",
-  "report_generated_at": "2026-10-14T23:29:19.664337+00:00",
-  "queue_status": "enqueued",
-  "inserted_count": 4,
-  "candidate_pool_count": 40,
-  "selected_source_distribution": {
-    "saylex.aep812": 1,
-    "poppytv_ae": 1,
-    "meloaep_": 1,
-    "menezxl9": 1
+  "candidate_pool_count": 21,
+  "candidate_pool_size": 21,
+  "completed_at": "2026-10-15T17:45:29+00:00",
+  "discovered_candidate_count": 48,
+  "duplicate_count": 0,
+  "duplicate_within_report_count": 0,
+  "filter_eligible_count": 21,
+  "filter_input_by_source": {
+    "meloaep_": 8,
+    "menezxl9": 8,
+    "poppytv_ae": 8,
+    "rickkzn_": 8,
+    "saylex.aep812": 8,
+    "smyxae": 8
   },
-  "selected_external_ids": [
-    "7694281183424695566",
-    "7692118289916366100",
-    "7692305726496050484",
-    "7693269088096800020"
-  ],
+  "filter_rejected_by_reason": {
+    "edit_signal_missing": 1,
+    "poppy_relevance_not_verified_in_visible_text": 26
+  },
+  "filter_rejected_by_source": {
+    "meloaep_": 8,
+    "menezxl9": 6,
+    "rickkzn_": 1,
+    "saylex.aep812": 5,
+    "smyxae": 7
+  },
+  "filter_rejected_count": 27,
+  "inserted_count": 4,
+  "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
-  "verification": {
-    "workflow_run_id": 38654154614,
-    "workflow_run_url": "https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38654154614",
-    "note": "Created from the verified successful run because that run started before the five-hour state-marker step was added."
-  }
+  "queue_counts": {
+    "failed": 1,
+    "processing": 0,
+    "queued": 60,
+    "sent": 2,
+    "sent_today": 1,
+    "skipped": 6,
+    "uncertain": 0,
+    "usage_day": "2026-10-15"
+  },
+  "queue_status": "enqueued",
+  "received_count": 4,
+  "report_generated_at": "2026-10-15T17:45:19.103053+00:00",
+  "schema_version": 1,
+  "selected_external_ids": [
+    "7696947046560828686",
+    "7691730352603139329",
+    "7693538721173441806",
+    "7685506230663564562"
+  ],
+  "selected_source_distribution": {
+    "menezxl9": 1,
+    "rickkzn_": 1,
+    "saylex.aep812": 2
+  },
+  "selected_urls": [
+    "https://www.tiktok.com/@saylex.aep812/video/7696947046560828686",
+    "https://www.tiktok.com/@menezxl9/video/7691730352603139329",
+    "https://www.tiktok.com/@saylex.aep812/video/7693538721173441806",
+    "https://www.tiktok.com/@rickkzn_/video/7685506230663564562"
+  ],
+  "skipped_existing_count": 13
 }
