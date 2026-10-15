@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -207,13 +208,16 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
             CodeAIUsageLedger("https://example.invalid", "short")
 
     def test_production_workflow_requires_gemini_ledger_but_no_workers_ai_model(self):
-        workflow = (__import__("pathlib").Path(__file__).resolve().parents[1] /
+        workflow = (Path(__file__).resolve().parents[1] /
                     ".github" / "workflows" / "gemini-code-assistant.yml").read_text(encoding="utf-8")
         self.assertIn('GEMINI_LEDGER_REQUIRED: "true"', workflow)
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
         self.assertIn("GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}", workflow)
-        self.assertNotIn("env.AI.run", workflow)
-        self.assertIn("Call gemini before ledger finish", "Call gemini before ledger finish")
+        self.assertNotIn("AI.run", workflow)
+        engine_source = Path(gemini.__file__).read_text(encoding="utf-8")
+        helper_source = engine_source.split("def call_gemini_with_ledger(", 1)[1].split("\ndef _write_json(", 1)[0]
+        self.assertLess(helper_source.index("ledger.reserve("), helper_source.index("proposal, usage = call_gemini("))
+        self.assertLess(helper_source.index("proposal, usage = call_gemini("), helper_source.index("ledger.finish("))
 
 
 if __name__ == "__main__":
