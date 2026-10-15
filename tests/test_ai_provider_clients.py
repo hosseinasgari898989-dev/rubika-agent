@@ -238,7 +238,7 @@ class ProviderClientTests(unittest.TestCase):
         sequence = []
         timeouts = []
 
-        def invoke(config, prompt, *, max_output_tokens, timeout_seconds=45):
+        def invoke(config, prompt, *, max_output_tokens, timeout_seconds=45, role=None, call_id=None):
             sequence.append("request")
             timeouts.append(timeout_seconds)
             return result
