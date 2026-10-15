@@ -32,12 +32,19 @@ MAX_CANDIDATE_AGE_DAYS = 90
 FUTURE_TIMESTAMP_TOLERANCE = timedelta(minutes=5)
 
 POPPY_RELEVANCE_TERMS = (
-    "poppy playtime", "poppyplaytime", "huggy wuggy", "huggywuggy",
-    "catnap", "cat nap", "kissy missy", "mommy long legs", "dogday",
+    "poppy playtime", "poppyplaytime", "poppyplytime",
+    "huggy wuggy", "huggywuggy", "catnap", "cat nap",
+    "kissy missy", "mommy long legs", "mommylonglegs", "dogday",
     "smiling critters", "smilingcritters", "nightmare critters",
     "bobby bearhug", "craftycorn", "kickin chicken", "hoppy hopscotch",
-    "picky piggy", "bubba bubbaphant", "prototype",
+    "picky piggy", "bubba bubbaphant", "prototype1006",
+    "lily lovebraids", "lilylovebraids",
 )
+EDIT_MARKER_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:edit(?:s|ed|ing)?|aep|amv|fan[\\s_-]?edit|"
+    r"capcut|velocity|transitions?|slowed|reverbed|vfx)(?:$|[^a-z0-9])"
+)
+EDIT_HASHTAG_SUFFIXES = ("edit", "edits", "aep", "amv")
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -53,15 +60,28 @@ def _parse_timestamp(value: Any) -> datetime | None:
 
 
 def _is_poppy_related(raw: Mapping[str, Any]) -> bool:
-    parts = [
-        raw.get("title"), raw.get("caption"), raw.get("query"),
-        raw.get("author"), raw.get("source_key"),
-    ]
+    """Require game-specific evidence in the video's own metadata, not its search query."""
+    parts = [raw.get("title"), raw.get("caption")]
     hashtags = raw.get("hashtags")
     if isinstance(hashtags, list):
         parts.extend(value for value in hashtags if isinstance(value, str))
     text = " ".join(value for value in parts if isinstance(value, str)).casefold()
     return any(term in text for term in POPPY_RELEVANCE_TERMS)
+
+
+def _has_edit_signal(raw: Mapping[str, Any]) -> bool:
+    """Known creators still need an edit marker; discovery provenance is not proof."""
+    parts = [raw.get("title"), raw.get("caption")]
+    hashtags = raw.get("hashtags")
+    if isinstance(hashtags, list):
+        clean_tags = [value.strip().lstrip("#").casefold() for value in hashtags if isinstance(value, str)]
+        parts.extend(clean_tags)
+        if any(tag.endswith(EDIT_HASHTAG_SUFFIXES) or tag in {
+            "velocity", "transition", "transitions", "slowed", "reverbed", "capcut", "vfx"
+        } for tag in clean_tags):
+            return True
+    text = " ".join(value for value in parts if isinstance(value, str)).casefold()
+    return bool(EDIT_MARKER_RE.search(text))
 
 
 def load_report(path: Path) -> dict[str, Any]:
@@ -102,7 +122,11 @@ def candidates_for_queue(
         if not isinstance(raw_rows, list):
             continue
         for raw in raw_rows:
-            if not isinstance(raw, dict) or not _is_poppy_related(raw):
+            if (
+                not isinstance(raw, dict)
+                or not _is_poppy_related(raw)
+                or not _has_edit_signal(raw)
+            ):
                 continue
             allowed_by_birth, _birth_reason = candidate_passes_birth_cutoff(
                 raw, policy=lifecycle_policy
