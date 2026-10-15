@@ -10,15 +10,12 @@
 - Metadata keywords and text checks are only weak signals. The six content checks for relevance, edit status, insults against Poppy characters, insults against other games/fandoms, editing effort and music are represented as explicit moderation fields. Without those fields the item is held for review and cannot enter a publish-ready batch.
 - Trusted sources can skip weak title/hashtag signal warnings, but not duplicate checks, file validation, resolution, or explicit content safety checks.
 
-## Phone-side daily discovery
+## Cloud-hosted Termux discovery
 
-Run the collector from the repository root on Termux:
-    python -m termux.daily_discovery --push
-
-It creates artifacts/termux_discovery.json with metadata only (no video downloads and no Rubika posts), then pushes only that report to agent-brain-mega-v1. The script refuses to push from another branch or a different repository origin. Configure Git authentication on the phone once before using --push.
+GitHub Actions runs the collector inside the Termux Docker environment on its cloud runner. No daily command, Git authentication, or manual push from the phone is required. The scheduled workflow writes metadata-only output, validates it, pushes only the discovery report to agent-brain-mega-v1, and then imports eligible TikTok metadata into D1. Keep termux/daily_discovery.py because the cloud collector uses it; the phone-specific bootstrap and daily shell wrappers are not part of the supported flow.
 
 ### TikTok
-- The free phone-side adapter requests a few public hashtag pages directly from the phone network and parses only embedded metadata or canonical video links already present in returned HTML.
+- The free cloud-hosted adapter requests a few public hashtag pages directly from the phone network and parses only embedded metadata or canonical video links already present in returned HTML.
 - It does not log in, use cookies, bypass a CAPTCHA, use third-party proxies, download media, or pretend a blocked/empty page succeeded.
 - A public page can still return a challenge, empty HTML, or no canonical results. This adapter is a new route compared with the old search-engine path, but live results must be checked on the phone before claiming it works reliably.
 
@@ -32,8 +29,8 @@ It creates artifacts/termux_discovery.json with metadata only (no video download
 - Instagram may still return a login wall or challenge to a phone. Parser tests prove the extractor handles fixture HTML, not that live discovery works on every phone/network. The first live run is required before treating this route as reliable.
 - No paid Apify adapter is part of the current daily flow. We will only evaluate a paid fallback if the live free-phone test fails and the owner chooses to consider it.
 
-## What happens after the phone pushes a report
-The discovery workflow validates the schema and canonical host/ID relationship, merges the phone results with the existing identity history, and runs only the fallbacks still needed. The workflow's exit status is red if it cannot find the required five TikTok and five YouTube candidates; an HTTP 200 by itself is not success. The discovery report is uploaded as an artifact for inspection.
+## What happens after the scheduled runner creates a report
+The discovery workflow validates the schema and canonical host/ID relationship, executes the collector in cloud-hosted Termux, and imports eligible TikTok rows into the persistent queue. The five-hour state is updated only after a successful queue-intake step; a successful HTTP response alone is not proof of useful discovery. The report is uploaded as an artifact for inspection.
 
 ## Official Mob Entertainment news
 - The official-source track accepts video, image and audio media independently of edit-style filtering.
@@ -48,10 +45,10 @@ The discovery workflow validates the schema and canonical host/ID relationship, 
 - The Rubka adapter uses the tested constructor and methods. It does not import or publish on module import.
 
 ## Remaining gaps before hands-off publishing
-- The phone discovery route has parser tests, but real TikTok results still need a live test on the user's phone.
-- Free Instagram hashtag discovery still needs a live phone test; the platform may return a login wall/challenge or no canonical video metadata.
+- The cloud-hosted discovery route has parser tests, but real TikTok results still need to be monitored in scheduled-run logs.
+- Free Instagram hashtag discovery may still return a challenge or no canonical video metadata; monitor the cloud runner's live report.
 - Automatic visual/audio judgement needs a real classifier integration. Until then, candidates are held as needs_review.
-- YouTube downloads from Termux need a user-side live test and later integration into the queue. Metadata collection alone is not download proof.
+- YouTube downloads in the cloud runner need a live test and reliable integration into the queue. Metadata collection alone is not download proof.
 - A full discovery -> permission check -> download -> inspect -> moderation -> MEGA/D1 -> delivery chain has not yet been validated end-to-end.
 - config/trusted_sources.json intentionally remains empty. The staging pipeline will not download or repost third-party material until explicit permission or a suitable license is recorded.
 - The production Worker is not deployed with new brain routes. Production publishing remains disabled while these requirements are incomplete.
