@@ -8,10 +8,33 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain import multi_ai_code_repair as multi
-from agent.brain.ai_provider_clients import GROQ_MAX_PROMPT_CHARS, ProviderResult
+from agent.brain.ai_provider_clients import GROQ_MAX_PROMPT_CHARS, ProviderClientError, ProviderResult
 
+
+from agent.brain.multi_ai_code_repair import _safe_provider_failure
 
 class MultiAIRepairPreflightTests(unittest.TestCase):
+    def test_provider_failure_report_contains_only_sanitized_allowlisted_fields(self):
+        error = ProviderClientError(
+            "provider_http_400",
+            outcome="failed",
+            diagnostics={
+                "http_status": 400,
+                "provider_reason": "INVALID_ARGUMENT",
+                "provider_message": "Unsupported generation parameter temperature",
+                "detail_reasons": ["INVALID_GENERATION_CONFIG"],
+                "api_key": "must-not-appear",
+            },
+        )
+        report = _safe_provider_failure(error, role="propose_patch", provider="gemini")
+        self.assertEqual(report["role"], "propose_patch")
+        self.assertEqual(report["provider"], "gemini")
+        self.assertEqual(report["error_code"], "provider_http_400")
+        self.assertEqual(report["outcome"], "failed")
+        self.assertEqual(report["diagnostics"]["provider_reason"], "INVALID_ARGUMENT")
+        self.assertNotIn("api_key", json.dumps(report))
+        self.assertNotIn("must-not-appear", json.dumps(report))
+
     def test_diagnosis_prompt_fits_groq_free_plan_budget(self):
         prompt = multi._build_diagnosis_prompt("L" * 12000, "T" * 12000)
         self.assertLessEqual(len(prompt), GROQ_MAX_PROMPT_CHARS)
