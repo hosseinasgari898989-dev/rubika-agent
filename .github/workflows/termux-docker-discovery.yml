@@ -184,6 +184,8 @@ jobs:
           print("SAFETY=metadata_only; no media downloads; no Rubika publishing")
           PY
 
+          # shellcheck disable=SC2016
+          # The nested script must expand variables inside Termux, not on the GitHub runner.
           timeout 25m docker run --rm -i \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -v "$output_dir:/out" \
