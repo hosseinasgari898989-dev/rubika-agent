@@ -8,6 +8,7 @@ const VISION_MODEL = "@cf/cloudflare/clef-omni";
 const OFFICIAL_TRANSLATION_MODEL = "gemini-3.8-flash";
 const MAX_OFFICIAL_TRANSLATION_CHARS = 4500;
 const MAX_OFFICIAL_TRANSLATION_OUTPUT_CHARS = 6500;
+const MAX_DAILY_GEMINI_TRANSLATIONS = 10;
 const MAX_TEXT = 5000;
 const PLATFORMS = new Set(["tiktok", "youtube", "instagram", "mob_official"]);
 const ITEM_STATUSES = new Set([
@@ -582,6 +583,12 @@ async function moderateMusic(env, body) {
 }
 
 async function translateOfficial(env, body) {
+  // Translation stays disabled unless the owner explicitly enables it after
+  // verifying the Gemini project billing and rate limits.
+  if (env.GEMINI_TRANSLATION_APPROVED !== "true") {
+    return json({ ok: false, error: "official_translation_disabled" }, 503);
+  }
+
   const apiKey = typeof env.GEMINI_API_KEY === "string" ? env.GEMINI_API_KEY.trim() : "";
   if (!apiKey) {
     return json({ ok: false, error: "gemini_api_key_missing" }, 503);
@@ -605,6 +612,22 @@ async function translateOfficial(env, body) {
     .trim();
   if (!source) {
     return json({ ok: false, error: "translation_text_empty_after_url_removal" }, 400);
+  }
+
+  // Reserve an atomic daily slot before the outbound call. A failed or
+  // ambiguous provider request still consumes the slot to prevent overuse.
+  const usageDay = new Date().toISOString().slice(0, 10);
+  let reservation;
+  try {
+    reservation = await env.DB.prepare(
+      "INSERT INTO gemini_translation_usage_daily (usage_day, request_count) VALUES (?, 1) ON CONFLICT(usage_day) DO UPDATE SET request_count = request_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE request_count < ? RETURNING request_count"
+    ).bind(usageDay, MAX_DAILY_GEMINI_TRANSLATIONS).first();
+  } catch {
+    return json({ ok: false, error: "official_translation_quota_guard_unavailable" }, 503);
+  }
+  if (!reservation || !Number.isInteger(reservation.request_count) ||
+      reservation.request_count < 1 || reservation.request_count > MAX_DAILY_GEMINI_TRANSLATIONS) {
+    return json({ ok: false, error: "official_translation_daily_limit_reached" }, 429);
   }
 
   const configuredModel = typeof env.GEMINI_MODEL === "string" ? env.GEMINI_MODEL.trim() : "";
