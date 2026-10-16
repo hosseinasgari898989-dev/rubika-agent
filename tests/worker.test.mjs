@@ -715,7 +715,7 @@ function makeTranslationAI(response = "ماب انترتینمنت خبر رسم
     method: "POST",
     body: { category: "error", source: "queue_worker", title: "Pipeline failed", detail: "error_code=staging_failed" },
   }), state));
-  assert.equal(response.status, 201);
+  assert.equal(response.status, 201, JSON.stringify(response.body));
   assert.equal(response.body.ok, true);
   const firstWindow = response.body.window_id;
 
