@@ -827,6 +827,187 @@ async function ownerDigestCommit(env, body) {
   }
 }
 
+
+const OWNER_CONSOLE_DAILY_COMMAND_LIMIT = 80;
+const OWNER_CONSOLE_COMMANDS = new Set([
+  "help", "status", "queue", "ai-status", "report", "unknown",
+  "ai-status:gemini", "ai-status:groq", "ai-status:openrouter", "ai-status:github_models"
+]);
+
+function validOwnerConsoleUpdateId(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function validOwnerConsoleChatHash(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function validOwnerConsoleCommand(value) {
+  return typeof value === "string" && OWNER_CONSOLE_COMMANDS.has(value);
+}
+
+async function ownerConsoleState(env) {
+  try {
+    const state = await env.DB.prepare(
+      "SELECT offset_id, updated_at FROM owner_console_state WHERE id = 1"
+    ).first();
+    return json({
+      ok: true,
+      offset_id: state && typeof state.offset_id === "string" ? state.offset_id : null,
+      updated_at: state ? state.updated_at : null
+    });
+  } catch {
+    return json({ ok: false, error: "owner_console_state_unavailable" }, 503);
+  }
+}
+
+async function ownerConsoleSetOffset(env, body) {
+  if (Object.keys(body).some(key => key !== "offset_id") ||
+      typeof body.offset_id !== "string" ||
+      body.offset_id.length < 1 || body.offset_id.length > 200 ||
+      /[\\u0000-\\u001f\\u007f]/.test(body.offset_id)) {
+    return json({ ok: false, error: "owner_console_offset_invalid" }, 400);
+  }
+  try {
+    const result = await env.DB.prepare(
+      "UPDATE owner_console_state SET offset_id = ?, updated_at = ? WHERE id = 1"
+    ).bind(body.offset_id, new Date().toISOString()).run();
+    if (!result || !result.meta || !result.meta.changes) {
+      return json({ ok: false, error: "owner_console_state_not_initialized" }, 503);
+    }
+    return json({ ok: true, offset_saved: true });
+  } catch {
+    return json({ ok: false, error: "owner_console_offset_write_failed" }, 503);
+  }
+}
+
+async function ownerConsoleClaim(env, body) {
+  const allowedKeys = new Set(["update_id", "chat_hash", "command"]);
+  if (Object.keys(body).some(key => !allowedKeys.has(key))) {
+    return json({ ok: false, error: "owner_console_claim_fields_invalid" }, 400);
+  }
+  const updateId = body.update_id;
+  const chatHash = body.chat_hash;
+  const command = body.command;
+  if (!validOwnerConsoleUpdateId(updateId)) {
+    return json({ ok: false, error: "owner_console_update_id_invalid" }, 400);
+  }
+  if (!validOwnerConsoleChatHash(chatHash)) {
+    return json({ ok: false, error: "owner_console_chat_hash_invalid" }, 400);
+  }
+  if (!validOwnerConsoleCommand(command)) {
+    return json({ ok: false, error: "owner_console_command_invalid" }, 400);
+  }
+
+  const now = new Date().toISOString();
+  const dayStart = now.slice(0, 10) + "T00:00:00.000Z";
+  try {
+    const claimed = await env.DB.prepare(
+      "INSERT INTO owner_console_updates (update_id, chat_hash, command, status, created_at, updated_at) " +
+      "SELECT ?, ?, ?, 'claimed', ?, ? " +
+      "WHERE (SELECT COUNT(*) FROM owner_console_updates WHERE created_at >= ?) < ? " +
+      "ON CONFLICT(update_id) DO NOTHING " +
+      "RETURNING update_id"
+    ).bind(
+      updateId, chatHash, command, now, now, dayStart, OWNER_CONSOLE_DAILY_COMMAND_LIMIT
+    ).first();
+
+    if (claimed && claimed.update_id === updateId) {
+      return json({ ok: true, claimed: true, update_id: updateId }, 201);
+    }
+
+    const existing = await env.DB.prepare(
+      "SELECT status FROM owner_console_updates WHERE update_id = ?"
+    ).bind(updateId).first();
+    if (existing) {
+      return json({
+        ok: true, claimed: false, duplicate: true, status: existing.status
+      });
+    }
+
+    const countRow = await env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM owner_console_updates WHERE created_at >= ?"
+    ).bind(dayStart).first();
+    if (Number(countRow && countRow.total || 0) >= OWNER_CONSOLE_DAILY_COMMAND_LIMIT) {
+      return json({ ok: true, claimed: false, rate_limited: true }, 429);
+    }
+    return json({ ok: false, error: "owner_console_claim_denied" }, 503);
+  } catch {
+    return json({ ok: false, error: "owner_console_claim_failed" }, 503);
+  }
+}
+
+async function ownerConsoleFinish(env, body) {
+  const allowedKeys = new Set(["update_id", "status", "result_code"]);
+  if (Object.keys(body).some(key => !allowedKeys.has(key))) {
+    return json({ ok: false, error: "owner_console_finish_fields_invalid" }, 400);
+  }
+  const updateId = body.update_id;
+  const status = text(body.status, 20);
+  const resultCode = body.result_code == null ? null : body.result_code;
+  if (!validOwnerConsoleUpdateId(updateId)) {
+    return json({ ok: false, error: "owner_console_update_id_invalid" }, 400);
+  }
+  if (!new Set(["answered", "failed", "uncertain", "ignored"]).has(status)) {
+    return json({ ok: false, error: "owner_console_finish_status_invalid" }, 400);
+  }
+  if (resultCode !== null &&
+      (typeof resultCode !== "string" || !/^[a-z0-9_-]{1,80}$/.test(resultCode))) {
+    return json({ ok: false, error: "owner_console_result_code_invalid" }, 400);
+  }
+
+  try {
+    const result = await env.DB.prepare(
+      "UPDATE owner_console_updates SET status = ?, result_code = ?, updated_at = ? " +
+      "WHERE update_id = ? AND status = 'claimed'"
+    ).bind(status, resultCode, new Date().toISOString(), updateId).run();
+    if (!result || !result.meta || !result.meta.changes) {
+      const existing = await env.DB.prepare(
+        "SELECT status FROM owner_console_updates WHERE update_id = ?"
+      ).bind(updateId).first();
+      if (!existing) return json({ ok: false, error: "owner_console_update_not_found" }, 404);
+      return json({ ok: false, error: "owner_console_update_already_finished" }, 409);
+    }
+    return json({ ok: true, update_id: updateId, status });
+  } catch {
+    return json({ ok: false, error: "owner_console_finish_failed" }, 503);
+  }
+}
+
+async function ownerConsoleQueueSummary(env) {
+  // This endpoint is intentionally read-only. Do not reuse automationQueueList(),
+  // whose current GET handler also repairs stale "processing" rows by updating D1.
+  try {
+    const [queueRows, itemRows, sentTodayRow] = await Promise.all([
+      env.DB.prepare(
+        "SELECT status, COUNT(*) AS total FROM automation_queue GROUP BY status"
+      ).all(),
+      env.DB.prepare(
+        "SELECT status, COUNT(*) AS total FROM items GROUP BY status"
+      ).all(),
+      env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM automation_queue WHERE status = 'sent' AND sent_at >= ?"
+      ).bind(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z").first()
+    ]);
+    const queueCounts = Object.fromEntries(
+      (queueRows.results || []).map(row => [String(row.status), Number(row.total || 0)])
+    );
+    const itemCounts = Object.fromEntries(
+      (itemRows.results || []).map(row => [String(row.status), Number(row.total || 0)])
+    );
+    return json({
+      ok: true,
+      queue_counts: queueCounts,
+      sent_today: Number(sentTodayRow && sentTodayRow.total || 0),
+      item_counts: itemCounts,
+      usage_day: new Date().toISOString().slice(0, 10),
+      publishing: PUBLISHING_ENABLED
+    });
+  } catch {
+    return json({ ok: false, error: "owner_console_queue_summary_unavailable" }, 503);
+  }
+}
+
 const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6, github_models: 6 });
 const CODE_AI_TOTAL_DAILY_LIMIT = 18;
 const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch"]);
@@ -1281,6 +1462,32 @@ export default {
       return json({ ok: false, error: "unauthorized" }, 401);
     }
 
+    if (path === "/api/brain/owner-console/state") {
+      if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
+      return ownerConsoleState(env);
+    }
+    if (path === "/api/brain/owner-console/offset") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedOffset = await readJson(request);
+      if (!parsedOffset.ok) return json({ ok: false, error: parsedOffset.error }, parsedOffset.status);
+      return ownerConsoleSetOffset(env, parsedOffset.value);
+    }
+    if (path === "/api/brain/owner-console/claim") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedClaim = await readJson(request);
+      if (!parsedClaim.ok) return json({ ok: false, error: parsedClaim.error }, parsedClaim.status);
+      return ownerConsoleClaim(env, parsedClaim.value);
+    }
+    if (path === "/api/brain/owner-console/finish") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedFinish = await readJson(request);
+      if (!parsedFinish.ok) return json({ ok: false, error: parsedFinish.error }, parsedFinish.status);
+      return ownerConsoleFinish(env, parsedFinish.value);
+    }
+    if (path === "/api/brain/owner-console/queue-summary") {
+      if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
+      return ownerConsoleQueueSummary(env);
+    }
     if (path === "/api/brain/ai-provider/status") {
       if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
       return codeAiProviderStatus(env, url);
