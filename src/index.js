@@ -1008,9 +1008,9 @@ async function ownerConsoleQueueSummary(env) {
   }
 }
 
-const CODE_AI_PROVIDER_LIMITS = Object.freeze({ groq: 6, openrouter: 6 });
-const CODE_AI_TOTAL_DAILY_LIMIT = 12;
-const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch"]);
+const CODE_AI_PROVIDER_LIMITS = Object.freeze({ groq: 18, openrouter: 18 });
+const CODE_AI_TOTAL_DAILY_LIMIT = 36;
+const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch", "translate_official"]);
 const CODE_AI_MAX_COOLDOWN_SECONDS = 86400;
 const CODE_AI_DEFAULT_COOLDOWN_SECONDS = 300;
 const CODE_AI_MAX_TOKEN_COUNT = 10000000;
