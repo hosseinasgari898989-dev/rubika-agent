@@ -39,6 +39,18 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("DAILY_SUCCESS_LIMIT = 4", worker)
         self.assertIn("edit_message_text", (ROOT / "agent" / "brain" / "owner_notify.py").read_text(encoding="utf-8"))
 
+    def test_manual_four_tiktok_dispatch_is_explicit_and_test_channel_only(self):
+        workflow = (ROOT / ".github" / "workflows" / "daily-queue-processor.yml").read_text(encoding="utf-8")
+        worker = (ROOT / "agent" / "brain" / "queue_worker.py").read_text(encoding="utf-8")
+        self.assertIn("publish_four_tiktok_test", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("inputs.publish_four_tiktok_test == true", workflow)
+        self.assertIn('if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]', workflow)
+        self.assertIn('RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230"', workflow)
+        self.assertIn('RUBIKA_CHANNEL_GUID:-}" == "c0EFohK0f3174377fb6fa422d3ccb230"', workflow)
+        self.assertIn("PLATFORMS = (\"tiktok\",)", worker)
+        self.assertIn("--daily-limit 4", workflow)
+
     def test_edit_pipeline_does_not_apply_mob_birth_cutoff(self):
         intake = (ROOT / "agent" / "brain" / "queue_intake.py").read_text(encoding="utf-8")
         worker = (ROOT / "agent" / "brain" / "queue_worker.py").read_text(encoding="utf-8")
