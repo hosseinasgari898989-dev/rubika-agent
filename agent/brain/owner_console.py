@@ -176,7 +176,10 @@ class ControlWorker:
         if parsed.query:
             if parsed.path != "/api/brain/ai-provider/status":
                 raise OwnerConsoleError("control_api_query_not_allowed")
-            query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+            try:
+                query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+            except ValueError:
+                raise OwnerConsoleError("control_api_query_invalid") from None
             if set(query) != {"provider"} or len(query["provider"]) != 1 or query["provider"][0] not in SAFE_PROVIDER:
                 raise OwnerConsoleError("control_api_provider_invalid")
         if method not in {"GET", "POST"} or (method == "GET" and payload is not None):
