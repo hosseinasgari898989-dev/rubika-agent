@@ -38,6 +38,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install minimal package-import dependency
+        run: python -m pip install --disable-pip-version-check 'requests>=2.31,<3'
       - name: Compile owner-console code
         run: python -m compileall -q agent/brain
       - name: Test owner-console commands and fake clients
