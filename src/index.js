@@ -597,11 +597,11 @@ async function translateOfficial(env, body) {
 
   // Keep Workers AI reserved for audio/music detection. Official-news translation
   // uses the configured Gemini API key; the key is sent only in a request header.
-  const urlPattern = /(?:https?:\\/\\/|www\\.)\\S+|\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}(?:\\/[^\\s]*)?/gi;
+  const urlPattern = /(?:https?:\/\/|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?/gi;
   const source = raw
     .replace(urlPattern, " ")
-    .replace(/[ \\t]+/g, " ")
-    .replace(/\\s+([,;:!?،؛؟])/g, "$1")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s+([,;:!?،؛؟])/g, "$1")
     .trim();
   if (!source) {
     return json({ ok: false, error: "translation_text_empty_after_url_removal" }, 400);
@@ -620,7 +620,7 @@ async function translateOfficial(env, body) {
     "<source_text>",
     source,
     "</source_text>"
-  ].join("\\n");
+  ].join("\n");
 
   try {
     const response = await fetch(
@@ -668,15 +668,15 @@ async function translateOfficial(env, body) {
     const parts = result && result.candidates && result.candidates[0] &&
       result.candidates[0].content && result.candidates[0].content.parts;
     const rawTranslation = Array.isArray(parts)
-      ? parts.filter(part => part && typeof part.text === "string").map(part => part.text).join("\\n")
+      ? parts.filter(part => part && typeof part.text === "string").map(part => part.text).join("\n")
       : "";
     let translation = text(rawTranslation, MAX_OFFICIAL_TRANSLATION_OUTPUT_CHARS);
     translation = translation
       .replace(urlPattern, " ")
-      .replace(/[ \\t]+/g, " ")
-      .replace(/\\s+([,;:!?،؛؟])/g, "$1")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\s+([,;:!?،؛؟])/g, "$1")
       .trim();
-    if (!translation || !/[\\u0600-\\u06FF]/.test(translation) || /[\\u0400-\\u04FF]/.test(translation)) {
+    if (!translation || !/[\u0600-\u06FF]/.test(translation) || /[\u0400-\u04FF]/.test(translation)) {
       return json({ ok: false, error: "translation_model_output_invalid" }, 502);
     }
     return json({
