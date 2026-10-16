@@ -1,57 +1,52 @@
-# Rubika-Agent brain, version 1
+# Rubika-Agent brain — current implementation notes
+
+This file summarizes the active main-branch architecture. Older phone-only discovery notes and provider experiments are historical; the master handoff and live workflow files take precedence.
 
 ## Two separate content tracks
 
-### Poppy Playtime edits from TikTok, YouTube and Instagram
-- Discovery adapters must produce canonical source URLs, stable external IDs and source metadata. Search-result menus, tags and pages are not media candidates.
-- The default batch requirement remains five TikTok items and five YouTube items. Instagram is a budget-limited optional source; the phone collector asks Apify for at most two Reels per UTC day.
-- Candidate IDs and SHA-256 hashes are checked for duplicates. Source accounts in config/trusted_sources.json are intentionally empty until the owner chooses and verifies them.
-- Every file is inspected as the actual media type. Video delivery copies are normalized to vertical 1080x1920 MP4 while preserving the full source frame (smaller sources of at least 480 pixels per dimension can be upscaled and padded). The original is never overwritten; final output is re-validated before staging.
-- Metadata keywords and text checks are only weak signals. The six content checks for relevance, edit status, insults against Poppy characters, insults against other games/fandoms, editing effort and music are represented as explicit moderation fields. Without those fields the item is held for review and cannot enter a publish-ready batch.
-- Trusted sources can skip weak title/hashtag signal warnings, but not duplicate checks, file validation, resolution, or explicit content safety checks.
+### Poppy Playtime edits
 
-## Phone-side daily discovery
+- Active discovery/intake is cloud-scheduled through GitHub Actions and Termux Docker, not a daily manual command on the user's phone. The workflow `.github/workflows/termux-docker-discovery.yml` checks its D1 intake gate every 30 minutes and runs the fuller metadata collection only after five hours since the last successful queue intake.
+- Metadata candidates are validated and enqueued in the D1 automation queue. The discovery workflow itself does not download video media or publish to Rubika.
+- Current delivery config enables TikTok-to-Rubika. YouTube discovery remains present, but YouTube delivery is paused by `config/tiktok_source_policy.json`; Instagram is not part of the active edit automation. The owner-selected TikTok creators and source-specific rules live in that policy file.
+- The daily queue processor `.github/workflows/daily-queue-processor.yml` runs at 07:00 UTC and targets at most four successful sends per run. Four is a cap, not a guarantee: each item must pass source, duplicate, media, policy and delivery checks.
+- Media output format is source-policy-dependent: selected profiles may use square 1080×1080, others preserve source aspect ratio. Do not assume all creators should be forced into the same aspect ratio.
+- Content relevance and edit-signal checks remain mandatory. A trusted creator identity cannot make every upload relevant. AI is not allowed to auto-approve uncertain content.
 
-Run the collector from the repository root on Termux:
-    python -m termux.daily_discovery --push
+### Official Mob Entertainment news
 
-It creates artifacts/termux_discovery.json with metadata only (no video downloads and no Rubika posts), then pushes only that report to agent-brain-mega-v1. The script refuses to push from another branch or a different repository origin. Configure Git authentication on the phone once before using --push.
+- This is a separate content track using the official Mob newsroom, verified X posts from @mobgamesstudios, official YouTube, and official Steam news as sources.
+- The X path checks the authoritative publication timestamp, author identity, canonical URL and actual attached media. For publication, the news item's verified published_at must fall inside the five-hour news-only window; GitHub commit time is not used as a proxy for publication time.
+- Captions preserve source text and require a valid Persian translation when the caption is available. Outgoing captions are checked to ensure they have no URL. Actual media must be downloaded and validated before sending.
+- Several eligible X posts in one five-hour window can be processed one at a time with deduplication. An ambiguous Rubika delivery stops the run to avoid duplicates.
+- Production publication is deliberately blocked until the owner updates the destination secret to the real main-channel GUID and separately approves the Mob-production gate/config. The lifecycle config remains in test mode today.
 
-### TikTok
-- The free phone-side adapter requests a few public hashtag pages directly from the phone network and parses only embedded metadata or canonical video links already present in returned HTML.
-- It does not log in, use cookies, bypass a CAPTCHA, use third-party proxies, download media, or pretend a blocked/empty page succeeded.
-- A public page can still return a challenge, empty HTML, or no canonical results. This adapter is a new route compared with the old search-engine path, but live results must be checked on the phone before claiming it works reliably.
+## AI responsibilities
 
-### YouTube
-- The Termux collector uses yt-dlp search with skip_download enabled and keeps eligible results with known durations up to 180 seconds.
-- It only submits metadata and Shorts URLs to the report. A GitHub runner download failure is not bypassed; the separate authorized-media relay remains a future download fallback.
+- Python owns source policy, metadata validation, deduplication, technical media validation, delivery status, and safe error guidance.
+- Cloudflare D1 stores the durable metadata, queue, provider call ledger and outcomes.
+- Cloudflare Workers AI is reserved exclusively for music detection from video audio using Clef Omni. Ambiguous audio decisions require human review. Workers AI is not used for code repair or official-news translation.
+- Groq and OpenRouter are the active external providers for code repair. Groq proposes a constrained patch, both providers diagnose and review independently, all requests reserve a D1 slot first, and uncertain provider calls are not blindly retried.
+- Official Mob translation uses Groq first and OpenRouter as a bounded fallback, with the translation role recorded in D1. Gemini, Mistral and GitHub Models are retired from active repair/translation paths.
+- No model may publish to Rubika, merge a PR, or bypass tests. The bounded self-repair workflow can open a review PR only after the changed-file allowlist and deterministic tests pass.
 
-### Instagram (free phone-side path)
-- Instagram discovery now runs on the phone against public hashtag pages using ordinary unauthenticated HTTPS; it does not use Apify, a paid API, cookies, login sessions, proxies or CAPTCHA/challenge bypasses.
-- The collector examines at most three hashtag pages and accepts at most two canonical video/Reel candidates per daily run. It extracts metadata only when the returned HTML exposes it; otherwise it reports zero/blocked rather than inventing candidates.
-- Instagram may still return a login wall or challenge to a phone. Parser tests prove the extractor handles fixture HTML, not that live discovery works on every phone/network. The first live run is required before treating this route as reliable.
-- No paid Apify adapter is part of the current daily flow. We will only evaluate a paid fallback if the live free-phone test fails and the owner chooses to consider it.
+## Delivery and failure handling
 
-## What happens after the phone pushes a report
-The discovery workflow validates the schema and canonical host/ID relationship, merges the phone results with the existing identity history, and runs only the fallbacks still needed. The workflow's exit status is red if it cannot find the required five TikTok and five YouTube candidates; an HTTP 200 by itself is not success. The discovery report is uploaded as an artifact for inspection.
+- A successful Rubika response is required before a delivery is recorded as sent.
+- Only definite structured rejection can be retried within the configured attempt bound.
+- A transport exception or ambiguous response is recorded as uncertain and stops automatic resend.
+- Temporary media is not removed before delivery status is known. Cleanup policies must fail closed when a staged copy is uncertain or needed for recovery.
+- Provider outputs and source captions are untrusted data. Never allow model text or media captions to inject repository instructions, secrets or arbitrary formatting metadata.
 
-## Official Mob Entertainment news
-- The official-source track accepts video, image and audio media independently of edit-style filtering.
-- A caption can be formatted with the original text and a Persian translation supplied by a translation adapter. No source caption or translation is invented if none is available.
-- Multi-image carousels are represented distinctly; they need an album-aware downloader/uploader before being marked ready.
+## Verified current checks
 
-## Delivery safety
-- Stage the complete requested batch before publication. A partial batch is never declared ready.
-- Retry only a definite structured Rubika rejection, up to three attempts.
-- A transport exception or response without a clear status is marked uncertain and stops immediately to avoid duplicate posts.
-- Local/MEGA staged copies are deleted only after Rubika returns status OK. If local cleanup fails, preserve the MEGA copy for recovery.
-- The Rubka adapter uses the tested constructor and methods. It does not import or publish on module import.
+- Latest Cloud bootstrap CI run recorded in the master handoff: 384 Python tests passed, Worker API tests passed, the Rubka API surface check returned ok, and agent.preflight self-test returned ok=true/publishing=false.
+- Live provider smoke confirmed one successful ledgered request each to Groq and OpenRouter. It did not prove every possible repair will succeed, nor did it publish to Rubika.
+- Read-only D1 counts last checked were 64 queued, 3 sent, 6 skipped and 1 failed; these counts are time-sensitive and should be queried again before making scheduling decisions.
+- Rubika bot authentication passed a read-only get_me check, but the main-channel preflight then blocked because RUBIKA_CHANNEL_GUID still equals the known test-channel GUID. No main-channel send was made.
 
-## Remaining gaps before hands-off publishing
-- The phone discovery route has parser tests, but real TikTok results still need a live test on the user's phone.
-- Free Instagram hashtag discovery still needs a live phone test; the platform may return a login wall/challenge or no canonical video metadata.
-- Automatic visual/audio judgement needs a real classifier integration. Until then, candidates are held as needs_review.
-- YouTube downloads from Termux need a user-side live test and later integration into the queue. Metadata collection alone is not download proof.
-- A full discovery -> permission check -> download -> inspect -> moderation -> MEGA/D1 -> delivery chain has not yet been validated end-to-end.
-- config/trusted_sources.json intentionally remains empty. The staging pipeline will not download or repost third-party material until explicit permission or a suitable license is recorded.
-- The production Worker is not deployed with new brain routes. Production publishing remains disabled while these requirements are incomplete.
+## What must remain gated
+
+1. Do not change the channel secret in code. The owner must set GitHub Actions secret RUBIKA_CHANNEL_GUID to the real main-channel GUID, then rerun the no-send main-channel preflight.
+2. Do not enable the Mob-production variable or move the lifecycle/source config to production until the actual main destination is confirmed and the owner approves that separate step.
+3. Do not claim a four-post day is complete until the live queue run confirms successful posts. Do not claim media-caption formatting works on a live post until Rubika has actually accepted a formatted payload; current unit tests use the parser and mocked publisher.
