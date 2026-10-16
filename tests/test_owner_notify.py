@@ -118,6 +118,42 @@ class OwnerNotifyTests(unittest.TestCase):
         self.assertEqual(len(bot.edited), 1)
         self.assertEqual(bot.edited[0]["message_id"], "rubika-existing")
 
+    def test_invalid_access_edit_creates_replacement_digest_and_persists_new_id(self):
+        bot = FakeRubikaBot(edit_result={"status": "INVALID_ACCESS"})
+        state = digest_state(message_id="rubika-inaccessible", message_body="old body")
+        commits = []
+
+        def worker_post(path, payload):
+            if path.endswith("/events"):
+                return {"ok": True, "window_id": "a" * 32}
+            if path.endswith("/claim"):
+                return {"ok": True, "claimed": True, "lock_token": "b" * 32,
+                        "state": state}
+            if path.endswith("/commit"):
+                commits.append(payload)
+                return {"ok": True, "message_id": payload["message_id"]}
+            raise AssertionError(path)
+
+        with (
+            patch.object(owner_notify, "_worker_post", side_effect=worker_post),
+            patch.object(owner_notify, "_make_rubika_bot", return_value=bot),
+        ):
+            result = owner_notify.send_owner_notification(
+                "✅ New successful run\\ncompleted",
+                category="success",
+                source="daily_worker",
+            )
+
+        self.assertTrue(result["sent"])
+        self.assertTrue(result["created"])
+        self.assertTrue(result["replaced_inaccessible"])
+        self.assertEqual(len(bot.edited), 1)
+        self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(bot.sent[0]["chat_id"], "owner-chat-id")
+        self.assertEqual(commits[-1]["message_id"], "rubika-msg-123")
+        self.assertNotEqual(commits[-1]["message_body"], "old body")
+        self.assertFalse(commits[-1]["message_creation_uncertain"])
+
     def test_uncertain_initial_send_does_not_create_duplicates(self):
         bot = FakeRubikaBot()
         state = digest_state(message_id=None, message_body="unknown", uncertain=True)
