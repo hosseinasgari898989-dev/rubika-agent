@@ -63,9 +63,10 @@ def _visible_metadata_text(raw: Mapping[str, Any]) -> str:
     """Return visible descriptive text without hashtags, queries, or creator handles."""
     parts = [raw.get("title"), raw.get("caption")]
     visible = " ".join(value for value in parts if isinstance(value, str))
-    visible = re.sub(r"https?://\\S+", " ", visible, flags=re.IGNORECASE)
-    visible = re.sub(r"(?<!\\w)#[^\\s#]+", " ", visible)
-    return re.sub(r"\\s+", " ", visible).strip().casefold()
+    visible = re.sub(r"https?://\S+", " ", visible, flags=re.IGNORECASE)
+    visible = re.sub(r"(?<!\w)#[^\s#]+", " ", visible)
+    visible = re.sub(r"(?<!\w)@[A-Za-z0-9._-]+", " ", visible)
+    return re.sub(r"\s+", " ", visible).strip().casefold()
 
 
 def _is_poppy_related(raw: Mapping[str, Any]) -> bool:
