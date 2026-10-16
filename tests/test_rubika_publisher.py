@@ -52,28 +52,40 @@ class RubikaPublisherMediaTests(unittest.TestCase):
             bot_factory=lambda **kwargs: self.fake_bot,
         )
 
-    def test_official_mob_caption_gets_bold_header_and_quoted_source_without_markup_injection(self):
+    def test_official_mob_caption_bolds_only_translation_and_escapes_source_markup(self):
         caption = (
-            "🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\n\n"
-            "Official **source** text with ||spoiler|| markers and a second line.\n\n"
-            "📝 ترجمه فارسی:\nA Persian translation."
+            "🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\\n\\n"
+            "Official **source** text with ||spoiler|| markers and a second line.\\n\\n"
+            "📝 ترجمه فارسی:\\nA Persian translation."
         )
         video_path = Path(self.tempdir.name) / "mob-news.mp4"
         video_path.write_bytes(b"fake-mob-news-video")
         outgoing = _decorate_official_mob_caption(caption)
-        self.assertIn("**🎮 ماب انترتینمنت پستی منتشر کرد و گفت:**", outgoing)
-        self.assertIn("> Official ", outgoing)
+
+        self.assertTrue(outgoing.startswith("🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\\n\\n"))
+        self.assertIn("Official", outgoing)
+        self.assertNotIn("> Official", outgoing)
+        self.assertNotIn("**🎮", outgoing)
+        self.assertNotIn("**📝 ترجمه فارسی:**", outgoing)
+        self.assertIn("**A Persian translation.**", outgoing)
         self.assertNotIn("**source**", outgoing)
         self.assertNotIn("||spoiler||", outgoing)
 
         self.publisher.send_media(video_path, "video", caption)
         payload = self.fake_bot.posts[0][1]
-        types = [part["type"] for part in payload["metadata"]["meta_data_parts"]]
-        self.assertGreaterEqual(types.count("Bold"), 2)
-        self.assertIn("Quote", types)
+        parts = payload["metadata"]["meta_data_parts"]
+        bold_parts = [part for part in parts if part["type"] == "Bold"]
+        self.assertEqual(len(bold_parts), 1)
+        translated = "A Persian translation."
+        expected_offset = len(payload["text"].split(translated)[0].encode("utf-16-be")) // 2
+        self.assertEqual(bold_parts[0]["from_index"], expected_offset)
+        self.assertEqual(bold_parts[0]["length"], len(translated.encode("utf-16-be")) // 2)
+        self.assertNotIn("Quote", [part["type"] for part in parts])
+        self.assertNotIn("Spoiler", [part["type"] for part in parts])
         self.assertNotIn("**", payload["text"])
         self.assertNotIn("||", payload["text"])
         self.assertIn("Official", payload["text"])
+        self.assertIn("📝 ترجمه فارسی:", payload["text"])
 
     def test_formatted_video_caption_uploads_once_and_sends_bold_quote_and_spoiler_metadata(self):
         video_path = Path(self.tempdir.name) / "formatted.mp4"
