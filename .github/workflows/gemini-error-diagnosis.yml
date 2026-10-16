@@ -77,8 +77,8 @@ jobs:
             exit 0
           fi
           today="$(date -u +%F)"
-          runs_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/gemini-error-diagnosis.yml/runs?per_page=100&created=$today..$today")"
-          attempts="$(python -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for r in d.get("workflow_runs",[]) if r.get("conclusion") != "skipped"))' <<< "$runs_json")"
+          artifacts_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100")"
+          attempts="$(python -c 'import json,sys; today=sys.argv[1]; d=json.load(sys.stdin); print(sum(1 for a in d.get("artifacts",[]) if str(a.get("name","")).startswith("gemini-diagnostic-attempt-") and str(a.get("created_at",""))[:10] == today and not a.get("expired",False)))' "$today" <<< "$artifacts_json")"
           if [[ "$attempts" -ge 2 ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             echo "Daily diagnostic request cap reached. No request was sent." >> "$GITHUB_STEP_SUMMARY"
@@ -86,6 +86,19 @@ jobs:
           fi
           echo "should_run=true" >> "$GITHUB_OUTPUT"
           echo "Cost gate, Gemini-only Worker ledger, credential presence, and daily cap passed."
+
+      - name: Consume one daily diagnostic slot
+        if: steps.preflight.outputs.should_run == 'true'
+        run: printf 'authorized-at-%s\\n' "$(date -u +%FT%TZ)" > "$RUNNER_TEMP/gemini-diagnostic-attempt.txt"
+
+      - name: Persist diagnostic slot marker
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-diagnostic-attempt-${{ github.run_id }}
+          path: ${{ runner.temp }}/gemini-diagnostic-attempt.txt
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Install pinned runtime dependencies
         if: steps.preflight.outputs.should_run == 'true'
