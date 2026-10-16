@@ -1347,22 +1347,10 @@ export default {
     if (storage) return updateStorage(env, decodeURIComponent(storage[1]), body);
     if (path === "/api/brain/events") return addEvent(env, body);
 
-    if (path === "/api/brain/owner-digest/events") {
-      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
-      const parsedDigestEvent = await readJson(request);
-      if (!parsedDigestEvent.ok) return json({ ok: false, error: parsedDigestEvent.error }, parsedDigestEvent.status);
-      return ownerDigestAddEvent(env, parsedDigestEvent.value);
-    }
-    if (path === "/api/brain/owner-digest/claim") {
-      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
-      return ownerDigestClaim(env);
-    }
-    if (path === "/api/brain/owner-digest/commit") {
-      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
-      const parsedDigestCommit = await readJson(request);
-      if (!parsedDigestCommit.ok) return json({ ok: false, error: parsedDigestCommit.error }, parsedDigestCommit.status);
-      return ownerDigestCommit(env, parsedDigestCommit.value);
-    }
+    // The request body was validated and parsed above; do not consume it twice.
+    if (path === "/api/brain/owner-digest/events") return ownerDigestAddEvent(env, body);
+    if (path === "/api/brain/owner-digest/claim") return ownerDigestClaim(env);
+    if (path === "/api/brain/owner-digest/commit") return ownerDigestCommit(env, body);
     return json({ ok: false, error: "not_found" }, 404);
   }
 };
