@@ -44,7 +44,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install the pinned Rubka client
-        run: python -m pip install --disable-pip-version-check "rubka==8.1.7"
+        run: python -m pip install --disable-pip-version-check "rubka==8.1.7" "Pillow>=10,<13"
 
       - name: Validate bot authentication with a read-only call
         shell: bash
