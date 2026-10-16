@@ -16,6 +16,47 @@ from typing import Any
 MARKDOWN_SIGNAL = re.compile(r"\*\*.+?\*\*|__(.+?)__|--(.+?)--|~~(.+?)~~|\|\|.+?\|\||`.+?`|^>.+?$", re.MULTILINE | re.DOTALL)
 
 
+def _escape_source_markup(value: str) -> str:
+    """Prevent source-caption text from injecting formatting metadata."""
+    for marker in ("**", "__", "~~", "||"):
+        value = value.replace(marker, marker[0] + "\u200b" + marker[1])
+    value = value.replace("`", "ˋ").replace("$", "＄")
+    return re.sub(r"(?m)^>", "›", value)
+
+
+def _decorate_official_mob_caption(caption: str) -> str:
+    """Use small bold/quote decorations for official Mob news only."""
+    lines = caption.splitlines()
+    if not lines or lines[0].strip() != "🎮 ماب انترتینمنت پستی منتشر کرد و گفت:":
+        return caption
+
+    translation_index = next(
+        (i for i, line in enumerate(lines) if line.strip() == "📝 ترجمه فارسی:"),
+        -1,
+    )
+    if translation_index < 0:
+        return caption
+
+    source_lines = lines[2:translation_index]
+    while source_lines and not source_lines[0].strip():
+        source_lines.pop(0)
+    while source_lines and not source_lines[-1].strip():
+        source_lines.pop()
+    translation_lines = lines[translation_index + 1:]
+    while translation_lines and not translation_lines[0].strip():
+        translation_lines.pop(0)
+
+    safe_source = [_escape_source_markup(line) for line in source_lines]
+    quoted_source = "\n".join("> " + line if line else ">" for line in safe_source)
+    safe_translation = [_escape_source_markup(line) for line in translation_lines]
+    output = ["**🎮 ماب انترتینمنت پستی منتشر کرد و گفت:**", ""]
+    if quoted_source:
+        output.extend([quoted_source, ""])
+    output.append("**📝 ترجمه فارسی:**")
+    output.extend(safe_translation)
+    return "\n".join(output)
+
+
 def _parse_formatted_caption(caption: str) -> dict[str, Any] | None:
     """Return a valid Rubika metadata payload only when the caption uses markup."""
     if not caption or not MARKDOWN_SIGNAL.search(caption):
@@ -86,7 +127,8 @@ class RubikaPublisher:
                 raise ValueError("carousel_requires_itemized_uploads")
             raise ValueError("unsupported_media_type")
 
-        formatted_caption = _parse_formatted_caption(caption or "")
+        outgoing_caption = _decorate_official_mob_caption(caption or "")
+        formatted_caption = _parse_formatted_caption(outgoing_caption)
         if formatted_caption is not None:
             return self._send_formatted_media(local_path, media_type, formatted_caption)
 
