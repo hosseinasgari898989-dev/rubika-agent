@@ -82,47 +82,18 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(groq.model, "openai/gpt-oss-20b")
         self.assertEqual(groq.url, "https://api.groq.com/openai/v1/chat/completions")
 
-        github_models = clients.provider_config("github_models", environ={
-            "GITHUB_TOKEN": "g" * 40,
-        })
-        self.assertEqual(github_models.model, "openai/gpt-4o")
-        self.assertEqual(github_models.url, "https://models.github.ai/inference/chat/completions")
-
         openrouter = clients.provider_config("openrouter", environ={"OPENROUTER_API_KEY": "a" * 32})
         self.assertEqual(openrouter.model, "openrouter/free")
         self.assertEqual(openrouter.url, "https://openrouter.ai/api/v1/chat/completions")
 
-        gemini = clients.provider_config("gemini", environ={"GEMINI_API_KEY": "m" * 32})
-        self.assertEqual(gemini.model, "gemini-3.8-flash")
-        self.assertTrue(gemini.url.startswith("https://generativelanguage.googleapis.com/"))
-
-    def test_gemini_response_is_parsed_and_api_key_is_only_a_header(self):
-        config = clients.ProviderConfig(
-            "gemini",
-            "g" * 32,
-            "gemini-3.8-flash",
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-        )
-        opener = FakeOpener(FakeResponse({
-            "candidates": [{
-                "finishReason": "STOP",
-                "content": {"parts": [{"text": '{"ok": true}'}]},
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 10,
-                "candidatesTokenCount": 5,
-                "totalTokenCount": 15,
-            },
-        }))
-        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
-            result = clients.invoke_provider(config, "safe prompt")
-        self.assertEqual(result.text, '{"ok": true}')
-        self.assertEqual(result.usage["totalTokenCount"], 15)
-        self.assertNotIn(config.api_key, opener.request.full_url)
-        self.assertEqual(opener.request.get_header("X-goog-api-key"), config.api_key)
-        request_body = json.loads(opener.request.data.decode("utf-8"))
-        self.assertEqual(request_body["generationConfig"]["responseMimeType"], "application/json")
-
+        for retired in ("gemini", "github_models", "mistral"):
+            with self.subTest(provider=retired), self.assertRaises(clients.ProviderClientError) as caught:
+                clients.provider_config(retired, environ={"GEMINI_API_KEY": "g" * 32, "GITHUB_TOKEN": "x" * 40})
+            self.assertEqual(caught.exception.code, "provider_not_enabled")
+    def test_gemini_is_disabled_before_any_network_request(self):
+        with self.assertRaises(clients.ProviderClientError) as caught:
+            clients.provider_config("gemini", environ={"GEMINI_API_KEY": "g" * 32})
+        self.assertEqual(caught.exception.code, "provider_not_enabled")
     def test_groq_openai_compatible_response_is_normalized(self):
         config = clients.ProviderConfig(
             "groq", "r" * 32, "llama-3.3-70b-versatile",
@@ -139,26 +110,10 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
 
-    def test_github_models_openai_compatible_response_is_normalized(self):
-        config = clients.ProviderConfig(
-            "github_models", "g" * 40, "openai/gpt-4o",
-            "https://models.github.ai/inference/chat/completions",
-        )
-        opener = FakeOpener(FakeResponse({
-            "choices": [{"message": {"content": '{"summary":"safe"}'}}],
-            "usage": {"prompt_tokens": 22, "completion_tokens": 11, "total_tokens": 33},
-        }))
-        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
-            result = clients.invoke_provider(config, "safe prompt")
-        self.assertEqual(result.text, '{"summary":"safe"}')
-        self.assertEqual(result.provider, "github_models")
-        self.assertEqual(result.usage["totalTokenCount"], 33)
-        self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
-        self.assertNotIn(config.api_key, opener.request.full_url)
-        body = json.loads(opener.request.data.decode("utf-8"))
-        self.assertEqual(body["model"], "openai/gpt-4o")
-        self.assertEqual(body["messages"][1]["content"], "safe prompt")
-
+    def test_github_models_are_disabled(self):
+        with self.assertRaises(clients.ProviderClientError) as caught:
+            clients.provider_config("github_models", environ={"GITHUB_TOKEN": "g" * 40})
+        self.assertEqual(caught.exception.code, "provider_not_enabled")
     def test_openrouter_chat_completion_response_is_normalized(self):
         config = clients.ProviderConfig(
             "openrouter", "o" * 32, "openrouter/free",
@@ -190,26 +145,15 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.outcome, "failed")
         self.assertNotIn("secret response body", str(caught.exception))
 
-    def test_gemini_503_includes_sanitized_provider_diagnostics(self):
+    def test_provider_503_has_sanitized_generic_diagnostics(self):
         config = clients.ProviderConfig(
-            "gemini", "g" * 32, "gemini-3.8-flash",
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+            "groq", "g" * 32, "model",
+            "https://api.groq.com/openai/v1/chat/completions",
         )
-        exposed_key = "AIza" + "A" * 32
-        body = {
-            "error": {
-                "code": 503,
-                "message": f"The model is overloaded; debug marker {exposed_key}",
-                "status": "UNAVAILABLE",
-                "details": [{"reason": "SERVICE_UNAVAILABLE"}],
-            }
-        }
         error = HTTPError(
-            config.url,
-            503,
-            "unavailable",
+            config.url, 503, "unavailable",
             {"Retry-After": "13"},
-            io.BytesIO(json.dumps(body).encode("utf-8")),
+            io.BytesIO(b'{"error":{"message":"must not be logged"}}'),
         )
         opener = FakeOpener(error=error)
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
@@ -218,13 +162,8 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "provider_http_503")
         self.assertEqual(caught.exception.outcome, "unknown")
         self.assertEqual(caught.exception.diagnostics["http_status"], 503)
-        self.assertEqual(caught.exception.diagnostics["provider_reason"], "UNAVAILABLE")
         self.assertEqual(caught.exception.diagnostics["retry_after_seconds"], 13)
-        self.assertEqual(caught.exception.diagnostics["detail_reasons"], ["SERVICE_UNAVAILABLE"])
-        self.assertIn("The model is overloaded", caught.exception.diagnostics["provider_message"])
-        self.assertNotIn(exposed_key, json.dumps(caught.exception.diagnostics))
-        self.assertNotIn(exposed_key, str(caught.exception))
-
+        self.assertNotIn("must not be logged", json.dumps(caught.exception.diagnostics))
     def test_ledger_reservation_happens_before_provider_request_and_result_is_finished(self):
         ledger = FakeLedger()
         result = clients.ProviderResult("groq", "model", "answer", {"totalTokenCount": 4})
@@ -255,11 +194,11 @@ class ProviderClientTests(unittest.TestCase):
     def test_no_provider_request_occurs_when_reservation_fails(self):
         ledger = FakeLedger(fail_reserve=True)
         with patch.object(clients, "provider_config", return_value=clients.ProviderConfig(
-            "gemini", "g" * 32, "model", "https://example.invalid"
+            "groq", "g" * 32, "model", "https://api.groq.com/openai/v1/chat/completions"
         )), patch.object(clients, "invoke_provider") as invoke:
             with self.assertRaises(UsageLedgerError):
                 clients.call_provider_with_ledger(
-                    provider="gemini", role="propose_patch", prompt="safe prompt", usage_client=ledger
+                    provider="groq", role="propose_patch", prompt="safe prompt", usage_client=ledger
                 )
         invoke.assert_not_called()
 
