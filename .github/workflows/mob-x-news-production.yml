@@ -14,7 +14,8 @@ concurrency:
 
 jobs:
   publish-all-new-official-x-posts-in-window:
-    # Production stays fail-closed unless Mob lifecycle, source config, and real channel secret all validate.
+    # Keep the five-hour publisher asleep until the owner explicitly approves production.
+    if: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
