@@ -761,10 +761,17 @@ async function ownerDigestAddEvent(env, body) {
   const source = text(body.source, 64);
   const title = text(body.title, 180);
   const detail = body.detail == null ? "" : body.detail;
-  if (!OWNER_DIGEST_CATEGORIES.has(category) ||
-      !/^[A-Za-z0-9_.:-]{1,64}$/.test(source) ||
-      !title || typeof detail !== "string" || detail.length > 1200) {
-    return json({ ok: false, error: "owner_digest_event_invalid" }, 400);
+  if (!OWNER_DIGEST_CATEGORIES.has(category)) {
+    return json({ ok: false, error: "owner_digest_category_invalid" }, 400);
+  }
+  if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(source)) {
+    return json({ ok: false, error: "owner_digest_source_invalid" }, 400);
+  }
+  if (!title) {
+    return json({ ok: false, error: "owner_digest_title_required" }, 400);
+  }
+  if (typeof detail !== "string" || detail.length > 1200) {
+    return json({ ok: false, error: "owner_digest_detail_invalid" }, 400);
   }
   try {
     const result = await recordOwnerDigestEvent(env, { category, source, title, detail });
