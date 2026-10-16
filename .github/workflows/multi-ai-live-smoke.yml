@@ -1,4 +1,4 @@
-name: Multi-AI live API smoke test
+name: Groq and OpenRouter live API smoke test
 
 on:
   push:
@@ -19,15 +19,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
       AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
-      GEMINI_MODEL: gemini-3.8-flash
       GROQ_MODEL: openai/gpt-oss-20b
-      MISTRAL_MODEL: mistral-small-latest
       OPENROUTER_MODEL: openrouter/free
     steps:
       - name: Check out source without persisting credentials
@@ -53,12 +49,12 @@ jobs:
           from agent.brain.ai_provider_clients import PROVIDERS, ProviderClientError, provider_config
           from agent.brain.gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
 
-          expected = {"gemini", "groq", "mistral", "openrouter"}
+          expected = {"groq", "openrouter"}
           if set(PROVIDERS) != expected:
               print("Preflight blocked: the provider allowlist does not match the smoke test.")
               sys.exit(2)
           try:
-              for provider in ("groq", "mistral", "openrouter", "gemini"):
+              for provider in ("groq", "openrouter"):
                   provider_config(provider)
               CodeAIUsageLedger.from_env()
           except (ProviderClientError, UsageLedgerError) as exc:
@@ -66,7 +62,7 @@ jobs:
               print(f"Preflight blocked before AI requests: {exc.code}")
               sys.exit(2)
 
-          print("All four provider keys, model identifiers, and ledger credentials passed local validation.")
+          print("Both provider keys, model identifiers, and ledger credentials passed local validation.")
           print("No model request has been sent during preflight.")
           PY
 
@@ -90,12 +86,10 @@ jobs:
               UsageLedgerError,
           )
 
-          providers = ("groq", "mistral", "openrouter", "gemini")
+          providers = ("groq", "openrouter")
           roles = {
               "groq": "diagnose",
-              "mistral": "diagnose",
               "openrouter": "diagnose",
-              "gemini": "propose_patch",
           }
           run_id = "live_smoke_" + os.environ["GITHUB_RUN_ID"] + "_" + os.environ.get("GITHUB_RUN_ATTEMPT", "1")
           ledger = CodeAIUsageLedger.from_env()
@@ -148,11 +142,11 @@ jobs:
           summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
           successes = sum(1 for row in results if row.get("status") == "success")
           with summary.open("a", encoding="utf-8") as handle:
-              handle.write("## Multi-AI live API smoke test\n")
+              handle.write("## Groq and OpenRouter live API smoke test\n")
               handle.write(f"- Providers with usable live responses: **{successes}/{len(providers)}**\n")
-              handle.write("- Maximum provider requests: **one per provider**, with a **90-second timeout per request**; every attempted call is recorded in the Cloudflare D1 ledger.\n")
+              handle.write("- Maximum provider requests: **one for Groq and one for OpenRouter**, with a **90-second timeout per request**; every attempted call is recorded in the Cloudflare D1 ledger.\n")
               handle.write("- Raw model response text and all secret values were omitted from logs.\n")
-              handle.write("- No patch was applied, no branch/PR was created, and no Rubika action was triggered.\n\n")
+              handle.write("- No Gemini request, patch, branch/PR write, or Rubika action was triggered by this smoke test.\n\n")
               handle.write("| Provider | Model | Status | Response characters | Total tokens |\n|---|---|---|---:|---:|\n")
               for row in results:
                   usage = row.get("usage", {})
@@ -164,5 +158,5 @@ jobs:
 
           if len(results) != len(providers) or successes != len(providers):
               sys.exit(1)
-          print("All four providers returned a non-empty live response.")
+          print("Both Groq and OpenRouter returned non-empty live responses.")
           PY
