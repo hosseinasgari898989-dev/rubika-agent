@@ -178,12 +178,12 @@ class MobTranslationTests(unittest.TestCase):
 
 
 
-    def test_groq_translation_is_primary_and_ledgered(self):
+    def test_gemini_translation_is_primary_and_ledgered(self):
         from types import SimpleNamespace
 
         result_value = SimpleNamespace(
-            provider="groq",
-            model="openai/gpt-oss-20b",
+            provider="gemini",
+            model="gemini-3.8-flash",
             text="ماب انترتینمنت یک خبر رسمی منتشر کرد.",
             usage={"totalTokenCount": 32},
         )
@@ -194,34 +194,25 @@ class MobTranslationTests(unittest.TestCase):
 
         self.assertEqual(result, "ماب انترتینمنت یک خبر رسمی منتشر کرد.")
         call.assert_called_once()
-        self.assertEqual(call.call_args.kwargs["provider"], "groq")
+        self.assertEqual(call.call_args.kwargs["provider"], "gemini")
         self.assertEqual(call.call_args.kwargs["role"], "translate_official")
         self.assertNotIn("example.com", call.call_args.kwargs["prompt"])
 
-    def test_invalid_groq_output_falls_back_to_openrouter(self):
+    def test_invalid_gemini_output_fails_closed_without_provider_fallback(self):
         from types import SimpleNamespace
 
-        groq = SimpleNamespace(provider="groq", model="test", text="This is still English.", usage={})
-        openrouter = SimpleNamespace(
-            provider="openrouter",
-            model="openrouter/free",
-            text="به عمق کارخانه پلی‌تایم بروید و برای ساخت مکانی مرموز تلاش کنید.",
-            usage={},
-        )
+        gemini = SimpleNamespace(provider="gemini", model="gemini-3.8-flash", text="This is still English.", usage={})
         with patch(
             "agent.brain.ai_provider_clients.call_provider_with_ledger",
-            side_effect=[groq, openrouter],
+            return_value=gemini,
         ) as call:
             result = translate_to_persian(
                 "Explore the depths of Playtime Co. while working to build a mysterious location."
             )
 
-        self.assertIsInstance(result, str)
-        self.assertIn("به عمق", result)
-        self.assertNotRegex(result, r"[\u0400-\u04FF]")
-        self.assertEqual(call.call_count, 2)
-        self.assertEqual(call.call_args_list[0].kwargs["provider"], "groq")
-        self.assertEqual(call.call_args_list[1].kwargs["provider"], "openrouter")
+        self.assertIsNone(result)
+        call.assert_called_once()
+        self.assertEqual(call.call_args.kwargs["provider"], "gemini")
 
     def test_long_official_caption_is_translated_in_bounded_chunks(self):
         calls = []
