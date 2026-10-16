@@ -1,10 +1,10 @@
 """Bounded multi-model code-repair ensemble with diagnosis and review quorum.
 
 The active ensemble gathers independent diagnoses from Groq and OpenRouter,
-uses GitHub Models to propose one constrained patch, and requires Groq and
-OpenRouter to independently review it. Gemini remains available for explicitly
-dispatched diagnostics; Mistral is disabled. Cloudflare Workers AI remains
-reserved for the project's existing media/music-related tasks.
+uses Gemini to propose one constrained patch, and requires Groq and OpenRouter
+to independently review it. Cloudflare Workers AI is reserved exclusively for
+the project's music-presence detection task. Official-news translation uses the
+separate Gemini API route. Mistral and GitHub Models are not active providers.
 All model outputs are untrusted, ledger-accounted, and subject to deterministic
 tests and human PR review. No model can execute tools, publish to Rubika, or
 merge code.
