@@ -32,7 +32,8 @@ jobs:
       - name: Check out the automation code
         uses: actions/checkout@v4
         with:
-          ref: agent-brain-mega-v1
+          ref: main
+          persist-credentials: false
 
       - name: Validate required credentials without printing them
         id: credentials_check
@@ -55,7 +56,15 @@ jobs:
             echo "::error::Test-only channel guard failed. Refusing to publish."
             exit 2
           fi
-          echo "Publishing is hard-locked to the Rubika test channel; maximum one successful post today."
+          echo "Publishing is hard-locked to the Rubika test channel; daily successful-post cap is four."
+
+      - name: Record queue-run start in the single editable owner digest
+        if: steps.credentials_check.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify \
+            --message '🚀 شروع پردازش صف ادیت‌ها؛ سقف این اجرا ۴ انتشار موفق است.' \
+            --workflow 'Daily edit queue'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -139,13 +148,13 @@ jobs:
           mega-ls /Rubika-Agent >/dev/null
           echo "MEGA login and project folder verified."
 
-      - name: Process the D1 backlog with a one-success test-channel cap
+      - name: Process the D1 backlog with a four-success test-channel cap
         id: queue_worker
         run: |
           # A clear failed/skipped video does not consume the one-post daily quota:
           # keep trying other queued URLs, with a hard cap of 20 candidate attempts.
           python -m agent.brain.queue_worker \
-            --daily-limit 1 \
+            --daily-limit 4 \
             --max-attempts 20 \
             --report artifacts/automation-daily-report.json
 

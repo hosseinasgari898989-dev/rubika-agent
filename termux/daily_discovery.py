@@ -62,11 +62,9 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
     mob_candidates, mob_attempts = discover_all_official_posts(max_results=12)
 
     lifecycle_policy = load_lifecycle_policy()
-    tiktok_before = len(tiktok_candidates)
-    mob_before = len(mob_candidates)
-    tiktok_candidates, stale_tiktok = filter_candidates_by_birth(
-        tiktok_candidates, policy=lifecycle_policy
-    )
+    # Lifecycle birth boundary is exclusive to official Mob news; TikTok edits
+    # keep their dedicated source-freshness and relevance filters.
+    stale_tiktok: list[dict[str, str]] = []
     mob_candidates, stale_mob = filter_candidates_by_birth(
         mob_candidates, policy=lifecycle_policy
     )

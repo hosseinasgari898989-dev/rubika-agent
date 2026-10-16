@@ -380,9 +380,9 @@ def call_provider_with_ledger(
         )
     except ProviderClientError as exc:
         outcome = exc.outcome
-        error_code = "rate_limited" if exc.code == "provider_http_429" else (
-            "provider_result_unknown" if outcome == "unknown" else exc.code
-        )
+        # Keep the safe provider error even when the outcome is ambiguous.
+        # The outcome field already captures uncertainty; erasing this code blocked diagnosis.
+        error_code = "rate_limited" if exc.code == "provider_http_429" else exc.code
         try:
             ledger.finish(
                 provider=provider,

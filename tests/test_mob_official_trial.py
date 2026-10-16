@@ -12,6 +12,7 @@ from agent.brain.mob_official_trial import (
     filter_official_candidates_by_source,
     load_x_candidates_from_report,
     preview_freshness_rejection,
+    publication_window_rejection,
     run_trial,
 )
 
@@ -158,6 +159,24 @@ class MobOfficialTrialReportTests(unittest.TestCase):
     def test_source_lane_filter_rejects_unknown_lane(self):
         with self.assertRaisesRegex(ValueError, "invalid_official_source_platform"):
             filter_official_candidates_by_source([{"source_platform": "x"}], "random")
+
+
+class OfficialXPublicationWindowTests(unittest.TestCase):
+    def test_only_verified_x_posts_inside_the_five_hour_window_pass(self):
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        recent = {"source_platform": "x", "freshness_verified": True, "published_at": "2026-10-16T11:59:00Z"}
+        boundary = {"source_platform": "x", "freshness_verified": True, "published_at": "2026-10-16T07:00:00Z"}
+        stale = {"source_platform": "x", "freshness_verified": True, "published_at": "2026-10-16T06:59:59Z"}
+        future = {"source_platform": "x", "freshness_verified": True, "published_at": "2026-10-16T12:06:00Z"}
+        unverified = {"source_platform": "x", "freshness_verified": False, "published_at": "2026-10-16T11:59:00Z"}
+        other_lane = {"source_platform": "youtube", "freshness_verified": True, "published_at": "2026-10-16T11:59:00Z"}
+
+        self.assertIsNone(publication_window_rejection(recent, now=now, window_hours=5))
+        self.assertIsNone(publication_window_rejection(boundary, now=now, window_hours=5))
+        self.assertEqual(publication_window_rejection(stale, now=now, window_hours=5), "outside_recent_publication_window")
+        self.assertEqual(publication_window_rejection(future, now=now, window_hours=5), "publication_time_in_future")
+        self.assertEqual(publication_window_rejection(unverified, now=now, window_hours=5), "publication_time_unverified")
+        self.assertEqual(publication_window_rejection(other_lane, now=now, window_hours=5), "official_x_source_required")
 
 
 class OfficialPreviewSafetyTests(unittest.TestCase):

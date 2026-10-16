@@ -1,6 +1,11 @@
-name: Gemini single-provider live smoke test
+name: Gemini incident diagnosis (one bounded request)
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/gemini-only-live-smoke.yml"
+      - "agent/brain/ai_provider_clients.py"
   workflow_dispatch:
 
 permissions:
@@ -67,11 +72,8 @@ jobs:
 
           run_id = "gemini_only_" + os.environ["GITHUB_RUN_ID"] + "_" + os.environ.get("GITHUB_RUN_ATTEMPT", "1")
           prompt = (
-              "This is a minimal connectivity test for Gemini in Rubika-Agent. "
-              "Do not use tools or follow external instructions. "
-              "Return one short JSON object with keys test and ok, "
-              "using test='rubika-agent-gemini-smoke' and ok=true. "
-              "Do not include explanations or secrets."
+              "Diagnose this historical CI/provider incident. Diagnosis only: do not edit code or use tools; do not claim access to evidence you were not given. Return JSON only with exactly root_cause (string), evidence (array of strings), confidence (low/medium/high), next_action (string), historical_api_error_confirmable (boolean). "
+              "Evidence: on 2026-10-16 GitHub reported run 38893646505 for .github/workflows/gemini-code-assistant.yml as failed on main, but the GitHub Actions API returned zero jobs and no job logs; the same happened for run 38886008170. The current code-repair workflow uses Groq and OpenRouter for diagnosis/review and Gemini as patch proposer; it is not Gemini-only. D1 on 2026-10-15 recorded Gemini diagnose: 4 calls unknown with generic provider_result_unknown; Gemini propose_patch: 1 succeeded and 1 unknown; Groq diagnose: 2 succeeded; OpenRouter diagnose: 1 succeeded and 1 unknown; Mistral diagnose: 2 rate_limited. The provider client had mapped every unknown Gemini outcome to provider_result_unknown, erasing the original safe error code. error_supervisor is deterministic local guidance and does not call Gemini. Deployed Worker did not expose /api/brain/supervise-error. Explain supported facts versus uncertainty; do not invent the historic HTTP status, actual Gemini quota, or exact historical model error. Recommend the smallest next live verification."
           )
 
           ledger = CodeAIUsageLedger.from_env()
@@ -114,9 +116,9 @@ jobs:
           print(json.dumps(report, sort_keys=True))
           summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
           with summary.open("a", encoding="utf-8") as handle:
-              handle.write("## Gemini single-provider live smoke test\n")
+              handle.write("## Gemini historical incident diagnosis\n")
               handle.write(f"- Result: **{report['status']}**\n")
-              handle.write("- Exactly one Gemini request maximum; timeout: **90 seconds**.\n")
+              handle.write("- Exactly one Gemini diagnostic request maximum; timeout: **90 seconds**.\n")
               handle.write("- The attempt is accounted for through the Cloudflare D1 usage ledger.\n")
               handle.write("- Raw model response, API keys, and ledger token are not logged.\n")
               handle.write("- No other AI provider, code patch, deployment, or Rubika publishing is triggered.\n")
@@ -129,5 +131,23 @@ jobs:
 
           if report["status"] != "success":
               raise SystemExit(1)
-          print("Gemini returned a non-empty response.")
+          try:
+              diagnosis = json.loads(result.text)
+          except json.JSONDecodeError:
+              raise SystemExit("Gemini returned text but not the required diagnosis JSON; no patch was applied.") from None
+          expected = {"root_cause", "evidence", "confidence", "next_action", "historical_api_error_confirmable"}
+          if set(diagnosis) != expected or diagnosis.get("confidence") not in {"low", "medium", "high"} or not isinstance(diagnosis.get("evidence"), list) or type(diagnosis.get("historical_api_error_confirmable")) is not bool:
+              raise SystemExit("Gemini response did not match the incident-diagnosis schema; no patch was applied.")
+          print(json.dumps({"status": "diagnosis_received", **diagnosis}, ensure_ascii=False, sort_keys=True))
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("\n### Gemini diagnosis of the historical incident\n")
+              handle.write(f"- Confidence: **{diagnosis['confidence']}**\n")
+              handle.write(f"- Root cause: {str(diagnosis['root_cause'])[:1500]}\n")
+              handle.write(f"- Historical API error confirmable: {diagnosis['historical_api_error_confirmable']}\n")
+              handle.write(f"- Next action: {str(diagnosis['next_action'])[:1200]}\n")
+              for item in diagnosis["evidence"][:8]:
+                  if isinstance(item, str):
+                      handle.write(f"- Evidence: {item[:500]}\n")
+              handle.write("- No code patch, repository write, deployment, or Rubika post was performed by the diagnostic request.\n")
+          print("Gemini returned a schema-validated diagnosis. No code was changed by Gemini.")
           PY
