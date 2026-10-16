@@ -63,7 +63,7 @@ class FakeStatement {
       }
       return { results: [...totals.entries()].map(([category, total]) => ({ category, total })) };
     }
-    if (this.sql.includes("FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 32")) {
+    if (this.sql.includes("FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 100")) {
       const windowId = this.values[0];
       return { results: this.db.ownerDigestEvents
         .filter(row => row.window_id === windowId)
