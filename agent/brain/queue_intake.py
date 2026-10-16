@@ -17,7 +17,7 @@ from typing import Any, Mapping
 
 from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
-from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
+# Official Mob news lifecycle cutoffs are not applied to the TikTok edit queue.
 
 
 # YouTube is paused for later; Instagram is no longer part of the normal edit queue.
@@ -122,8 +122,6 @@ def candidates_for_queue(
 
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    lifecycle_policy = load_lifecycle_policy()
-
     def reject(reason: str, source: str) -> None:
         if diagnostics is None:
             return
@@ -162,12 +160,7 @@ def candidates_for_queue(
                 reject("edit_signal_missing", source_name)
                 continue
 
-            allowed_by_birth, _birth_reason = candidate_passes_birth_cutoff(
-                raw, policy=lifecycle_policy
-            )
-            if not allowed_by_birth:
-                reject("lifecycle_cutoff_rejected", source_name)
-                continue
+            # The Mob-only birth boundary is intentionally not applied to edit videos.
 
             published_at = _parse_timestamp(raw.get("published_at"))
             if published_at is None:
