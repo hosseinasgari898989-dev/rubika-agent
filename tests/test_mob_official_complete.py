@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent.discovery.mob_official_complete import _detail_from_page, _discover_youtube, _fingerprints, discover_all_official_posts, discover_complete_official_posts
+from agent.discovery.mob_official_complete import _detail_from_page, _discover_youtube, _fingerprints, discover_all_official_posts, discover_complete_official_posts, discover_official_x_posts
 
 
 class FakeResponse:
@@ -442,6 +442,56 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             rows[0]["media_url"],
             "https://clan.cloudflare.steamstatic.com/images/12345/update.jpg",
         )
+
+
+    def test_x_only_lane_never_calls_newsroom_youtube_or_steam_adapters(self):
+        x_url = "https://x.com/mobgamesstudios/status/1734258130186559716"
+        sources = [
+            {
+                "id": "mob_x", "kind": "public_search_plus_x_syndication",
+                "source_platform": "x", "handle": "mobgamesstudios",
+                "enabled": True, "seed_urls": [x_url],
+            },
+            {"id": "mob_newsroom", "kind": "html_newsroom", "source_platform": "website", "enabled": True},
+            {"id": "mob_youtube", "kind": "youtube_atom", "source_platform": "youtube", "enabled": True},
+            {"id": "steam_news", "kind": "steam_news_api", "source_platform": "steam", "enabled": True},
+        ]
+        x_post = {
+            "platform": "mob_official",
+            "id": "x-1734258130186559716",
+            "external_id": "1734258130186559716",
+            "source_platform": "x",
+            "official_source": True,
+            "canonical_url": x_url,
+            "url": x_url,
+            "caption": "Official Mob X post",
+            "original_caption": "Official Mob X post",
+            "published_at": "2026-10-14T12:00:00Z",
+            "media_type": "image",
+            "media_url": "https://pbs.twimg.com/media/example.jpg",
+        }
+        other_lane = dict(x_post)
+        other_lane.update({
+            "id": "yt-12345678901",
+            "external_id": "yt-12345678901",
+            "source_platform": "youtube",
+            "canonical_url": "https://www.youtube.com/watch?v=12345678901",
+            "media_url": "https://i.ytimg.com/vi/12345678901/hqdefault.jpg",
+        })
+        with tempfile.TemporaryDirectory() as folder:
+            path = config_file(folder, sources)
+            with patch(
+                "agent.discovery.termux_mob_x.discover_mob_x_posts",
+                return_value=([x_post, other_lane], [{"source": "mob_x", "result": "ok"}]),
+            ) as x_search:
+                candidates, attempts = discover_official_x_posts(config_path=path, max_results=12)
+
+        self.assertEqual([row["source_platform"] for row in candidates], ["x"])
+        self.assertEqual(candidates[0]["canonical_url"], x_url)
+        x_search.assert_called_once()
+        self.assertEqual(x_search.call_args.kwargs["seed_urls"], (x_url,))
+        self.assertEqual(attempts[-1]["enabled_lanes"], ["x"])
+
 
 
 if __name__ == "__main__":
