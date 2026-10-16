@@ -11,6 +11,8 @@ class FakeBot:
     def __init__(self, **kwargs):
         self.init_kwargs = kwargs
         self.calls = []
+        self.uploads = []
+        self.posts = []
 
     def send_image(self, **kwargs):
         self.calls.append(("send_image", kwargs))
@@ -23,6 +25,18 @@ class FakeBot:
     def send_file(self, **kwargs):
         self.calls.append(("send_file", kwargs))
         return {"status": "OK"}
+
+    def get_upload_url(self, media_type):
+        self.uploads.append(("get_upload_url", media_type))
+        return "https://upload.example.invalid/media"
+
+    def upload_media_file(self, upload_url, name, path):
+        self.uploads.append(("upload_media_file", upload_url, name, Path(path).read_bytes()))
+        return "uploaded-file-id"
+
+    def _post(self, method, payload):
+        self.posts.append((method, payload))
+        return {"status": "OK", "data": {"message_id": "formatted-media-message"}}
 
 
 class RubikaPublisherMediaTests(unittest.TestCase):
@@ -37,6 +51,38 @@ class RubikaPublisherMediaTests(unittest.TestCase):
             "test-channel",
             bot_factory=lambda **kwargs: self.fake_bot,
         )
+
+    def test_formatted_video_caption_uploads_once_and_sends_bold_quote_and_spoiler_metadata(self):
+        video_path = Path(self.tempdir.name) / "formatted.mp4"
+        video_path.write_bytes(b"fake-video-for-formatting-test")
+        caption = "**Bold title**\n> quoted announcement\n||spoiler text||"
+
+        result = self.publisher.send_media(video_path, "video", caption)
+
+        self.assertEqual(result["status"], "OK")
+        self.assertEqual(self.fake_bot.uploads[0][0], "get_upload_url")
+        self.assertEqual(self.fake_bot.uploads[0][1], "Video")
+        self.assertEqual(self.fake_bot.uploads[1][0], "upload_media_file")
+        self.assertEqual(len(self.fake_bot.posts), 1)
+        method, payload = self.fake_bot.posts[0]
+        self.assertEqual(method, "sendFile")
+        self.assertEqual(payload["chat_id"], "test-channel")
+        self.assertEqual(payload["file_id"], "uploaded-file-id")
+        self.assertNotIn("**", payload["text"])
+        self.assertNotIn("||", payload["text"])
+        kinds = {part["type"] for part in payload["metadata"]["meta_data_parts"]}
+        self.assertTrue({"Bold", "Quote", "Spoiler"}.issubset(kinds))
+        self.assertEqual(self.fake_bot.calls, [])
+
+    def test_formatted_image_uses_image_upload_type_and_metadata_payload(self):
+        caption = "**Official update**\n> Verified source quote"
+        self.publisher.send_media(self.media_path, "image", caption)
+
+        self.assertEqual(self.fake_bot.uploads[0], ("get_upload_url", "Image"))
+        self.assertEqual(self.fake_bot.posts[0][0], "sendFile")
+        types = {part["type"] for part in self.fake_bot.posts[0][1]["metadata"]["meta_data_parts"]}
+        self.assertTrue({"Bold", "Quote"}.issubset(types))
+        self.assertEqual(self.fake_bot.calls, [])
 
     def test_image_uses_native_inline_image_method_with_caption(self):
         self.publisher.send_media(self.media_path, "image", "A test caption")
