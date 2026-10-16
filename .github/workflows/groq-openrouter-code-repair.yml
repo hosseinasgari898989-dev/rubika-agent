@@ -99,25 +99,65 @@ jobs:
           fi
           echo "Raw logs stay in the temporary runner directory."
 
-      - name: Set up Python
+      - name: Refuse code repair for credential and publishing safety guards
+        id: incident_safety
         if: steps.preflight.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          decision="$(python - "$RUNNER_TEMP/upstream-failure.log" <<'PY'
+          import sys
+          from pathlib import Path
+          text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").casefold()
+          protected_markers = {
+              "test_channel_guard": "rubika_channel_guid still points at the test channel",
+              "missing_rubika_token": "rubika_token is not configured",
+              "missing_rubika_channel": "rubika_channel_guid is not configured",
+              "rubika_authentication_failure": "bot_authentication_failed",
+              "rubika_authentication_preflight": "bot_authentication_preflight_failed",
+              "main_destination_preflight": "main_destination_preflight_failed",
+              "missing_actions_secret": "missing actions secret:",
+              "missing_groq_credential": "required credential groq_api_key is missing",
+              "missing_openrouter_credential": "required credential openrouter_api_key is missing",
+              "provider_budget_exhausted": "code_ai_daily_budget_exhausted",
+              "provider_cooldown_active": "code_ai_provider_cooldown_active",
+              "provider_ledger_unavailable": "code_ai_ledger_unavailable",
+              "provider_rate_limited": "rate_limited",
+          }
+          for code, marker in protected_markers.items():
+              if marker in text:
+                  print(code)
+                  raise SystemExit(0)
+          print("code_repair_allowed")
+          PY
+          )"
+          if [[ "$decision" != "code_repair_allowed" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Model patching skipped for a credential, channel, quota, or protected publishing guard: $decision. No model request or patch was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Incident passed the safety guard; bounded diagnosis may proceed."
+
+      - name: Set up Python
+        if: steps.incident_safety.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install project dependencies
-        if: steps.preflight.outputs.should_run == 'true'
+        if: steps.incident_safety.outputs.should_run == 'true'
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
       - name: Set up Node.js
-        if: steps.preflight.outputs.should_run == 'true'
+        if: steps.incident_safety.outputs.should_run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
       - name: Diagnose with both providers, propose with Groq, and review with both
         id: proposal
-        if: steps.preflight.outputs.should_run == 'true'
+        if: steps.incident_safety.outputs.should_run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -139,7 +179,7 @@ jobs:
 
       - name: Validate any proposed patch in a disposable runner
         id: validation
-        if: steps.preflight.outputs.should_run == 'true'
+        if: steps.incident_safety.outputs.should_run == 'true'
         shell: bash
         run: |
           set -u
