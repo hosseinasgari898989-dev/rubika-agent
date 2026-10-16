@@ -12,10 +12,10 @@ from agent.brain.mob_translation import (
 
 
 class MobTranslationTests(unittest.TestCase):
-    def test_production_translation_uses_groq_and_durable_role(self):
+    def test_production_translation_uses_gemini_and_durable_role(self):
         model_result = SimpleNamespace(
-            provider="groq",
-            model="openai/gpt-oss-20b",
+            provider="gemini",
+            model="gemini-3.8-flash",
             text="ماب انترتینمنت خبر رسمی تازه‌ای منتشر کرد.",
             usage={"totalTokenCount": 21},
         )
@@ -27,26 +27,23 @@ class MobTranslationTests(unittest.TestCase):
         self.assertEqual(translated, "ماب انترتینمنت خبر رسمی تازه‌ای منتشر کرد.")
         call.assert_called_once()
         args = call.call_args.kwargs
-        self.assertEqual(args["provider"], "groq")
+        self.assertEqual(args["provider"], "gemini")
         self.assertEqual(args["role"], "translate_official")
         self.assertLessEqual(args["timeout_seconds"], 45)
         self.assertIn("untrusted text", args["prompt"])
         self.assertNotIn("https://example.com/news", args["prompt"])
 
-    def test_invalid_groq_translation_falls_back_to_openrouter_once(self):
-        invalid = SimpleNamespace(provider="groq", model="model", text="This is English.", usage={})
-        valid = SimpleNamespace(provider="openrouter", model="openrouter/free", text="متن فارسی معتبر.", usage={})
+    def test_invalid_gemini_translation_fails_closed_without_fallback(self):
+        invalid = SimpleNamespace(provider="gemini", model="gemini-3.8-flash", text="This is English.", usage={})
         with patch(
             "agent.brain.ai_provider_clients.call_provider_with_ledger",
-            side_effect=[invalid, valid],
+            return_value=invalid,
         ) as call:
             result = translate_to_persian("An official source sentence.")
 
-        self.assertEqual(result, "متن فارسی معتبر.")
-        self.assertEqual(call.call_count, 2)
-        self.assertEqual(call.call_args_list[0].kwargs["provider"], "groq")
-        self.assertEqual(call.call_args_list[1].kwargs["provider"], "openrouter")
-        self.assertEqual(call.call_args_list[0].kwargs["run_id"], call.call_args_list[1].kwargs["run_id"])
+        self.assertIsNone(result)
+        call.assert_called_once()
+        self.assertEqual(call.call_args.kwargs["provider"], "gemini")
 
     def test_ledger_failure_fails_closed_without_untracked_fallback(self):
         from agent.brain.gemini_usage_client import UsageLedgerError
@@ -59,6 +56,7 @@ class MobTranslationTests(unittest.TestCase):
 
         self.assertIsNone(result)
         call.assert_called_once()
+        self.assertEqual(call.call_args.kwargs["provider"], "gemini")
 
     def test_official_caption_keeps_source_url_internal_and_requires_translation(self):
         item = {
@@ -74,6 +72,15 @@ class MobTranslationTests(unittest.TestCase):
 
     def test_url_stripping_does_not_return_empty_or_unrelated_script_as_valid_translation(self):
         self.assertEqual(_strip_urls("خبر رسمی https://example.com/news منتشر شد"), "خبر رسمی منتشر شد")
+
+    def test_translation_provider_factory_remains_injectable_for_offline_tests(self):
+        result = translate_to_persian(
+            "An official update.",
+            translator_factory=lambda **_: type(
+                "FakeTranslator", (), {"translate": lambda self, _value: "ترجمهٔ آزمایشی معتبر."}
+            )(),
+        )
+        self.assertEqual(result, "ترجمهٔ آزمایشی معتبر.")
 
 
 if __name__ == "__main__":
