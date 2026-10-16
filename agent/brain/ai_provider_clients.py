@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping
 from .gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
 
 PROVIDERS = frozenset({"groq", "openrouter"})
-ROLES = frozenset({"diagnose", "propose_patch", "review_patch"})
+ROLES = frozenset({"diagnose", "propose_patch", "review_patch", "translate_official"})
 SAFE_MODEL = re.compile(r"[@A-Za-z0-9._:/-]{1,160}")
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_PROMPT_CHARS = 160_000
