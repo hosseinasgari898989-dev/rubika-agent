@@ -56,8 +56,8 @@ jobs:
           import sys
           logging.disable(logging.CRITICAL)
           try:
-              from rubka import Robot
-              bot = Robot(os.environ["RUBIKA_TOKEN"], timeout=15)
+              from rubka import Bot
+              bot = Bot(token=os.environ["RUBIKA_TOKEN"], timeout=15)
               me = bot.get_me()
               if not isinstance(me, dict):
                   print("bot_api_response_type=" + type(me).__name__, file=sys.stderr)
@@ -101,8 +101,8 @@ jobs:
           import sys
           logging.disable(logging.CRITICAL)
           try:
-              from rubka import Robot
-              bot = Robot(os.environ["RUBIKA_TOKEN"], timeout=15)
+              from rubka import Bot
+              bot = Bot(token=os.environ["RUBIKA_TOKEN"], timeout=15)
               destination = bot.get_chat(os.environ["RUBIKA_CHANNEL_GUID"])
               if not isinstance(destination, dict) or destination.get("status") != "OK":
                   raise RuntimeError("main_destination_unavailable")
