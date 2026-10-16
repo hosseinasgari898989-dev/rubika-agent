@@ -1,61 +1,53 @@
-# Multi-provider code-repair request ledger
+# AI provider ledger — current main configuration
 
-The durable ledger is used only by the **code-repair workflow**. The default four-provider ensemble is:
-1. **Groq + Mistral + OpenRouter Free — diagnose in parallel:** collect independent views of sanitized CI logs and read-only test context.
-2. **Gemini — propose:** produce one constrained patch using the existing strict prompt and allowlisted unified-diff validator.
-3. **Mistral + OpenRouter Free — review independently:** both reviewers must approve; a veto, malformed response, or reviewer outage stops promotion.
+This document describes the current deployed arrangement. Older multi-provider rollout notes and Gemini/Mistral/GitHub Models experiments are historical only.
 
-This is a cooperative multi-model pipeline, not a single giant model. Each response is untrusted evidence; no model can execute commands or tools. A reviewer cannot authorize deployment, bypass fixed tests, merge a pull request, or publish to Rubika. Cloudflare Workers AI remains separate for its existing unrelated jobs; the code-repair provider module never calls `env.AI.run`.
+## Active providers and roles
 
-## Ledger and budget
+The active provider allowlist is **Groq** and **OpenRouter Free**. Gemini, Mistral, and GitHub Models are not active code-repair or translation providers.
 
-All requests must reserve a slot through the authenticated Worker API before contacting a provider, then record the final outcome. The server enforces both a provider-specific limit of **6 reservations per provider per UTC day** and a shared total of **18 reservations per UTC day**. A complete ensemble normally uses six calls (three parallel diagnoses, one proposal, and two reviews), leaving a conservative maximum of three complete repair cycles per day. A reservation counts even when the result is unknown. Requests are never automatically retried.
+| Role | Active behavior |
+|---|---|
+| Diagnose CI failures | Groq and OpenRouter provide separate diagnoses from sanitized logs/read-only test context. |
+| Propose a code patch | Groq proposes one constrained patch. |
+| Review the patch | Groq and OpenRouter review independently. |
+| Translate official Mob news | Groq is tried first; OpenRouter is the bounded fallback if Groq returns an unusable result. |
+| Detect music in video audio | Cloudflare Workers AI, using `@cf/cloudflare/clef-omni`, handles this separately. |
 
-- `GET /api/brain/ai-provider/status?provider=gemini` (also `groq`, `mistral`, or `openrouter`): reports provider usage, shared usage, remaining slots, cooldown, and readiness.
-- `POST /api/brain/ai-provider/reserve`: accepts `provider`, role (`diagnose`, `propose_patch`, or `review_patch`), a unique `call_id`, and optional `run_id`.
-- `POST /api/brain/ai-provider/finish`: records `succeeded`, `failed`, or `unknown`, plus optional safe error code and token counts.
+Workers AI must **not** be used for code repair, error diagnosis, or news translation. The old Worker translation route returns `410 translation_route_retired`. The live Worker code has a single `env.AI.run(...)` call, for audio-based music moderation. Music decisions that are uncertain require human review; they are not auto-approved for publication.
 
-Every endpoint is behind the existing `Authorization: Bearer <AGENT_API_TOKEN>` check. Provider names outside the explicit allowlist are rejected. The reservation SQL checks the provider and shared budgets in one conditional insert, preventing concurrent requests from passing a stale count. Reused call IDs are rejected and each reservation can be finished only once. A rate-limited response records a persistent five-minute cooldown by default (up to 24 hours).
+## Metering and safety
 
-The accounting client sends only identifiers, role, outcome, safe error code, and token counters. It does not send prompts, source code, model output, credentials other than its ledger bearer token, or raw provider exceptions to the accounting endpoints.
+Every Groq/OpenRouter repair or Mob translation request must reserve a D1 usage slot before it contacts the provider, then finish the ledger record with the result. If a reservation cannot be confirmed, the request is not sent. Ambiguous requests are not automatically retried. Safe provider error codes are retained in the ledger; raw credentials, provider response bodies and secrets must not be logged.
 
-## API configuration
+The current Worker policy is:
 
-The multi-AI workflow reads credentials from GitHub Actions secrets; keys must never be committed to the repository or pasted into chat. Required secrets:
-- `GEMINI_API_KEY`
-- `GROQ_API_KEY`
-- `MISTRAL_API_KEY` (Mistral Studio must remain in its no-card Free mode)
-- `OPENROUTER_API_KEY`
-- `AGENT_API_TOKEN` (existing ledger authorization secret)
+- Per-provider daily cap: **18 reservations** for Groq and **18** for OpenRouter.
+- Shared daily cap: **36 reservations** across both providers.
+- Allowed roles: `diagnose`, `propose_patch`, `review_patch`, and `translate_official`.
+- The ledger schema role change is migration `0008_ai_provider_translation_role.sql`; the live D1 schema was read back and confirms `translate_official` is permitted.
+- The repository still keeps historical providers in its older migration history for data compatibility, but the live Worker allowlist and Python clients reject retired providers.
 
-The selected role/model environment defaults are `GROQ_MODEL=openai/gpt-oss-20b`, `GEMINI_MODEL=gemini-3.8-flash`, `MISTRAL_MODEL=mistral-small-latest`, and `OPENROUTER_MODEL=openrouter/free`. OpenRouter's `openrouter/free` router selects from available zero-price models; the model can vary between calls. Groq, Gemini, and Mistral have their own service-side limits. Mistral documents a no-card Free mode with limited usage: https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key. Configure Mistral in that free mode only. The code validates all four provider credentials before any model request, so a missing key cannot cause a partial run.
+## Automatic repair workflow
 
-## Fail-closed protections
+`.github/workflows/groq-openrouter-code-repair.yml` watches failures from the CI, scheduled edit-queue, cloud discovery, and live-provider-smoke workflows on `main`. It checks that the failed SHA is still the current `main`, verifies credential presence and the live D1 budget/cooldown, and applies a further safety guard for missing credentials, Rubika destination/auth failures, and provider quota or ledger errors.
 
-- No model request occurs if its ledger reservation cannot be confirmed.
-- If writing the result to the ledger fails, the result is blocked from progressing.
-- Uncertain network outcomes consume their reservation and are not retried automatically.
-- Any provider failure, invalid proposal JSON, unsafe diff, or reviewer veto stops promotion.
-- Proposed patches remain untrusted; the existing fixed checks run in a disposable runner and a human must review the opened PR.
-- Publishing to Rubika remains disabled.
+If allowed to proceed, it needs two diagnoses, one Groq proposal, and independent Groq/OpenRouter review. The proposed diff is untrusted. It must pass the changed-file allowlist, compile checks, all Python unit tests, Worker tests, and the repository self-test in a disposable runner. Only then may the workflow open a review PR. It never auto-merges, deploys the Worker, changes secrets, changes D1 schema, or publishes to Rubika. It is fail-closed when it has no safe file context.
 
-## Current rollout checkpoint — 2026-10-15
+The workflow has a daily cap of three non-skipped attempts. Normal successful CI runs cause the repair workflow to be skipped; this is expected and does not mean a repair failed.
 
-- PR #13 was merged into `main` as commit `042a0ecb2fea0c9ebe4a247388ff2951b7fecb92`.
-- Production Worker `rubika-agent` version 62 was deployed at 100% traffic from that commit. The existing `AGENT_API_TOKEN`, `GEMINI_API_KEY`, `AI`, and `DB` bindings were preserved.
-- Public `/health` smoke check returned `ok: true`, `database: connected`, and `publishing: false`.
-- PR #14 fixed the Python ledger client's provider allowlist to match the four active providers and added a safe live smoke workflow. Its CI test suite passed before merge.
-- Live provider smoke run [#38736998429](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38736998429) validated all four key/model configurations and ledger credentials before sending any model requests.
-- The run attempted exactly one ledger-accounted request for each provider. Groq succeeded (249 tokens reported); OpenRouter Free succeeded (188 tokens reported); Mistral returned HTTP 429 and was recorded as `rate_limited` with a five-minute cooldown; Gemini resulted in `provider_network_result_unknown` and was recorded as unknown without retrying.
-- Cloudflare D1 confirms all four reservations were recorded. The test did not print API keys or raw model responses, apply a patch, create a repair PR, deploy code, or trigger Rubika publishing.
-- Result: **Groq and OpenRouter are confirmed responding; Mistral is currently rate-limited; Gemini's network-level outcome is inconclusive.** The full diagnosis → proposal → independent-review ensemble has not yet been proven end-to-end. It remains fail-closed if Gemini or either required reviewer is unavailable.
+## Live verification evidence — 2026-10-16
 
-## Model identifier maintenance
+- The live Groq/OpenRouter provider smoke workflow completed successfully in GitHub Actions run [38924738525](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38924738525): one ledgered request to Groq and one to OpenRouter returned usable responses. A metered Groq-first Persian-translation check also returned Persian text without a source URL. This proves these bounded calls worked at that time; it is not a guarantee of future free-tier availability.
+- The latest repository CI after the recent provider, caption, and documentation changes is [run 38929244036](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38929244036), conclusion **success**, at commit `226bf30ee7ab02d8f0f83fa29f49ddcf476d0a2d`. Earlier run `38928819444` also passed **384 tests**, Worker API tests, the installed Rubka API surface check and `agent.preflight self-test`.
+- D1 read-only queries show successful Groq/OpenRouter diagnosis calls and a successful `translate_official` call. A previous OpenRouter result was recorded as `provider_text_missing`; the adapter preserves that reason and does not blindly retry the same call.
+- Production Rubika sending is **not yet cleared**. A read-only bot-authentication preflight succeeded, but the next guard correctly stopped because the repository secret `RUBIKA_CHANNEL_GUID` still equals the known test-channel GUID. No main-channel message was sent by that preflight.
+- The Mob production publisher is still gated by the explicit Actions variable `RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014`, `config/agent_lifecycle.json` is still in test mode, and `config/mob_official_sources.json` remains test-channel-only. Therefore the five-hour Mob publisher is configured and guarded, but is not production-enabled.
 
-The default model IDs in the workflow were checked against provider documentation on 2026-10-15:
-- Gemini: `gemini-3.8-flash` — https://ai.google.dev/gemini-api/docs/models
-- Groq: `openai/gpt-oss-20b` — https://console.groq.com/docs/models. The previous `llama-3.3-70b-versatile` model was marked deprecated for free/developer tiers with an August 16, 2026 shutdown date: https://console.groq.com/docs/deprecations
-- Mistral: `mistral-small-latest` via the no-card Free mode, with limited usage: https://docs.mistral.ai/api/endpoint/chat and https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key
-- OpenRouter: `openrouter/free` — routes to currently available zero-price models: https://openrouter.ai/openrouter/free/. Free-model limits depend on account eligibility and current limits: https://openrouter.ai/pricing/
+## Credentials
 
-These values are configurable, not guaranteed permanent. Re-check provider/model availability before the first live request; never use that check as permission to create or spend on an API account automatically.
+The workflow uses GitHub Actions secrets `GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `AGENT_API_TOKEN`. The official Mob publisher also needs `RUBIKA_TOKEN`, `RUBIKA_CHANNEL_GUID`, and its other configured credentials. Never commit or print secret values. Do not change secrets or bypass a destination gate in code to make a test green.
+
+## Important limits
+
+Live provider smoke tests prove that individual model calls can work; they do not prove that every possible failure can be repaired automatically. A model can return incorrect reasoning or an unsafe proposal, a provider can be rate-limited, and test/live source conditions can vary. Deterministic tests, code-path restrictions, a human-reviewed PR and a separate main-channel preflight remain mandatory.
