@@ -809,76 +809,22 @@ function makeOmniAI(probability = 0.97) {
   assert.equal(response.status, 401);
 }
 
-{
-  const state = env();
-  state.AI = makeTranslationAI("به عمق بازی بروید, еще اسرارآمیزتر.");
-  const response = await read(await worker.fetch(request("/api/brain/translate-official", {
-    method: "POST",
-    body: { text: "Explore the depths of the game." },
-  }), state));
-  assert.equal(response.status, 502);
-  assert.equal(response.body.error, "translation_model_output_invalid");
-}
 
 console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction, Clef Omni music moderation and uncapped daily usage accounting.");
 
-function makeTranslationAI(response = "ماب انترتینمنت خبر رسمی تازه‌ای منتشر کرد.") {
-  return {
-    run: async (model, input) => {
-      assert.equal(model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
-      assert.equal(input.temperature, 0.1);
-      assert.equal(input.max_tokens, 2048);
-      assert.ok(Array.isArray(input.messages));
-      assert.ok(!input.messages[1].content.includes("example.com"));
-      return { response };
-    },
-  };
-}
 {
   const state = env();
-  state.AI = makeTranslationAI();
+  let aiCalled = false;
+  state.AI = { run: async () => { aiCalled = true; throw new Error("translation inference must be disabled"); } };
   const response = await read(await worker.fetch(request("/api/brain/translate-official", {
     method: "POST",
-    body: { text: "Mob Entertainment published an official update at https://example.com/news." },
+    body: { text: "Mob Entertainment published an official update." },
   }), state));
-  assert.equal(response.status, 200);
-  assert.equal(response.body.ok, true);
-  assert.match(response.body.translation, /ماب انترتینمنت/);
-  assert.equal(response.body.publishing, false);
-  assert.equal(state.DB.aiUsageDaily.size, 1);
-}
-{
-  const state = env();
-  state.AI = makeTranslationAI();
-  const response = await read(await worker.fetch(request("/api/brain/translate-official", {
-    method: "POST", body: { text: "x".repeat(4501) },
-  }), state));
-  assert.equal(response.status, 413);
-  assert.equal(response.body.error, "translation_text_too_long");
+  assert.equal(response.status, 410);
+  assert.equal(response.body.error, "translation_route_retired");
+  assert.equal(aiCalled, false);
   assert.equal(state.DB.aiUsageDaily.size, 0);
 }
-{
-  const state = env();
-  state.AI = makeTranslationAI("This is still English, not a Persian translation.");
-  const response = await read(await worker.fetch(request("/api/brain/translate-official", {
-    method: "POST", body: { text: "This is a valid source sentence." },
-  }), state));
-  assert.equal(response.status, 502);
-  assert.equal(response.body.error, "translation_model_output_invalid");
-}
-{
-  const state = env();
-  state.AI = makeTranslationAI();
-  const response = await read(await worker.fetch(request("/api/brain/translate-official", {
-    method: "GET",
-  }), state));
-  assert.equal(response.status, 405);
-  assert.equal(response.body.error, "method_not_allowed");
-}
-
-
-
-
 {
   const state = env();
   let response = await read(await worker.fetch(request("/api/brain/owner-digest/events", {
