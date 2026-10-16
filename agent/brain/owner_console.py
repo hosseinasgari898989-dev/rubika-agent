@@ -283,7 +283,7 @@ def parse_command(message: str) -> ParsedCommand:
     if not parts or not parts[0].startswith("/"):
         return ParsedCommand("unknown", None, "unknown")
     name = parts[0].split("@", 1)[0].lower()
-    if name == "/help" and len(parts) == 1:
+    if name in {"/help", "/commands", "/brain-help"} and len(parts) == 1:
         return ParsedCommand("help", None, "help")
     if name == "/status" and len(parts) == 1:
         return ParsedCommand("status", None, "status")
@@ -512,15 +512,16 @@ class OperationsConsole:
     def _reply(self, command: ParsedCommand) -> str:
         if command.name == "help":
             return (
-                "🤖 دستیار مدیریتی روبیکا — مرحلهٔ فقط‌خواندنی\n\n"
+                "🧠 راهنمای فرمان‌های مغز Rubika-Agent (بدون نیاز به هوش مصنوعی)\n\n"
                 "/status — وضعیت Worker، پایگاه داده و آخرین اجرا\n"
-                "/queue — خلاصهٔ صف بدون تغییر وضعیت آن\n"
-                "/ai-status — وضعیت ledger و سهمیهٔ چهار provider\n"
-                "/ai-status gemini — وضعیت یک provider مشخص\n"
-                "/report — گزارش ترکیبی پروژه، صف، سهمیهٔ AI و CI اخیر\n"
-                "/help — همین راهنما\n\n"
-                "این نسخه فقط گزارش می‌خواند؛ کد را تغییر نمی‌دهد، فرمان اجرا نمی‌کند، "
-                "در صف دست نمی‌برد و هیچ‌چیز را merge/deploy/publish نمی‌کند."
+                "/queue — خلاصهٔ صف، فقط برای مشاهده\n"
+                "/report — گزارش وضعیت پروژه، صف، سهمیه‌ها و اجرای CI\n"
+                "/ai-status — بررسی دفتر سهمیهٔ providerها، بدون فراخوانی مدل\n"
+                "/ai-status gemini — بررسی وضعیت یک provider مشخص\n"
+                "/help یا /commands — نمایش همین راهنما\n\n"
+                "این فرمان‌ها با فهرست مجاز ثابت اجرا می‌شوند و برای فهم فرمان به مدل AI نیاز ندارند. "
+                "این نسخه فقط گزارش می‌خواند؛ کد را تغییر نمی‌دهد، فرمان دلخواه اجرا نمی‌کند، "
+                "صف را دست‌کاری نمی‌کند و چیزی را merge/deploy/publish نمی‌کند."
             )
         if command.name == "status":
             try:
