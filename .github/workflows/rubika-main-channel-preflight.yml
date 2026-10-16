@@ -59,11 +59,25 @@ jobs:
               from rubka import Robot
               bot = Robot(os.environ["RUBIKA_TOKEN"], timeout=15)
               me = bot.get_me()
-              if not isinstance(me, dict) or me.get("status") != "OK":
-                  raise RuntimeError("bot_authentication_failed")
+              if not isinstance(me, dict):
+                  print("bot_api_response_type=" + type(me).__name__, file=sys.stderr)
+                  raise SystemExit(1)
+              status = me.get("status")
+              if status != "OK":
+                  import re
+                  status_code = str(status or "missing")
+                  detail_code = str(me.get("status_det") or me.get("error") or "missing")
+                  status_code = status_code if re.fullmatch(r"[A-Za-z0-9_-]{1,48}", status_code) else "unrecognized"
+                  detail_code = detail_code if re.fullmatch(r"[A-Za-z0-9 _-]{1,64}", detail_code) else "unrecognized"
+                  print("bot_api_status=" + status_code + "; bot_api_detail=" + detail_code, file=sys.stderr)
+                  raise SystemExit(1)
+          except SystemExit:
+              raise
           except Exception as exc:
-              code = "bot_authentication_failed" if type(exc).__name__ in {"InvalidTokenError", "APIRequestError"} else "bot_authentication_preflight_failed"
-              print(code, file=sys.stderr)
+              exception_name = type(exc).__name__
+              if not __import__("re").fullmatch(r"[A-Za-z0-9_]{1,60}", exception_name):
+                  exception_name = "unknown_exception"
+              print("bot_authentication_preflight_failed:" + exception_name, file=sys.stderr)
               raise SystemExit(1) from None
           print("Rubika bot authentication passed; no message was sent.")
           PY
