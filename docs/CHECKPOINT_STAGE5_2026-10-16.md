@@ -1,44 +1,38 @@
-# Rubika-Agent checkpoint — Stage 5 — 2026-10-16
+# Rubika-Agent checkpoint — Stage 5 — وضعیت اصلاح‌شده در 2026-10-16
 
-## Scope completed in the draft branch
+این سند قبلاً وضعیت پیش از ادغام PRهای Stage 5 را ثبت می‌کرد و اکنون با شواهد زندهٔ 2026-10-16 به‌روزرسانی شده است. برای جزئیات ممیزی و شناسهٔ Runها به [گزارش ممیزی زنده](RUBIKA_AGENT_AUDIT_2026-10-16.md) مراجعه کنید؛ پیش از هر اقدام عملیاتی، وضعیت روز را دوباره بخوانید.
 
-Stage 5 implements the first read-only slice of the owner management console: the private Rubika bot can accept a short allowlist of commands and reply with status information sourced from the Worker, D1 summaries, provider usage ledger and GitHub Actions metadata.
+## وضعیت قابلیت کنسول
 
-Commands: `/help`, `/status`, `/queue`, `/ai-status`, `/ai-status <provider>`, and `/report`.
+کد `agent/brain/owner_console.py` برای دستورهای allowlist‌شدهٔ `/help`، `/status`، `/queue`، `/ai-status` و `/report` طراحی شده و گزارش‌ها را فقط می‌خواند. این کد به‌خودی‌خود به معنی پاسخ‌گویی خودکار در گفت‌وگوی خصوصی نیست: PR #28 گردش‌کار زمان‌بندی‌شدهٔ `owner-console-poll.yml` را حذف کرده است. کنسول در کد باقی مانده، اما poller فعالی در `main` وجود ندارد.
 
-The console is intentionally command-based at this stage; it does not use an LLM, execute arbitrary instructions, edit code, repair bugs, mutate the publishing queue, merge PRs, deploy, migrate remote D1 or publish channel posts.
+این بخش از پروژه از LLM برای تفسیر دستورهای آزاد استفاده نمی‌کند و نباید به اجرای shell، تغییر صف، تغییر کد، merge، deploy، migration یا انتشار کانال تبدیل شود.
 
-## Current GitHub state
+## وضعیت زندهٔ GitHub
 
-- PR #24: [Draft owner digest](https://github.com/hosseinasgari898989-dev/rubika-agent/pull/24), open and unmerged. Migration ordering was fixed: existing `0005_ai_provider_ledger.sql` is preserved, digest schema is `0006_owner_daily_digest.sql`. Latest checked runs `38848004714` (Agent brain checks #445) and `38848004840` (Cloud bootstrap checks #240) succeeded.
-- PR #25: [Stage 5 read-only Rubika operations console](https://github.com/hosseinasgari898989-dev/rubika-agent/pull/25), open, draft, unmerged and stacked on PR #24's branch. If later approved, review order is PR #24 first, PR #25 second.
-- Stage 5 branch: `feature/rubika-readonly-ops-console-stage5`.
-- Code is not live. No remote D1 migration, Worker deployment, live Rubika poll/reply, provider request, channel publish, or merge was performed.
+- شاخهٔ `main` در آخرین بررسی روی SHA `a55e856d6d529f618b73efa060cacd4c06e8c084` بود.
+- PR #24 (گزارش ۲۴ساعتهٔ صاحب پروژه) و PR #25 (برش فقط‌خواندنی کنسول) در 2026-10-16 ادغام شدند.
+- PR #28 در 2026-10-16 ادغام شد و poller خصوصی را حذف کرد؛ این حذف عمدی است.
+- PRهای #31، #33، #34، #35 و #36 نیز در `main` ادغام شده‌اند. جزئیات و زمان ادغام در گزارش ممیزی ثبت شده است.
+- PR #37 یک اصلاح یک‌خطی برای تست منبع خبر Mob در شاخهٔ آزمایشی `agent-brain-mega-v1` است. CI آن در Run [38960147671](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38960147671) موفق شد، اما تا هنگام این snapshot هنوز merge نشده بود.
+- آخرین CI اصلی ثبت‌شده، Run [38952275986](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38952275986)، روی SHA فعلی `main` موفق بود؛ گزارش همان اجرا ۳۸۷ تست Python، تست‌های Worker و self-test موفق را ثبت کرده است.
 
-## Latest verified automated checks
+## کشف ابری و علت توقف اجرای اخیر
 
-- Agent brain checks #455, run [38849356778](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38849356778): success. Log confirms owner-console tests (20), migration tests (5), workflow-safety tests (3), other brain/storage suites and Worker API tests passed.
-- Stage 5 isolated offline checks #11, run [38849353459](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38849353459): success.
-- Stage 5 isolated offline checks #12, run [38849356795](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38849356795): success.
-- Local offline pipeline installs project requirements, compiles Python modules, tests fake Worker/Rubika clients, applies SQLite migration chain 0001–0007, runs workflow safety checks, Worker tests against the in-memory D1 fake and the console self-test (`publishing=false`, `queue_mutation=false`).
-- Earlier CI failures were investigated: test precedence expected the wrong validation error for an allowlisted route with an unapproved query; the test and per-route method allowlist were corrected. A separate workflow initially lacked a dependency imported by the existing `agent.brain` package; the workflow now installs project requirements. Latest relevant CI runs succeeded.
+زمان‌بند فعال `.github/workflows/termux-docker-discovery.yml` هر ۳۰ دقیقه gate پنج‌ساعته را بررسی می‌کند و برای گردآوری از Termux Docker در GitHub Actions استفاده می‌کند؛ این مسیر به فرمان روزانه روی گوشی وابسته نیست.
 
-## Safety architecture
+آخرین اجرای کشف بررسی‌شده، Run [38959310615](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38959310615)، در 2026-10-16 شکست خورد چون مجموعهٔ تست شاخهٔ `agent-brain-mega-v1` هنوز انتظار داشت منابع سایت، YouTube و Steam فعال باشند. سیاست تأییدشدهٔ فعلی فقط منبع رسمی X با شناسهٔ `mob_x` را فعال می‌کند. در آن اجرا ۳۰۰ تست اجرا شد و فقط همان assertion قدیمی شکست خورد؛ بررسی Worker و D1 پیش از آن موفق بود، اما اجرای collector، ثبت گزارش و intake به صف انجام نشد.
 
-- Both exact configured owner chat ID and sender/user ID must match.
-- Only three fixed Rubika API methods are used: `getMe`, `getUpdates`, `sendMessage`.
-- Unsupported requests are not passed to an AI model and are never interpreted as shell commands.
-- Worker control routes use authenticated access and strict route/method/query allowlists.
-- D1 stores an opaque updates cursor and minimal idempotency/audit rows with hashed identities, normalized commands and safe outcome codes; raw incoming text and raw owner identifiers are not stored.
-- Uncertain message delivery is not automatically retried to avoid duplicate replies.
-- Queue summary is implemented via new SELECT-only queries so it does not call the existing summary path that can repair stale processing rows.
+PR #37 assertion را با سیاست X-only هماهنگ می‌کند. CI آن ۳۰۰ تست و self-test را با موفقیت گذراند. تا زمان merge و اجرای مجدد زمان‌بندی‌شده، این موفقیت ثابت نمی‌کند که چرخهٔ زندهٔ کشف و intake کامل شده است.
 
-## Remaining before live activation
+## صف و گیت‌های انتشار
 
-1. Review PR #24 and PR #25 in dependency order.
-2. Owner explicitly approves merging, remote migration and deployment as separate actions.
-3. Configure `RUBIKA_TOKEN`, `RUBIKA_OWNER_CHAT_ID`, `RUBIKA_OWNER_USER_ID`, and `AGENT_API_TOKEN` as repository Actions secrets without sharing them in chat.
-4. Apply pending D1 migrations in order and deploy only after explicit authorization.
-5. Run one carefully controlled private-chat test, then verify a read-only status and queue report.
+- Run [38945789415](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38945789415) سه ویدئوی TikTok را واقعاً به کانال تست فرستاد؛ خروجی همان اجرا `sent_count=3`، `failed_count=0` و `queued_remaining=61` بود. این شواهد مربوط به کانال تست و همان اجراست، نه انتشار به کانال اصلی.
+- Preflight کانال اصلی در Run [38945649562](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38945649562) احراز هویت Bot را گذراند، اما مقصد را به‌دلیل تنظیم بودن شناسهٔ کانال تست رد کرد و هیچ پیامی نفرستاد.
+- `config/agent_lifecycle.json` همچنان روی `mode=test` است؛ انتشار Mob در production قفل است.
+- در `config/mob_official_sources.json` فقط X فعال است. تحویل ویدئوی YouTube به روبیکا نیز با `youtube_to_rubika_enabled=false` خاموش است.
+- اجرای زمان‌بندی‌شدهٔ گزارش خصوصی صاحب پروژه، Run [38959343572](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38959343572)، پس از PR #36 موفق شد؛ اما لاگ آن اثبات نمی‌کند که مسیر جایگزین مخصوص خطای `INVALID_ACCESS` اجرا شده باشد. اجرای زندهٔ اضافه برای تحریک این مسیر انجام نشده، چون ممکن است پیام خصوصی تازه‌ای بسازد.
 
-Until these steps are explicitly approved and completed, PR #25 remains a draft prototype, not a working/live Rubika bot integration.
+## محدودیت و ایمنی
+
+این snapshot شامل merge خودکار، deploy Worker، تغییر یا migration واقعی D1، تغییر secretها، تغییر مقصد کانال، انتشار عمومی یا اجرای دستی owner digest نیست. هیچ secretی در گزارش درج نشده است. قبل از اقدام به کانال اصلی یا تولید Mob باید مجوز مستقل و preflight مربوطه بررسی شود.
