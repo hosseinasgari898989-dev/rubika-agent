@@ -111,7 +111,7 @@ jobs:
                       role=roles[provider],
                       prompt=prompt,
                       run_id=run_id,
-                      max_output_tokens=96,
+                      max_output_tokens=512,
                       timeout_seconds=90,
                       usage_client=ledger,
                   )
