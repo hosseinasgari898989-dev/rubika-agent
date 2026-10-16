@@ -235,6 +235,17 @@ class HTTPClientTests(unittest.TestCase):
         with self.assertRaisesRegex(console.OwnerConsoleError, "code_ai_provider_not_enabled"):
             client.ai_status("unknown")
 
+    def test_worker_client_rejects_arbitrary_queries_and_paths(self):
+        client = console.ControlWorker(
+            "https://rubika-agent.h98609294.workers.dev", "t" * 40, opener=FakeOpener()
+        )
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_query_not_allowed"):
+            client._request("GET", "/api/brain/owner-console/state?offset=private")
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_provider_invalid"):
+            client._request("GET", "/api/brain/ai-provider/status?provider=gemini&provider=groq")
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_path_not_allowed"):
+            client._request("GET", "/api/brain/owner-console/claim?mode=write")
+
     def test_rubika_transport_errors_never_reveal_token(self):
         token = "private-rubika-token-1234567890"
         api = console.RubikaBotAPI(token, opener=FakeOpener(error=TimeoutError()))
