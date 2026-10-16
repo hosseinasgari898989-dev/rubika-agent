@@ -32,14 +32,14 @@ permissions:
 jobs:
   offline-checks:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install minimal package-import dependency
-        run: python -m pip install --disable-pip-version-check 'requests>=2.31,<3'
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Compile owner-console code
         run: python -m compileall -q agent/brain
       - name: Test owner-console commands and fake clients
