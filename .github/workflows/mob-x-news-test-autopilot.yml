@@ -1,0 +1,141 @@
+name: Mob X official news five-hour test autopilot
+
+on:
+  schedule:
+    - cron: "0 */5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rubika-agent-mob-x-news-test-autopilot
+  cancel-in-progress: false
+
+jobs:
+  publish-test-channel:
+    if: ${{ vars.RUBIKA_AGENT_MOB_X_TEST_AUTOPILOT_APPROVED == 'true' && vars.RUBIKA_AGENT_AI_FREE_TIER_APPROVED == 'true' && vars.RUBIKA_AGENT_GEMINI_ONLY_WORKER_READY == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
+      RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+    steps:
+      - name: Check out main source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Validate test-only lifecycle, source policy, secrets and Worker provider ledger
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from agent.lifecycle import load_lifecycle_policy
+          from agent.brain.mob_official_trial import TEST_CHANNEL_GUID
+          lifecycle = load_lifecycle_policy()
+          if lifecycle.get("mode") != "test" or lifecycle.get("birth_datetime") is not None:
+              raise SystemExit("mob_test_lifecycle_guard_failed")
+          cfg = json.loads(Path("config/mob_official_sources.json").read_text(encoding="utf-8"))
+          publishing = cfg.get("publishing", {})
+          if not (
+              publishing.get("enabled") is True
+              and publishing.get("mode") == "test_channel_only"
+              and publishing.get("target_channel_guid") == TEST_CHANNEL_GUID
+              and publishing.get("max_posts_per_run") == 1
+              and publishing.get("production_enabled") is False
+          ):
+              raise SystemExit("mob_test_channel_config_guard_failed")
+          if TEST_CHANNEL_GUID != "c0EFohK0f3174377fb6fa422d3ccb230":
+              raise SystemExit("mob_test_channel_constant_changed")
+          print("Mob test-only lifecycle/config verified; news publication window remains independent from edit lifecycle.")
+          PY
+          for key in AGENT_API_TOKEN GEMINI_API_KEY RUBIKA_TOKEN; do
+            value="${!key:-}"
+            if [[ -z "$value" || ${#value} -lt 20 ]]; then
+              echo "::error::Required secret presence check failed for $key. Values are hidden; no post was sent."
+              exit 2
+            fi
+          done
+          status_file="$RUNNER_TEMP/gemini-ledger-status.json"
+          code="$(curl --silent --show-error --connect-timeout 5 --max-time 10 -o "$status_file" -w '%{http_code}' -H "Authorization: Bearer $AGENT_API_TOKEN" "$AGENT_API_BASE_URL/api/brain/ai-provider/status?provider=gemini" || true)"
+          if [[ "$code" != "200" ]] || ! python - "$status_file" <<'PY'
+          import json, sys
+          from pathlib import Path
+          try:
+              data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          except Exception:
+              raise SystemExit(1)
+          raise SystemExit(0 if data.get("ok") is True and data.get("provider") == "gemini" and data.get("ready") is True else 1)
+          PY
+          then
+            echo "::error::Live Worker does not confirm Gemini ledger readiness; no post was sent."
+            exit 2
+          fi
+          echo "Preflight passed. Destination is hard-locked to the test channel GUID."
+
+      - name: Install runtime dependencies and ffprobe
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes ffmpeg
+          fi
+          ffprobe -version | head -n 1
+
+      - name: Publish each newly verified X post from the last five hours to test channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/mob-x-test-media
+          published=0
+          final_report="$RUNNER_TEMP/mob-x-test-report.json"
+          for attempt in $(seq 1 12); do
+            report="$RUNNER_TEMP/mob-x-test-report-$attempt.json"
+            media_dir="artifacts/mob-x-test-media/attempt-$attempt"
+            set +e
+            python -m agent.brain.mob_official_trial \
+              --publish-test-channel \
+              --limit 1 \
+              --source-platform x \
+              --published-within-hours 5 \
+              --report "$report" \
+              --output-dir "$media_dir"
+            run_status=$?
+            set -e
+            if [[ ! -s "$report" ]]; then
+              echo "::error::Publisher produced no report; stopping to prevent duplicate or unsafe sends."
+              exit 1
+            fi
+            cp "$report" "$final_report"
+            status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("status", "unknown"))' "$report")"
+            if [[ "$status" == "published" ]]; then
+              published=$((published + 1))
+              continue
+            fi
+            if [[ "$status" == "nothing_new" ]]; then
+              break
+            fi
+            echo "::error::Mob test publisher stopped on status $status (exit $run_status); no further posts will be attempted."
+            exit 1
+          done
+          if [[ -s "$final_report" ]]; then cp "$final_report" artifacts/mob-x-test-report.json; fi
+          echo "Verified new X posts sent to the test channel in this sweep: $published" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload safe test sweep report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mob-x-test-sweep-${{ github.run_id }}
+          path: artifacts/mob-x-test-report.json
+          if-no-files-found: ignore
+          retention-days: 14
