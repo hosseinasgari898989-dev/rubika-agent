@@ -35,7 +35,7 @@ class WorkflowSafetyTests(unittest.TestCase):
             row["id"] for row in config.get("official_sources", [])
             if row.get("enabled") is True
         }
-        self.assertTrue({"mob_newsroom", "mob_youtube", "steam_news", "mob_x"}.issubset(enabled))
+        self.assertEqual(enabled, {"mob_x"})
 
 
 if __name__ == "__main__":
