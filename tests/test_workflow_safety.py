@@ -51,5 +51,21 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertTrue({"mob_newsroom", "mob_youtube", "steam_news", "mob_x"}.issubset(enabled))
 
 
+    def test_scheduled_discovery_uses_official_termux_mirror_fallback_and_live_health_route(self):
+        workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        # Avoid the retired supervisor route (removed from the deployed Worker).
+        self.assertNotIn("/api/brain/supervise-error", workflow)
+        # Check the real read-only health endpoint before spending time on discovery.
+        self.assertIn('"$AGENT_API_BASE_URL/health"', workflow)
+        self.assertIn('payload.get("database") != "connected"', workflow)
+        # A rate-limited community mirror must not permanently block the five-hour run.
+        self.assertIn("packages.termux.dev", workflow)
+        self.assertIn("packages-cf.termux.dev", workflow)
+        self.assertIn("mirror/apt/termux-main stable main", workflow)
+        self.assertIn("Termux package index could not be refreshed from official mirrors.", workflow)
+        # Mob official items are a separate lane and cannot mask an empty TikTok queue intake.
+        self.assertIn('if safe_summary["tiktok_candidates"] == 0:', workflow)
+        self.assertIn('with a Mob-only run.', workflow)
+
 if __name__ == "__main__":
     unittest.main()
