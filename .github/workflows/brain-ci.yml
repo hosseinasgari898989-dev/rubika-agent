@@ -1,6 +1,13 @@
 name: Agent brain checks
 
 on:
+  pull_request:
+    paths:
+      - "src/index.js"
+      - "agent/brain/**"
+      - "migrations/**"
+      - "tests/**"
+      - ".github/workflows/**"
   push:
     branches:
       - agent-brain-mega-v1
