@@ -193,7 +193,7 @@ def render_daily_digest(state: dict[str, Any]) -> str:
     info = int(counts.get("info", 0) or 0)
     start = str(state.get("window_started_at") or "نامشخص").replace("T", " ").replace("Z", " UTC")
     end = str(state.get("window_ends_at") or "نامشخص").replace("T", " ").replace("Z", " UTC")
-    lines = [
+    header = [
         "🧠 اعلامیهٔ روزانهٔ مغز Rubika-Agent",
         f"🕒 بازهٔ ۲۴ ساعته: {start} تا {end}",
         f"✅ موفقیت‌ها: {successful} | ❌ خطاها: {errors} | ℹ️ اطلاعیه‌ها: {info}",
@@ -201,10 +201,8 @@ def render_daily_digest(state: dict[str, Any]) -> str:
     ]
 
     events = state.get("events") if isinstance(state.get("events"), list) else []
-    visible = events[-24:]
-    total_events = max(0, int(state.get("total_event_count", len(events)) or 0))
-    omitted = max(0, total_events - len(visible))
-    for event in visible:
+    event_lines: list[str] = []
+    for event in events:
         if not isinstance(event, dict):
             continue
         category = str(event.get("category") or "info")
@@ -222,23 +220,31 @@ def render_daily_digest(state: dict[str, Any]) -> str:
         row = f"{icon} {at} · {source}: {title}"
         if detail and detail != title:
             row += f"\n   {detail}"
-        lines.append(row)
+        event_lines.append(row)
 
-    if omitted:
-        lines.append(f"… {omitted} رویداد قدیمی‌تر هم در سوابق این بازه ذخیره شده است.")
-    elif not events:
-        lines.append("هنوز رویدادی ثبت نشده؛ این پیام با رخدادهای جدید ویرایش می‌شود.")
-    lines.append("این پیام در طول بازه ویرایش می‌شود؛ پیام تازه پس از پایان ۲۴ ساعت ساخته خواهد شد.")
+    total_events = max(0, int(state.get("total_event_count", len(event_lines)) or 0))
+    omitted = max(0, total_events - len(event_lines))
+    note = "این پیام طی بازه ویرایش می‌شود؛ پس از پایان ۲۴ ساعت، بازه و پیام تازه‌ای آغاز می‌شود."
 
-    # Stay below Rubika message-size limits; newest visible entries are at the end.
-    rendered = "\n".join(lines)
-    if len(rendered) <= DIGEST_MAX_CHARS:
-        return rendered
-    suffix = "\n… برای جلوگیری از ردشدن پیام، جزئیات قدیمی‌تر خلاصه شد."
-    while len(rendered) + len(suffix) > DIGEST_MAX_CHARS and len(lines) > 6:
-        lines.pop(4)
-        rendered = "\n".join(lines)
-    return (rendered[:DIGEST_MAX_CHARS - len(suffix)] + suffix).strip()
+    def build() -> str:
+        rows = list(header)
+        rows.extend(event_lines)
+        if omitted:
+            rows.append(f"… {omitted} رویداد قدیمی‌تر در سوابق همین بازه نگهداری می‌شود.")
+        elif not event_lines:
+            rows.append("هنوز رویدادی ثبت نشده؛ این پیام با رخدادهای جدید ویرایش می‌شود.")
+        rows.append(note)
+        return "\n".join(rows)
+
+    rendered = build()
+    while len(rendered) > DIGEST_MAX_CHARS and event_lines:
+        event_lines.pop(0)
+        omitted += 1
+        rendered = build()
+
+    if len(rendered) > DIGEST_MAX_CHARS:
+        return rendered[:DIGEST_MAX_CHARS]
+    return rendered
 
 
 def _commit_digest(
