@@ -2,7 +2,7 @@ name: Mob official X news publisher (gated)
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 */5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -13,9 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-one-new-official-x-post:
-    # Closed unless explicitly approved during the final production launch.
-    if: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved' }}
+  publish-all-new-official-x-posts-in-window:
+    # Production stays fail-closed unless Mob lifecycle, source config, and real channel secret all validate.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -25,10 +24,10 @@ jobs:
       RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
       RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
     steps:
-      - name: Check out the tested X-only agent branch
+      - name: Check out the current main agent
         uses: actions/checkout@v4
         with:
-          ref: agent-brain-mega-v1
+          ref: main
           persist-credentials: false
 
       - name: Validate launch boundary and required secrets
@@ -37,14 +36,17 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
+          import json
+          from pathlib import Path
           from agent.lifecycle import load_lifecycle_policy
           policy = load_lifecycle_policy()
           if policy["mode"] != "production" or policy["birth_datetime"] is None:
-              raise SystemExit(
-                  "Publishing blocked: set config/agent_lifecycle.json to production "
-                  "and set a valid UTC born_at only at final launch."
-              )
-          print("Production launch boundary verified; historical posts are filtered.")
+              raise SystemExit("Mob news requires its own valid production born_at boundary.")
+          cfg = json.loads(Path("config/mob_official_sources.json").read_text(encoding="utf-8"))
+          publishing = cfg.get("publishing", {})
+          if not (publishing.get("enabled") is True and publishing.get("mode") == "production" and publishing.get("production_enabled") is True):
+              raise SystemExit("Mob production publishing is not explicitly enabled in config.")
+          print("Mob-only launch boundary and production publishing config verified.")
           PY
           missing=0
           for key in AGENT_API_TOKEN RUBIKA_TOKEN RUBIKA_CHANNEL_GUID RUBIKA_OWNER_CHAT_ID; do
@@ -58,6 +60,17 @@ jobs:
             missing=1
           fi
           if [[ "$missing" -ne 0 ]]; then exit 2; fi
+          if [[ "$RUBIKA_CHANNEL_GUID" == "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
+            echo "::error::Production Mob publishing cannot target the known test channel."
+            exit 2
+          fi
+
+      - name: Record Mob automation start in the single editable owner digest
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify \
+            --message '📰 شروع بررسی خبرهای رسمی Mob در پنجرهٔ پنج‌ساعته.' \
+            --workflow 'Mob official X news'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -74,14 +87,46 @@ jobs:
           fi
           ffprobe -version | head -n 1
 
-      - name: Find the newest unposted official Mob X item and publish at most one
+      - name: Publish every verified unposted Mob X post within the last five hours
         id: publish_official_x
+        shell: bash
         run: |
-          python -m agent.brain.mob_official_trial \
-            --publish \
-            --limit 1 \
-            --report artifacts/mob-x-production-report.json \
-            --output-dir artifacts/mob-x-production-media
+          set -euo pipefail
+          mkdir -p artifacts/mob-x-production-media
+          published=0
+          final_report="$RUNNER_TEMP/mob-x-production-report.json"
+          for attempt in $(seq 1 12); do
+            report="$RUNNER_TEMP/mob-x-production-report-$attempt.json"
+            media_dir="artifacts/mob-x-production-media/attempt-$attempt"
+            set +e
+            python -m agent.brain.mob_official_trial \
+              --publish \
+              --limit 1 \
+              --source-platform x \
+              --published-within-hours 5 \
+              --report "$report" \
+              --output-dir "$media_dir"
+            run_status=$?
+            set -e
+            if [[ ! -s "$report" ]]; then
+              echo "::error::Mob publisher returned without a report; stopping to avoid unsafe retries."
+              exit 1
+            fi
+            cp "$report" "$final_report"
+            status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("status", "unknown"))' "$report")"
+            if [[ "$status" == "published" ]]; then
+              published=$((published + 1))
+              continue
+            fi
+            if [[ "$status" == "nothing_new" ]]; then
+              break
+            fi
+            echo "::error::Mob publisher stopped on status $status; no further posts will be attempted in this sweep."
+            exit 1
+          done
+          if [[ -s "$final_report" ]]; then cp "$final_report" artifacts/mob-x-production-report.json; fi
+          echo "Verified posts published in this five-hour sweep: $published"
+          echo "published_count=$published" >> "$GITHUB_OUTPUT"
 
       - name: Get safe AI diagnosis for gated official-news failure
         if: failure()
