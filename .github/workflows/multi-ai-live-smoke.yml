@@ -162,3 +162,41 @@ jobs:
               sys.exit(1)
           print("Both Groq and OpenRouter returned non-empty live responses.")
           PY
+
+      - name: Verify real Mob translation through the metered provider ledger
+        id: translation_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+          from agent.brain.mob_translation import translate_to_persian
+
+          source = "Mob Entertainment announced an official Poppy Playtime update today."
+          translated = translate_to_persian(source)
+          if not isinstance(translated, str) or not translated.strip():
+              print("Official-news translation failed closed; no publication was attempted.")
+              sys.exit(1)
+          if not re.search(r"[\u0600-\u06FF]", translated) or re.search(r"[\u0400-\u04FF]", translated):
+              print("Translation output did not pass Persian-script validation.")
+              sys.exit(1)
+          if re.search(r"https?://|www\\.", translated, re.IGNORECASE):
+              print("Translation output included a URL and was rejected.")
+              sys.exit(1)
+          print(json.dumps({
+              "status": "success",
+              "translation_chars": len(translated),
+              "persian_script_valid": True,
+              "url_free": True,
+              "raw_translation_logged": False
+          }, sort_keys=True))
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Metered official-news translation check\\n")
+              summary.write("- One real Groq-first translation request, with OpenRouter fallback only if required.\\n")
+              summary.write("- D1 usage ledger required; translation is rejected if ledger reservation/result cannot be confirmed.\\n")
+              summary.write(f"- Persian script validated: **yes**; URL-free: **yes**; characters: **{len(translated)}**.\\n")
+              summary.write("- Raw translation text is not logged; no Rubika post was sent.\\n")
+          PY
