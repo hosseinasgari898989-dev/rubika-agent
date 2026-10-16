@@ -822,6 +822,7 @@ function makeOmniAI(probability = 0.97) {
 {
   const mock = mockGeminiFetch("به عمق بازی بروید, еще اسرارآمیزتر.");
   const state = env();
+  state.GEMINI_TRANSLATION_APPROVED = "true";
   state.GEMINI_API_KEY = "synthetic-test-key";
   state.AI = { run: async () => { throw new Error("Workers AI must not be used for translation"); } };
   try {
@@ -832,6 +833,7 @@ function makeOmniAI(probability = 0.97) {
     assert.equal(response.status, 502);
     assert.equal(response.body.error, "translation_model_output_invalid");
     assert.equal(state.DB.aiUsageDaily.size, 0);
+    assert.equal(state.DB.geminiTranslationUsageDaily.size, 1);
     assert.equal(mock.getCaptured().url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
   } finally {
     mock.restore();
