@@ -230,7 +230,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
 
     def test_active_repair_workflow_uses_groq_and_openrouter_only(self):
         root = Path(__file__).resolve().parents[1]
-        workflow = (root / ".github" / "workflows" / "gemini-code-assistant.yml").read_text(encoding="utf-8")
+        workflow = (root / ".github" / "workflows" / "groq-openrouter-code-repair.yml").read_text(encoding="utf-8")
         self.assertIn("python -m agent.brain.multi_ai_code_repair", workflow)
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
         self.assertIn("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}", workflow)
