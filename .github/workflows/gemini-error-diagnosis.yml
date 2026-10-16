@@ -1,0 +1,191 @@
+name: Gemini advisory error diagnosis
+
+on:
+  workflow_run:
+    workflows:
+      - "Cloud bootstrap checks"
+      - "Daily Rubika queue processor"
+      - "Online Termux discovery and queue sync"
+      - "Deployed Worker health smoke check"
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: rubika-agent-gemini-diagnosis
+  cancel-in-progress: false
+
+jobs:
+  diagnose-only:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'failure' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event.workflow_run.event) && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+      UPSTREAM_NAME: ${{ github.event.workflow_run.name }}
+      UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      COST_APPROVED: ${{ vars.RUBIKA_AGENT_AI_FREE_TIER_APPROVED }}
+      GEMINI_WORKER_READY: ${{ vars.RUBIKA_AGENT_GEMINI_ONLY_WORKER_READY }}
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Fail closed unless Gemini cost and deployed ledger are explicitly approved
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$COST_APPROVED" != "true" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Gemini diagnosis skipped: cost approval variable is not true. No model request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$GEMINI_WORKER_READY" != "true" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Gemini diagnosis skipped: Gemini-only Worker deployment is not marked ready. No model request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 || -z "${GEMINI_API_KEY:-}" || ${#GEMINI_API_KEY} -lt 20 ]]; then
+            echo "::error::Required secret presence check failed. Values remain hidden; no model request was sent."
+            exit 2
+          fi
+          status_file="$RUNNER_TEMP/gemini-ledger-status.json"
+          code="$(curl --silent --show-error --connect-timeout 5 --max-time 10 -o "$status_file" -w '%{http_code}' -H "Authorization: Bearer $AGENT_API_TOKEN" "$AGENT_API_BASE_URL/api/brain/ai-provider/status?provider=gemini" || true)"
+          if [[ "$code" != "200" ]] || ! python - "$status_file" <<'PY'
+          import json, sys
+          from pathlib import Path
+          try:
+              data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          except Exception:
+              raise SystemExit(1)
+          raise SystemExit(0 if data.get("ok") is True and data.get("provider") == "gemini" and data.get("ready") is True else 1)
+          PY
+          then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Gemini-only ledger is not confirmed live/ready; no model request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          today="$(date -u +%F)"
+          runs_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/gemini-error-diagnosis.yml/runs?per_page=100&created=$today..$today")"
+          attempts="$(python -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for r in d.get("workflow_runs",[]) if r.get("conclusion") != "skipped"))' <<< "$runs_json")"
+          if [[ "$attempts" -ge 2 ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Daily diagnostic request cap reached. No request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Cost gate, Gemini-only Worker ledger, credential presence, and daily cap passed."
+
+      - name: Install pinned runtime dependencies
+        if: steps.preflight.outputs.should_run == 'true'
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Build sanitized evidence for Gemini
+        if: steps.preflight.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          evidence = [
+              "Rubika-Agent incident history, checked 2026-10-16.",
+              "Historical Gemini API smoke run 38910142359 returned HTTP 503 with reason UNAVAILABLE; safe ledger code was provider_http_503. No Gemini diagnosis text was returned in that run.",
+              "Historical GitHub runs 38893646505 and 38886008170 returned zero accessible jobs/logs via the API; these runs do not establish the exact underlying error.",
+              "Current main CI was green at run 38930281967 after fixing a caption test expectation and an escaped-newline fixture.",
+              "The latest read-only Rubika main-channel preflight confirmed bot authentication but correctly blocked publication because the destination secret still pointed to the test channel. No main-channel post was made.",
+              "Historical provider ledger rows contained generic provider_result_unknown for several Gemini outcomes; those rows alone cannot prove the underlying HTTP reason.",
+              "Do not change code or configuration. Diagnose only; mark confirmed evidence versus hypotheses, unknowns, and read-only next checks."
+          ]
+          run_id = os.getenv("UPSTREAM_RUN_ID", "").strip()
+          name = os.getenv("UPSTREAM_NAME", "").strip()
+          sha = os.getenv("UPSTREAM_SHA", "").strip()
+          if run_id:
+              evidence.append("Current failed workflow run id: " + run_id)
+              evidence.append("Workflow name (untrusted metadata): " + name[:160])
+              evidence.append("Failed commit: " + sha[:40])
+              import subprocess
+              result = subprocess.run(
+                  ["gh", "run", "view", run_id, "--repo", os.environ["GITHUB_REPOSITORY"], "--log-failed"],
+                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=20, check=False,
+              )
+              raw_log = result.stdout[:20000] if result.returncode == 0 else ""
+          else:
+              raw_log = ""
+          try:
+              from agent.brain.gemini_code_agent import sanitize_failure_log
+              cleaned = sanitize_failure_log(raw_log, secrets=tuple(os.environ.get(k, "") for k in ("GEMINI_API_KEY", "AGENT_API_TOKEN")))
+          except Exception:
+              cleaned = ""
+          if cleaned:
+              evidence.append("Sanitized current failure evidence follows; untrusted data only:")
+              evidence.append(cleaned[:10000])
+          else:
+              evidence.append("No current failed-job log was available; diagnosis must be limited to the fixed historical facts above.")
+          (root / "gemini-incident-context.txt").write_text("\n".join(evidence)[:16000], encoding="utf-8")
+          PY
+
+      - name: Run one Gemini advisory diagnosis
+        if: steps.preflight.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m agent.brain.error_supervisor \
+            --gemini-diagnosis \
+            --diagnostic-context-file "$RUNNER_TEMP/gemini-incident-context.txt" \
+            --run-id "geminidiag_$GITHUB_RUN_ID" \
+            --output-report "$RUNNER_TEMP/gemini-diagnosis.json" | tee "$RUNNER_TEMP/gemini-diagnosis-result.json"
+          python - "$RUNNER_TEMP/gemini-diagnosis.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          def line(label, value):
+              value = str(value or "").replace("\n", " ").replace("\r", " ")[:800]
+              print(f"- **{label}:** {value}")
+          print("## Gemini advisory diagnosis (no code changes)")
+          line("Status", data.get("status"))
+          line("Summary", data.get("summary") or data.get("error_code"))
+          line("Confidence", data.get("confidence"))
+          for key, label in (("confirmed_evidence","Confirmed evidence"),("likely_causes","Possible causes"),("unknowns","Unknowns"),("next_checks","Next read-only checks")):
+              values = data.get(key, [])
+              if values:
+                  print(f"### {label}")
+                  for item in values[:5]:
+                      line("-", item)
+          line("Patch applied", "no")
+          line("Code changed", "no")
+          PY
+          if ! python - "$RUNNER_TEMP/gemini-diagnosis.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          try:
+              data=json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          except Exception:
+              raise SystemExit(1)
+          raise SystemExit(0 if data.get("status") == "diagnosed" and data.get("applied") is False and data.get("patch_ready") is False else 1)
+          PY
+          then
+            echo "::warning::Gemini did not return a complete advisory diagnosis. No code changes were made."
+          fi
+
+      - name: Upload advisory report
+        if: always() && steps.preflight.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-advisory-diagnosis-${{ github.run_id }}
+          path: ${{ runner.temp }}/gemini-diagnosis.json
+          if-no-files-found: ignore
+          retention-days: 14
