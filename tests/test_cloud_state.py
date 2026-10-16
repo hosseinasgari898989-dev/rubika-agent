@@ -197,55 +197,21 @@ class CloudStateTests(unittest.TestCase):
 
 
 
-    def test_translate_official_uses_authenticated_worker_and_validates_persian_result(self):
-        state = CloudState("https://worker.example", TOKEN)
-        captured = {}
-
-        def fake_open(request, timeout):
-            captured["url"] = request.full_url
-            captured["method"] = request.method
-            captured["auth"] = request.get_header("Authorization")
-            captured["payload"] = json.loads(request.data.decode("utf-8"))
-            return io.BytesIO(json.dumps({
-                "ok": True,
-                "translation": "ماب انترتینمنت خبر رسمی منتشر کرد.",
-                "model": "@cf/meta/llama-3.1-8b-instruct-fp8",
-                "publishing": False,
-            }).encode("utf-8"))
-
-        with patch("urllib.request.urlopen", side_effect=fake_open):
-            result = state.translate_official("Mob Entertainment published a new official update.")
-
-        self.assertEqual(result, "ماب انترتینمنت خبر رسمی منتشر کرد.")
-        self.assertTrue(captured["url"].endswith("/api/brain/translate-official"))
-        self.assertEqual(captured["method"], "POST")
-        self.assertEqual(captured["auth"], "Bearer " + TOKEN)
-        self.assertIn("text", captured["payload"])
-
-
-    def test_translate_official_rejects_mixed_cyrillic_output(self):
-        state = CloudState("https://worker.example", TOKEN)
-
-        def fake_open(request, timeout):
-            return io.BytesIO(json.dumps({
-                "ok": True,
-                "translation": "به عمق بازی بروید, еще اسرارآمیزتر.",
-                "publishing": False,
-            }).encode("utf-8"))
-
-        with patch("urllib.request.urlopen", side_effect=fake_open):
-            with self.assertRaises(CloudStateError) as caught:
-                state.translate_official("Explore the depths of the game.")
-
-        self.assertEqual(caught.exception.code, "control_api_translation_wrong_script")
-
-    def test_translate_official_rejects_too_long_text_before_network(self):
+    def test_translate_official_is_retired_and_makes_no_network_request(self):
         state = CloudState("https://worker.example", TOKEN)
         with patch("urllib.request.urlopen") as opener:
             with self.assertRaises(CloudStateError) as caught:
-                state.translate_official("x" * 4501)
-        self.assertEqual(caught.exception.code, "translation_text_too_long")
+                state.translate_official("Mob Entertainment published a new official update.")
+        self.assertEqual(caught.exception.code, "translation_route_retired")
         opener.assert_not_called()
+
+    def test_translate_official_retirement_does_not_reveal_source_or_token(self):
+        state = CloudState("https://worker.example", TOKEN)
+        with self.assertRaises(CloudStateError) as caught:
+            state.translate_official("secret source excerpt")
+        self.assertEqual(caught.exception.code, "translation_route_retired")
+        self.assertNotIn("secret source excerpt", str(caught.exception))
+        self.assertNotIn(TOKEN, str(caught.exception))
 
     def test_upsert_staged_preserves_canonical_youtube_id_and_never_approves(self):
         state = CloudState("https://worker.example", TOKEN)
