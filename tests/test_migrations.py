@@ -18,6 +18,7 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0004_automation_queue.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0005_ai_provider_ledger.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0006_owner_daily_digest.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0007_owner_console.sql").read_text(encoding="utf-8"))
 
             columns = {
                 row[1] for row in db.execute("PRAGMA table_info(items)").fetchall()
@@ -35,7 +36,7 @@ class D1MigrationTests(unittest.TestCase):
             self.assertTrue({
                 "agent_config", "sources", "items", "runs", "delivery_attempts", "brain_events",
                 "ai_usage_daily", "automation_queue", "ai_provider_calls", "ai_provider_state",
-                "owner_digest_state", "owner_digest_events"
+                "owner_digest_state", "owner_digest_events", "owner_console_state", "owner_console_updates"
             }.issubset(tables))
 
             db.execute(
@@ -69,6 +70,7 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0004_automation_queue.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0005_ai_provider_ledger.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0006_owner_daily_digest.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0007_owner_console.sql").read_text(encoding="utf-8"))
 
             values = (
                 "tiktok:7616247520657771796", "tiktok", "7616247520657771796",
@@ -119,6 +121,7 @@ class D1MigrationTests(unittest.TestCase):
                 "0004_automation_queue.sql",
                 "0005_ai_provider_ledger.sql",
                 "0006_owner_daily_digest.sql",
+                "0007_owner_console.sql",
             ):
                 db.executescript((ROOT / "migrations" / name).read_text(encoding="utf-8"))
 
@@ -127,7 +130,7 @@ class D1MigrationTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 ).fetchall()
             }
-            self.assertTrue({"ai_provider_calls", "ai_provider_state", "owner_digest_state", "owner_digest_events"}.issubset(tables))
+            self.assertTrue({"ai_provider_calls", "ai_provider_state", "owner_digest_state", "owner_digest_events", "owner_console_state", "owner_console_updates"}.issubset(tables))
 
             db.execute(
                 "INSERT INTO owner_digest_state "
@@ -152,6 +155,65 @@ class D1MigrationTests(unittest.TestCase):
                     "INSERT INTO owner_digest_state "
                     "(id, window_id, window_started_at, window_ends_at, window_started_epoch, window_ends_epoch) "
                     "VALUES (1, 'duplicatewindow1234', 'x', 'y', 1, 2)"
+                )
+        finally:
+            db.close()
+
+
+    def test_owner_console_migration_persists_offset_and_idempotency_audit(self):
+        db = sqlite3.connect(":memory:")
+        try:
+            for name in (
+                "0001_init.sql",
+                "0002_brain_metadata.sql",
+                "0003_ai_usage_daily.sql",
+                "0004_automation_queue.sql",
+                "0005_ai_provider_ledger.sql",
+                "0006_owner_daily_digest.sql",
+                "0007_owner_console.sql",
+            ):
+                db.executescript((ROOT / "migrations" / name).read_text(encoding="utf-8"))
+
+            state = db.execute(
+                "SELECT id, offset_id FROM owner_console_state WHERE id = 1"
+            ).fetchone()
+            self.assertEqual(state, (1, None))
+            db.execute(
+                "UPDATE owner_console_state SET offset_id = ?, updated_at = ? WHERE id = 1",
+                ("cursor-123", "2026-10-16T08:00:00Z"),
+            )
+            self.assertEqual(
+                db.execute("SELECT offset_id FROM owner_console_state WHERE id = 1").fetchone(),
+                ("cursor-123",),
+            )
+            audit = (
+                "a" * 64, "b" * 64, "status", "answered", "reply_sent",
+                "2026-10-16T08:00:00Z", "2026-10-16T08:00:00Z",
+            )
+            db.execute(
+                "INSERT INTO owner_console_updates "
+                "(update_id, chat_hash, command, status, result_code, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                audit,
+            )
+            self.assertEqual(
+                db.execute(
+                    "SELECT command, status, result_code FROM owner_console_updates WHERE update_id = ?",
+                    ("a" * 64,),
+                ).fetchone(),
+                ("status", "answered", "reply_sent"),
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO owner_console_updates "
+                    "(update_id, chat_hash, command, status) VALUES (?, ?, ?, ?)",
+                    ("a" * 64, "c" * 64, "queue", "claimed"),
+                )
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO owner_console_updates "
+                    "(update_id, chat_hash, command, status) VALUES (?, ?, ?, ?)",
+                    ("not-a-64-character-hash", "c" * 64, "queue", "claimed"),
                 )
         finally:
             db.close()
