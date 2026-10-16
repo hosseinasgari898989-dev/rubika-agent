@@ -401,6 +401,27 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
+  const created = new Date().toISOString();
+  for (let i = 0; i < 80; i += 1) {
+    const id = String(i).padStart(64, "0");
+    state.DB.ownerConsoleUpdates.set(id, {
+      update_id: id, chat_hash: "b".repeat(64), command: "status",
+      status: "answered", result_code: "reply_sent", created_at: created, updated_at: created,
+    });
+  }
+  const response = await read(await worker.fetch(
+    request("/api/brain/owner-console/claim", {
+      method: "POST",
+      body: { update_id: "f".repeat(64), chat_hash: "b".repeat(64), command: "status" },
+    }), state
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.claimed, false);
+  assert.equal(response.body.rate_limited, true);
+  assert.equal(state.DB.ownerConsoleUpdates.size, 80);
+}
+{
+  const state = env();
   state.DB.automationQueue.set("tiktok:item-1", {
     id: "tiktok:item-1", status: "queued", sent_at: null,
   });
