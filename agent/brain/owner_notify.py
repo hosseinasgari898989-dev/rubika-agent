@@ -202,7 +202,8 @@ def render_daily_digest(state: dict[str, Any]) -> str:
 
     events = state.get("events") if isinstance(state.get("events"), list) else []
     visible = events[-24:]
-    omitted = max(0, len(events) - len(visible))
+    total_events = max(0, int(state.get("total_event_count", len(events)) or 0))
+    omitted = max(0, total_events - len(visible))
     for event in visible:
         if not isinstance(event, dict):
             continue
