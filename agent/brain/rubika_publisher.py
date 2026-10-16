@@ -25,7 +25,7 @@ def _escape_source_markup(value: str) -> str:
 
 
 def _decorate_official_mob_caption(caption: str) -> str:
-    """Use small bold/quote decorations for official Mob news only."""
+    """Bold only the translated Persian body in official Mob news captions."""
     lines = caption.splitlines()
     if not lines or lines[0].strip() != "🎮 ماب انترتینمنت پستی منتشر کرد و گفت:":
         return caption
@@ -46,16 +46,17 @@ def _decorate_official_mob_caption(caption: str) -> str:
     while translation_lines and not translation_lines[0].strip():
         translation_lines.pop(0)
 
+    # Keep the source and both labels unformatted. Source-provided markup is
+    # escaped so an official post cannot inject bold/quote/spoiler metadata.
     safe_source = [_escape_source_markup(line) for line in source_lines]
-    quoted_source = "\n".join("> " + line if line else ">" for line in safe_source)
     safe_translation = [_escape_source_markup(line) for line in translation_lines]
-    output = ["**🎮 ماب انترتینمنت پستی منتشر کرد و گفت:**", ""]
-    if quoted_source:
-        output.extend([quoted_source, ""])
-    output.append("**📝 ترجمه فارسی:**")
-    output.extend(safe_translation)
+    output = ["🎮 ماب انترتینمنت پستی منتشر کرد و گفت:", ""]
+    output.extend(safe_source)
+    output.extend(["", "📝 ترجمه فارسی:"])
+    translated_body = "\n".join(safe_translation).strip()
+    if translated_body:
+        output.append("**" + translated_body + "**")
     return "\n".join(output)
-
 
 def _parse_formatted_caption(caption: str) -> dict[str, Any] | None:
     """Return a valid Rubika metadata payload only when the caption uses markup."""
