@@ -1,53 +1,65 @@
-# AI provider ledger — current main configuration
+# AI provider ledger — Gemini-only proposal and deployment boundary
 
-This document describes the current deployed arrangement. Older multi-provider rollout notes and Gemini/Mistral/GitHub Models experiments are historical only.
+This document describes the proposed Gemini-only branch. **The currently deployed Worker has not been updated by this PR.** The live Worker/D1 provider allowlist still needs an approved Worker deployment before the new Gemini workflow can make a model call. The new workflows check this and fail closed.
 
-## Active providers and roles
+## Intended active roles after review and deployment
 
-The active provider allowlist is **Groq** and **OpenRouter Free**. Gemini, Mistral, and GitHub Models are not active code-repair or translation providers.
-
-| Role | Active behavior |
+| Role | Proposed behavior |
 |---|---|
-| Diagnose CI failures | Groq and OpenRouter provide separate diagnoses from sanitized logs/read-only test context. |
-| Propose a code patch | Groq proposes one constrained patch. |
-| Review the patch | Groq and OpenRouter review independently. |
-| Translate official Mob news | Groq is tried first; OpenRouter is the bounded fallback if Groq returns an unusable result. |
-| Detect music in video audio | Cloudflare Workers AI, using `@cf/cloudflare/clef-omni`, handles this separately. |
+| Error diagnosis | One Gemini request through the D1 ledger. Return structured evidence, likely causes, unknowns, and read-only next checks. |
+| Official Mob news translation | One Gemini request through the D1 ledger; validate that the result is real Persian text and remove URLs from the outgoing caption. |
+| Code patching | Disabled. Gemini may not propose or apply patches, write files, open repair PRs, merge, deploy or publish. |
+| Music detection | Cloudflare Workers AI using `@cf/cloudflare/clef-omni` on extracted video audio only. Uncertain results require human review. |
 
-Workers AI must **not** be used for code repair, error diagnosis, or news translation. The old Worker translation route returns `410 translation_route_retired`. The live Worker code has a single `env.AI.run(...)` call, for audio-based music moderation. Music decisions that are uncertain require human review; they are not auto-approved for publication.
+Groq, OpenRouter, Mistral and GitHub Models are removed from the proposed active client/workflow path. Historical D1 rows and migration history are retained for audit compatibility; this does not reactivate those providers.
 
-## Metering and safety
+## Ledger and safety design
 
-Every Groq/OpenRouter repair or Mob translation request must reserve a D1 usage slot before it contacts the provider, then finish the ledger record with the result. If a reservation cannot be confirmed, the request is not sent. Ambiguous requests are not automatically retried. Safe provider error codes are retained in the ledger; raw credentials, provider response bodies and secrets must not be logged.
+Every Gemini call must reserve an entry through the authenticated Worker API before contacting the provider, then record the result. A failed or uncertain reservation blocks the request. There are no automatic API retries. Provider HTTP status/reason codes must be retained safely in the ledger, even if the outcome is unknown. Raw provider response bodies, prompts containing sensitive data, credentials and secrets must not be printed.
 
-The current Worker policy is:
+The proposed Worker limits are:
 
-- Per-provider daily cap: **18 reservations** for Groq and **18** for OpenRouter.
-- Shared daily cap: **36 reservations** across both providers.
-- Allowed roles: `diagnose`, `propose_patch`, `review_patch`, and `translate_official`.
-- The ledger schema role change is migration `0008_ai_provider_translation_role.sql`; the live D1 schema was read back and confirms `translate_official` is permitted.
-- The repository still keeps historical providers in its older migration history for data compatibility, but the live Worker allowlist and Python clients reject retired providers.
+- Gemini per-provider daily cap: 12 reservations.
+- Shared daily cap: 12 reservations across diagnosis and translation.
+- Allowed roles: `diagnose` and `translate_official` only.
+- The Python client independently enforces the same provider/role allowlist.
+- Historical database provider names are preserved; live route allowlisting is enforced by Worker code.
 
-## Automatic repair workflow
+The live Worker currently has the legacy Groq/OpenRouter allowlist. The new workflow checks the status route at `/api/brain/ai-provider/status?provider=gemini` and will not request Gemini unless the deployed Worker confirms the provider is ready.
 
-`.github/workflows/groq-openrouter-code-repair.yml` watches failures from the CI, scheduled edit-queue, cloud discovery, and live-provider-smoke workflows on `main`. It checks that the failed SHA is still the current `main`, verifies credential presence and the live D1 budget/cooldown, and applies a further safety guard for missing credentials, Rubika destination/auth failures, and provider quota or ledger errors.
+## Gemini advisory diagnosis
 
-If allowed to proceed, it needs two diagnoses, one Groq proposal, and independent Groq/OpenRouter review. The proposed diff is untrusted. It must pass the changed-file allowlist, compile checks, all Python unit tests, Worker tests, and the repository self-test in a disposable runner. Only then may the workflow open a review PR. It never auto-merges, deploys the Worker, changes secrets, changes D1 schema, or publishes to Rubika. It is fail-closed when it has no safe file context.
+`.github/workflows/gemini-error-diagnosis.yml` is bounded to two workflow attempts per UTC day and requires both repository Actions variables:
 
-The workflow has a daily cap of three non-skipped attempts. Normal successful CI runs cause the repair workflow to be skipped; this is expected and does not mean a repair failed.
+- `RUBIKA_AGENT_AI_FREE_TIER_APPROVED=true`
+- `RUBIKA_AGENT_GEMINI_ONLY_WORKER_READY=true`
 
-## Live verification evidence — 2026-10-16
+The workflow also verifies secret presence and performs a read-only D1-ledger status check. It supplies sanitized historical facts and, when available, sanitized logs from a failed scheduled/CI workflow. The model output is schema-checked and redacted before it is summarized or stored as an artifact. A Gemini HTTP 503/UNAVAILABLE result remains a failed diagnosis, not a reason to retry or to invent a root cause.
 
-- The live Groq/OpenRouter provider smoke workflow completed successfully in GitHub Actions run [38924738525](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38924738525): one ledgered request to Groq and one to OpenRouter returned usable responses. A metered Groq-first Persian-translation check also returned Persian text without a source URL. This proves these bounded calls worked at that time; it is not a guarantee of future free-tier availability.
-- The latest repository CI after the recent provider, caption, and documentation changes is [run 38929244036](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38929244036), conclusion **success**, at commit `226bf30ee7ab02d8f0f83fa29f49ddcf476d0a2d`. Earlier run `38928819444` also passed **384 tests**, Worker API tests, the installed Rubka API surface check and `agent.preflight self-test`.
-- D1 read-only queries show successful Groq/OpenRouter diagnosis calls and a successful `translate_official` call. A previous OpenRouter result was recorded as `provider_text_missing`; the adapter preserves that reason and does not blindly retry the same call.
-- Production Rubika sending is **not yet cleared**. A read-only bot-authentication preflight succeeded, but the next guard correctly stopped because the repository secret `RUBIKA_CHANNEL_GUID` still equals the known test-channel GUID. No main-channel message was sent by that preflight.
-- The Mob production publisher is still gated by the explicit Actions variable `RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014`, `config/agent_lifecycle.json` is still in test mode, and `config/mob_official_sources.json` remains test-channel-only. Therefore the five-hour Mob publisher is configured and guarded, but is not production-enabled.
+The historical evidence includes one Gemini run with HTTP 503/UNAVAILABLE and safe error code `provider_http_503`; other historical runs returned zero accessible jobs/logs; several old D1 records had the generic `provider_result_unknown` code. Those facts do **not** establish the cause of all earlier failures.
 
-## Credentials
+The previous Groq/OpenRouter code-repair workflow and multi-provider live smoke test are now inert manual-only workflows. They read no provider secrets and make no model requests.
 
-The workflow uses GitHub Actions secrets `GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `AGENT_API_TOKEN`. The official Mob publisher also needs `RUBIKA_TOKEN`, `RUBIKA_CHANNEL_GUID`, and its other configured credentials. Never commit or print secret values. Do not change secrets or bypass a destination gate in code to make a test green.
+## Official Mob translation and five-hour test automation
 
-## Important limits
+The proposed Mob translation adapter uses Gemini only and requires a D1-ledgered response that passes Persian-language validation. It does not fall back to Groq, OpenRouter, or an unmetered public translation service.
 
-Live provider smoke tests prove that individual model calls can work; they do not prove that every possible failure can be repaired automatically. A model can return incorrect reasoning or an unsafe proposal, a provider can be rate-limited, and test/live source conditions can vary. Deterministic tests, code-path restrictions, a human-reviewed PR and a separate main-channel preflight remain mandatory.
+`.github/workflows/mob-x-news-test-autopilot.yml` runs every five hours, but it is hard-locked to the test Rubika channel and gated by:
+
+- `RUBIKA_AGENT_MOB_X_TEST_AUTOPILOT_APPROVED=true`
+- `RUBIKA_AGENT_AI_FREE_TIER_APPROVED=true`
+- `RUBIKA_AGENT_GEMINI_ONLY_WORKER_READY=true`
+
+The news freshness window is based only on a verified X post `published_at` timestamp, not GitHub commit/push time. The flow checks source author, actual media, caption/translation validity and duplicate history. It handles at most 12 candidate posts per sweep, sending one at a time and stopping on any uncertain delivery. It uses the existing five-hour news window and does not change edit-queue lifecycle/birth-cutoff behavior.
+
+The production Mob workflow remains separately gated. The repository lifecycle must stay `mode=test` and the source publishing policy must remain test-channel-only until the owner separately approves production.
+
+## Verified evidence and outstanding boundary
+
+- Main CI before this PR passed 384 Python tests, Worker API tests, the Rubka API surface check and `agent.preflight self-test`.
+- The prior live Groq/OpenRouter smoke test proved individual requests worked at that time. This branch retires them from future active calls; it does not rewrite history or imply Gemini has already passed a live request in the deployed Worker.
+- No Worker deployment, D1 migration/write, secret change, Gemini API request or Rubika send is performed by this branch commit.
+- The repository Actions gates default to unset/false in a new environment, so the new diagnosis and Mob test-autopilot jobs do not make requests until approval and Worker readiness are explicitly configured.
+- A green CI run only validates the code and tests. It does not prove that the deployed Worker is updated, that Gemini API access is on a free tier, or that any live Rubika post was sent.
+
+Secrets used after explicit approval are GitHub Actions secrets, never source code. Do not bypass the gates or use an unmetered model request to test around a stale Worker.
