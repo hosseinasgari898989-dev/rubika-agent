@@ -19,6 +19,7 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0005_ai_provider_ledger.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0006_owner_daily_digest.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0007_owner_console.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0008_ai_provider_translation_role.sql").read_text(encoding="utf-8"))
 
             columns = {
                 row[1] for row in db.execute("PRAGMA table_info(items)").fetchall()
@@ -71,6 +72,7 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0005_ai_provider_ledger.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0006_owner_daily_digest.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0007_owner_console.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0008_ai_provider_translation_role.sql").read_text(encoding="utf-8"))
 
             values = (
                 "tiktok:7616247520657771796", "tiktok", "7616247520657771796",
@@ -122,6 +124,7 @@ class D1MigrationTests(unittest.TestCase):
                 "0005_ai_provider_ledger.sql",
                 "0006_owner_daily_digest.sql",
                 "0007_owner_console.sql",
+                "0008_ai_provider_translation_role.sql",
             ):
                 db.executescript((ROOT / "migrations" / name).read_text(encoding="utf-8"))
 
@@ -171,6 +174,7 @@ class D1MigrationTests(unittest.TestCase):
                 "0005_ai_provider_ledger.sql",
                 "0006_owner_daily_digest.sql",
                 "0007_owner_console.sql",
+                "0008_ai_provider_translation_role.sql",
             ):
                 db.executescript((ROOT / "migrations" / name).read_text(encoding="utf-8"))
 
@@ -218,6 +222,45 @@ class D1MigrationTests(unittest.TestCase):
         finally:
             db.close()
 
+
+    def test_provider_ledger_allows_only_the_new_translation_role(self):
+        db = sqlite3.connect(":memory:")
+        try:
+            for name in (
+                "0001_init.sql",
+                "0002_brain_metadata.sql",
+                "0003_ai_usage_daily.sql",
+                "0004_automation_queue.sql",
+                "0005_ai_provider_ledger.sql",
+                "0006_owner_daily_digest.sql",
+                "0007_owner_console.sql",
+                "0008_ai_provider_translation_role.sql",
+            ):
+                db.executescript((ROOT / "migrations" / name).read_text(encoding="utf-8"))
+
+            db.execute(
+                "INSERT INTO ai_provider_calls (call_id, usage_day, provider, role, status) VALUES (?, ?, ?, ?, ?)",
+                ("call_translation_0001", "2026-10-16", "groq", "translate_official", "reserved"),
+            )
+            row = db.execute(
+                "SELECT provider, role, status FROM ai_provider_calls WHERE call_id = ?",
+                ("call_translation_0001",),
+            ).fetchone()
+            self.assertEqual(row, ("groq", "translate_official", "reserved"))
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO ai_provider_calls (call_id, usage_day, provider, role, status) VALUES (?, ?, ?, ?, ?)",
+                    ("call_translation_0002", "2026-10-16", "groq", "unknown_role", "reserved"),
+                )
+            names = {
+                row[1] for row in db.execute("PRAGMA index_list(ai_provider_calls)").fetchall()
+            }
+            self.assertTrue({
+                "idx_ai_provider_calls_usage_day_provider",
+                "idx_ai_provider_calls_status",
+            }.issubset(names))
+        finally:
+            db.close()
 
 if __name__ == "__main__":
     unittest.main()
