@@ -76,7 +76,7 @@ def translate_to_persian(
     *,
     translator_factory: Callable[..., Any] | None = None,
 ) -> str | None:
-    """Translate official source text through Groq/OpenRouter with D1 usage accounting.
+    """Translate official source text through one ledger-accounted Gemini call.
 
     The local translator_factory hook exists only for deterministic tests. Production
     requests never fall back to an unmetered public translator or Workers AI.
@@ -117,8 +117,8 @@ def translate_to_persian(
         "\nSOURCE:\n" + source + "\nEND SOURCE"
     )
     run_id = "mobtrans_" + uuid4().hex[:32]
-    last_failure = "translation_provider_unavailable"
-    for provider in ("groq", "openrouter"):
+    last_failure = "gemini_translation_unavailable"
+    for provider in ("gemini",):
         try:
             result = call_provider_with_ledger(
                 provider=provider,
