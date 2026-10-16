@@ -101,13 +101,15 @@ class AIProviderLedgerTests(unittest.TestCase):
         }
         self.assertEqual(providers, {"gemini", "groq", "openrouter", "github_models"})
 
-    def test_worker_enables_gemini_groq_openrouter_github_models_and_shared_daily_cap(self):
+    def test_worker_enables_only_groq_openrouter_and_shared_daily_cap(self):
         source = WORKER.read_text(encoding="utf-8")
-        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6, github_models: 6 });", source)
-        self.assertIn("const CODE_AI_TOTAL_DAILY_LIMIT = 18;", source)
+        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ groq: 6, openrouter: 6 });", source)
+        self.assertIn("const CODE_AI_TOTAL_DAILY_LIMIT = 12;", source)
         self.assertIn("CODE_AI_TOTAL_DAILY_LIMIT", source)
         self.assertIn('"code_ai_provider_not_enabled"', source)
         self.assertIn("CODE_AI_PROVIDER_LIMITS[provider]", source)
+        self.assertNotIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini:", source)
+        self.assertNotIn("github_models: 6", source)
 
     def test_reservation_is_atomic_and_rejects_active_cooldown(self):
         source = WORKER.read_text(encoding="utf-8")
