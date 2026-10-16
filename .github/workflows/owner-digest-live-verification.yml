@@ -54,3 +54,51 @@ jobs:
           if result.get("sent") is not True or result.get("updated") is not True:
               raise SystemExit("same_message_edit_not_verified")
           PY
+
+      - name: Read-only probe of owner chat identity for Stage 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          token = os.environ["RUBIKA_TOKEN"]
+          owner_chat_id = os.environ["RUBIKA_OWNER_CHAT_ID"]
+          url = "https://botapi.rubika.ir/v3/" + token + "/getUpdates"
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({"limit": 20}).encode(),
+              headers={"Content-Type": "application/json", "Accept": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=15) as response:
+              payload = json.loads(response.read(256 * 1024).decode("utf-8"))
+          data = payload.get("data") if isinstance(payload, dict) else None
+          updates = data.get("updates", []) if isinstance(data, dict) else []
+          matches = []
+          for update in updates if isinstance(updates, list) else []:
+              if not isinstance(update, dict):
+                  continue
+              message = update.get("new_message")
+              if not isinstance(message, dict):
+                  continue
+              chat_id = str(update.get("chat_id") or message.get("chat_id") or "")
+              if chat_id != owner_chat_id:
+                  continue
+              matches.append({
+                  "new_message": update.get("type") == "NewMessage",
+                  "chat_equals_sender": str(message.get("sender_id") or "") == chat_id,
+                  "sender_present": bool(message.get("sender_id")),
+                  "group_flag": bool(update.get("is_group") or message.get("is_group")),
+                  "chat_type": str(update.get("chat_type") or message.get("chat_type") or update.get("type") or "")[:24],
+              })
+          print(json.dumps({
+              "api_status_ok": isinstance(payload, dict) and payload.get("status") == "OK",
+              "updates_seen": len(updates) if isinstance(updates, list) else 0,
+              "owner_chat_updates": matches[:5],
+              "message_text_logged": False,
+              "identifiers_logged": False,
+          }, sort_keys=True))
+          PY
