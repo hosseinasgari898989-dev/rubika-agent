@@ -1,10 +1,11 @@
 name: Online Termux discovery and queue sync
 
 on:
-  # Run a lightweight gate every 30 minutes; it starts collection only after five hours since
-  # the last successful D1 intake, avoiding the midnight gap in "*/5" cron hours.
+  # Offset the twice-hourly gate away from the top of the hour to reduce queue delays.
+  # Updating this cron also reactivates a schedule that GitHub may have stopped delivering.
+  # Collection itself still starts only after five hours since the last successful D1 intake.
   schedule:
-    - cron: "2,32 * * * *"
+    - cron: "7,37 * * * *"
   workflow_dispatch:
 
 permissions:
