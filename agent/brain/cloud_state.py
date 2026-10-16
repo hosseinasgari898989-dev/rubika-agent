@@ -96,26 +96,8 @@ class CloudState:
         return result
 
     def translate_official(self, source_text: str) -> str:
-        """Translate an official news excerpt through the authenticated Cloudflare AI route."""
-        if not isinstance(source_text, str) or not source_text.strip():
-            raise CloudStateError("translation_text_required")
-        if len(source_text) > 4500:
-            raise CloudStateError("translation_text_too_long")
-        result = self._request(
-            "POST",
-            "/api/brain/translate-official",
-            {"text": source_text},
-            max_body_bytes=20 * 1024,
-        )
-        translation = result.get("translation")
-        if not isinstance(translation, str) or not translation.strip():
-            raise CloudStateError("control_api_translation_missing")
-        clean = re.sub(r"\s+", " ", translation).strip()
-        if not re.search(r"[\u0600-\u06FF]", clean):
-            raise CloudStateError("control_api_translation_not_persian")
-        if re.search(r"[\u0400-\u04FF]", clean):
-            raise CloudStateError("control_api_translation_wrong_script")
-        return clean[:6500]
+        """Retired: official news translation now uses the metered Groq/OpenRouter client."""
+        raise CloudStateError("translation_route_retired")
 
     def supervise_error(
         self,
