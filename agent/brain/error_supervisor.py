@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -167,7 +168,8 @@ def diagnose_with_gemini(
     except Exception:
         return {"ok": False, "status": "diagnostic_client_unavailable", "error_code": "diagnostic_client_unavailable", **fallback}
 
-    safe_context = redact(str(context or ""))[:12000]
+    secrets = tuple(os.getenv(key, "").strip() for key in ("GEMINI_API_KEY", "AGENT_API_TOKEN"))
+    safe_context = redact(str(context or ""), secrets=secrets)[:12000]
     if not safe_context.strip():
         return {"ok": False, "status": "diagnostic_context_missing", "error_code": "diagnostic_context_missing", **fallback}
     prompt = (
@@ -223,6 +225,7 @@ def diagnose_with_gemini(
         if confidence not in {"low", "medium", "high"}:
             confidence = "low"
         return {
+            **fallback,
             "ok": True,
             "status": "diagnosed",
             "source": "gemini_advisory",
@@ -234,7 +237,6 @@ def diagnose_with_gemini(
             "next_checks": clean_items(data.get("next_checks")),
             "confidence": confidence,
             "usage": dict(result.usage) if isinstance(result.usage, Mapping) else {},
-            **fallback,
         }
     except UsageLedgerError as exc:
         return {"ok": False, "status": "usage_ledger_blocked", "error_code": exc.code, **fallback}
