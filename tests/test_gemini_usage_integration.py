@@ -179,7 +179,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         )
         response = FakeResponse({"ok": True, "reserved": True, "call_id": CALL_ID}, status=201)
         with patch.object(client._opener, "open", return_value=response) as open_request:
-            result = client.reserve(provider="groq", role="propose_patch", call_id=CALL_ID)
+            result = client.reserve(provider="gemini", role="diagnose", call_id=CALL_ID)
         request = open_request.call_args.args[0]
         headers = {key.lower(): value for key, value in request.header_items()}
         self.assertEqual(request.full_url, "https://example.invalid/api/brain/ai-provider/reserve")
@@ -188,7 +188,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertEqual(result["call_id"], CALL_ID)
 
     def test_ledger_client_allowlist_matches_enabled_providers(self):
-        expected = {"groq", "openrouter"}
+        expected = {"gemini"}
         self.assertEqual(ALLOWED_PROVIDERS, expected)
         client = CodeAIUsageLedger(
             "https://example.invalid",
@@ -228,32 +228,24 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(UsageLedgerError, "usage_ledger_token_missing_or_short"):
             CodeAIUsageLedger("https://example.invalid", "short")
 
-    def test_active_repair_workflow_uses_groq_and_openrouter_only(self):
+    def test_active_ai_workflows_are_gemini_diagnosis_only_and_gated(self):
         root = Path(__file__).resolve().parents[1]
-        workflow = (root / ".github" / "workflows" / "groq-openrouter-code-repair.yml").read_text(encoding="utf-8")
-        self.assertIn("python -m agent.brain.multi_ai_code_repair", workflow)
-        self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
-        self.assertIn("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}", workflow)
-        self.assertIn("OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}", workflow)
-        self.assertIn("CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("CODE_AI_PROPOSER_PROVIDER: groq", workflow)
-        self.assertIn("CODE_AI_REVIEWER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("status?provider=$provider", workflow)
-        self.assertNotIn("GITHUB_MODELS_MODEL", workflow)
-        self.assertNotIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
-        self.assertNotIn("GEMINI_API_KEY", workflow)
-        self.assertNotIn("AI.run", workflow)
-        self.assertIn('- "Daily Rubika queue processor"', workflow)
-        self.assertIn('- "Online Termux discovery and queue sync"', workflow)
-        self.assertIn('contains(fromJSON(\'["push","schedule","workflow_dispatch"]\')', workflow)
-        self.assertIn("id: incident_safety", workflow)
-        self.assertIn("still pointed at the test channel", workflow)
-        self.assertIn("bot_api_status=", workflow)
-        self.assertIn("code_ai_daily_budget_exhausted", workflow)
-        self.assertIn('if: steps.incident_safety.outputs.should_run == \'true\'', workflow)
-        self.assertIn('if: steps.validation.outputs.tests_passed == \'true\'', workflow)
-        self.assertIn('attempts="$(python', workflow)
-        self.assertIn('"$attempts" -ge 4', workflow)
+        diagnostic = (root / ".github" / "workflows" / "gemini-error-diagnosis.yml").read_text(encoding="utf-8")
+        retired_repair = (root / ".github" / "workflows" / "groq-openrouter-code-repair.yml").read_text(encoding="utf-8")
+        retired_smoke = (root / ".github" / "workflows" / "multi-ai-live-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("RUBIKA_AGENT_AI_FREE_TIER_APPROVED", diagnostic)
+        self.assertIn("RUBIKA_AGENT_GEMINI_ONLY_WORKER_READY", diagnostic)
+        self.assertIn("status?provider=gemini", diagnostic)
+        self.assertIn("--gemini-diagnosis", diagnostic)
+        self.assertIn("No code changes were made", diagnostic)
+        self.assertNotIn("GROQ_API_KEY", diagnostic)
+        self.assertNotIn("OPENROUTER_API_KEY", diagnostic)
+        self.assertNotIn("multi_ai_code_repair", diagnostic)
+        self.assertNotIn("GROQ_API_KEY", retired_repair)
+        self.assertNotIn("OPENROUTER_API_KEY", retired_repair)
+        self.assertNotIn("GEMINI_API_KEY", retired_smoke)
+        self.assertNotIn("api.groq.com", retired_smoke)
+        self.assertIn("makes no provider calls", retired_smoke)
         provider_source = (root / "agent" / "brain" / "ai_provider_clients.py").read_text(encoding="utf-8")
         helper_source = provider_source.split("def call_provider_with_ledger(", 1)[1]
         self.assertLess(helper_source.index("ledger.reserve("), helper_source.index("invoke_provider("))
