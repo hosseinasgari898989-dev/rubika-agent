@@ -1,74 +1,79 @@
-# Rubika-Agent — مستند اصلی انتقال گفتگو
+# Rubika-Agent — checkpoint اصلی و به‌روز
 
-این سند منبع انتقال بین گفتگوهاست. پیش از هر کار، وضعیت زندهٔ GitHub و Cloudflare و آخرین Workflowها را بخوان؛ SHAهای پیام‌های قدیمی به‌تنهایی قابل اعتماد نیستند. این متن اجازهٔ عبور از guardها نیست.
+این سند وضعیت جاری است، نه فهرست کارهای قدیمی. قبل از ادامه همیشه SHA فعلی main، Runها، وضعیت Worker/D1 و gateهای انتشار را دوباره از سرویس زنده بخوان. هیچ secret/tokenی را چاپ نکن و هیچ ارسال روبیکا را صرفاً برای آزمایش فعال نکن.
 
-## هدف و قواعد همکاری
-- مخزن: hosseinasgari898989-dev/rubika-agent
+## مشخصات و مرزهای امن
+
+- GitHub: hosseinasgari898989-dev/rubika-agent
 - Worker: https://rubika-agent.h98609294.workers.dev/
-- D1: rubika-agent-db؛ شناسه 70634eb9-70a8-48e8-b254-903a42e93304
-- کانال آزمایشی شناخته‌شده: c0EFohK0f3174377fb6fa422d3ccb230
-- هرگز secret یا token را در خروجی چاپ نکن.
-- هیچ کاری را موفق اعلام نکن مگر اینکه خروجی تازهٔ GitHub/Actions/D1/Worker آن را تأیید کند.
-- ترجیح کاربر: فارسی، کوتاه و قابل فهم، بدون بازسازی معماری یا پرسش‌های تأیید تکراری. مسیرهای موجود را هماهنگ کن.
-- انتشار واقعی باید از کانال درست عبور کند، تکراری‌ها نباید دوباره ارسال شوند و وضعیت ارسال نامشخص باید باعث توقف امن شود.
+- D1: rubika-agent-db، شناسه 70634eb9-70a8-48e8-b254-903a42e93304
+- شناسهٔ کانال تست شناخته‌شده: c0EFohK0f3174377fb6fa422d3ccb230
+- انتشار واقعی فقط بعد از تأیید مقصد اصلی و عبور از preflight read-only.
+- در این دوره هیچ پیام/ویدئویی در کانال اصلی ارسال نشده است. preflight معتبر بودن Bot را تأیید کرد، اما مقصد را به‌درستی مسدود کرد چون secret مربوط به RUBIKA_CHANNEL_GUID هنوز شناسهٔ کانال تست است.
+- Worker زنده آخرین بار در ممیزی روی نسخهٔ 4f72c97e-75dd-4e9c-9c73-73e149027478 با ۱۰۰٪ ترافیک بود؛ health و اتصال D1 تأیید شدند. برای وضعیت تازه‌تر، نسخهٔ فعلی را از Cloudflare دوباره بخوان.
+- Lifecycle همچنان config/agent_lifecycle.json با mode=test است. آن را برای راه‌اندازی ادیت‌ها به production تغییر نده.
 
-## تصمیم‌های محصول
-1. اطلاع‌رسانی خصوصی سازنده باید در یک پیام روزانهٔ قابل ویرایش با edit_message_text جمع شود. مسیر agent/brain/owner_notify.py در main شناسهٔ پیام را از Worker/D1 می‌گیرد و همان پیام را ویرایش می‌کند. Workflow صف باید همین کد main را اجرا کند؛ نسخهٔ قدیمی شاخهٔ agent-brain-mega-v1 فقط send_message داشت.
-2. صف ادیت TikTok: هدف چهار انتشار موفق در روز است. خطاهای قطعی نباید کل صف را متوقف کنند؛ وضعیت uncertain نباید خودکار تکرار شود. بررسی منبع، مرتبط بودن محتوا، اعتبارسنجی مدیا و ضدتکرار باقی بمانند.
-3. مرز تولد/birth cutoff فقط برای خبر رسمی Mob است. برای ادیت‌ها نباید agent_lifecycle باعث رد شدن ویدئو شود. فایل‌ها config/agent_lifecycle.json و agent/lifecycle.py باید در مسیر خبر Mob اعمال شوند، نه مسیر ادیت.
-4. انتشار خودکار خبر Mob مستقل از ادیت‌هاست. X از حساب رسمی @mobgamesstudios راستی‌آزمایی شود؛ وب‌سایت Mob منبع اصلی و YouTube رسمی و Steam منابع پشتیبان‌اند. خبر قابل انتشار باید زمان واقعی و تأییدشده در پنجرهٔ پنج‌ساعته داشته باشد، رسانهٔ اصلی واقعی و معتبر داشته باشد، کپشن بدون URL و ترجمهٔ فارسی سالم داشته باشد، ضدتکرار شود و تمام خبرهای واجد شرایط در پنجره پردازش شوند. پس از ارسال نامشخص توقف امن. رویداد Mob نیز باید در پیام واحد سازنده جمع شود.
-5. Workers AI فقط برای تشخیص وجود موسیقی در صدای ویدئو است. ترجمهٔ خبر باید از مسیر Gemini یا مسیر مجاز کنترل‌شده باشد؛ تغییر کد به‌تنهایی اثبات Deploy یا Migration نیست.
-6. Gemini باید با یک درخواست کنترل‌شده خطاهای تاریخی را تحلیل کند. خطاهای provider در ledger باید کد واقعی و امن داشته باشند؛ وضعیت unknown از ستون outcome معلوم است و نباید error_code عمومی اطلاعات تشخیصی را پاک کند. تحلیل AI مجوز patch خودکار یا ادغام نیست.
-7. Groq و OpenRouter را بدون آزمایش مستقل Gemini حذف نکن. در ترکیب قبلی برای diagnose/review هستند؛ خطای rate-limit یا خروجی نامشخص‌شان می‌تواند کل تعمیر را متوقف کند. با شواهد واقعی و وضعیت هزینه/quota تصمیم بگیر.
+## موتورهای هوش مصنوعی
 
-## مسیرهای مهم
-- .github/workflows/daily-queue-processor.yml — اجرای صف ادیت؛ سقف روزانه و گزارش خصوصی.
-- .github/workflows/owner-daily-digest.yml — شروع پیام گزارش ۲۴ ساعته.
-- .github/workflows/owner-digest-refresh.yml — تازه‌سازی پیام واحد از رویدادها.
-- agent/brain/owner_notify.py — ثبت رخداد، ساخت پیام واحد و ویرایش پیام قبلی.
-- agent/brain/queue_worker.py — پردازش صف و انتشار ادیت؛ birth cutoff مربوط به Mob نباید اجرا شود.
-- agent/brain/queue_intake.py — اعتبارسنجی metadata و افزودن به D1.
-- termux/daily_discovery.py و .github/workflows/termux-docker-discovery.yml — کشف metadata؛ Workflow هر حدود پنج ساعت گردآوری کامل می‌کند و چیزی منتشر نمی‌کند.
-- agent/brain/mob_official_trial.py — کشف، ترجمه، اعتبارسنجی مدیا و انتشار خبر رسمی Mob.
-- agent/discovery/termux_mob_x.py — اعتبارسنجی حساب رسمی، زمان واقعی X و مدیای اصلی.
-- agent/discovery/mob_official_complete.py — ترکیب سایت رسمی، X، YouTube و Steam با حذف موارد تکراری.
-- config/mob_official_sources.json — منابع رسمی و وضعیت انتشار Mob.
-- config/agent_lifecycle.json و agent/lifecycle.py — مرز شروع که باید فقط برای خبر رسمی Mob اعمال شود.
-- agent/brain/ai_provider_clients.py و agent/brain/gemini_usage_client.py — فراخوانی provider و ثبت بودجه/نتیجه در D1.
-- .github/workflows/gemini-only-live-smoke.yml — آزمایش محدود Gemini و تحلیل ساختاریافته.
-- agent/brain/error_supervisor.py — قبلاً فقط راهنمای محلی deterministic بود؛ Gemini فعال نیست مگر کد مسیر واقعی آن را نشان دهد.
-- src/index.js — کد Worker؛ از Cloudflare نسخهٔ زنده/health را بررسی کن.
+### Groq و OpenRouter
 
-## شواهد واقعی آخرین ممیزی
-- main قبل از این اصلاح روی SHA a9a707effe4ea0d2313e5bc133138e5f091009ed بود؛ بعد از commitها SHA فعلی را از API بخوان.
-- Worker نسخهٔ ۶۴، health موفق و D1 متصل داشت؛ API status مقدار publishing=false نشان می‌داد.
-- Run انتشار ادیت 38898409972 در 2026-10-16 موفق شد و ویدئوی https://www.tiktok.com/@menezxl9/video/7696229912578985237 را فرستاد. گزارش فایل خروجی MP4 را حدود ۹٫۷ MB ثبت کرد؛ افت کیفیت هنوز با bitrate/رزولوشن منبع و خروجی مقایسه نشده است.
-- همان اجرا یک انتشار موفق داشت، workflow با daily-limit 1 اجرا شد و صف ۶۴ مورد انتظار نشان داد.
-- D1 در 2026-10-15: Gemini diagnose چهار call با status unknown و error_code عمومی provider_result_unknown؛ Gemini propose_patch یک موفق و یک unknown؛ Groq diagnose دو موفق؛ OpenRouter یک موفق و یک unknown؛ Mistral دو rate_limited. علت دقیق خطای تاریخی Gemini از این داده‌ها به‌تنهایی قابل بازیابی نیست.
-- GitHub Runs 38893646505 و 38886008170 با نام فایل workflow و failure برگشتند، اما API برایشان zero jobs/بدون logs نشان داد؛ این احتمال خطای پیکربندی Workflow را مطرح می‌کند اما HTTP error واقعی Gemini را ثابت نمی‌کند.
-- PR #29 (Workers AI فقط موسیقی/Gemini translation) و #30 (code repair/GitHub Models) در ممیزی قبلی draft بودند؛ وضعیت را دوباره بخوان، تغییر تکراری نساز.
-- rubika-main.zip در کتابخانه هنگام بررسی پیدا نشد. اگر لازم است از API کتابخانه استفاده شود، ابتدا فایل را واقعاً پیدا و باز کن.
+Gemini، Mistral و GitHub Models از مسیر فعال تعمیر کد/ترجمه خارج شده‌اند. تنظیم فعلی:
 
-## چک‌لیست ادامه
-1. بازخوانی Main head، PRها و runهای جدید.
-2. بررسی نتیجهٔ CI/test واقعی؛ شکست‌ها را رفع کن.
-3. اجرای Gemini با حداکثر یک درخواست، ledger و error code دقیق؛ نتیجهٔ واقعی و تشخیص را بخوان.
-4. پس از تأیید Gemini، ترجمهٔ Mob را از Workers AI جدا کن و هر Migration/Deploy لازم را واقعاً کنترل کن.
-5. سیستم Mob: timestamp تأییدشدهٔ پنج ساعت اخیر، رسانهٔ اصلی، کپشن/ترجمه، ضدتکرار، چند خبر در همان پنجره و پیام واحد مالک.
-6. در پایان فقط ادعاهایی را بیان کن که تست، Run یا Deployment واقعی ثابت کرده است.
+- تشخیص خطا: Groq و OpenRouter تشخیص مستقل ارائه می‌کنند.
+- پیشنهاد اصلاح: Groq.
+- بازبینی: Groq و OpenRouter به‌صورت مستقل.
+- ترجمهٔ خبر Mob: Groq اول، OpenRouter فقط به‌عنوان fallback محدود.
+- بودجهٔ D1: ۱۸ رزرو روزانه برای هر Provider و سقف مشترک ۳۶.
+- نقش‌های مجاز شامل diagnose، propose_patch، review_patch، translate_official هستند. Migration با نام 0008_ai_provider_translation_role.sql برای نقش ترجمه ساخته شده و schema زنده بررسی شده است.
 
-## دستور شروع در گفتگوی تازه
-«این سند را بخوان؛ سپس وضعیت فعلی main، PRها، CI، Worker version/health و جدول‌های D1 را بررسی کن. تغییرات تأییدشده را تکرار نکن، مسیر موازی نساز و secretها را چاپ نکن. کارهای باقی‌مانده را از وضعیت واقعی ادامه بده.»
+تمام درخواست‌ها باید از ledger در D1 عبور کنند. رزرو ناموفق یعنی درخواست ارسال نمی‌شود؛ خطاهای مبهم خودکار retry نمی‌شوند. خروجی مدل قابل اعتماد فرض نمی‌شود. اصلاح خودکار کد فقط پس از دو تشخیص، پیشنهاد محدود، دو بازبینی، allowlist و تست‌های ثابت می‌تواند PR بسازد؛ merge خودکار ندارد.
 
-## به‌روزرسانی زنده پس از ادغام PR #31 — 2026-10-16
-- PR #31 ادغام شد؛ SHA اصلی آن پس از ادغام `8730cbd50f48d934134f02a71d73b398a0f58a73` بود. سپس دو اصلاح مستقیم کوچک در main انجام شد: جابه‌جایی پیام شروع صف به بعد از نصب وابستگی‌ها (برای اینکه `rubka` نصب شده باشد) و بازگرداندن gate انتشار Mob؛ SHA فعلی را همیشه از GitHub تازه بگیر.
-- هر دو CI پیش از ادغام PR #31 سبز بودند: Agent brain checks run `38909973302` و Cloud bootstrap checks `38909973047`. Bootstrap checks پس از hotfix پیام شروع run `38910430626` نیز موفق شد. برای commit بعدی gate انتشار Mob، run `38910593198` در آخرین بررسی تکمیل و موفق بود.
-- آزمایش واقعی Gemini در run `38910142359` و تلاش مجدد همان job هر دو در مرحلهٔ درخواست Gemini خطا دادند: HTTP 503، reason `UNAVAILABLE`، کد امن `provider_http_503` و پیام اینکه مدل فعلاً تقاضای بالایی دارد. این نشان می‌دهد کلید/ledger از مرحلهٔ بررسی تنظیمات عبور کردند، اما **مدل پاسخ تحلیلی نداد**؛ پس علت تاریخی واقعی هنوز از طرف Gemini تأیید نشده است. مدل `gemini-3.8-flash` در مستندات جاری Google مدل پایدار است؛ 503 به‌تنهایی دلیل مدل نامعتبر یا خطای دائمی نیست. فعلاً درخواست‌های بیشتر را پشت‌سرهم نفرست.
-- چون Gemini هنوز پاسخ نداده، Groq/OpenRouter را بازنشسته نکن؛ فعلاً مدرک کافی برای جایگزین شدن Gemini در repair/translation وجود ندارد.
-- پیام شروع صف اکنون پس از `pip install -r requirements.txt` اجرا می‌شود تا کتابخانهٔ Rubika در دسترس باشد.
-- مسیر Mob در main پنجرهٔ ۵ ساعته را با `published_at` تأییدشده برای X اعمال می‌کند و می‌تواند چند خبر را پشت‌سرهم بررسی کند؛ هر اجرای غیرمنتظره/نامشخص متوقف می‌شود. بااین‌حال انتشار فعلاً **غیرفعال می‌ماند**: `RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014` باید صریحاً `approved` شود، `config/agent_lifecycle.json` هنوز `mode=test` است، و `config/mob_official_sources.json` همچنان test-channel-only می‌باشد. همچنین تغییر ترجمه به Gemini در PR #29 هنوز جداگانه بررسی/ادغام و Worker/Migration آن مستقر نشده است. پس هنوز نباید Mob را production-ready معرفی کرد.
-- Workflow قدیمی `.github/workflows/gemini-code-assistant.yml` همچنان با نام خود فایل شکست می‌خورد و API آن صفر job برمی‌گرداند؛ علت دقیق خطای راه‌اندازی آن در خروجی قابل دسترسی مشخص نشده. این workflow واقعاً مدل یا patch را اجرا نکرده؛ قبل از بازنویسی بزرگ، تشخیص اعتبار YAML/trigger آن لازم است.
+Workflow فعال: .github/workflows/groq-openrouter-code-repair.yml. این مسیر CIهای شکست‌خورده و چند workflow زمان‌بندی‌شده را می‌بیند، اما شکست‌های کلید/دسترسی کانال/سهمیه را به‌عنوان guard تشخیص می‌دهد و از تلاش برای «اصلاح کد» آن‌ها جلوگیری می‌کند. محدودیت فعلی: حداکثر سه تلاش غیر-skipped در روز.
 
-## فرمان ادامه از همین checkpoint
-«main فعلی و آخرین Runها را تازه بخوان. اطلاع‌رسانی تک‌پیام و سقف چهار ادیت را حفظ کن. خطای Gemini فعلی 503/UNAVAILABLE است؛ حذف Groq/OpenRouter و فعال‌سازی Mob production را تا پاسخ واقعی Gemini و ترجمهٔ کنترل‌شده انجام نده. PR #29 و وضعیت deploy/migration را بازبینی کن؛ هیچ secret را چاپ نکن.»
+### Cloudflare Workers AI
 
+Workers AI فقط برای تشخیص وجود موسیقی در صدای ویدئو با مدل @cf/cloudflare/clef-omni است. نتیجهٔ نامطمئن نیازمند بازبینی انسانی است. ترجمهٔ خبر یا تعمیر کد از Workers AI استفاده نمی‌کند. مسیر قدیمی /api/brain/translate-official پاسخ 410 translation_route_retired می‌دهد. Worker کد جاری فقط یک env.AI.run(...) دارد و آن برای تشخیص موسیقی است.
+
+### شواهد تست
+
+- GitHub Actions run 38929244036 روی SHA 226bf30ee7ab02d8f0f83fa29f49ddcf476d0a2d موفق شد.
+- Run 38928819444 نیز ۳۸۴ تست Python را با موفقیت اجرا کرد؛ تست‌های Worker، بررسی سطح API کتابخانهٔ Rubka و agent.preflight self-test هم موفق شدند.
+- Live provider smoke run 38924738525 یک درخواست واقعی و ledger-accounted به Groq و یک درخواست به OpenRouter را موفق ثبت کرد. یک بررسی محدود ترجمهٔ فارسی نیز موفق بود. این شواهد کارکرد همان درخواست‌ها را ثابت می‌کنند، نه دسترس‌پذیری دائمی رایگان یا موفقیت همهٔ تعمیرهای ممکن.
+- D1 شامل درخواست‌های موفق Groq/OpenRouter، از جمله diagnose و یک translate_official موفق است؛ خطای قدیمی provider_text_missing نیز با کد واقعی ثبت شده است.
+- تست‌های Rubka از قابلیت‌های metadata و کپشن media پشتیبانی می‌کنند؛ live post با قالب‌بندی در کانال اصلی انجام نشده است.
+
+## مسیر ادیت‌ها و صف
+
+- کشف ابری فعال در .github/workflows/termux-docker-discovery.yml است: gate هر ۳۰ دقیقه اجرا می‌شود و فقط پس از گذشت ۵ ساعت از intake موفق D1، Termux Docker را برای کشف metadata به‌کار می‌گیرد. این مسیر روی گوشی فرمان روزانه نمی‌خواهد و خود ویدئو دانلود یا منتشر نمی‌کند.
+- گزارش metadata پس از بررسی به صف D1 اضافه می‌شود. پردازش صف در .github/workflows/daily-queue-processor.yml روزانه ساعت 07:00 UTC اجرا می‌شود و سقف آن حداکثر ۴ انتشار موفق است. برای هر آیتم اعتبارسنجی مدیا/منبع و ضدتکرار لازم است؛ وضعیت uncertain نباید خودکار دوباره ارسال شود.
+- آخرین SELECT فقط‌خواندنی روی D1: queued=64, sent=3, skipped=6, failed=1. این شمارش ممکن است تغییر کند؛ قبل از هر تصمیم تازه دوباره بخوان.
+- چهار انتشار روزانه یک سقف موفقیت است، نه تضمین اینکه هر روز چهار ویدئو واجد شرایط پیدا می‌شود.
+- تغییر مقصد اصلی فقط از طریق secret درست RUBIKA_CHANNEL_GUID انجام شود. Workflow صف همان کانال secret را استفاده می‌کند و وقتی مقدار برابر شناسهٔ کانال تست باشد، عمداً متوقف می‌شود.
+
+## خبرهای رسمی Mob و پنجرهٔ پنج‌ساعته
+
+- منابع رسمی: وب‌سایت Mob در اولویت، X حساب @mobgamesstudios با راستی‌آزمایی نویسنده و زمان انتشار، YouTube رسمی و Steam به‌عنوان منابع پشتیبان.
+- مسیر در agent/brain/mob_official_trial.py و .github/workflows/mob-x-news-production.yml است. پنجرهٔ پنج‌ساعته بر پایهٔ published_at تأییدشدهٔ خود خبر است، نه زمان ایجاد commit در GitHub. خبرهای واجد شرایط داخل بازه می‌توانند یکی‌یکی پردازش شوند؛ رسانهٔ واقعی و کپشن/ترجمهٔ معتبر لازم است و ارسال نامشخص باعث توقف امن می‌شود.
+- اما Workflow انتشار Mob فعلاً با متغیر RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 gate شده است؛ config/agent_lifecycle.json هنوز test است و config/mob_official_sources.json هنوز test-channel-only است. پس زمان‌بندی تعریف‌شده است ولی انتشار production خبر Mob فعال نیست.
+- پیش از فعال کردن این مسیر باید مقصد اصلی واقعی را در secret RUBIKA_CHANNEL_GUID ثبت و preflight read-only را موفق کرد؛ سپس gate و تنظیمات production خبر Mob را جداگانه بازبینی و با رضایت صریح مالک فعال کرد. این کار نباید lifecycle ادیت‌ها را تغییر دهد.
+
+## Rubka formatting و کتابخانه
+
+نسخهٔ CI برابر rubka==8.1.7 است. Parser داخل rubka/metadata.py قالب‌های Bold، Italic، Underline، Strike، Spoiler، Quote، Inline code، Code block و Link را به metadata تبدیل می‌کند. متدهای media سطح‌بالا metadata را عبور نمی‌دادند؛ agent/brain/rubika_publisher.py اکنون برای کپشن قالب‌بندی‌شده فایل را یک بار upload می‌کند و با sendFile متن parseشده و metadata را می‌فرستد. کپشن‌های ساده همچنان از متدهای عادی media استفاده می‌کنند؛ ارسال قالب‌بندی‌شده فقط یک بار تلاش می‌شود تا ابهام شبکه موجب duplicate نشود.
+- تیتر/نام کانال کپشن ادیت با markup بولد شده است.
+- خبر Mob تیتر بولد، نقل‌قول منبع و برچسب ترجمهٔ بولد دارد؛ متن منبع از تزریق markup محافظت می‌شود.
+- unit testهای mock برای payloadهای Bold/Quote/Spoiler وجود دارد، ولی هنوز تأیید رسانه‌ای زنده در کانال اصلی نداریم.
+
+## کاری که مانع انتشار اصلی است
+
+1. در GitHub: Settings → Secrets and variables → Actions → RUBIKA_CHANNEL_GUID را به GUID واقعی کانال اصلی تغییر بده. توکن/مقدار secret را در چت نفرست. مقدار فعلی همان کانال تست است و به همین علت مسیر عمداً متوقف می‌شود.
+2. اجرای workflow .github/workflows/rubika-main-channel-preflight.yml با workflow_dispatch باید تأیید کند Bot با get_me() احراز هویت می‌شود و get_chat() برای GUID اصلی موفق است؛ این preflight پیام نمی‌فرستد.
+3. سپس تصمیم جداگانه دربارهٔ فعال‌سازی production برای خبرهای Mob لازم است. پیش از آن، هیچ‌کدام از guardها را با تغییر کد دور نزن.
+
+## قواعد ادامه
+
+- اول وضعیت تازهٔ main, Actions, Worker health/deployment, D1 counts و gateها را بخوان.
+- فقط ادعاهایی را موفق اعلام کن که خروجی تازه ثابت کرده است.
+- هیچ secret، raw provider response یا شناسهٔ خصوصی را در گزارش چاپ نکن.
+- Worker/D1 را دستی deploy/migrate نکن؛ migration 0008 در این checkpoint قبلاً روی D1 بررسی شده است.
+- هیچ PR قدیمی Gemini/Mistral/GitHub Models را صرفاً برای مرتب‌سازی merge نکن؛ تغییرات فعلی main جایگزین مسیرهای قدیمی شده‌اند.
