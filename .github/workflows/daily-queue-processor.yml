@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "0 7 * * *"
   workflow_dispatch:
+    inputs:
+      publish_four_tiktok_test:
+        description: "Explicitly confirm up to four queued TikTok videos will be sent to the fixed test channel"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -14,7 +20,8 @@ concurrency:
 
 jobs:
   process-edit-queue:
-    # Production edit publishing targets only the owner-configured channel secret; no GUID is printed.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_four_tiktok_test == true }}
+    # Manual trials require an explicit input and are hard-locked to the known test channel.
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -52,11 +59,23 @@ jobs:
             missing=1
           fi
           if [[ "$missing" -ne 0 ]]; then exit 2; fi
-          if [[ "${RUBIKA_CHANNEL_GUID:-}" == "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
-            echo "::error::Production edit publishing is still pointed at the test channel. Refusing to publish."
-            exit 2
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "${{ inputs.publish_four_tiktok_test }}" != "true" ]]; then
+              echo "::error::Manual four-video test was not explicitly confirmed; no media will be published."
+              exit 2
+            fi
+            if [[ "${RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
+              echo "::error::Manual four-video test can target only the fixed Rubika test channel."
+              exit 2
+            fi
+            echo "Explicit manual trial confirmed; this run is locked to the test channel and capped at four successful TikTok posts."
+          else
+            if [[ "${RUBIKA_CHANNEL_GUID:-}" == "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
+              echo "::error::Scheduled publishing is still pointed at the test channel; refusing to publish."
+              exit 2
+            fi
+            echo "Scheduled publishing destination is not the test channel; daily successful-post cap is four."
           fi
-          echo "Target secret is present and not the known test channel; daily successful-post cap is four."
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
