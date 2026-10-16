@@ -677,11 +677,11 @@ const OWNER_DIGEST_CATEGORIES = new Set(["info", "success", "error", "ai_success
 function safeOwnerDigestText(value, max = 500) {
   if (typeof value !== "string") return "";
   return value
-    .replace(/Bearer\\s+[^\\s]+/gi, "[redacted]")
-    .replace(/(?:token|password|secret|authorization|cookie)\\s*[:=]\\s*[^\\s,;]+/gi, "[redacted]")
-    .replace(/https?:\\/\\/[^\\s]+/gi, "[URL omitted]")
-    .replace(/\\b[A-Za-z0-9_-]{36,}\\b/g, "[redacted]")
-    .replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]/g, " ")
+    .replace(/Bearer\s+[^\s]+/gi, "[redacted]")
+    .replace(/(?:token|password|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi, "[redacted]")
+    .replace(/https?:\/\/[^\s]+/gi, "[URL omitted]")
+    .replace(/\b[A-Za-z0-9_-]{36,}\b/g, "[redacted]")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, " ")
     .trim()
     .slice(0, max);
 }
