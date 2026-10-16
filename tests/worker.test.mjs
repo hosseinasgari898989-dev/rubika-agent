@@ -67,6 +67,14 @@ class FakeStatement {
       state.updated_at = updatedAt;
       return { ...state };
     }
+    if (this.sql.startsWith("INSERT INTO gemini_translation_usage_daily")) {
+      if (this.db.failGeminiTranslationReservation) throw new Error("synthetic D1 failure");
+      const [day, maximum] = this.values;
+      const current = this.db.geminiTranslationUsageDaily.get(day) || 0;
+      if (current >= maximum) return null;
+      this.db.geminiTranslationUsageDaily.set(day, current + 1);
+      return { request_count: current + 1 };
+    }
     if (this.sql.startsWith("INSERT INTO ai_usage_daily")) {
       const [day] = this.values;
       const current = this.db.aiUsageDaily.get(day) || 0;
@@ -294,6 +302,8 @@ class FakeDB {
     this.queueLimit = null;
     this.seenQuery = null;
     this.aiUsageDaily = new Map();
+    this.geminiTranslationUsageDaily = new Map();
+    this.failGeminiTranslationReservation = false;
     this.ownerDigestState = null;
     this.ownerDigestEvents = [];
     this.ownerConsoleState = { id: 1, offset_id: null, updated_at: null };
@@ -833,7 +843,9 @@ console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval g
 function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رسمی تازه‌ای منتشر کرد.", status = 200) {
   const originalFetch = globalThis.fetch;
   let captured = null;
+  let callCount = 0;
   globalThis.fetch = async (url, options = {}) => {
+    callCount += 1;
     captured = { url: String(url), options };
     return new Response(JSON.stringify({
       candidates: [{ content: { parts: [{ text: responseText }] } }],
@@ -844,6 +856,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
   };
   return {
     getCaptured: () => captured,
+    getCallCount: () => callCount,
     restore: () => { globalThis.fetch = originalFetch; },
   };
 }
