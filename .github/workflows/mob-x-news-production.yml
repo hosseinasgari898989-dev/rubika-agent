@@ -2,7 +2,7 @@ name: Mob official X news publisher (gated)
 
 on:
   schedule:
-    - cron: "0 */5 * * *"
+    - cron: "7 */5 * * *"
   workflow_dispatch:
 
 permissions:
