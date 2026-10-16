@@ -81,33 +81,29 @@ jobs:
         id: install_requirements
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
-      - name: Smoke-test deployed AI supervisor API without using an AI request
+      - name: Smoke-test deployed Worker health without AI requests
         continue-on-error: true
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
         shell: bash
         run: |
           set -euo pipefail
-          code="$(curl --silent --show-error --output "$RUNNER_TEMP/supervisor-smoke.json" --write-out '%{http_code}' \
-            --request POST \
-            --header "Authorization: Bearer $AGENT_API_TOKEN" \
-            --header "Content-Type: application/json" \
-            --data '{"event_code":"invalid_smoke_probe","stage":"unknown","error_code":"route_smoke_test","platform":"none","attempt_count":0,"counts":{}}' \
-            "$AGENT_API_BASE_URL/api/brain/supervise-error" || true)"
-          if [[ "$code" != "400" ]]; then
-            echo "::warning::AI supervisor live smoke did not confirm the expected validation response (HTTP ${code:-unknown}); collection continues with the deterministic local fallback."
+          code="$(curl --silent --show-error --output "$RUNNER_TEMP/worker-health.json" --write-out '%{http_code}' \
+            "$AGENT_API_BASE_URL/health" || true)"
+          if [[ "$code" != "200" ]]; then
+            echo "::warning::Worker health check returned HTTP ${code:-unknown}; collection keeps its normal fail-closed D1 checks."
             exit 1
           fi
-          python - "$RUNNER_TEMP/supervisor-smoke.json" <<'PY'
+          python - "$RUNNER_TEMP/worker-health.json" <<'PY'
           import json, sys
           from pathlib import Path
           try:
               payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           except Exception:
-              raise SystemExit("supervisor_smoke_body_not_json")
-          if payload.get("error") != "supervisor_input_invalid":
-              raise SystemExit("supervisor_smoke_unexpected_validation_response")
-          print("Supervisor endpoint reachable and validates inputs; no Workers AI quota used.")
+              raise SystemExit("worker_health_not_json")
+          if payload.get("ok") is not True or payload.get("database") != "connected":
+              raise SystemExit("worker_health_contract_failed")
+          print("Worker health and D1 connectivity confirmed; no AI request, media download, or Rubika post was made.")
           PY
 
       - name: Run all repository unit tests
