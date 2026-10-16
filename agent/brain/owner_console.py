@@ -634,8 +634,27 @@ class OperationsConsole:
 def format_github_runs(runs: list[dict[str, Any]]) -> str:
     if not runs:
         return "🧪 CI اخیر: اطلاعات فعلاً در دسترس نیست."
-    pieces = ["🧪 اجراهای اخیر GitHub Actions"]
-    for run in runs[:3]:
+    # Surface recent failures first, then fill remaining slots with the latest runs.
+    ordered: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for run in runs:
+        conclusion = str(run.get("conclusion") or run.get("status") or "").lower()
+        run_id = run.get("id")
+        if conclusion in {"failure", "timed_out", "action_required", "cancelled"} and type(run_id) is int and run_id not in seen_ids:
+            ordered.append(run)
+            seen_ids.add(run_id)
+    for run in runs:
+        run_id = run.get("id")
+        if type(run_id) is int and run_id not in seen_ids:
+            ordered.append(run)
+            seen_ids.add(run_id)
+    has_failure = any(
+        str(run.get("conclusion") or "").lower() in {"failure", "timed_out", "action_required", "cancelled"}
+        for run in ordered[:3]
+    )
+    pieces = ["🧪 خطاهای اخیر و اجراهای GitHub Actions" if has_failure
+              else "🧪 اجراهای اخیر GitHub Actions"]
+    for run in ordered[:3]:
         name = str(run.get("name") or "Workflow")[:70]
         status = re.sub(r"[^a-z_-]", "", str(run.get("conclusion") or run.get("status") or "unknown").lower())[:20]
         branch = re.sub(r"[^A-Za-z0-9_.:/-]", "", str(run.get("branch") or ""))[:50]
