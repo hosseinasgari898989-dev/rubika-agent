@@ -778,7 +778,7 @@ function makeTranslationAI(response = "ماب انترتینمنت خبر رسم
     body: { category: "fatal", source: "bad", title: "Invalid category", detail: "" },
   }), env()));
   assert.equal(response.status, 400);
-  assert.equal(response.body.error, "owner_digest_event_invalid");
+  assert.equal(response.body.error, "owner_digest_category_invalid");
 }
 
 // Error guidance now runs locally in Python. The Worker has no AI supervisor endpoint.
