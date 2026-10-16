@@ -17,7 +17,7 @@ from agent.brain.owner_notify import queue_inventory_lines, send_owner_notificat
 from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
 
 
-DAILY_SUCCESS_LIMIT = 1
+DAILY_SUCCESS_LIMIT = 4
 MAX_CANDIDATE_ATTEMPTS = 20
 QUEUE_READ_LIMIT = 100
 PLATFORMS = ("tiktok",)
