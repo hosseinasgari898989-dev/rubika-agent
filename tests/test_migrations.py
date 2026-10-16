@@ -16,7 +16,8 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0002_brain_metadata.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0003_ai_usage_daily.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0004_automation_queue.sql").read_text(encoding="utf-8"))
-            db.executescript((ROOT / "migrations" / "0005_owner_daily_digest.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0005_ai_provider_ledger.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0006_owner_daily_digest.sql").read_text(encoding="utf-8"))
 
             columns = {
                 row[1] for row in db.execute("PRAGMA table_info(items)").fetchall()
@@ -33,7 +34,8 @@ class D1MigrationTests(unittest.TestCase):
             }
             self.assertTrue({
                 "agent_config", "sources", "items", "runs", "delivery_attempts", "brain_events",
-                "ai_usage_daily", "automation_queue"
+                "ai_usage_daily", "automation_queue", "ai_provider_calls", "ai_provider_state",
+                "owner_digest_state", "owner_digest_events"
             }.issubset(tables))
 
             db.execute(
@@ -65,7 +67,8 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0002_brain_metadata.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0003_ai_usage_daily.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0004_automation_queue.sql").read_text(encoding="utf-8"))
-            db.executescript((ROOT / "migrations" / "0005_owner_daily_digest.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0005_ai_provider_ledger.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0006_owner_daily_digest.sql").read_text(encoding="utf-8"))
 
             values = (
                 "tiktok:7616247520657771796", "tiktok", "7616247520657771796",
@@ -114,7 +117,8 @@ class D1MigrationTests(unittest.TestCase):
                 "0002_brain_metadata.sql",
                 "0003_ai_usage_daily.sql",
                 "0004_automation_queue.sql",
-                "0005_owner_daily_digest.sql",
+                "0005_ai_provider_ledger.sql",
+                "0006_owner_daily_digest.sql",
             ):
                 db.executescript((ROOT / "migrations" / name).read_text(encoding="utf-8"))
 
@@ -123,7 +127,7 @@ class D1MigrationTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 ).fetchall()
             }
-            self.assertTrue({"owner_digest_state", "owner_digest_events"}.issubset(tables))
+            self.assertTrue({"ai_provider_calls", "ai_provider_state", "owner_digest_state", "owner_digest_events"}.issubset(tables))
 
             db.execute(
                 "INSERT INTO owner_digest_state "
