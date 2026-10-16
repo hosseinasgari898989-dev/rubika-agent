@@ -907,6 +907,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
 {
   const mock = mockGeminiFetch("This is still English, not a Persian translation.");
   const state = env();
+  state.GEMINI_TRANSLATION_APPROVED = "true";
   state.GEMINI_API_KEY = "synthetic-test-key";
   try {
     const response = await read(await worker.fetch(request("/api/brain/translate-official", {
@@ -923,6 +924,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
 {
   const mock = mockGeminiFetch();
   const state = env();
+  state.GEMINI_TRANSLATION_APPROVED = "true";
   state.GEMINI_API_KEY = "synthetic-test-key";
   try {
     const response = await read(await worker.fetch(request("/api/brain/translate-official", {
@@ -940,6 +942,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
 {
   const mock = mockGeminiFetch("ماب انترتینمنت خبر تازه‌ای منتشر کرد.", 429);
   const state = env();
+  state.GEMINI_TRANSLATION_APPROVED = "true";
   state.GEMINI_API_KEY = "synthetic-test-key";
   try {
     const response = await read(await worker.fetch(request("/api/brain/translate-official", {
