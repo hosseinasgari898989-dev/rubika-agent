@@ -68,9 +68,8 @@ def translate_to_persian(
     if not source:
         return None
 
-    # In the cloud trial, prefer the authenticated Cloudflare AI endpoint already
-    # bound to this project's Worker. This avoids depending solely on Google's
-    # public web-translation endpoint, which can be unavailable to CI runners.
+    # Prefer the authenticated Worker endpoint, which now uses Gemini directly.
+    # Workers AI is reserved for audio/music detection and is not used for translation.
     if translator_factory is None:
         base_url = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
         token = os.getenv("AGENT_API_TOKEN", "").strip()
