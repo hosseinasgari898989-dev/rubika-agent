@@ -865,6 +865,23 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
   const mock = mockGeminiFetch();
   const state = env();
   state.GEMINI_API_KEY = "synthetic-test-key";
+  try {
+    const response = await read(await worker.fetch(request("/api/brain/translate-official", {
+      method: "POST", body: { text: "Mob published an update." },
+    }), state));
+    assert.equal(response.status, 503);
+    assert.equal(response.body.error, "official_translation_disabled");
+    assert.equal(mock.getCallCount(), 0);
+    assert.equal(state.DB.geminiTranslationUsageDaily.size, 0);
+  } finally {
+    mock.restore();
+  }
+}
+{
+  const mock = mockGeminiFetch();
+  const state = env();
+  state.GEMINI_TRANSLATION_APPROVED = "true";
+  state.GEMINI_API_KEY = "synthetic-test-key";
   state.AI = { run: async () => { throw new Error("Workers AI must not be used for translation"); } };
   try {
     const response = await read(await worker.fetch(request("/api/brain/translate-official", {
@@ -877,6 +894,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
     assert.equal(response.body.publishing, false);
     assert.equal(response.body.model, "gemini-3.8-flash");
     assert.equal(state.DB.aiUsageDaily.size, 0);
+    assert.equal(state.DB.geminiTranslationUsageDaily.size, 1);
     const call = mock.getCaptured();
     assert.equal(call.url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
     assert.equal(call.options.headers["x-goog-api-key"], "synthetic-test-key");
@@ -897,6 +915,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
     assert.equal(response.status, 502);
     assert.equal(response.body.error, "translation_model_output_invalid");
     assert.equal(state.DB.aiUsageDaily.size, 0);
+    assert.equal(state.DB.geminiTranslationUsageDaily.size, 1);
   } finally {
     mock.restore();
   }
@@ -913,6 +932,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
     assert.equal(response.body.error, "translation_text_too_long");
     assert.equal(mock.getCaptured(), null);
     assert.equal(state.DB.aiUsageDaily.size, 0);
+    assert.equal(state.DB.geminiTranslationUsageDaily.size, 0);
   } finally {
     mock.restore();
   }
@@ -928,6 +948,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
     assert.equal(response.status, 503);
     assert.equal(response.body.error, "official_translation_quota_exhausted");
     assert.equal(state.DB.aiUsageDaily.size, 0);
+    assert.equal(state.DB.geminiTranslationUsageDaily.size, 1);
   } finally {
     mock.restore();
   }
@@ -935,6 +956,7 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
 {
   const mock = mockGeminiFetch();
   const state = env();
+  state.GEMINI_TRANSLATION_APPROVED = "true";
   try {
     const response = await read(await worker.fetch(request("/api/brain/translate-official", {
       method: "POST", body: { text: "Mob published an update." },
@@ -943,6 +965,48 @@ function mockGeminiFetch(responseText = "ماب انترتینمنت خبر رس
     assert.equal(response.body.error, "gemini_api_key_missing");
     assert.equal(mock.getCaptured(), null);
     assert.equal(state.DB.aiUsageDaily.size, 0);
+    assert.equal(state.DB.geminiTranslationUsageDaily.size, 0);
+  } finally {
+    mock.restore();
+  }
+}
+{
+  const mock = mockGeminiFetch();
+  const state = env();
+  state.GEMINI_TRANSLATION_APPROVED = "true";
+  state.GEMINI_API_KEY = "synthetic-test-key";
+  try {
+    for (let index = 0; index < 10; index++) {
+      const response = await read(await worker.fetch(request("/api/brain/translate-official", {
+        method: "POST", body: { text: "Mob published an update." },
+      }), state));
+      assert.equal(response.status, 200);
+    }
+    assert.equal(mock.getCallCount(), 10);
+    assert.equal(state.DB.geminiTranslationUsageDaily.values().next().value, 10);
+    const capped = await read(await worker.fetch(request("/api/brain/translate-official", {
+      method: "POST", body: { text: "Another Mob update." },
+    }), state));
+    assert.equal(capped.status, 429);
+    assert.equal(capped.body.error, "official_translation_daily_limit_reached");
+    assert.equal(mock.getCallCount(), 10);
+  } finally {
+    mock.restore();
+  }
+}
+{
+  const mock = mockGeminiFetch();
+  const state = env();
+  state.GEMINI_TRANSLATION_APPROVED = "true";
+  state.GEMINI_API_KEY = "synthetic-test-key";
+  state.DB.failGeminiTranslationReservation = true;
+  try {
+    const response = await read(await worker.fetch(request("/api/brain/translate-official", {
+      method: "POST", body: { text: "Mob published an update." },
+    }), state));
+    assert.equal(response.status, 503);
+    assert.equal(response.body.error, "official_translation_quota_guard_unavailable");
+    assert.equal(mock.getCallCount(), 0);
   } finally {
     mock.restore();
   }
