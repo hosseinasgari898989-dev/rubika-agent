@@ -279,14 +279,14 @@ class HTTPClientTests(unittest.TestCase):
 
 
 class OperationsConsoleTests(unittest.TestCase):
-    def make_console(self, bot=None, control=None, github_runs=None):
+    def make_console(self, bot=None, control=None, github_runs=None, owner_user_id="owner-user-456"):
         api = bot or FakeBot()
         worker = control or FakeControl()
         instance = console.OperationsConsole(
             bot=api,
             control=worker,
             owner_chat_id="owner-chat-123",
-            owner_user_id="owner-user-456",
+            owner_user_id=owner_user_id,
             github_runs=github_runs or (lambda: []),
         )
         return instance, api, worker
@@ -366,18 +366,89 @@ class OperationsConsoleTests(unittest.TestCase):
         api = FakeBot(updates={
             "status": "OK",
             "data": {
-                "updates": [update(text="/status"), update(text="/status", sender_id="other")],
+                "updates": [
+                    update(text="/status"),
+                    update(text="/status", chat_id="other-chat", sender_id="other"),
+                ],
+                "next_offset_id": "cursor-next",
+            },
+        })
+        control = FakeControl()
+        control.offset = "cursor-existing"
+        instance, bot, control = self.make_console(bot=api, control=control)
+        stats = instance.poll_once()
+        self.assertEqual(stats["answered"], 1)
+        self.assertEqual(stats["ignored"], 1)
+        self.assertFalse(stats["bootstrapped"])
+        self.assertTrue(stats["offset_advanced"])
+        self.assertEqual(control.offset, "cursor-next")
+        self.assertEqual(bot.get_updates_offsets, ["cursor-existing"])
+        self.assertEqual(len(bot.sent), 1)
+
+    def test_first_poll_bootstraps_cursor_without_replying_to_old_messages(self):
+        api = FakeBot(updates={
+            "status": "OK",
+            "data": {
+                "updates": [update(text="/status"), update(text="/queue")],
                 "next_offset_id": "cursor-next",
             },
         })
         instance, bot, control = self.make_console(bot=api)
         stats = instance.poll_once()
-        self.assertEqual(stats["answered"], 1)
-        self.assertEqual(stats["ignored"], 1)
-        self.assertTrue(stats["offset_advanced"])
+        self.assertTrue(stats["bootstrapped"])
+        self.assertEqual(stats["updates_received"], 2)
+        self.assertEqual(stats["ignored"], 2)
+        self.assertEqual(stats["answered"], 0)
+        self.assertEqual(bot.sent, [])
+        self.assertEqual(control.claims, [])
         self.assertEqual(control.offset, "cursor-next")
-        self.assertEqual(bot.get_updates_offsets, [None])
+        self.assertTrue(stats["offset_advanced"])
+
+    def test_poll_once_resolves_sender_from_single_owner_chat_when_secret_missing(self):
+        api = FakeBot(updates={
+            "status": "OK",
+            "data": {
+                "updates": [
+                    update(text="/status", sender_id="observed-owner"),
+                    update(text="/status", chat_id="other-chat", sender_id="other"),
+                ],
+                "next_offset_id": "cursor-next",
+            },
+        })
+        control = FakeControl()
+        control.offset = "cursor-existing"
+        instance, bot, control = self.make_console(
+            bot=api, control=control, owner_user_id=None
+        )
+        stats = instance.poll_once()
+        self.assertEqual(stats["answered"], 1)
+        self.assertFalse(stats["owner_identity_ambiguous"])
+        self.assertEqual(control.status_calls, 1)
         self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(control.offset, "cursor-next")
+
+    def test_poll_once_fails_closed_when_owner_chat_has_multiple_senders(self):
+        api = FakeBot(updates={
+            "status": "OK",
+            "data": {
+                "updates": [
+                    update(text="/status", sender_id="observed-owner"),
+                    update(text="/status", sender_id="unexpected-sender", message_id="message-002"),
+                ],
+                "next_offset_id": "cursor-next",
+            },
+        })
+        control = FakeControl()
+        control.offset = "cursor-existing"
+        instance, bot, control = self.make_console(
+            bot=api, control=control, owner_user_id=None
+        )
+        stats = instance.poll_once()
+        self.assertTrue(stats["owner_identity_ambiguous"])
+        self.assertEqual(stats["answered"], 0)
+        self.assertEqual(len(bot.sent), 0)
+        self.assertEqual(control.claims, [])
+        self.assertEqual(control.offset, "cursor-next")
 
 
 if __name__ == "__main__":
