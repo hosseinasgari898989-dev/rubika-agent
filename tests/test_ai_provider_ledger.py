@@ -103,12 +103,12 @@ class AIProviderLedgerTests(unittest.TestCase):
 
     def test_worker_enables_only_groq_openrouter_translation_roles_and_bounded_daily_cap(self):
         source = WORKER.read_text(encoding="utf-8")
-        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ groq: 18, openrouter: 18 });", source)
-        self.assertIn("const CODE_AI_TOTAL_DAILY_LIMIT = 36;", source)
-        self.assertIn('"translate_official"', source)
+        self.assertIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 12 });", source)
+        self.assertIn("const CODE_AI_TOTAL_DAILY_LIMIT = 12;", source)
+        self.assertIn('new Set(["diagnose", "translate_official"])', source)
         self.assertIn('"code_ai_provider_not_enabled"', source)
         self.assertIn("CODE_AI_PROVIDER_LIMITS[provider]", source)
-        self.assertNotIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini:", source)
+        self.assertNotIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ groq:", source)
         self.assertNotIn("github_models: 6", source)
 
     def test_reservation_is_atomic_and_rejects_active_cooldown(self):
