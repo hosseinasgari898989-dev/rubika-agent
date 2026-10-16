@@ -235,7 +235,7 @@ def render_daily_digest(state: dict[str, Any]) -> str:
     header = [
         "**🧠 اعلامیهٔ روزانهٔ مغز Rubika-Agent**",
         f"**🕒 بازهٔ ۲۴ ساعته:** {start} تا {end}",
-        f"**✅ موفقیت‌ها:** {successful} | **❌ خطاها:** {errors} | **ℹ️ اطلاعیه‌ها:** {info}",
+        f"✅ موفقیت‌ها: {successful} | ❌ خطاها: {errors} | ℹ️ اطلاعیه‌ها: {info}",
         "**━━━━━━━━━━━━━━━━━━**",
     ]
 
