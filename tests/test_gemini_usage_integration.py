@@ -238,7 +238,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertIn("CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter", workflow)
         self.assertIn("CODE_AI_PROPOSER_PROVIDER: groq", workflow)
         self.assertIn("CODE_AI_REVIEWER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("status?provider=groq", workflow)
+        self.assertIn("status?provider=$provider", workflow)
         self.assertNotIn("GITHUB_MODELS_MODEL", workflow)
         self.assertNotIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
         self.assertNotIn("GEMINI_API_KEY", workflow)
