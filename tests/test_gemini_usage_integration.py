@@ -220,7 +220,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         )
         with patch.object(client._opener, "open", side_effect=error):
             with self.assertRaisesRegex(UsageLedgerError, "code_ai_daily_budget_exhausted"):
-                client.reserve(provider="groq", role="propose_patch", call_id=CALL_ID)
+                client.reserve(provider="gemini", role="diagnose", call_id=CALL_ID)
 
     def test_ledger_client_rejects_http_url_and_short_token(self):
         with self.assertRaisesRegex(UsageLedgerError, "usage_ledger_url_invalid"):
