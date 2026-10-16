@@ -31,6 +31,23 @@ class WorkflowSafetyTests(unittest.TestCase):
             with self.subTest(preserved=preserved):
                 self.assertTrue((workflows / preserved).is_file())
 
+    def test_edit_queue_uses_main_digest_and_four_success_cap(self):
+        workflow = (ROOT / ".github" / "workflows" / "daily-queue-processor.yml").read_text(encoding="utf-8")
+        worker = (ROOT / "agent" / "brain" / "queue_worker.py").read_text(encoding="utf-8")
+        self.assertIn("ref: main", workflow)
+        self.assertIn("--daily-limit 4", workflow)
+        self.assertIn("DAILY_SUCCESS_LIMIT = 4", worker)
+        self.assertIn("edit_message_text", (ROOT / "agent" / "brain" / "owner_notify.py").read_text(encoding="utf-8"))
+
+    def test_edit_pipeline_does_not_apply_mob_birth_cutoff(self):
+        intake = (ROOT / "agent" / "brain" / "queue_intake.py").read_text(encoding="utf-8")
+        worker = (ROOT / "agent" / "brain" / "queue_worker.py").read_text(encoding="utf-8")
+        discovery = (ROOT / "termux" / "daily_discovery.py").read_text(encoding="utf-8")
+        self.assertNotIn("candidate_passes_birth_cutoff", intake)
+        self.assertNotIn("candidate_passes_birth_cutoff", worker)
+        self.assertIn("mob_candidates, stale_mob = filter_candidates_by_birth", discovery)
+        self.assertNotIn("tiktok_candidates, stale_tiktok = filter_candidates_by_birth", discovery)
+
     def test_official_news_publishing_is_locked_to_test_channel_only(self):
         config = json.loads((ROOT / "config" / "mob_official_sources.json").read_text(encoding="utf-8"))
         policy = json.loads((ROOT / "config" / "agent_lifecycle.json").read_text(encoding="utf-8"))
