@@ -51,5 +51,37 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertTrue({"mob_newsroom", "mob_youtube", "steam_news", "mob_x"}.issubset(enabled))
 
 
+    def test_cloud_discovery_preserves_five_hour_schedule_and_checks_worker_health(self):
+        workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        self.assertIn('cron: "2,32 * * * *"', workflow)
+        self.assertIn("--state-file artifacts/termux_collection_state.json", workflow)
+        self.assertNotIn("/api/brain/supervise-error", workflow)
+        self.assertIn('"$AGENT_API_BASE_URL/health"', workflow)
+        self.assertIn('payload.get("database") != "connected"', workflow)
+        self.assertIn("packages.termux.dev", workflow)
+        self.assertIn("packages-cf.termux.dev", workflow)
+        self.assertIn("Termux package index could not be refreshed from official mirrors.", workflow)
+        self.assertIn('if safe_summary["tiktok_candidates"] == 0:', workflow)
+        self.assertIn("with a Mob-only run.", workflow)
+
+    def test_daily_phone_termux_helpers_are_not_required_or_shipped(self):
+        # The scheduler runs Termux inside GitHub's cloud runner; only the collector
+        # module is retained in this repository, not a manual phone daily command.
+        self.assertTrue((ROOT / "termux" / "daily_discovery.py").is_file())
+        self.assertFalse((ROOT / "termux" / "daily.sh").exists())
+        self.assertFalse((ROOT / "termux" / "bootstrap.sh").exists())
+        self.assertFalse((ROOT / "docs" / "TERMUX_DAILY_DISCOVERY.md").exists())
+        self.assertTrue((ROOT / "docs" / "CLOUD_DISCOVERY.md").is_file())
+
+
+    def test_retired_worker_error_supervisor_workflows_are_removed(self):
+        self.assertFalse((ROOT / ".github" / "workflows" / "supervisor-live-smoke.yml").exists())
+        self.assertFalse((ROOT / ".github" / "workflows" / "supervisor-inference-probe.yml").exists())
+        # The deterministic local advisor remains the supported error fallback.
+        local_advisor = (ROOT / "agent" / "brain" / "error_supervisor.py").read_text(encoding="utf-8")
+        self.assertIn("Deterministic local error guidance", local_advisor)
+        self.assertNotIn("/api/brain/supervise-error", local_advisor)
+
+
 if __name__ == "__main__":
     unittest.main()
