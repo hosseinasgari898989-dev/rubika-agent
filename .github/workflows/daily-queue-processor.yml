@@ -58,14 +58,6 @@ jobs:
           fi
           echo "Publishing is hard-locked to the Rubika test channel; daily successful-post cap is four."
 
-      - name: Record queue-run start in the single editable owner digest
-        if: steps.credentials_check.outcome == 'success'
-        continue-on-error: true
-        run: |
-          python -m agent.brain.owner_notify \
-            --message '🚀 شروع پردازش صف ادیت‌ها؛ سقف این اجرا ۴ انتشار موفق است.' \
-            --workflow 'Daily edit queue'
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -84,6 +76,14 @@ jobs:
       - name: Install project Python dependencies
         id: install_python_dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Record queue-run start in the single editable owner digest
+        if: steps.credentials_check.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python -m agent.brain.owner_notify \
+            --message '🚀 شروع پردازش صف ادیت‌ها؛ سقف این اجرا ۴ انتشار موفق است.' \
+            --workflow 'Daily edit queue'
 
       - name: Install ffmpeg if required
         id: ffmpeg_setup
