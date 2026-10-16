@@ -669,6 +669,156 @@ async function translateOfficial(env, body) {
 }
 
 
+
+const OWNER_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
+const OWNER_DIGEST_LOCK_MS = 60 * 1000;
+const OWNER_DIGEST_CATEGORIES = new Set(["info", "success", "error", "ai_success", "ai_error"]);
+
+function safeOwnerDigestText(value, max = 500) {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/Bearer\\s+[^\\s]+/gi, "[redacted]")
+    .replace(/(?:token|password|secret|authorization|cookie)\\s*[:=]\\s*[^\\s,;]+/gi, "[redacted]")
+    .replace(/https?:\\/\\/[^\\s]+/gi, "[URL omitted]")
+    .replace(/\\b[A-Za-z0-9_-]{36,}\\b/g, "[redacted]")
+    .replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+async function ensureOwnerDigestWindow(env) {
+  const now = Date.now();
+  const start = new Date(now).toISOString();
+  const end = new Date(now + OWNER_DIGEST_WINDOW_MS).toISOString();
+  const windowId = crypto.randomUUID().replace(/-/g, "");
+
+  let state = await env.DB.prepare(
+    "SELECT id, window_id, window_started_at, window_ends_at, window_started_epoch, window_ends_epoch, message_id, message_body, message_creation_uncertain, edit_lock_token, edit_lock_until_epoch FROM owner_digest_state WHERE id = 1"
+  ).first();
+
+  if (!state) {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO owner_digest_state (id, window_id, window_started_at, window_ends_at, window_started_epoch, window_ends_epoch) VALUES (1, ?, ?, ?, ?, ?)"
+    ).bind(windowId, start, end, now, now + OWNER_DIGEST_WINDOW_MS).run();
+    state = await env.DB.prepare(
+      "SELECT id, window_id, window_started_at, window_ends_at, window_started_epoch, window_ends_epoch, message_id, message_body, message_creation_uncertain, edit_lock_token, edit_lock_until_epoch FROM owner_digest_state WHERE id = 1"
+    ).first();
+  }
+
+  if (!state) throw new Error("owner_digest_state_unavailable");
+
+  if (Number(state.window_ends_epoch) <= now) {
+    await env.DB.prepare(
+      "UPDATE owner_digest_state SET window_id = ?, window_started_at = ?, window_ends_at = ?, window_started_epoch = ?, window_ends_epoch = ?, message_id = NULL, message_body = NULL, message_creation_uncertain = 0, edit_lock_token = NULL, edit_lock_until_epoch = NULL, updated_at = ? WHERE id = 1 AND window_ends_epoch <= ?"
+    ).bind(
+      windowId, start, end, now, now + OWNER_DIGEST_WINDOW_MS, start, now
+    ).run();
+    state = await env.DB.prepare(
+      "SELECT id, window_id, window_started_at, window_ends_at, window_started_epoch, window_ends_epoch, message_id, message_body, message_creation_uncertain, edit_lock_token, edit_lock_until_epoch FROM owner_digest_state WHERE id = 1"
+    ).first();
+  }
+
+  if (!state) throw new Error("owner_digest_state_unavailable");
+  return state;
+}
+
+async function ownerDigestSnapshot(env, state) {
+  const [counts, events] = await Promise.all([
+    env.DB.prepare(
+      "SELECT category, COUNT(*) AS total FROM owner_digest_events WHERE window_id = ? GROUP BY category"
+    ).bind(state.window_id).all(),
+    env.DB.prepare(
+      "SELECT id, occurred_at, category, source, title, detail FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 32"
+    ).bind(state.window_id).all()
+  ]);
+  return {
+    window_id: state.window_id,
+    window_started_at: state.window_started_at,
+    window_ends_at: state.window_ends_at,
+    message_id: state.message_id || null,
+    message_body: state.message_body || "",
+    message_creation_uncertain: Number(state.message_creation_uncertain || 0) === 1,
+    counts: Object.fromEntries((counts.results || []).map(row => [row.category, Number(row.total || 0)])),
+    events: (events.results || []).reverse()
+  };
+}
+
+async function recordOwnerDigestEvent(env, event) {
+  const category = OWNER_DIGEST_CATEGORIES.has(event.category) ? event.category : "info";
+  const source = safeOwnerDigestText(event.source, 64) || "automation";
+  const title = safeOwnerDigestText(event.title, 180) || "Automation event";
+  const detail = safeOwnerDigestText(event.detail, 600);
+  const state = await ensureOwnerDigestWindow(env);
+  const result = await env.DB.prepare(
+    "INSERT INTO owner_digest_events (window_id, category, source, title, detail) VALUES (?, ?, ?, ?, ?)"
+  ).bind(state.window_id, category, source, title, detail || null).run();
+  return { window_id: state.window_id, event_id: result && result.meta ? result.meta.last_row_id || null : null };
+}
+
+async function ownerDigestAddEvent(env, body) {
+  const category = text(body.category, 20);
+  const source = text(body.source, 64);
+  const title = text(body.title, 180);
+  const detail = body.detail == null ? "" : body.detail;
+  if (!OWNER_DIGEST_CATEGORIES.has(category) ||
+      !/^[A-Za-z0-9_.:-]{1,64}$/.test(source) ||
+      !title || typeof detail !== "string" || detail.length > 1200) {
+    return json({ ok: false, error: "owner_digest_event_invalid" }, 400);
+  }
+  try {
+    const result = await recordOwnerDigestEvent(env, { category, source, title, detail });
+    return json({ ok: true, ...result }, 201);
+  } catch {
+    return json({ ok: false, error: "owner_digest_event_write_failed" }, 503);
+  }
+}
+
+async function ownerDigestClaim(env) {
+  try {
+    const state = await ensureOwnerDigestWindow(env);
+    const now = Date.now();
+    const lockToken = crypto.randomUUID().replace(/-/g, "");
+    const claimed = await env.DB.prepare(
+      "UPDATE owner_digest_state SET edit_lock_token = ?, edit_lock_until_epoch = ?, updated_at = ? WHERE id = 1 AND window_id = ? AND (edit_lock_token IS NULL OR edit_lock_until_epoch IS NULL OR edit_lock_until_epoch <= ?) RETURNING id, window_id, window_started_at, window_ends_at, window_started_epoch, window_ends_epoch, message_id, message_body, message_creation_uncertain, edit_lock_token, edit_lock_until_epoch"
+    ).bind(lockToken, now + OWNER_DIGEST_LOCK_MS, new Date(now).toISOString(), state.window_id, now).first();
+
+    if (!claimed) return json({ ok: true, claimed: false, retry_after_ms: 800 });
+    const snapshot = await ownerDigestSnapshot(env, claimed);
+    return json({ ok: true, claimed: true, lock_token: lockToken, state: snapshot });
+  } catch {
+    return json({ ok: false, error: "owner_digest_claim_failed" }, 503);
+  }
+}
+
+async function ownerDigestCommit(env, body) {
+  const windowId = text(body.window_id, 64);
+  const lockToken = text(body.lock_token, 64);
+  const messageId = body.message_id == null ? null : text(body.message_id, 120);
+  const messageBody = body.message_body == null ? "" : body.message_body;
+  const creationUncertain = body.message_creation_uncertain === true ? 1 : 0;
+
+  if (!/^[A-Fa-f0-9]{16,64}$/.test(windowId) ||
+      !/^[A-Fa-f0-9]{16,64}$/.test(lockToken) ||
+      (body.message_id != null && !messageId) ||
+      typeof messageBody !== "string" || messageBody.length > 3800 ||
+      typeof body.message_creation_uncertain !== "boolean") {
+    return json({ ok: false, error: "owner_digest_commit_invalid" }, 400);
+  }
+
+  try {
+    const now = new Date().toISOString();
+    const result = await env.DB.prepare(
+      "UPDATE owner_digest_state SET message_id = ?, message_body = ?, message_creation_uncertain = ?, edit_lock_token = NULL, edit_lock_until_epoch = NULL, updated_at = ? WHERE id = 1 AND window_id = ? AND edit_lock_token = ?"
+    ).bind(messageId, messageBody || null, creationUncertain, now, windowId, lockToken).run();
+    if (!result || !result.meta || !result.meta.changes) {
+      return json({ ok: false, error: "owner_digest_lock_lost" }, 409);
+    }
+    return json({ ok: true, window_id: windowId, message_id: messageId });
+  } catch {
+    return json({ ok: false, error: "owner_digest_commit_failed" }, 503);
+  }
+}
+
 const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6, github_models: 6 });
 const CODE_AI_TOTAL_DAILY_LIMIT = 18;
 const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch"]);
@@ -899,6 +1049,22 @@ async function finishCodeAiProviderCall(env, body) {
       ).bind(callId, provider).first();
       if (!existing) return json({ ok: false, error: "code_ai_call_not_found" }, 404);
       return json({ ok: false, error: "code_ai_call_already_finished" }, 409);
+    }
+
+    try {
+      const callMeta = await env.DB.prepare(
+        "SELECT role FROM ai_provider_calls WHERE call_id = ? AND provider = ?"
+      ).bind(callId, provider).first();
+      await recordOwnerDigestEvent(env, {
+        category: outcome === "succeeded" ? "ai_success" : "ai_error",
+        source: "code_ai_" + provider,
+        title: outcome === "succeeded" ? "Code-repair AI call succeeded" : "Code-repair AI call did not succeed",
+        detail: "outcome=" + outcome
+          + (callMeta && callMeta.role ? "; role=" + callMeta.role : "")
+          + (errorCode ? "; error_code=" + errorCode : "")
+      });
+    } catch {
+      // Reporting must never change the result of the code-repair provider call.
     }
     return json({
       ok: true,
@@ -1156,6 +1322,23 @@ export default {
     const storage = /^\/api\/brain\/items\/([^/]+)\/storage$/.exec(path);
     if (storage) return updateStorage(env, decodeURIComponent(storage[1]), body);
     if (path === "/api/brain/events") return addEvent(env, body);
+
+    if (path === "/api/brain/owner-digest/events") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedDigestEvent = await readJson(request);
+      if (!parsedDigestEvent.ok) return json({ ok: false, error: parsedDigestEvent.error }, parsedDigestEvent.status);
+      return ownerDigestAddEvent(env, parsedDigestEvent.value);
+    }
+    if (path === "/api/brain/owner-digest/claim") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      return ownerDigestClaim(env);
+    }
+    if (path === "/api/brain/owner-digest/commit") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedDigestCommit = await readJson(request);
+      if (!parsedDigestCommit.ok) return json({ ok: false, error: parsedDigestCommit.error }, parsedDigestCommit.status);
+      return ownerDigestCommit(env, parsedDigestCommit.value);
+    }
     return json({ ok: false, error: "not_found" }, 404);
   }
 };
