@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/multi-ai-live-smoke.yml"
+      - "agent/brain/ai_provider_clients.py"
+      - "agent/brain/gemini_usage_client.py"
   workflow_dispatch:
 
 permissions:
