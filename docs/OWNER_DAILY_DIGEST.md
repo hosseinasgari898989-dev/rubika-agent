@@ -13,7 +13,7 @@
 
 ## Files changed
 
-- `migrations/0005_owner_daily_digest.sql`: persistent 24-hour window, message state, lease and event history.
+- `migrations/0006_owner_daily_digest.sql`: persistent 24-hour window, message state, lease and event history.
 - `src/index.js`: authenticated event/claim/commit endpoints; cloud code-repair AI outcomes and quota/cooldown skips are recorded without affecting provider results.
 - `agent/brain/owner_notify.py`: append, format, send-once, edit-existing, duplicate-avoidance and manual refresh behavior.
 - `.github/workflows/owner-daily-digest.yml`: schedules a daily starter announcement.
