@@ -16,6 +16,8 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0002_brain_metadata.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0003_ai_usage_daily.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0004_automation_queue.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0005_ai_provider_ledger.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0006_owner_daily_digest.sql").read_text(encoding="utf-8"))
 
             columns = {
                 row[1] for row in db.execute("PRAGMA table_info(items)").fetchall()
@@ -32,7 +34,8 @@ class D1MigrationTests(unittest.TestCase):
             }
             self.assertTrue({
                 "agent_config", "sources", "items", "runs", "delivery_attempts", "brain_events",
-                "ai_usage_daily", "automation_queue"
+                "ai_usage_daily", "automation_queue", "ai_provider_calls", "ai_provider_state",
+                "owner_digest_state", "owner_digest_events"
             }.issubset(tables))
 
             db.execute(
@@ -64,6 +67,8 @@ class D1MigrationTests(unittest.TestCase):
             db.executescript((ROOT / "migrations" / "0002_brain_metadata.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0003_ai_usage_daily.sql").read_text(encoding="utf-8"))
             db.executescript((ROOT / "migrations" / "0004_automation_queue.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0005_ai_provider_ledger.sql").read_text(encoding="utf-8"))
+            db.executescript((ROOT / "migrations" / "0006_owner_daily_digest.sql").read_text(encoding="utf-8"))
 
             values = (
                 "tiktok:7616247520657771796", "tiktok", "7616247520657771796",
@@ -100,6 +105,54 @@ class D1MigrationTests(unittest.TestCase):
             db.rollback()
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute(insert, ("video", "auto_approved"))
+        finally:
+            db.close()
+
+
+    def test_owner_daily_digest_migration_persists_window_message_and_events(self):
+        db = sqlite3.connect(":memory:")
+        try:
+            for name in (
+                "0001_init.sql",
+                "0002_brain_metadata.sql",
+                "0003_ai_usage_daily.sql",
+                "0004_automation_queue.sql",
+                "0005_ai_provider_ledger.sql",
+                "0006_owner_daily_digest.sql",
+            ):
+                db.executescript((ROOT / "migrations" / name).read_text(encoding="utf-8"))
+
+            tables = {
+                row[0] for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertTrue({"ai_provider_calls", "ai_provider_state", "owner_digest_state", "owner_digest_events"}.issubset(tables))
+
+            db.execute(
+                "INSERT INTO owner_digest_state "
+                "(id, window_id, window_started_at, window_ends_at, window_started_epoch, window_ends_epoch) "
+                "VALUES (1, 'window1234567890abcdef', '2026-10-16T07:00:00Z', "
+                "'2026-10-17T07:00:00Z', 1792134000000, 1792220400000)"
+            )
+            db.execute(
+                "INSERT INTO owner_digest_events (window_id, category, source, title, detail) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("window1234567890abcdef", "ai_error", "code_ai_github_models",
+                 "AI repair call failed", "error_code=provider_unavailable"),
+            )
+            event = db.execute(
+                "SELECT category, source, title FROM owner_digest_events WHERE window_id = ?",
+                ("window1234567890abcdef",),
+            ).fetchone()
+            self.assertEqual(event, ("ai_error", "code_ai_github_models", "AI repair call failed"))
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO owner_digest_state "
+                    "(id, window_id, window_started_at, window_ends_at, window_started_epoch, window_ends_epoch) "
+                    "VALUES (1, 'duplicatewindow1234', 'x', 'y', 1, 2)"
+                )
         finally:
             db.close()
 

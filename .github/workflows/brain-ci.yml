@@ -1,9 +1,17 @@
 name: Agent brain checks
 
 on:
+  pull_request:
+    paths:
+      - "src/index.js"
+      - "agent/brain/**"
+      - "migrations/**"
+      - "tests/**"
+      - ".github/workflows/**"
   push:
     branches:
       - agent-brain-mega-v1
+      - feature/rubika-owner-24h-digest
     paths:
       - "agent/brain/**"
       - "agent/source_policy.py"
@@ -56,8 +64,11 @@ on:
       - "tests/test_rubika_publisher.py"
       - "tests/test_queue_intake.py"
       - "tests/test_queue_worker.py"
+      - "tests/test_owner_notify.py"
       - "tests/test_workflow_safety.py"
       - ".github/workflows/queue-intake.yml"
+      - ".github/workflows/owner-daily-digest.yml"
+      - ".github/workflows/owner-digest-refresh.yml"
       - "tests/test_vision_moderator.py"
       - "tests/worker.test.mjs"
       - "tests/test_migrations.py"
@@ -116,6 +127,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_rubika_publisher.py' -v
           python -m unittest discover -s tests -p 'test_queue_intake.py' -v
           python -m unittest discover -s tests -p 'test_queue_worker.py' -v
+          python -m unittest discover -s tests -p 'test_owner_notify.py' -v
           python -m unittest discover -s tests -p 'test_vision_moderator.py' -v
           python -m unittest discover -s tests -p 'test_migrations.py' -v
           python -m unittest discover -s tests -p 'test_proxitok_discovery.py' -v
