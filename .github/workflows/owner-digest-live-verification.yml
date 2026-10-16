@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   live-private-verification:
-    if: "${{ github.event.head_commit.message == 'test: verify private owner digest live edit' }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
