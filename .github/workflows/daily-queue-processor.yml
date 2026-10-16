@@ -84,9 +84,9 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from rubka import Robot
+          from rubka import Bot
 
-          bot = Robot(os.environ["RUBIKA_TOKEN"], timeout=15)
+          bot = Bot(token=os.environ["RUBIKA_TOKEN"], timeout=15)
           identity = bot.get_me()
           if not isinstance(identity, dict) or identity.get("status") != "OK":
               raise SystemExit("rubika_bot_authentication_failed")
