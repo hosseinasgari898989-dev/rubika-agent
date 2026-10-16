@@ -13,6 +13,11 @@ class FakeRubikaBot:
         self.edit_result = edit_result or {"status": "OK"}
         self.sent = []
         self.edited = []
+        self.posts = []
+
+    def _post(self, method, payload):
+        self.posts.append((method, payload))
+        return {"status": "OK"}
 
     def send_message(self, *, chat_id, text):
         self.sent.append({"chat_id": chat_id, "text": text})
@@ -83,6 +88,7 @@ class OwnerNotifyTests(unittest.TestCase):
         self.assertTrue(result["created"])
         self.assertEqual(len(bot.sent), 1)
         self.assertEqual(bot.edited, [])
+        self.assertEqual(bot.posts, [])
         self.assertEqual(bot.sent[0]["chat_id"], "owner-chat-id")
         commit = next(payload for path, payload in calls if path.endswith("/commit"))
         self.assertEqual(commit["message_id"], "rubika-msg-123")
@@ -115,6 +121,7 @@ class OwnerNotifyTests(unittest.TestCase):
         self.assertTrue(result["sent"])
         self.assertTrue(result["updated"])
         self.assertEqual(bot.sent, [])
+        self.assertEqual(bot.posts, [])
         self.assertEqual(len(bot.edited), 1)
         self.assertEqual(bot.edited[0]["message_id"], "rubika-existing")
 

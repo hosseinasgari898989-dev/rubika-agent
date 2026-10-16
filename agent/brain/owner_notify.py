@@ -188,43 +188,6 @@ def _make_rubika_bot(token: str) -> Any:
     return Bot(token=token, timeout=25, show_progress=False)
 
 
-def _rubika_format_payload(body: str) -> dict[str, Any]:
-    """Convert the repository's Markdown into the metadata payload understood by Rubka."""
-    try:
-        from rubka.metadata import Track_parsed
-        parsed = Track_parsed().parse(body, parse_mode="MARKDOWN")
-        if not isinstance(parsed, dict) or not isinstance(parsed.get("text"), str):
-            return {"text": body}
-        payload: dict[str, Any] = {"text": parsed["text"]}
-        metadata = parsed.get("metadata")
-        if isinstance(metadata, dict) and isinstance(metadata.get("meta_data_parts"), list):
-            if metadata["meta_data_parts"]:
-                payload["metadata"] = metadata
-        return payload
-    except Exception:
-        # Plain text remains readable on a library version without the parser.
-        return {"text": body}
-
-
-def _rubika_send_digest(bot: Any, owner_id: str, body: str) -> Any:
-    payload = {"chat_id": owner_id, "disable_notification": False, **_rubika_format_payload(body)}
-    post = getattr(bot, "_post", None)
-    if callable(post):
-        return post("sendMessage", payload)
-    return bot.send_message(chat_id=owner_id, text=body)
-
-
-def _rubika_edit_digest(bot: Any, owner_id: str, message_id: str, body: str) -> Any:
-    payload = {"chat_id": owner_id, "message_id": message_id, **_rubika_format_payload(body)}
-    post = getattr(bot, "_post", None)
-    if callable(post):
-        return post("editMessageText", payload)
-    edit = getattr(bot, "edit_message_text", None)
-    if not callable(edit):
-        raise RuntimeError("rubika_edit_message_unavailable")
-    return edit(chat_id=owner_id, message_id=message_id, text=body)
-
-
 def render_daily_digest(state: dict[str, Any]) -> str:
     counts = state.get("counts") if isinstance(state.get("counts"), dict) else {}
     successful = int(counts.get("success", 0) or 0) + int(counts.get("ai_success", 0) or 0)
@@ -233,10 +196,10 @@ def render_daily_digest(state: dict[str, Any]) -> str:
     start = str(state.get("window_started_at") or "نامشخص").replace("T", " ").replace("Z", " UTC")
     end = str(state.get("window_ends_at") or "نامشخص").replace("T", " ").replace("Z", " UTC")
     header = [
-        "**🧠 اعلامیهٔ روزانهٔ مغز Rubika-Agent**",
-        f"**🕒 بازهٔ ۲۴ ساعته:** {start} تا {end}",
+        "🧠 اعلامیهٔ روزانهٔ مغز Rubika-Agent",
+        f"🕒 بازهٔ ۲۴ ساعته: {start} تا {end}",
         f"✅ موفقیت‌ها: {successful} | ❌ خطاها: {errors} | ℹ️ اطلاعیه‌ها: {info}",
-        "**━━━━━━━━━━━━━━━━━━**",
+        "━━━━━━━━━━━━━━━━━━",
     ]
 
     events = state.get("events") if isinstance(state.get("events"), list) else []
@@ -382,7 +345,7 @@ def refresh_daily_digest() -> dict[str, Any]:
                     )
                     return {"sent": False, "reason": "rubika_edit_message_unavailable"}
 
-                raw = _rubika_edit_digest(bot, owner_id, old_message_id, new_body)
+                raw = edit(chat_id=owner_id, message_id=old_message_id, text=new_body)
                 if not _rubika_ok(raw):
                     _commit_digest(
                         window_id=window_id,
@@ -406,7 +369,7 @@ def refresh_daily_digest() -> dict[str, Any]:
                 )
                 return {"sent": True, "updated": True, "message_id": old_message_id}
 
-            raw = _rubika_send_digest(bot, owner_id, new_body)
+            raw = bot.send_message(chat_id=owner_id, text=new_body)
             if not _rubika_ok(raw):
                 _commit_digest(
                     window_id=window_id,
