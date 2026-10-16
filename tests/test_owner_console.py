@@ -298,6 +298,8 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertEqual(result, "answered")
         self.assertEqual(len(bot.sent), 1)
         self.assertIn("/queue", bot.sent[0][1])
+        self.assertIn("/commands", bot.sent[0][1])
+        self.assertIn("بدون نیاز به هوش مصنوعی", bot.sent[0][1])
         self.assertEqual(control.status_calls, 0)
         self.assertEqual(control.queue_calls, 0)
         self.assertEqual(control.ai_calls, [])
