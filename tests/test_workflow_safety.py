@@ -83,7 +83,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn('"code_changes_made": False', supervisor)
         self.assertNotIn("GROQ_API_KEY", repair)
         self.assertNotIn("OPENROUTER_API_KEY", repair)
-        self.assertIn("no AI calls are sent", repair)
+        self.assertIn("no AI calls are sent, and no PR is opened.", repair)
 
     def test_five_hour_mob_autopilot_is_test_channel_only_and_news_timestamp_scoped(self):
         workflow = (ROOT / ".github" / "workflows" / "mob-x-news-test-autopilot.yml").read_text(encoding="utf-8")
