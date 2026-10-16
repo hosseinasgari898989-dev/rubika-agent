@@ -244,7 +244,9 @@ class HTTPClientTests(unittest.TestCase):
         with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_provider_invalid"):
             client._request("GET", "/api/brain/ai-provider/status?provider=gemini&provider=groq")
         with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_path_not_allowed"):
-            client._request("GET", "/api/brain/owner-console/claim?mode=write")
+            client._request("GET", "/api/brain/owner-console/not-allowlisted")
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_method_not_allowed"):
+            client._request("GET", "/api/brain/owner-console/claim")
 
     def test_rubika_transport_errors_never_reveal_token(self):
         token = "private-rubika-token-1234567890"
