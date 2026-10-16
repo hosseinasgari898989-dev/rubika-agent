@@ -26,8 +26,8 @@ This file summarizes the active main-branch architecture. Older phone-only disco
 - Python owns source policy, metadata validation, deduplication, technical media validation, delivery status, and safe error guidance.
 - Cloudflare D1 stores the durable metadata, queue, provider call ledger and outcomes.
 - Cloudflare Workers AI is reserved exclusively for music detection from video audio using Clef Omni. Ambiguous audio decisions require human review. Workers AI is not used for code repair or official-news translation.
-- Groq and OpenRouter are the active external providers for code repair. Groq proposes a constrained patch, both providers diagnose and review independently, all requests reserve a D1 slot first, and uncertain provider calls are not blindly retried.
-- Official Mob translation uses Groq first and OpenRouter as a bounded fallback, with the translation role recorded in D1. Gemini, Mistral and GitHub Models are retired from active repair/translation paths.
+- PR پیشنهادی Gemini-only مسیر تشخیص و ترجمه را به Gemini با D1 ledger منتقل می‌کند؛ تشخیص فقط گزارش مشورتی می‌دهد و patch/merge/deploy انجام نمی‌دهد. تا پیش از merge و deploy Worker، مسیر فعالِ main هنوز تنظیمات قدیمی Groq/OpenRouter را دارد. متغیرهای صریح هزینه و آمادگی Worker باید پیش از اولین درخواست جدید true شوند.
+- در شاخهٔ پیشنهادی PR، ترجمهٔ Mob فقط از Gemini ledger-accounted استفاده می‌کند و fallback به Groq/OpenRouter یا مترجم عمومی ندارد. کد Worker در این PR هنوز deploy نشده، بنابراین این توصیف به شاخهٔ پیشنهادی اشاره دارد، نه Worker زنده.
 - No model may publish to Rubika, merge a PR, or bypass tests. The bounded self-repair workflow can open a review PR only after the changed-file allowlist and deterministic tests pass.
 
 ## Delivery and failure handling
@@ -41,7 +41,7 @@ This file summarizes the active main-branch architecture. Older phone-only disco
 ## Verified current checks
 
 - Latest Cloud bootstrap CI run recorded in the master handoff: 384 Python tests passed, Worker API tests passed, the Rubka API surface check returned ok, and agent.preflight self-test returned ok=true/publishing=false.
-- Live provider smoke confirmed one successful ledgered request each to Groq and OpenRouter. It did not prove every possible repair will succeed, nor did it publish to Rubika.
+- آزمایش زندهٔ تاریخی یک درخواست ledgered موفق به Groq و یکی به OpenRouter را ثابت کرد؛ این فقط سابقه است. در این PR هیچ درخواست جدیدی به Gemini و هیچ پیامی به Rubika ارسال نشده است.
 - Read-only D1 counts last checked were 64 queued, 3 sent, 6 skipped and 1 failed; these counts are time-sensitive and should be queried again before making scheduling decisions.
 - Rubika bot authentication passed a read-only get_me check, but the main-channel preflight then blocked because RUBIKA_CHANNEL_GUID still equals the known test-channel GUID. No main-channel send was made.
 
