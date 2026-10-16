@@ -806,6 +806,125 @@ def discover_complete_official_posts(
     return output, attempts
 
 
+
+def discover_official_x_posts(
+    *,
+    config_path: str | Path = DEFAULT_CONFIG,
+    max_results: int = 12,
+    session: Any | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Discover only the verified Mob Entertainment X lane; never poll other sources."""
+    try:
+        config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], [{"source": "config", "result": "config_unavailable"}]
+    if not isinstance(config, dict) or config.get("version") != 1:
+        return [], [{"source": "config", "result": "config_invalid"}]
+    sources = config.get("official_sources", [])
+    if not isinstance(sources, list):
+        return [], [{"source": "config", "result": "sources_invalid"}]
+
+    x_source = next((
+        row for row in sources
+        if isinstance(row, dict)
+        and row.get("id") == "mob_x"
+        and row.get("kind") == "public_search_plus_x_syndication"
+        and row.get("source_platform") == "x"
+        and str(row.get("handle") or "").strip().casefold() == "mobgamesstudios"
+        and row.get("enabled") is True
+    ), None)
+    if x_source is None:
+        return [], [{"source": "mob_x", "result": "disabled", "candidate_count": 0}]
+
+    raw_seed_urls = x_source.get("seed_urls", [])
+    seed_urls = tuple(
+        value.strip()
+        for value in raw_seed_urls
+        if isinstance(raw_seed_urls, list)
+        and isinstance(value, str)
+        and value.strip().startswith("https://")
+    ) if isinstance(raw_seed_urls, list) else ()
+    try:
+        # Import only the public X lane. No newsroom, YouTube, or Steam adapter is invoked.
+        from .termux_mob_x import discover_mob_x_posts
+        x_rows, x_attempts = discover_mob_x_posts(
+            max_results=max(1, min(int(max_results), 25)),
+            session=session,
+            seed_urls=seed_urls,
+        )
+    except Exception as exc:
+        return [], [{
+            "source": "mob_x",
+            "result": "source_error",
+            "error_code": re.sub(r"[^A-Za-z0-9_-]", "", type(exc).__name__)[:60] or "source_error",
+            "candidate_count": 0,
+        }]
+
+    def published_epoch(row: dict[str, Any]) -> float:
+        value = _timestamp(row.get("published_at"))
+        if not value:
+            return 0.0
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
+    combined: list[dict[str, Any]] = []
+    for row in x_rows:
+        if not isinstance(row, dict) or row.get("platform") != "mob_official":
+            continue
+        if row.get("source_platform") != "x" or row.get("official_source") is not True:
+            continue
+        canonical = str(row.get("canonical_url") or "")
+        parsed = urlparse(canonical)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "x.com"
+            or parsed.query
+            or parsed.fragment
+            or not re.fullmatch(r"/mobgamesstudios/status/[0-9]{15,22}/?", parsed.path)
+        ):
+            continue
+        if not str(row.get("original_caption") or row.get("caption") or "").strip():
+            continue
+        media_url = str(row.get("media_url") or "")
+        if not media_url.startswith("https://") or row.get("media_type") not in {"image", "video"}:
+            continue
+        combined.append(row)
+
+    combined.sort(key=lambda row: (
+        0 if published_epoch(row) > 0 else 1,
+        -published_epoch(row),
+        str(row.get("external_id") or row.get("id") or ""),
+    ))
+    output: list[dict[str, Any]] = []
+    seen_identity: set[tuple[str, str]] = set()
+    seen_urls: set[str] = set()
+    seen_fingerprints: set[str] = set()
+    for row in combined:
+        external_id = str(row.get("external_id") or row.get("id") or "")
+        canonical = str(row.get("canonical_url") or "").rstrip("/")
+        identity = ("x", external_id)
+        fingerprints = _fingerprints(row)
+        if identity in seen_identity or canonical in seen_urls:
+            continue
+        if fingerprints.intersection(seen_fingerprints):
+            continue
+        seen_identity.add(identity)
+        seen_urls.add(canonical)
+        seen_fingerprints.update(fingerprints)
+        output.append(row)
+
+    limit = max(1, min(int(max_results), 25))
+    attempts = list(x_attempts) if isinstance(x_attempts, list) else []
+    attempts.append({
+        "source": "mob_x_only_policy",
+        "result": "ok" if output else "no_complete_official_x_posts",
+        "candidate_count": min(len(output), limit),
+        "enabled_lanes": ["x"],
+    })
+    return output[:limit], attempts
+
 def discover_all_official_posts(
     *,
     config_path: str | Path = DEFAULT_CONFIG,
