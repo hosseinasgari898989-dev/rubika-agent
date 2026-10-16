@@ -1,8 +1,8 @@
 """Standard caption for Poppy Playtime fan-edit videos sent to Rubika."""
 
-EDIT_CAPTION = """𝔓𝔒𝔓𝔜 𝔓𝔏𝔄𝔜𝔗ℑ𝔐𝔈
+EDIT_CAPTION = """**𝔓𝔒𝔓𝔜 𝔓𝔏𝔄𝔜𝔗ℑ𝔐𝔈**
 .✫─────୨୧─────✫
-CHANEL» @poppy_play_time_HV
+**CHANEL» @poppy_play_time_HV**
 
 ↬🄿🄾🄿🄿🅈 🄿🄻🄰🅈🅃🄸🄼🄴
 .   ☆  •    .   𖠋    •   𑜷    .    ✯   ☆         *            •    ☆       *         .             . ٠.   ٠.      
