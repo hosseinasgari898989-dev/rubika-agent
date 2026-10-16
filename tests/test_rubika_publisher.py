@@ -54,15 +54,15 @@ class RubikaPublisherMediaTests(unittest.TestCase):
 
     def test_official_mob_caption_bolds_only_translation_and_escapes_source_markup(self):
         caption = (
-            "🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\\n\\n"
-            "Official **source** text with ||spoiler|| markers and a second line.\\n\\n"
-            "📝 ترجمه فارسی:\\nA Persian translation."
+            "🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\n\n"
+            "Official **source** text with ||spoiler|| markers and a second line.\n\n"
+            "📝 ترجمه فارسی:\nA Persian translation."
         )
         video_path = Path(self.tempdir.name) / "mob-news.mp4"
         video_path.write_bytes(b"fake-mob-news-video")
         outgoing = _decorate_official_mob_caption(caption)
 
-        self.assertTrue(outgoing.startswith("🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\\n\\n"))
+        self.assertTrue(outgoing.startswith("🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\n\n"))
         self.assertIn("Official", outgoing)
         self.assertNotIn("> Official", outgoing)
         self.assertNotIn("**🎮", outgoing)
