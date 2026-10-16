@@ -252,6 +252,18 @@ class HTTPClientTests(unittest.TestCase):
         self.assertIn("run 1234", rendered)
         self.assertNotIn("token", rendered.lower())
 
+    def test_report_prioritizes_recent_ci_failures(self):
+        rendered = console.format_github_runs([
+            {"id": 10, "name": "Latest green", "branch": "main", "status": "completed", "conclusion": "success"},
+            {"id": 9, "name": "Another green", "branch": "main", "status": "completed", "conclusion": "success"},
+            {"id": 8, "name": "Earlier failure", "branch": "feature", "status": "completed", "conclusion": "failure"},
+            {"id": 7, "name": "Older run", "branch": "main", "status": "completed", "conclusion": "success"},
+        ])
+        self.assertIn("خطاهای اخیر", rendered)
+        self.assertIn("run 8", rendered)
+        self.assertIn("run 10", rendered)
+        self.assertLess(rendered.index("run 8"), rendered.index("run 10"))
+
 
 class OperationsConsoleTests(unittest.TestCase):
     def make_console(self, bot=None, control=None, github_runs=None):
