@@ -347,6 +347,106 @@ def refresh_daily_digest() -> dict[str, Any]:
 
                 raw = edit(chat_id=owner_id, message_id=old_message_id, text=new_body)
                 if not _rubika_ok(raw):
+                    diagnostic = _response_diagnostic(raw, [token, owner_id])
+                    response = _parse_rubika_response(raw)
+                    if response.get("status") == "INVALID_ACCESS":
+                        # The API definitively rejected editing the recorded message.
+                        # Create one replacement, then persist its ID so later runs edit
+                        # that new message. Never retry a send with an ambiguous outcome.
+                        try:
+                            replacement_raw = bot.send_message(chat_id=owner_id, text=new_body)
+                        except Exception:
+                            try:
+                                _commit_digest(
+                                    window_id=window_id,
+                                    lock_token=lock_token,
+                                    message_id=None,
+                                    message_body=new_body,
+                                    message_creation_uncertain=True,
+                                )
+                            except Exception:
+                                pass
+                            return {
+                                "sent": False,
+                                "reason": "rubika_digest_replacement_send_uncertain",
+                            }
+
+                        if not _rubika_ok(replacement_raw):
+                            replacement_response = _parse_rubika_response(replacement_raw)
+                            replacement_status = replacement_response.get("status")
+                            if replacement_status in {"INVALID_ACCESS", "ERROR", "FAILED"}:
+                                _commit_digest(
+                                    window_id=window_id,
+                                    lock_token=lock_token,
+                                    message_id=old_message_id,
+                                    message_body=old_body,
+                                    message_creation_uncertain=False,
+                                )
+                                return {
+                                    "sent": False,
+                                    "reason": "rubika_digest_replacement_rejected",
+                                    "diagnostic": _response_diagnostic(replacement_raw, [token, owner_id]),
+                                }
+                            try:
+                                _commit_digest(
+                                    window_id=window_id,
+                                    lock_token=lock_token,
+                                    message_id=None,
+                                    message_body=new_body,
+                                    message_creation_uncertain=True,
+                                )
+                            except Exception:
+                                pass
+                            return {
+                                "sent": False,
+                                "reason": "rubika_digest_replacement_outcome_uncertain",
+                                "diagnostic": _response_diagnostic(replacement_raw, [token, owner_id]),
+                            }
+
+                        replacement_id = _rubika_message_id(replacement_raw)
+                        if not replacement_id:
+                            try:
+                                _commit_digest(
+                                    window_id=window_id,
+                                    lock_token=lock_token,
+                                    message_id=None,
+                                    message_body=new_body,
+                                    message_creation_uncertain=True,
+                                )
+                            except Exception:
+                                pass
+                            return {
+                                "sent": False,
+                                "reason": "rubika_digest_replacement_message_id_missing",
+                            }
+
+                        try:
+                            committed = _commit_digest(
+                                window_id=window_id,
+                                lock_token=lock_token,
+                                message_id=replacement_id,
+                                message_body=new_body,
+                                message_creation_uncertain=False,
+                            )
+                        except Exception:
+                            committed = False
+                        if not committed:
+                            try:
+                                _commit_digest(
+                                    window_id=window_id,
+                                    lock_token=lock_token,
+                                    message_id=None,
+                                    message_body=new_body,
+                                    message_creation_uncertain=True,
+                                )
+                            except Exception:
+                                pass
+                            return {
+                                "sent": False,
+                                "reason": "rubika_digest_replacement_commit_uncertain",
+                            }
+                        return {"sent": True, "replaced": True}
+
                     _commit_digest(
                         window_id=window_id,
                         lock_token=lock_token,
@@ -357,7 +457,7 @@ def refresh_daily_digest() -> dict[str, Any]:
                     return {
                         "sent": False,
                         "reason": "rubika_digest_edit_rejected",
-                        "diagnostic": _response_diagnostic(raw, [token, owner_id]),
+                        "diagnostic": diagnostic,
                     }
 
                 _commit_digest(
