@@ -162,17 +162,19 @@ class ControlWorker:
         payload: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         parsed = urllib.parse.urlsplit(path)
-        allowed_paths = {
-            "/api/status",
-            "/api/brain/owner-console/state",
-            "/api/brain/owner-console/offset",
-            "/api/brain/owner-console/claim",
-            "/api/brain/owner-console/finish",
-            "/api/brain/owner-console/queue-summary",
-            "/api/brain/ai-provider/status",
+        allowed_methods = {
+            "/api/status": {"GET"},
+            "/api/brain/owner-console/state": {"GET"},
+            "/api/brain/owner-console/offset": {"POST"},
+            "/api/brain/owner-console/claim": {"POST"},
+            "/api/brain/owner-console/finish": {"POST"},
+            "/api/brain/owner-console/queue-summary": {"GET"},
+            "/api/brain/ai-provider/status": {"GET"},
         }
-        if parsed.path not in allowed_paths or parsed.fragment:
+        if parsed.path not in allowed_methods or parsed.fragment:
             raise OwnerConsoleError("control_api_path_not_allowed")
+        if method not in allowed_methods[parsed.path]:
+            raise OwnerConsoleError("control_api_method_not_allowed")
         if parsed.query:
             if parsed.path != "/api/brain/ai-provider/status":
                 raise OwnerConsoleError("control_api_query_not_allowed")
