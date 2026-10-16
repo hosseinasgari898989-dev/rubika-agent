@@ -20,6 +20,40 @@ class FakeStatement {
     return this;
   }
   async first() {
+    if (this.sql.includes("FROM owner_console_state WHERE id = 1")) {
+      return this.db.ownerConsoleState ? { ...this.db.ownerConsoleState } : null;
+    }
+    if (this.sql.startsWith("INSERT INTO owner_console_updates")) {
+      const [updateId, chatHash, command, createdAt, updatedAt, dayStart, dailyLimit] = this.values;
+      if (this.db.ownerConsoleUpdates.has(updateId)) return null;
+      const used = [...this.db.ownerConsoleUpdates.values()]
+        .filter(row => row.created_at >= dayStart).length;
+      if (used >= dailyLimit) return null;
+      const row = {
+        update_id: updateId, chat_hash: chatHash, command, status: "claimed",
+        result_code: null, created_at: createdAt, updated_at: updatedAt,
+      };
+      this.db.ownerConsoleUpdates.set(updateId, row);
+      return { update_id: updateId };
+    }
+    if (this.sql.includes("FROM owner_console_updates WHERE update_id = ?")) {
+      const row = this.db.ownerConsoleUpdates.get(this.values[0]);
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS total FROM owner_console_updates WHERE created_at >= ?")) {
+      const dayStart = this.values[0];
+      return {
+        total: [...this.db.ownerConsoleUpdates.values()]
+          .filter(row => row.created_at >= dayStart).length,
+      };
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS total FROM automation_queue WHERE status = 'sent' AND sent_at >= ?")) {
+      const dayStart = this.values[0];
+      return {
+        total: [...this.db.automationQueue.values()]
+          .filter(row => row.status === "sent" && row.sent_at && row.sent_at >= dayStart).length,
+      };
+    }
     if (this.sql.includes("FROM owner_digest_state WHERE id = 1")) {
       return this.db.ownerDigestState ? { ...this.db.ownerDigestState } : null;
     }
@@ -109,6 +143,21 @@ class FakeStatement {
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("UPDATE owner_console_state SET offset_id")) {
+      if (!this.db.ownerConsoleState) return { meta: { changes: 0 } };
+      Object.assign(this.db.ownerConsoleState, { offset_id: v[0], updated_at: v[1] });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE owner_console_updates SET status = ?")) {
+      const row = this.db.ownerConsoleUpdates.get(v[3]);
+      if (!row || row.status !== "claimed") return { meta: { changes: 0 } };
+      Object.assign(row, { status: v[0], result_code: v[1], updated_at: v[2] });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE automation_queue SET status = 'uncertain'")) {
+      this.db.queueStateRepairCalls += 1;
+      return { meta: { changes: 0 } };
+    }
     if (sql.startsWith("INSERT OR IGNORE INTO owner_digest_state")) {
       if (!this.db.ownerDigestState) {
         this.db.ownerDigestState = {
@@ -169,9 +218,6 @@ class FakeStatement {
       );
       if (!existing) this.db.automationQueue.set(row.id, row);
       return { meta: { changes: existing ? 0 : 1 } };
-    }
-    if (sql.startsWith("UPDATE automation_queue SET status = 'uncertain'")) {
-      return { meta: { changes: 0 } };
     }
     if (sql.startsWith("UPDATE automation_queue SET status = ?")) {
       const row = this.db.automationQueue.get(v[4]);
@@ -250,6 +296,9 @@ class FakeDB {
     this.aiUsageDaily = new Map();
     this.ownerDigestState = null;
     this.ownerDigestEvents = [];
+    this.ownerConsoleState = { id: 1, offset_id: null, updated_at: null };
+    this.ownerConsoleUpdates = new Map();
+    this.queueStateRepairCalls = 0;
   }
   prepare(sql) {
     return new FakeStatement(this, sql);
@@ -278,6 +327,127 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.status, 200);
   assert.equal(response.body.service, "rubika-agent");
   assert.equal(response.body.publishing, false);
+}
+
+{
+  const state = env();
+  let response = await read(await worker.fetch(
+    request("/api/brain/owner-console/state", { token: null }), state
+  ));
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error, "unauthorized");
+
+  response = await read(await worker.fetch(
+    request("/api/brain/owner-console/state"), state
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.offset_id, null);
+
+  response = await read(await worker.fetch(
+    request("/api/brain/owner-console/offset", {
+      method: "POST", body: { offset_id: "cursor-123" },
+    }), state
+  ));
+  assert.equal(response.status, 200);
+  response = await read(await worker.fetch(
+    request("/api/brain/owner-console/state"), state
+  ));
+  assert.equal(response.body.offset_id, "cursor-123");
+  assert.equal(response.body.ok, true);
+}
+{
+  const state = env();
+  const updateId = "a".repeat(64);
+  const chatHash = "b".repeat(64);
+  const payload = { update_id: updateId, chat_hash: chatHash, command: "status" };
+  let response = await read(await worker.fetch(
+    request("/api/brain/owner-console/claim", { method: "POST", body: payload }), state
+  ));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.claimed, true);
+
+  response = await read(await worker.fetch(
+    request("/api/brain/owner-console/claim", { method: "POST", body: payload }), state
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.claimed, false);
+  assert.equal(response.body.duplicate, true);
+  assert.equal(response.body.status, "claimed");
+
+  response = await read(await worker.fetch(
+    request("/api/brain/owner-console/claim", {
+      method: "POST", body: { ...payload, command: "delete_everything" },
+    }), state
+  ));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "owner_console_command_invalid");
+
+  response = await read(await worker.fetch(
+    request("/api/brain/owner-console/finish", {
+      method: "POST",
+      body: { update_id: updateId, status: "answered", result_code: "status_ok" },
+    }), state
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "answered");
+
+  response = await read(await worker.fetch(
+    request("/api/brain/owner-console/finish", {
+      method: "POST",
+      body: { update_id: updateId, status: "answered", result_code: "status_ok" },
+    }), state
+  ));
+  assert.equal(response.status, 409);
+}
+{
+  const state = env();
+  const created = new Date().toISOString();
+  for (let i = 0; i < 80; i += 1) {
+    const id = String(i).padStart(64, "0");
+    state.DB.ownerConsoleUpdates.set(id, {
+      update_id: id, chat_hash: "b".repeat(64), command: "status",
+      status: "answered", result_code: "reply_sent", created_at: created, updated_at: created,
+    });
+  }
+  const response = await read(await worker.fetch(
+    request("/api/brain/owner-console/claim", {
+      method: "POST",
+      body: { update_id: "f".repeat(64), chat_hash: "b".repeat(64), command: "status" },
+    }), state
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.claimed, false);
+  assert.equal(response.body.rate_limited, true);
+  assert.equal(state.DB.ownerConsoleUpdates.size, 80);
+}
+{
+  const state = env();
+  state.DB.automationQueue.set("tiktok:item-1", {
+    id: "tiktok:item-1", status: "queued", sent_at: null,
+  });
+  state.DB.automationQueue.set("youtube:item-2", {
+    id: "youtube:item-2", status: "processing", sent_at: null,
+  });
+  state.DB.automationQueue.set("instagram:item-3", {
+    id: "instagram:item-3", status: "sent", sent_at: new Date().toISOString(),
+  });
+  const before = [...state.DB.automationQueue.values()].map(row => row.status);
+  let response = await read(await worker.fetch(
+    request("/api/brain/owner-console/queue-summary"), state
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.queue_counts.queued, 1);
+  assert.equal(response.body.queue_counts.processing, 1);
+  assert.equal(response.body.queue_counts.sent, 1);
+  assert.equal(response.body.sent_today, 1);
+  assert.equal(response.body.publishing, false);
+  assert.deepEqual([...state.DB.automationQueue.values()].map(row => row.status), before);
+  assert.equal(state.DB.queueStateRepairCalls, 0);
+
+  response = await read(await worker.fetch(
+    request("/api/brain/owner-console/queue-summary", { method: "POST", body: {} }), state
+  ));
+  assert.equal(response.status, 405);
 }
 {
   const response = await read(await worker.fetch(request("/api/brain/runs", { method: "POST", body: { id: "run-test-0001" }, token: null }), env()));

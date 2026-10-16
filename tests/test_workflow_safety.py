@@ -18,6 +18,20 @@ class WorkflowSafetyTests(unittest.TestCase):
         # Merely changing the request file must not launch downloads or publication.
         self.assertNotIn("\n  push:\n", workflow)
 
+    def test_owner_console_workflow_is_scheduled_read_only_and_owner_gated(self):
+        workflow = (ROOT / ".github" / "workflows" / "owner-console-poll.yml").read_text(encoding="utf-8")
+        self.assertIn("schedule:", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
+        self.assertNotIn("\n  pull_request:\n", workflow)
+        self.assertIn("RUBIKA_OWNER_CHAT_ID", workflow)
+        self.assertIn("RUBIKA_OWNER_USER_ID", workflow)
+        self.assertIn("AGENT_API_TOKEN", workflow)
+        self.assertIn("python -m agent.brain.owner_console --once", workflow)
+        for forbidden in ("send_video", "merge_pull_request", "wrangler deploy", "migrations apply"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, workflow)
+
     def test_official_news_publishing_is_locked_to_test_channel_only(self):
         config = json.loads((ROOT / "config" / "mob_official_sources.json").read_text(encoding="utf-8"))
         policy = json.loads((ROOT / "config" / "agent_lifecycle.json").read_text(encoding="utf-8"))

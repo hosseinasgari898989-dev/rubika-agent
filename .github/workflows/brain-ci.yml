@@ -65,10 +65,12 @@ on:
       - "tests/test_queue_intake.py"
       - "tests/test_queue_worker.py"
       - "tests/test_owner_notify.py"
+      - "tests/test_owner_console.py"
       - "tests/test_workflow_safety.py"
       - ".github/workflows/queue-intake.yml"
       - ".github/workflows/owner-daily-digest.yml"
       - ".github/workflows/owner-digest-refresh.yml"
+      - ".github/workflows/owner-console-poll.yml"
       - "tests/test_vision_moderator.py"
       - "tests/worker.test.mjs"
       - "tests/test_migrations.py"
@@ -128,6 +130,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_queue_intake.py' -v
           python -m unittest discover -s tests -p 'test_queue_worker.py' -v
           python -m unittest discover -s tests -p 'test_owner_notify.py' -v
+          python -m unittest discover -s tests -p 'test_owner_console.py' -v
           python -m unittest discover -s tests -p 'test_vision_moderator.py' -v
           python -m unittest discover -s tests -p 'test_migrations.py' -v
           python -m unittest discover -s tests -p 'test_proxitok_discovery.py' -v

@@ -1,0 +1,384 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import unittest
+import urllib.error
+from unittest.mock import patch
+
+from agent.brain import owner_console as console
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload, status=200):
+        self.status = status
+        self._payload = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
+
+    def read(self, limit=-1):
+        return self._payload[:limit] if limit >= 0 else self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+class FakeOpener:
+    def __init__(self, responses=None, error=None):
+        self.responses = list(responses or [])
+        self.error = error
+        self.requests = []
+
+    def open(self, request, timeout=0):
+        self.requests.append((request, timeout))
+        if self.error:
+            raise self.error
+        if not self.responses:
+            raise AssertionError("Unexpected HTTP request in offline test")
+        return self.responses.pop(0)
+
+
+class FakeBot:
+    def __init__(self, updates=None, send_error=None):
+        self.updates = updates or {"status": "OK", "data": {"updates": [], "next_offset_id": "next-cursor"}}
+        self.send_error = send_error
+        self.sent = []
+        self.get_updates_offsets = []
+
+    def get_updates(self, offset_id):
+        self.get_updates_offsets.append(offset_id)
+        return self.updates
+
+    def send_message(self, chat_id, text):
+        self.sent.append((chat_id, text))
+        if self.send_error:
+            raise self.send_error
+        return {"status": "OK"}
+
+
+class FakeControl:
+    def __init__(self):
+        self.offset = None
+        self.claims = []
+        self.finished = []
+        self.status_calls = 0
+        self.queue_calls = 0
+        self.ai_calls = []
+        self._claimed = set()
+        self.status_payload = {
+            "ok": True, "database": "connected", "agent": {"enabled": 0},
+            "item_counts": [{"status": "ready", "total": 2}],
+            "recent_runs": [{"id": "run-12345678", "status": "ok"}],
+            "capabilities": {"publishing": False}, "publishing": False,
+        }
+        self.queue_payload = {
+            "ok": True,
+            "queue_counts": {
+                "queued": 2, "processing": 1, "sent": 3, "failed": 0,
+                "uncertain": 1, "skipped": 2,
+            },
+            "sent_today": 1,
+            "item_counts": {"ready": 2, "sent": 3},
+            "publishing": False,
+        }
+
+    def get_state(self):
+        return {"ok": True, "offset_id": self.offset}
+
+    def set_offset(self, offset_id):
+        self.offset = offset_id
+        return {"ok": True, "offset_saved": True}
+
+    def claim(self, update_id, chat_hash, command):
+        self.claims.append((update_id, chat_hash, command))
+        if update_id in self._claimed:
+            return {"ok": True, "claimed": False, "duplicate": True, "status": "answered"}
+        self._claimed.add(update_id)
+        return {"ok": True, "claimed": True, "update_id": update_id}
+
+    def finish(self, update_id, status, result_code):
+        self.finished.append((update_id, status, result_code))
+        return {"ok": True, "status": status}
+
+    def status(self):
+        self.status_calls += 1
+        return self.status_payload
+
+    def queue_summary(self):
+        self.queue_calls += 1
+        return self.queue_payload
+
+    def ai_status(self, provider):
+        self.ai_calls.append(provider)
+        return {
+            "ok": True, "provider": provider, "ready": True, "status": "ready",
+            "calls_used": 2, "daily_limit": 6, "remaining": 4,
+            "cooldown_active": False, "last_error_code": None,
+        }
+
+
+def update(*, text="/status", chat_id="owner-chat-123", sender_id="owner-user-456",
+           message_id="message-001", update_type="NewMessage", extra=None):
+    value = {
+        "type": update_type,
+        "chat_id": chat_id,
+        "new_message": {
+            "message_id": message_id,
+            "sender_id": sender_id,
+            "text": text,
+        },
+    }
+    if extra:
+        value.update(extra)
+    return value
+
+
+class CommandParserTests(unittest.TestCase):
+    def test_only_allowlisted_commands_are_recognized(self):
+        self.assertEqual(console.parse_command("/status").audit_name, "status")
+        self.assertEqual(console.parse_command("/queue").audit_name, "queue")
+        self.assertEqual(console.parse_command("/report").name, "report")
+        self.assertEqual(console.parse_command("/ai-status").audit_name, "ai-status")
+        self.assertEqual(console.parse_command("/ai-status GEMINI").audit_name, "ai-status:gemini")
+        self.assertEqual(console.parse_command("/ai-status github_models").provider, "github_models")
+        self.assertEqual(console.parse_command("/edit src/index.js").name, "unknown")
+        self.assertEqual(console.parse_command("please run a command").name, "unknown")
+        self.assertEqual(console.parse_command("/ai-status some-other-provider").name, "unknown")
+        self.assertEqual(console.parse_command("/status argument").name, "unknown")
+
+    def test_private_message_gate_requires_exact_chat_and_sender(self):
+        accepted = console._owner_private_text(
+            update(text="/status"), "owner-chat-123", "owner-user-456"
+        )
+        self.assertEqual(accepted, "/status")
+        self.assertIsNone(console._owner_private_text(
+            update(chat_id="other-chat"), "owner-chat-123", "owner-user-456"
+        ))
+        self.assertIsNone(console._owner_private_text(
+            update(sender_id="other-user"), "owner-chat-123", "owner-user-456"
+        ))
+        self.assertIsNone(console._owner_private_text(
+            update(extra={"chat_type": "group"}), "owner-chat-123", "owner-user-456"
+        ))
+        self.assertIsNone(console._owner_private_text(
+            update(update_type="UpdatedMessage"), "owner-chat-123", "owner-user-456"
+        ))
+
+    def test_message_identity_is_stable_and_does_not_include_raw_id_in_storage(self):
+        item = update()
+        first = console._message_identity(item)
+        second = console._message_identity(item)
+        expected = hashlib.sha256(b"owner-chat-123|message-001").hexdigest()
+        self.assertEqual(first, expected)
+        self.assertEqual(first, second)
+        self.assertNotIn("owner-chat-123", first)
+        self.assertEqual(len(first), 64)
+
+
+class FormattingTests(unittest.TestCase):
+    def test_status_and_queue_summaries_are_bounded_and_non_mutating(self):
+        status = console.format_status({
+            "ok": True, "database": "connected", "agent": {"enabled": 0},
+            "publishing": False, "capabilities": {"publishing": False},
+            "item_counts": [{"status": "ready", "total": 3}],
+            "recent_runs": [{"id": "run-12345678", "status": "ok"}],
+        })
+        self.assertIn("پایگاه داده: متصل", status)
+        self.assertIn("انتشار از این API: غیرفعال", status)
+        self.assertIn("ready: 3", status)
+        queue = console.format_queue({
+            "ok": True, "queue_counts": {"queued": 4, "processing": 1, "sent": 3},
+            "sent_today": 1, "item_counts": {"ready": 2}, "publishing": False,
+        })
+        self.assertIn("در انتظار: 4", queue)
+        self.assertIn("هیچ موردی از صف", queue)
+        self.assertLessEqual(len(status), console.MAX_REPLY_CHARS)
+        self.assertLessEqual(len(queue), console.MAX_REPLY_CHARS)
+
+    def test_ai_report_only_shows_allowlisted_status_fields(self):
+        rendered = console.format_ai_status("gemini", {
+            "ok": True, "ready": False, "status": "cooldown_active",
+            "calls_used": 3, "daily_limit": 6, "remaining": 3,
+            "cooldown_active": True, "last_error_code": "rate_limited",
+            "api_key": "must-not-show",
+        })
+        self.assertIn("3/6", rendered)
+        self.assertIn("rate_limited", rendered)
+        self.assertNotIn("must-not-show", rendered)
+
+
+class HTTPClientTests(unittest.TestCase):
+    def test_worker_client_uses_fixed_https_host_and_no_redirects(self):
+        opener = FakeOpener([FakeHTTPResponse({"ok": True, "database": "connected"})])
+        client = console.ControlWorker(
+            "https://rubika-agent.h98609294.workers.dev", "t" * 40, opener=opener
+        )
+        self.assertEqual(client.status()["database"], "connected")
+        request_obj, timeout = opener.requests[0]
+        self.assertEqual(request_obj.full_url, "https://rubika-agent.h98609294.workers.dev/api/status")
+        self.assertEqual(request_obj.get_method(), "GET")
+        self.assertNotIn("Authorization", request_obj.headers)
+        self.assertEqual(timeout, 10)
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_url_invalid"):
+            console.ControlWorker("https://attacker.example", "t" * 40, opener=FakeOpener())
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_path_not_allowed"):
+            client._request("GET", "/api/brain/anything-secret")
+
+    def test_ai_status_query_is_allowlisted(self):
+        opener = FakeOpener([FakeHTTPResponse({"ok": True, "status": "ready"})])
+        client = console.ControlWorker(
+            "https://rubika-agent.h98609294.workers.dev", "t" * 40, opener=opener
+        )
+        client.ai_status("gemini")
+        self.assertIn("provider=gemini", opener.requests[0][0].full_url)
+        with self.assertRaisesRegex(console.OwnerConsoleError, "code_ai_provider_not_enabled"):
+            client.ai_status("unknown")
+
+    def test_worker_client_rejects_arbitrary_queries_and_paths(self):
+        client = console.ControlWorker(
+            "https://rubika-agent.h98609294.workers.dev", "t" * 40, opener=FakeOpener()
+        )
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_query_not_allowed"):
+            client._request("GET", "/api/brain/owner-console/state?offset=private")
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_provider_invalid"):
+            client._request("GET", "/api/brain/ai-provider/status?provider=gemini&provider=groq")
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_path_not_allowed"):
+            client._request("GET", "/api/brain/owner-console/not-allowlisted")
+        with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_method_not_allowed"):
+            client._request("GET", "/api/brain/owner-console/claim")
+
+    def test_rubika_transport_errors_never_reveal_token(self):
+        token = "private-rubika-token-1234567890"
+        api = console.RubikaBotAPI(token, opener=FakeOpener(error=TimeoutError()))
+        with self.assertRaises(console.OwnerConsoleError) as caught:
+            api.get_updates(None)
+        self.assertEqual(caught.exception.code, "rubika_network_result_unknown")
+        self.assertNotIn(token, str(caught.exception))
+
+    def test_github_run_formatter_never_accepts_raw_logs(self):
+        rendered = console.format_github_runs([{
+            "id": 1234, "name": "Cloud bootstrap checks",
+            "branch": "main", "status": "completed", "conclusion": "failure",
+        }])
+        self.assertIn("failure", rendered)
+        self.assertIn("run 1234", rendered)
+        self.assertNotIn("token", rendered.lower())
+
+    def test_report_prioritizes_recent_ci_failures(self):
+        rendered = console.format_github_runs([
+            {"id": 10, "name": "Latest green", "branch": "main", "status": "completed", "conclusion": "success"},
+            {"id": 9, "name": "Another green", "branch": "main", "status": "completed", "conclusion": "success"},
+            {"id": 8, "name": "Earlier failure", "branch": "feature", "status": "completed", "conclusion": "failure"},
+            {"id": 7, "name": "Older run", "branch": "main", "status": "completed", "conclusion": "success"},
+        ])
+        self.assertIn("خطاهای اخیر", rendered)
+        self.assertIn("run 8", rendered)
+        self.assertIn("run 10", rendered)
+        self.assertLess(rendered.index("run 8"), rendered.index("run 10"))
+
+
+class OperationsConsoleTests(unittest.TestCase):
+    def make_console(self, bot=None, control=None, github_runs=None):
+        api = bot or FakeBot()
+        worker = control or FakeControl()
+        instance = console.OperationsConsole(
+            bot=api,
+            control=worker,
+            owner_chat_id="owner-chat-123",
+            owner_user_id="owner-user-456",
+            github_runs=github_runs or (lambda: []),
+        )
+        return instance, api, worker
+
+    def test_help_command_is_read_only_and_does_not_call_worker(self):
+        instance, bot, control = self.make_console()
+        result = instance.process_update(update(text="/help"))
+        self.assertEqual(result, "answered")
+        self.assertEqual(len(bot.sent), 1)
+        self.assertIn("/queue", bot.sent[0][1])
+        self.assertEqual(control.status_calls, 0)
+        self.assertEqual(control.queue_calls, 0)
+        self.assertEqual(control.ai_calls, [])
+        self.assertEqual(control.finished[0][1], "answered")
+
+    def test_queue_command_uses_only_read_only_summary(self):
+        instance, bot, control = self.make_console()
+        self.assertEqual(instance.process_update(update(text="/queue")), "answered")
+        self.assertEqual(control.queue_calls, 1)
+        self.assertEqual(control.status_calls, 0)
+        self.assertIn("در انتظار: 2", bot.sent[-1][1])
+        self.assertNotIn("send_video", bot.sent[-1][1])
+
+    def test_ai_status_queries_each_provider_without_inference(self):
+        instance, bot, control = self.make_console()
+        self.assertEqual(instance.process_update(update(text="/ai-status")), "answered")
+        self.assertEqual(control.ai_calls, list(console.PROVIDERS))
+        self.assertIn("GITHUB_MODELS", bot.sent[-1][1])
+        self.assertEqual(control.queue_calls, 0)
+
+    def test_report_gathers_status_queue_ai_and_latest_ci(self):
+        instance, bot, control = self.make_console(
+            github_runs=lambda: [{"id": 999, "name": "CI", "branch": "main",
+                                  "status": "completed", "conclusion": "success"}]
+        )
+        self.assertEqual(instance.process_update(update(text="/report")), "answered")
+        self.assertEqual(control.status_calls, 1)
+        self.assertEqual(control.queue_calls, 1)
+        self.assertEqual(control.ai_calls, list(console.PROVIDERS))
+        self.assertIn("run 999", bot.sent[-1][1])
+        self.assertIn("گزارش Rubika-Agent", bot.sent[-1][1])
+        self.assertLessEqual(len(bot.sent[-1][1]), console.MAX_REPLY_CHARS)
+
+    def test_unapproved_commands_are_not_executed(self):
+        instance, bot, control = self.make_console()
+        result = instance.process_update(update(text="/edit src/index.js"))
+        self.assertEqual(result, "answered")
+        self.assertIn("پشتیبانی نمی‌شود", bot.sent[-1][1])
+        self.assertEqual(control.status_calls, 0)
+        self.assertEqual(control.queue_calls, 0)
+        self.assertEqual(control.ai_calls, [])
+
+    def test_duplicate_update_never_sends_a_second_reply(self):
+        instance, bot, control = self.make_console()
+        incoming = update(text="/status")
+        self.assertEqual(instance.process_update(incoming), "answered")
+        self.assertEqual(instance.process_update(incoming), "duplicate")
+        self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(len(control.claims), 2)
+
+    def test_non_owner_updates_are_ignored_without_claim_or_reply(self):
+        instance, bot, control = self.make_console()
+        result = instance.process_update(update(text="/status", sender_id="attacker"))
+        self.assertEqual(result, "ignored")
+        self.assertEqual(bot.sent, [])
+        self.assertEqual(control.claims, [])
+
+    def test_ambiguous_send_is_recorded_uncertain_and_never_retried(self):
+        instance, bot, control = self.make_console(bot=FakeBot(send_error=console.OwnerConsoleError("rubika_network_result_unknown")))
+        incoming = update(text="/status")
+        self.assertEqual(instance.process_update(incoming), "uncertain")
+        self.assertEqual(instance.process_update(incoming), "duplicate")
+        self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(control.finished[0][1], "uncertain")
+
+    def test_poll_once_persists_cursor_after_batch_and_skips_other_users(self):
+        api = FakeBot(updates={
+            "status": "OK",
+            "data": {
+                "updates": [update(text="/status"), update(text="/status", sender_id="other")],
+                "next_offset_id": "cursor-next",
+            },
+        })
+        instance, bot, control = self.make_console(bot=api)
+        stats = instance.poll_once()
+        self.assertEqual(stats["answered"], 1)
+        self.assertEqual(stats["ignored"], 1)
+        self.assertTrue(stats["offset_advanced"])
+        self.assertEqual(control.offset, "cursor-next")
+        self.assertEqual(bot.get_updates_offsets, [None])
+        self.assertEqual(len(bot.sent), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
