@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent-brain-mega-v1
+      - feature/rubika-owner-24h-digest
     paths:
       - "agent/brain/**"
       - "agent/source_policy.py"
@@ -56,8 +57,11 @@ on:
       - "tests/test_rubika_publisher.py"
       - "tests/test_queue_intake.py"
       - "tests/test_queue_worker.py"
+      - "tests/test_owner_notify.py"
       - "tests/test_workflow_safety.py"
       - ".github/workflows/queue-intake.yml"
+      - ".github/workflows/owner-daily-digest.yml"
+      - ".github/workflows/owner-digest-refresh.yml"
       - "tests/test_vision_moderator.py"
       - "tests/worker.test.mjs"
       - "tests/test_migrations.py"
