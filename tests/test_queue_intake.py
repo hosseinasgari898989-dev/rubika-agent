@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from agent.brain.queue_intake import candidates_for_queue, fair_round_robin, run_intake
+from agent.brain.queue_intake import (
+    _is_poppy_related,
+    _visible_metadata_text,
+    candidates_for_queue,
+    fair_round_robin,
+    run_intake,
+)
 
 
 def _now_iso() -> str:
@@ -303,6 +309,20 @@ class QueueIntakeTests(unittest.TestCase):
         )
         self.assertEqual(diagnostics["rejected_by_reason"]["edit_signal_missing"], 1)
         self.assertEqual(diagnostics["duplicate_within_report_count"], 1)
+
+    def test_urls_hashtags_and_creator_handles_cannot_fake_poppy_relevance(self):
+        hashtag_only = {"title": "Unrelated clip", "caption": "#smilingcritters #poppyplaytime"}
+        url_only = {"title": "https://www.tiktok.com/tag/poppyplaytime", "caption": "Funny unrelated clip"}
+        handle_only = {"title": "@smilingcritters", "caption": "Funny unrelated clip"}
+        valid_text = {"title": "Huggy Wuggy edit", "caption": "#smilingcritters"}
+
+        self.assertEqual(_visible_metadata_text(hashtag_only), "unrelated clip")
+        self.assertEqual(_visible_metadata_text(url_only), "funny unrelated clip")
+        self.assertEqual(_visible_metadata_text(handle_only), "funny unrelated clip")
+        self.assertFalse(_is_poppy_related(hashtag_only))
+        self.assertFalse(_is_poppy_related(url_only))
+        self.assertFalse(_is_poppy_related(handle_only))
+        self.assertTrue(_is_poppy_related(valid_text))
 
 if __name__ == "__main__":
     unittest.main()
