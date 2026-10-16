@@ -67,6 +67,40 @@ def preview_freshness_rejection(
     return None
 
 
+def publication_window_rejection(
+    candidate: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    window_hours: int = 5,
+) -> str | None:
+    """Require a verified original X publication timestamp inside the news-only window."""
+    if type(window_hours) is not int or not 1 <= window_hours <= 24:
+        return "publication_window_policy_invalid"
+    if str(candidate.get("source_platform") or "").strip().casefold() != "x":
+        return "official_x_source_required"
+    if candidate.get("freshness_verified") is not True:
+        return "publication_time_unverified"
+    raw = candidate.get("published_at")
+    if not isinstance(raw, str) or not raw.strip():
+        return "publication_time_unverified"
+    try:
+        published = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "publication_time_unverified"
+    if published.tzinfo is None:
+        return "publication_time_unverified"
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        return "publication_window_clock_timezone_required"
+    published = published.astimezone(timezone.utc)
+    current = current.astimezone(timezone.utc)
+    if published > current + timedelta(minutes=5):
+        return "publication_time_in_future"
+    if published < current - timedelta(hours=window_hours):
+        return "outside_recent_publication_window"
+    return None
+
+
 TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
 
 
@@ -505,6 +539,7 @@ def run_trial(
     candidate_report: Path | None = None,
     test_channel_publish: bool = False,
     source_platform: str | None = None,
+    published_within_hours: int = 5,
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -602,6 +637,29 @@ def run_trial(
             "result": "lane_candidates_found" if candidates else "no_candidates_in_requested_lane",
         })
 
+    news_window_rejections: list[dict[str, str]] = []
+    if source_platform == "x" and (publish or test_channel_publish):
+        recent_x_candidates: list[dict[str, Any]] = []
+        window_now = datetime.now(timezone.utc)
+        for item in candidates:
+            reason = publication_window_rejection(
+                item, now=window_now, window_hours=published_within_hours
+            )
+            if reason:
+                news_window_rejections.append({
+                    "id": str(item.get("external_id") or item.get("id") or "")[:120],
+                    "reason": reason,
+                })
+            else:
+                recent_x_candidates.append(item)
+        candidates = recent_x_candidates
+        report["publication_window"] = {
+            "source_platform": "x",
+            "hours": published_within_hours,
+            "rejected_count": len(news_window_rejections),
+            "rejections": news_window_rejections[:25],
+        }
+
     candidates, birth_rejections = filter_candidates_by_birth_for_trial(candidates, lifecycle_policy)
     preview_rejections: list[dict[str, str]] = []
     if not publish:
@@ -641,6 +699,11 @@ def run_trial(
             "max_age_days": PREVIEW_MAX_AGE_DAYS,
             "rejected_count": len(preview_rejections),
         }] if not publish else []),
+        *([{
+            "source": "official_x_publication_window",
+            "hours": published_within_hours,
+            "rejected_count": len(news_window_rejections),
+        }] if source_platform == "x" and (publish or test_channel_publish) else []),
     ]
     report["candidate_count"] = len(candidates)
     if not candidates:
@@ -649,6 +712,8 @@ def run_trial(
         report["error"] = (
             "no_recent_verified_official_mob_posts_found"
             if preview_rejections
+            else "no_official_x_posts_in_recent_window"
+            if news_window_rejections
             else "no_verified_official_posts_in_" + source_platform + "_lane"
             if source_platform is not None
             else "no_verified_official_mob_posts_found"
@@ -931,6 +996,7 @@ def main() -> int:
     parser.add_argument("--report", type=Path, default=Path("artifacts/mob-official-trial-report.json"))
     parser.add_argument("--candidate-report", type=Path, default=None, help="Use the verified official-source candidates found by Termux instead of searching again.")
     parser.add_argument("--source-platform", choices=sorted(OFFICIAL_SOURCE_PLATFORMS), default=None, help="Restrict this run to a verified source lane; never fall back to another lane.")
+    parser.add_argument("--published-within-hours", type=int, choices=range(1, 25), default=5, help="Mob X publishing window based on the verified original publication timestamp.")
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/mob-official-media"))
     args = parser.parse_args()
     result = run_trial(
@@ -941,6 +1007,7 @@ def main() -> int:
         output_dir=args.output_dir,
         candidate_report=args.candidate_report,
         source_platform=args.source_platform,
+        published_within_hours=args.published_within_hours,
     )
     if args.publish or args.publish_test_channel:
         try:
