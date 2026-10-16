@@ -137,6 +137,7 @@ def update(*, text="/status", chat_id="owner-chat-123", sender_id="owner-user-45
 class CommandParserTests(unittest.TestCase):
     def test_only_allowlisted_commands_are_recognized(self):
         self.assertEqual(console.parse_command("/status").audit_name, "status")
+        self.assertEqual(console.parse_command("/commands").audit_name, "help")
         self.assertEqual(console.parse_command("/queue").audit_name, "queue")
         self.assertEqual(console.parse_command("/report").name, "report")
         self.assertEqual(console.parse_command("/ai-status").audit_name, "ai-status")
