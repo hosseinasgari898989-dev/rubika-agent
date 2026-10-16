@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping
 
 from .gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
 
-PROVIDERS = frozenset({"gemini", "groq", "openrouter", "github_models"})
+PROVIDERS = frozenset({"groq", "openrouter"})
 ROLES = frozenset({"diagnose", "propose_patch", "review_patch"})
 SAFE_MODEL = re.compile(r"[@A-Za-z0-9._:/-]{1,160}")
 MAX_RESPONSE_BYTES = 1_000_000
@@ -26,23 +26,11 @@ MAX_PROMPT_CHARS = 160_000
 MAX_OUTPUT_TOKENS = 8192
 
 _PROVIDER_CONFIG = {
-    "gemini": {
-        "key_env": "GEMINI_API_KEY",
-        "model_env": "GEMINI_MODEL",
-        "default_model": "gemini-3.8-flash",
-        "url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-    },
     "groq": {
         "key_env": "GROQ_API_KEY",
         "model_env": "GROQ_MODEL",
         "default_model": "openai/gpt-oss-20b",
         "url": "https://api.groq.com/openai/v1/chat/completions",
-    },
-    "github_models": {
-        "key_env": "GITHUB_TOKEN",
-        "model_env": "GITHUB_MODELS_MODEL",
-        "default_model": "openai/gpt-4o",
-        "url": "https://models.github.ai/inference/chat/completions",
     },
     "openrouter": {
         "key_env": "OPENROUTER_API_KEY",
@@ -156,32 +144,7 @@ def _provider_http_diagnostics(exc: urllib.error.HTTPError, provider: str) -> di
         if 0 <= seconds <= 86400:
             result["retry_after_seconds"] = seconds
 
-    if provider != "gemini":
-        return result
-    try:
-        raw = exc.read(8192)
-        payload = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return result
-    error = payload.get("error") if isinstance(payload, dict) else None
-    if not isinstance(error, dict):
-        return result
-    reason = error.get("status")
-    if isinstance(reason, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", reason):
-        result["provider_reason"] = reason
-    message = error.get("message")
-    if isinstance(message, str) and message.strip():
-        result["provider_message"] = _safe_diagnostic_text(message)
-    details = error.get("details")
-    if isinstance(details, list):
-        reasons = []
-        for item in details[:8]:
-            if isinstance(item, dict):
-                candidate = item.get("reason")
-                if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", candidate):
-                    reasons.append(candidate)
-        if reasons:
-            result["detail_reasons"] = reasons[:4]
+    # Provider response bodies are deliberately excluded from diagnostics.
     return result
 
 
@@ -230,22 +193,7 @@ def invoke_provider(
     if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 90:
         raise ProviderClientError("provider_timeout_invalid")
 
-    if config.provider == "gemini":
-        body = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "thinkingConfig": {"thinkingLevel": "low"},
-                "maxOutputTokens": max_output_tokens,
-                "responseMimeType": "application/json",
-                "temperature": 0.1,
-            },
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": config.api_key,
-            "User-Agent": "Rubika-Agent-Multi-AI-Repair/1.0",
-        }
-    elif config.provider in {"groq", "openrouter", "github_models"}:
+    if config.provider in {"groq", "openrouter"}:
         body = {
             "model": config.model,
             "messages": [
@@ -294,47 +242,25 @@ def invoke_provider(
 
     answer = ""
     usage: dict[str, int] = {}
-    if config.provider == "gemini":
-        candidates = payload.get("candidates")
-        if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], dict):
-            raise ProviderClientError("provider_response_invalid", outcome="unknown")
-        candidate = candidates[0]
-        if candidate.get("finishReason") != "STOP":
-            raise ProviderClientError("provider_response_incomplete", outcome="unknown")
-        parts = candidate.get("content", {}).get("parts", [])
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise ProviderClientError("provider_response_invalid", outcome="unknown")
+    message = choices[0].get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        answer = content.strip()
+    elif isinstance(content, list):
         answer = "\n".join(
-            part.get("text", "") for part in parts
+            part.get("text", "") for part in content
             if isinstance(part, dict) and isinstance(part.get("text"), str)
         ).strip()
-        counts = payload.get("usageMetadata", {})
-        if isinstance(counts, dict):
-            usage = _normalize_usage(
-                prompt=counts.get("promptTokenCount"),
-                output=counts.get("candidatesTokenCount"),
-                total=counts.get("totalTokenCount"),
-            )
-    elif config.provider in {"groq", "openrouter", "github_models"}:
-        choices = payload.get("choices")
-        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-            raise ProviderClientError("provider_response_invalid", outcome="unknown")
-        message = choices[0].get("message")
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
-            answer = content.strip()
-        elif isinstance(content, list):
-            answer = "\n".join(
-                part.get("text", "") for part in content
-                if isinstance(part, dict) and isinstance(part.get("text"), str)
-            ).strip()
-        counts = payload.get("usage", {})
-        if isinstance(counts, dict):
-            usage = _normalize_usage(
-                prompt=counts.get("prompt_tokens"),
-                output=counts.get("completion_tokens"),
-                total=counts.get("total_tokens"),
-            )
-    else:
-        raise ProviderClientError("provider_not_enabled")
+    counts = payload.get("usage", {})
+    if isinstance(counts, dict):
+        usage = _normalize_usage(
+            prompt=counts.get("prompt_tokens"),
+            output=counts.get("completion_tokens"),
+            total=counts.get("total_tokens"),
+        )
 
     if not answer:
         raise ProviderClientError("provider_text_missing", outcome="unknown")
