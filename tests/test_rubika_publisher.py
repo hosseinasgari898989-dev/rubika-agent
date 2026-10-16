@@ -54,9 +54,9 @@ class RubikaPublisherMediaTests(unittest.TestCase):
 
     def test_official_mob_caption_gets_bold_header_and_quoted_source_without_markup_injection(self):
         caption = (
-            "🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\\n\\n"
-            "Official **source** text with ||spoiler|| markers and a second line.\\n\\n"
-            "📝 ترجمه فارسی:\\nA Persian translation."
+            "🎮 ماب انترتینمنت پستی منتشر کرد و گفت:\n\n"
+            "Official **source** text with ||spoiler|| markers and a second line.\n\n"
+            "📝 ترجمه فارسی:\nA Persian translation."
         )
         video_path = Path(self.tempdir.name) / "mob-news.mp4"
         video_path.write_bytes(b"fake-mob-news-video")
