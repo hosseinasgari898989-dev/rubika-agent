@@ -65,14 +65,15 @@ class ErrorSupervisorTests(unittest.TestCase):
         rendered = json.dumps(result)
         self.assertNotIn("invalid-event-extra", rendered)
 
-    def test_worker_has_no_error_supervisor_ai_but_keeps_music_and_translation(self):
+    def test_worker_ai_is_reserved_for_music_and_translation_route_is_retired(self):
         source = (Path(__file__).resolve().parents[1] / "src" / "index.js").read_text(encoding="utf-8")
         self.assertNotIn("AI_SUPERVISOR_MODEL", source)
         self.assertNotIn("/api/brain/supervise-error", source)
-        self.assertIn("OFFICIAL_TRANSLATION_MODEL", source)
-        self.assertIn("VISION_MODEL", source)
-        self.assertIn("translateOfficial(env", source)
+        self.assertNotIn("OFFICIAL_TRANSLATION_MODEL", source)
+        self.assertNotIn("translateOfficial(env", source)
+        self.assertIn('error: "translation_route_retired"', source)
         self.assertIn("moderateMusic(env", source)
+        self.assertEqual(source.count("env.AI.run("), 1)
 
     def test_report_file_contains_only_bounded_recommendation(self):
         payload = {
