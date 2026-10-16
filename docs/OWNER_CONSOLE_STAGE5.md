@@ -37,10 +37,15 @@ The GitHub Actions workflow polls every five minutes (actual start may be delaye
 - No remote D1 migration, Worker deployment, live Rubika request, private message, model-provider request or publishing action has been performed.
 - The Stage 5 branch is stacked on the PR #24 branch. If approved later, review/merge PR #24 first and Stage 5 second; apply the ordered pending migrations and deploy only through separately approved steps.
 
-## Current checkpoint
+## Checkpoint — 2026-10-16 (latest verified)
 
-Branch: `feature/rubika-readonly-ops-console-stage5`
+- PR #24: open, draft, unmerged. Head `da1e7033dd9f54998da29120877b24284bc09253`. Its latest checked runs `Agent brain checks #445` and `Cloud bootstrap checks #240` completed successfully.
+- PR #25: open, draft, unmerged, mergeable. URL: https://github.com/hosseinasgari898989-dev/rubika-agent/pull/25
+- Stage 5 branch: `feature/rubika-readonly-ops-console-stage5`, current head `01943911acdded499fff2cdf19f7859f6e535bcc`. Base is the PR #24 branch, not `main`; intended order remains PR #24 first and Stage 5 second, only after human approval.
+- Latest brain CI `#455` (run `38849356778`) completed successfully. Its logs show all tests, including 20 owner-console tests, 5 migration tests, 3 workflow-safety tests, and the Worker API suite, passing.
+- Latest isolated offline checks `#11` and `#12` (runs `38849353459` and `38849356795`) completed successfully. They install project requirements, compile the module, run the owner-console fake-client tests, apply local SQLite migrations 0001–0007, run workflow safety and in-memory Worker tests, and pass the `--self-test` (`publishing=false`, `queue_mutation=false`).
+- Failures encountered and fixed: one test expected path validation to win even though the request was rejected earlier for an unapproved query; route/path/method allowlists and that assertion are now aligned. The isolated CI also initially lacked the `requests` dependency required by the existing `agent.brain` package import; it now installs the repository requirements. The latest tests pass.
 
-Implemented in source, pending CI/runtime verification: allowlisted read-only commands, private sender gate, durable cursor, idempotent claims/audit, read-only queue summary, sanitized provider and GitHub Actions status summaries.
+### Still deliberately not activated
 
-Not live/verified: actual bot IDs/secrets, live Worker routes, remote migration 0007, end-to-end private replies.
+Actual Rubika IDs/secrets, end-to-end polling/reply, live Worker API routes, remote D1 migration 0007 and deployment remain unverified/not performed. No actual Rubika request, private reply, provider call, public post, Worker deployment, remote migration, merge or publishing-workflow execution was performed.
