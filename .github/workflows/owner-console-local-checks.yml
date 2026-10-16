@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install minimal package-import dependency
+      - name: Install project requirements
         run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Compile owner-console code
         run: python -m compileall -q agent/brain
