@@ -1,0 +1,218 @@
+name: Groq/OpenRouter bounded CI repair
+
+on:
+  workflow_run:
+    workflows:
+      - "Cloud bootstrap checks"
+      - "Agent brain checks"
+    branches:
+      - main
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: rubika-agent-groq-openrouter-repair
+  cancel-in-progress: false
+
+jobs:
+  propose-repair:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+      UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GROQ_MODEL: openai/gpt-oss-20b
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_MODEL: openrouter/free
+      CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter
+      CODE_AI_PROPOSER_PROVIDER: groq
+      CODE_AI_REVIEWER_PROVIDERS: groq,openrouter
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Check out the exact failed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Check freshness, secrets presence, and D1 budgets
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Main has advanced since the failed run; no provider request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for key in AGENT_API_TOKEN GROQ_API_KEY OPENROUTER_API_KEY; do
+            value="${!key:-}"
+            if [[ -z "$value" || ${#value} -lt 20 ]]; then
+              echo "::error::Required credential $key is missing or too short. No provider request was sent."
+              exit 2
+            fi
+          done
+
+          today="$(date -u +%F)"
+          runs_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/groq-openrouter-code-repair.yml/runs?per_page=100&created=$today..$today")"
+          successful="$(python -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for r in d.get("workflow_runs",[]) if r.get("status")=="completed" and r.get("conclusion")=="success"))' <<< "$runs_json")"
+          if [[ "$successful" -ge 3 ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Daily repair-attempt cap reached; no provider request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for provider in groq openrouter; do
+            status_json="$(curl --silent --show-error --connect-timeout 5 --max-time 10 -H "Authorization: Bearer $AGENT_API_TOKEN" "$AGENT_API_BASE_URL/api/brain/ai-provider/status?provider=$provider" 2>/dev/null || true)"
+            if ! printf '%s' "$status_json" | python -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if data.get("ok") is True and data.get("provider") in {"groq","openrouter"} and data.get("ready") is True else 1)'; then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "The live D1 ledger blocked a provider by budget/cooldown; no model call was sent." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Preflight passed for both provider budgets."
+
+      - name: Download the failed CI log to temporary storage
+        if: steps.preflight.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh run view "$UPSTREAM_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > "$RUNNER_TEMP/upstream-failure.log" 2>/dev/null; then
+            printf '%s\n' "No failed CI log could be retrieved." > "$RUNNER_TEMP/upstream-failure.log"
+            echo "The run log was unavailable; repair will only proceed if the engine can find safe source context." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "Raw logs stay in the temporary runner directory."
+
+      - name: Set up Python
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project dependencies
+        if: steps.preflight.outputs.should_run == 'true'
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Set up Node.js
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Diagnose with both providers, propose with Groq, and review with both
+        id: proposal
+        if: steps.preflight.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m agent.brain.multi_ai_code_repair --repo-root "$GITHUB_WORKSPACE" --failure-log "$RUNNER_TEMP/upstream-failure.log" --report-path "$RUNNER_TEMP/repair.json" --patch-path "$RUNNER_TEMP/repair.diff" | tee "$RUNNER_TEMP/repair-result.json"
+          python - "$RUNNER_TEMP/repair.json" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          with open(sys.argv[2], "a", encoding="utf-8") as summary:
+              summary.write("## Groq/OpenRouter repair attempt\n")
+              summary.write(f"- Status: {report.get('status', 'unknown')}\n")
+              summary.write(f"- Provider roles: {report.get('provider_roles', {})}\n")
+              summary.write(f"- Diagnostics used: {report.get('diagnostics_used', 0)}\n")
+              summary.write(f"- Review decision: {report.get('review', {}).get('decision', 'not_run')}\n")
+              summary.write(f"- Request sent: {bool(report.get('request_sent'))}\n")
+              summary.write(f"- Selected files: {', '.join(report.get('selected_files', [])) or 'none'}\n")
+              summary.write("- No patch is auto-merged; deterministic checks and owner review are required.\n")
+          PY
+
+      - name: Validate any proposed patch in a disposable runner
+        id: validation
+        if: steps.preflight.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set -u
+          patch="$RUNNER_TEMP/repair.diff"
+          if [[ ! -s "$patch" ]]; then
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "No high-confidence reviewed patch was produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! git apply --check "$patch" 2>/dev/null; then
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "Patch did not apply cleanly; it was not promoted." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! git apply "$patch"; then
+            git reset --hard HEAD >/dev/null
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "Patch application failed; working tree was reset." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! python -m agent.brain.gemini_code_agent --repo-root "$GITHUB_WORKSPACE" --validate-working-tree; then
+            git reset --hard HEAD >/dev/null
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "Changed-file allowlist failed; working tree was reset." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          set +e
+          python -m compileall -q agent termux
+          compile_status=$?
+          if [[ "$compile_status" -eq 0 ]]; then python -m unittest discover -s tests -v; test_status=$?; else test_status=1; fi
+          if [[ "$test_status" -eq 0 ]]; then python -m agent.preflight self-test; preflight_status=$?; else preflight_status=1; fi
+          if [[ "$preflight_status" -eq 0 ]]; then node tests/worker.test.mjs; worker_status=$?; else worker_status=1; fi
+          set -e
+          if [[ "$compile_status" -ne 0 || "$test_status" -ne 0 || "$preflight_status" -ne 0 || "$worker_status" -ne 0 ]]; then
+            git reset --hard HEAD >/dev/null
+            echo "tests_passed=false" >> "$GITHUB_OUTPUT"
+            echo "The proposal failed deterministic tests and was discarded." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git diff --check
+          echo "tests_passed=true" >> "$GITHUB_OUTPUT"
+          echo "The patch passed fixed tests and may be submitted for owner review." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open a review PR for the tested patch
+        if: steps.validation.outputs.tests_passed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m agent.brain.gemini_code_agent --repo-root "$GITHUB_WORKSPACE" --validate-working-tree
+          short_sha="$(printf '%s' "$UPSTREAM_SHA" | cut -c1-12)"
+          branch="agent-fix/groq-openrouter-$short_sha"
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            echo "::error::Repair branch already exists; it will not be overwritten."
+            exit 2
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git diff --name-only -z | xargs -0 git add --
+          git commit -m "Propose Groq/OpenRouter repair for CI $short_sha"
+          gh auth setup-git
+          git push origin "HEAD:refs/heads/$branch"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --title "Proposed Groq/OpenRouter repair for CI $short_sha" --body "Groq and OpenRouter diagnose the CI failure; Groq proposes a constrained patch; both providers review it. Deterministic tests must pass; no auto-merge, Worker deploy, D1 migration, or Rubika publish is performed."
+
+      - name: Upload sanitized repair evidence
+        if: always() && steps.preflight.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: groq-openrouter-repair-${{ github.event.workflow_run.head_sha }}
+          path: |
+            ${{ runner.temp }}/repair.json
+            ${{ runner.temp }}/repair.diff
+            ${{ runner.temp }}/repair-result.json
+          if-no-files-found: warn
+          retention-days: 7
