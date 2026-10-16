@@ -831,7 +831,7 @@ async function ownerDigestCommit(env, body) {
 const OWNER_CONSOLE_DAILY_COMMAND_LIMIT = 80;
 const OWNER_CONSOLE_COMMANDS = new Set([
   "help", "status", "queue", "ai-status", "report", "unknown",
-  "ai-status:gemini", "ai-status:groq", "ai-status:openrouter", "ai-status:github_models"
+  "ai-status:groq", "ai-status:openrouter"
 ]);
 
 function validOwnerConsoleUpdateId(value) {
@@ -1008,8 +1008,8 @@ async function ownerConsoleQueueSummary(env) {
   }
 }
 
-const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini: 6, groq: 6, openrouter: 6, github_models: 6 });
-const CODE_AI_TOTAL_DAILY_LIMIT = 18;
+const CODE_AI_PROVIDER_LIMITS = Object.freeze({ groq: 6, openrouter: 6 });
+const CODE_AI_TOTAL_DAILY_LIMIT = 12;
 const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch"]);
 const CODE_AI_MAX_COOLDOWN_SECONDS = 86400;
 const CODE_AI_DEFAULT_COOLDOWN_SECONDS = 300;
@@ -1085,7 +1085,7 @@ async function codeAiProviderSnapshot(env, provider, usageDay = new Date().toISO
 }
 
 async function codeAiProviderStatus(env, url) {
-  const provider = validCodeAiProvider(url.searchParams.get("provider") || "gemini");
+  const provider = validCodeAiProvider(url.searchParams.get("provider") || "groq");
   if (!provider) return json({ ok: false, error: "code_ai_provider_not_enabled" }, 400);
   try {
     return json({ ok: true, ...(await codeAiProviderSnapshot(env, provider)) });
