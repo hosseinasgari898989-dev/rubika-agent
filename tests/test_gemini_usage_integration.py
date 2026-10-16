@@ -179,7 +179,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         )
         response = FakeResponse({"ok": True, "reserved": True, "call_id": CALL_ID}, status=201)
         with patch.object(client._opener, "open", return_value=response) as open_request:
-            result = client.reserve(provider="gemini", role="propose_patch", call_id=CALL_ID)
+            result = client.reserve(provider="groq", role="propose_patch", call_id=CALL_ID)
         request = open_request.call_args.args[0]
         headers = {key.lower(): value for key, value in request.header_items()}
         self.assertEqual(request.full_url, "https://example.invalid/api/brain/ai-provider/reserve")
@@ -188,7 +188,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         self.assertEqual(result["call_id"], CALL_ID)
 
     def test_ledger_client_allowlist_matches_enabled_providers(self):
-        expected = {"gemini", "groq", "openrouter", "github_models"}
+        expected = {"groq", "openrouter"}
         self.assertEqual(ALLOWED_PROVIDERS, expected)
         client = CodeAIUsageLedger(
             "https://example.invalid",
@@ -220,7 +220,7 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         )
         with patch.object(client._opener, "open", side_effect=error):
             with self.assertRaisesRegex(UsageLedgerError, "code_ai_daily_budget_exhausted"):
-                client.reserve(provider="gemini", role="propose_patch", call_id=CALL_ID)
+                client.reserve(provider="groq", role="propose_patch", call_id=CALL_ID)
 
     def test_ledger_client_rejects_http_url_and_short_token(self):
         with self.assertRaisesRegex(UsageLedgerError, "usage_ledger_url_invalid"):
@@ -228,29 +228,25 @@ class GeminiUsageIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(UsageLedgerError, "usage_ledger_token_missing_or_short"):
             CodeAIUsageLedger("https://example.invalid", "short")
 
-    def test_active_repair_workflow_uses_github_models_and_excludes_mistral_and_gemini(self):
+    def test_active_repair_workflow_uses_groq_and_openrouter_only(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github" / "workflows" / "gemini-code-assistant.yml").read_text(encoding="utf-8")
         self.assertIn("python -m agent.brain.multi_ai_code_repair", workflow)
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
-        self.assertIn("models: read", workflow)
-        self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
-        self.assertIn("GITHUB_MODELS_MODEL: openai/gpt-4o", workflow)
         self.assertIn("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}", workflow)
         self.assertIn("OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}", workflow)
         self.assertIn("CODE_AI_DIAGNOSER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("CODE_AI_PROPOSER_PROVIDER: github_models", workflow)
+        self.assertIn("CODE_AI_PROPOSER_PROVIDER: groq", workflow)
         self.assertIn("CODE_AI_REVIEWER_PROVIDERS: groq,openrouter", workflow)
-        self.assertIn("status?provider=github_models", workflow)
-        self.assertNotIn("MISTRAL_API_KEY", workflow)
+        self.assertIn("status?provider=groq", workflow)
+        self.assertNotIn("GITHUB_MODELS_MODEL", workflow)
+        self.assertNotIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
         self.assertNotIn("GEMINI_API_KEY", workflow)
         self.assertNotIn("AI.run", workflow)
         provider_source = (root / "agent" / "brain" / "ai_provider_clients.py").read_text(encoding="utf-8")
         helper_source = provider_source.split("def call_provider_with_ledger(", 1)[1]
         self.assertLess(helper_source.index("ledger.reserve("), helper_source.index("invoke_provider("))
         self.assertLess(helper_source.index("invoke_provider("), helper_source.rindex("ledger.finish("))
-        engine_source = Path(gemini.__file__).read_text(encoding="utf-8")
-        self.assertIn("def call_gemini_with_ledger(", engine_source)
 
 
 if __name__ == "__main__":
