@@ -14,7 +14,7 @@ from typing import Any
 from agent.brain.cloud_state import CloudState
 from agent.brain.e2e_from_report import run_one
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
-from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
+# The global lifecycle birth gate is reserved for official Mob news, not TikTok edits.
 
 
 DAILY_SUCCESS_LIMIT = 4
@@ -151,7 +151,6 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
     if not 1 <= max_attempts <= 100:
         raise ValueError("max_attempts_out_of_range")
 
-    lifecycle_policy = load_lifecycle_policy()
     cloud = CloudState(
         os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
         token=os.getenv("AGENT_API_TOKEN", ""),
@@ -161,9 +160,9 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
         "ok": True,
         "status": "running",
         "started_at": _utc_now(),
-        "lifecycle_mode": lifecycle_policy["mode"],
-        "agent_born_at": lifecycle_policy["born_at"],
-        "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+        "lifecycle_mode": "not_applied_to_tiktok_edits",
+        "agent_born_at": None,
+        "birth_cutoff_enabled": False,
         "daily_success_limit": daily_limit,
         "max_candidate_attempts": max_attempts,
         "attempted_count": 0,
@@ -229,23 +228,8 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                 })
                 continue
 
-            # Enforce the launch timestamp again at the last possible point before staging.
-            # This also protects old queued records that were inserted before production.
-            allowed_by_birth, birth_reason = candidate_passes_birth_cutoff(
-                item, policy=lifecycle_policy
-            )
-            if not allowed_by_birth:
-                try:
-                    cloud.update_automation_queue_item(queue_id, "processing")
-                    cloud.update_automation_queue_item(queue_id, "skipped", error_code=birth_reason)
-                except Exception:
-                    report["ok"] = False
-                report["skipped_count"] += 1
-                report["results"].append({
-                    "platform": platform, "external_id": external_id,
-                    "status": "skipped", "reason": birth_reason,
-                })
-                continue
+            # Edit publication uses edit/source validation and the persistent queue.
+            # The official Mob birth boundary is deliberately not applied to this lane.
 
             # A stale/unverified YouTube row is not allowed to become a publish attempt.
             if platform == "youtube" and item.get("freshness_verified") not in (1, True):
