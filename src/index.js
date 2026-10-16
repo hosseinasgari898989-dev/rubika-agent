@@ -739,6 +739,7 @@ async function ownerDigestSnapshot(env, state) {
     message_body: state.message_body || "",
     message_creation_uncertain: Number(state.message_creation_uncertain || 0) === 1,
     counts: Object.fromEntries((counts.results || []).map(row => [row.category, Number(row.total || 0)])),
+    total_event_count: (counts.results || []).reduce((sum, row) => sum + Number(row.total || 0), 0),
     events: (events.results || []).reverse()
   };
 }
@@ -952,10 +953,26 @@ async function reserveCodeAiProviderCall(env, body) {
 
     const snapshot = await codeAiProviderSnapshot(env, provider, usageDay);
     if (snapshot.cooldown_active) {
+      try {
+        await recordOwnerDigestEvent(env, {
+          category: "ai_error",
+          source: "code_ai_" + provider,
+          title: "Code-repair AI provider was skipped",
+          detail: "error_code=provider_cooldown_active; role=" + role
+        });
+      } catch {}
       return json({ ok: false, error: "code_ai_provider_cooldown_active", ...snapshot }, 429);
     }
     if (snapshot.calls_used >= snapshot.daily_limit ||
         snapshot.total_calls_used >= snapshot.total_daily_limit) {
+      try {
+        await recordOwnerDigestEvent(env, {
+          category: "ai_error",
+          source: "code_ai_" + provider,
+          title: "Code-repair AI provider quota exhausted",
+          detail: "error_code=daily_budget_exhausted; role=" + role
+        });
+      } catch {}
       return json({ ok: false, error: "code_ai_daily_budget_exhausted", ...snapshot }, 429);
     }
     return json({ ok: false, error: "code_ai_reservation_denied", ...snapshot }, 503);
