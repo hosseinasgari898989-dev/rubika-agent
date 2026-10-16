@@ -1,4 +1,4 @@
-name: Groq and OpenRouter live API smoke test
+name: Groq and OpenRouter live API smoke test (post-deploy)
 
 on:
   push:
