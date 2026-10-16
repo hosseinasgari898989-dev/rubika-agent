@@ -26,8 +26,8 @@
       "source_platform": "website",
       "source_name": "Mob Entertainment newsroom",
       "url": "https://mobentertainment.com/",
-      "enabled": true,
-      "note": "Primary source when a complete post includes its real caption and original media."
+      "enabled": false,
+      "note": "Primary source when a complete post includes its real caption and original media. Disabled by owner policy: official Mob publishing/discovery must use X only."
     },
     {
       "id": "poppyplaytime_news",
@@ -37,7 +37,7 @@
       "source_name": "Poppy Playtime official news",
       "url": "https://poppyplaytime.com/blogs/news.atom",
       "enabled": false,
-      "note": "Not part of the primary-plus-two-fallback plan for the first official Mob trial."
+      "note": "Not part of the primary-plus-two-fallback plan for the first official Mob trial. Disabled by owner policy: official Mob publishing/discovery must use X only."
     },
     {
       "id": "mob_youtube",
@@ -47,8 +47,8 @@
       "source_name": "Mob Entertainment YouTube",
       "channel_id": "UCXqV4yoyC_mmZye6VbKFPeQ",
       "url": "https://www.youtube.com/channel/UCXqV4yoyC_mmZye6VbKFPeQ",
-      "enabled": true,
-      "note": "Fallback using the official channel feed and genuine video description; never substitutes the thumbnail for media."
+      "enabled": false,
+      "note": "Fallback using the official channel feed and genuine video description; never substitutes the thumbnail for media. Disabled by owner policy: official Mob publishing/discovery must use X only."
     },
     {
       "id": "mob_tiktok",
@@ -57,7 +57,8 @@
       "source_platform": "tiktok",
       "source_name": "Mob Entertainment TikTok",
       "url": "https://www.tiktok.com/@mob.entertainment",
-      "enabled": false
+      "enabled": false,
+      "note": "Disabled by owner policy: official Mob publishing/discovery must use X only."
     },
     {
       "id": "poppy_instagram",
@@ -66,7 +67,8 @@
       "source_platform": "instagram",
       "source_name": "Poppy Playtime Instagram",
       "url": "https://www.instagram.com/poppyplaytimeco/",
-      "enabled": false
+      "enabled": false,
+      "note": "Disabled by owner policy: official Mob publishing/discovery must use X only."
     },
     {
       "id": "mob_x",
@@ -75,7 +77,8 @@
       "source_platform": "x",
       "source_name": "Mob Games Studios on X",
       "url": "https://x.com/mobgamesstudios",
-      "enabled": false
+      "enabled": false,
+      "note": "Disabled by owner policy: official Mob publishing/discovery must use X only."
     },
     {
       "id": "steam_news",
@@ -86,8 +89,8 @@
       "app_id": 1721470,
       "feed_name": "steam_community_announcements",
       "url": "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/",
-      "enabled": true,
-      "note": "Fallback limited to official developer announcements with original post text and embedded post media."
+      "enabled": false,
+      "note": "Fallback limited to official developer announcements with original post text and embedded post media. Disabled by owner policy: official Mob publishing/discovery must use X only."
     }
   ],
   "dedupe": {
@@ -101,6 +104,6 @@
     "target_channel_guid": "c0EFohK0f3174377fb6fa422d3ccb230",
     "max_posts_per_run": 1,
     "production_enabled": false,
-    "reason": "Explicitly enabled for a one-post official-source trial in the hard-locked Rubika test channel only. Production publishing remains disabled."
+    "reason": "Official Mob items must come only from verified X posts by @mobgamesstudios. Non-X official sources are disabled. Publishing remains separately gated by the configured Rubika destination."
   }
 }
