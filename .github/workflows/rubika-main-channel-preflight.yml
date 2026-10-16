@@ -74,10 +74,15 @@ jobs:
           except SystemExit:
               raise
           except Exception as exc:
+              import re
               exception_name = type(exc).__name__
-              if not __import__("re").fullmatch(r"[A-Za-z0-9_]{1,60}", exception_name):
+              missing_module = getattr(exc, "name", None)
+              if not re.fullmatch(r"[A-Za-z0-9_]{1,60}", exception_name):
                   exception_name = "unknown_exception"
-              print("bot_authentication_preflight_failed:" + exception_name, file=sys.stderr)
+              if isinstance(missing_module, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", missing_module):
+                  print("bot_authentication_preflight_failed:" + exception_name + ":" + missing_module, file=sys.stderr)
+              else:
+                  print("bot_authentication_preflight_failed:" + exception_name, file=sys.stderr)
               raise SystemExit(1) from None
           print("Rubika bot authentication passed; no message was sent.")
           PY
