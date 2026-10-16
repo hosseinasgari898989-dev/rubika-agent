@@ -20,6 +20,19 @@ class FakeStatement {
     return this;
   }
   async first() {
+    if (this.sql.includes("FROM owner_digest_state WHERE id = 1")) {
+      return this.db.ownerDigestState ? { ...this.db.ownerDigestState } : null;
+    }
+    if (this.sql.startsWith("UPDATE owner_digest_state SET edit_lock_token")) {
+      const [lockToken, lockUntil, updatedAt, windowId, now] = this.values;
+      const state = this.db.ownerDigestState;
+      if (!state || state.window_id !== windowId ||
+          (state.edit_lock_token && state.edit_lock_until_epoch > now)) return null;
+      state.edit_lock_token = lockToken;
+      state.edit_lock_until_epoch = lockUntil;
+      state.updated_at = updatedAt;
+      return { ...state };
+    }
     if (this.sql.startsWith("INSERT INTO ai_usage_daily")) {
       const [day] = this.values;
       const current = this.db.aiUsageDaily.get(day) || 0;
@@ -42,6 +55,22 @@ class FakeStatement {
     return null;
   }
   async all() {
+    if (this.sql.includes("FROM owner_digest_events WHERE window_id = ? GROUP BY category")) {
+      const windowId = this.values[0];
+      const totals = new Map();
+      for (const row of this.db.ownerDigestEvents) {
+        if (row.window_id === windowId) totals.set(row.category, (totals.get(row.category) || 0) + 1);
+      }
+      return { results: [...totals.entries()].map(([category, total]) => ({ category, total })) };
+    }
+    if (this.sql.includes("FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 32")) {
+      const windowId = this.values[0];
+      return { results: this.db.ownerDigestEvents
+        .filter(row => row.window_id === windowId)
+        .sort((a, b) => b.id - a.id)
+        .slice(0, 32)
+        .map(row => ({ ...row })) };
+    }
     if (this.sql.includes("FROM automation_queue GROUP BY status")) {
       const totals = new Map();
       for (const row of this.db.automationQueue.values()) {
@@ -80,6 +109,52 @@ class FakeStatement {
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("INSERT OR IGNORE INTO owner_digest_state")) {
+      if (!this.db.ownerDigestState) {
+        this.db.ownerDigestState = {
+          id: 1, window_id: v[0], window_started_at: v[1], window_ends_at: v[2],
+          window_started_epoch: v[3], window_ends_epoch: v[4],
+          message_id: null, message_body: null, message_creation_uncertain: 0,
+          edit_lock_token: null, edit_lock_until_epoch: null, updated_at: v[1],
+        };
+        return { meta: { changes: 1 } };
+      }
+      return { meta: { changes: 0 } };
+    }
+    if (sql.startsWith("UPDATE owner_digest_state SET window_id")) {
+      const state = this.db.ownerDigestState;
+      const [windowId, start, end, startEpoch, endEpoch, updated, now] = v;
+      if (!state || state.window_ends_epoch > now) return { meta: { changes: 0 } };
+      Object.assign(state, {
+        window_id: windowId, window_started_at: start, window_ends_at: end,
+        window_started_epoch: startEpoch, window_ends_epoch: endEpoch,
+        message_id: null, message_body: null, message_creation_uncertain: 0,
+        edit_lock_token: null, edit_lock_until_epoch: null, updated_at: updated,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO owner_digest_events")) {
+      const [windowId, category, source, title, detail] = v;
+      this.db.ownerDigestEvents.push({
+        id: this.db.ownerDigestEvents.length + 1,
+        window_id: windowId, category, source, title, detail,
+        occurred_at: new Date().toISOString(),
+      });
+      return { meta: { changes: 1, last_row_id: this.db.ownerDigestEvents.length } };
+    }
+    if (sql.startsWith("UPDATE owner_digest_state SET message_id")) {
+      const state = this.db.ownerDigestState;
+      const [messageId, messageBody, creationUncertain, updated, windowId, lockToken] = v;
+      if (!state || state.window_id !== windowId || state.edit_lock_token !== lockToken) {
+        return { meta: { changes: 0 } };
+      }
+      Object.assign(state, {
+        message_id: messageId, message_body: messageBody,
+        message_creation_uncertain: creationUncertain,
+        edit_lock_token: null, edit_lock_until_epoch: null, updated_at: updated,
+      });
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("INSERT INTO automation_queue")) {
       const row = {
         id: v[0], platform: v[1], external_id: v[2], canonical_url: v[3],
@@ -173,6 +248,8 @@ class FakeDB {
     this.queueLimit = null;
     this.seenQuery = null;
     this.aiUsageDaily = new Map();
+    this.ownerDigestState = null;
+    this.ownerDigestEvents = [];
   }
   prepare(sql) {
     return new FakeStatement(this, sql);
@@ -630,6 +707,79 @@ function makeTranslationAI(response = "ماب انترتینمنت خبر رسم
 }
 
 
+
+
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/brain/owner-digest/events", {
+    method: "POST",
+    body: { category: "error", source: "queue_worker", title: "Pipeline failed", detail: "error_code=staging_failed" },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.ok, true);
+  const firstWindow = response.body.window_id;
+
+  response = await read(await worker.fetch(request("/api/brain/owner-digest/claim", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.claimed, true);
+  const lock = response.body.lock_token;
+  assert.equal(response.body.state.events.length, 1);
+  assert.equal(response.body.state.events[0].category, "error");
+
+  const concurrent = await read(await worker.fetch(request("/api/brain/owner-digest/claim", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(concurrent.status, 200);
+  assert.equal(concurrent.body.claimed, false);
+
+  response = await read(await worker.fetch(request("/api/brain/owner-digest/commit", {
+    method: "POST",
+    body: {
+      window_id: firstWindow, lock_token: lock, message_id: "rubika-message-1",
+      message_body: "Daily digest", message_creation_uncertain: false,
+    },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.ownerDigestState.message_id, "rubika-message-1");
+
+  response = await read(await worker.fetch(request("/api/brain/owner-digest/events", {
+    method: "POST",
+    body: { category: "ai_success", source: "code_ai_github_models", title: "AI call succeeded", detail: "role=diagnose" },
+  }), state));
+  assert.equal(response.status, 201);
+
+  response = await read(await worker.fetch(request("/api/brain/owner-digest/claim", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.body.claimed, true);
+  assert.equal(response.body.state.message_id, "rubika-message-1");
+  assert.equal(response.body.state.counts.error, 1);
+  assert.equal(response.body.state.counts.ai_success, 1);
+  assert.equal(response.body.state.events.length, 2);
+
+  // The next rolling 24-hour window starts a new message state, without touching old events.
+  state.DB.ownerDigestState.edit_lock_token = null;
+  state.DB.ownerDigestState.edit_lock_until_epoch = null;
+  state.DB.ownerDigestState.window_ends_epoch = Date.now() - 1;
+  response = await read(await worker.fetch(request("/api/brain/owner-digest/events", {
+    method: "POST",
+    body: { category: "info", source: "daily_digest", title: "New 24-hour window", detail: "" },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.notEqual(response.body.window_id, firstWindow);
+  assert.equal(state.DB.ownerDigestState.message_id, null);
+  assert.equal(state.DB.ownerDigestEvents.length, 3);
+}
+{
+  const response = await read(await worker.fetch(request("/api/brain/owner-digest/events", {
+    method: "POST",
+    body: { category: "fatal", source: "bad", title: "Invalid category", detail: "" },
+  }), env()));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "owner_digest_event_invalid");
+}
 
 // Error guidance now runs locally in Python. The Worker has no AI supervisor endpoint.
 {
