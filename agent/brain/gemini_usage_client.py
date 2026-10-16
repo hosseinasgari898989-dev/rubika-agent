@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 from typing import Any, Mapping
 
-ALLOWED_PROVIDERS = frozenset({"gemini", "groq", "openrouter", "github_models"})
+ALLOWED_PROVIDERS = frozenset({"groq", "openrouter"})
 ALLOWED_ROLES = frozenset({"diagnose", "propose_patch", "review_patch"})
 ALLOWED_OUTCOMES = frozenset({"succeeded", "failed", "unknown"})
 SAFE_CODE = re.compile(r"[a-z0-9_-]{1,80}")
@@ -79,7 +79,7 @@ class CodeAIUsageLedger:
                 "Accept": "application/json",
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + self.token,
-                "User-Agent": "rubika-agent-gemini-ledger/1.0",
+                "User-Agent": "rubika-agent-provider-ledger/1.0",
             },
         )
         try:
