@@ -728,7 +728,7 @@ async function ownerDigestSnapshot(env, state) {
       "SELECT category, COUNT(*) AS total FROM owner_digest_events WHERE window_id = ? GROUP BY category"
     ).bind(state.window_id).all(),
     env.DB.prepare(
-      "SELECT id, occurred_at, category, source, title, detail FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 32"
+      "SELECT id, occurred_at, category, source, title, detail FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 100"
     ).bind(state.window_id).all()
   ]);
   return {
