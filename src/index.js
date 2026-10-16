@@ -865,7 +865,7 @@ async function ownerConsoleSetOffset(env, body) {
   if (Object.keys(body).some(key => key !== "offset_id") ||
       typeof body.offset_id !== "string" ||
       body.offset_id.length < 1 || body.offset_id.length > 200 ||
-      /[\\u0000-\\u001f\\u007f]/.test(body.offset_id)) {
+      [...body.offset_id].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
     return json({ ok: false, error: "owner_console_offset_invalid" }, 400);
   }
   try {
