@@ -1,0 +1,52 @@
+name: Stage 5 owner-console offline checks
+
+on:
+  push:
+    branches:
+      - feature/rubika-readonly-ops-console-stage5
+    paths:
+      - "agent/brain/owner_console.py"
+      - "src/index.js"
+      - "migrations/**"
+      - "tests/test_owner_console.py"
+      - "tests/test_migrations.py"
+      - "tests/test_workflow_safety.py"
+      - "tests/worker.test.mjs"
+      - ".github/workflows/owner-console-local-checks.yml"
+  pull_request:
+    branches:
+      - feature/rubika-owner-24h-digest
+    paths:
+      - "agent/brain/owner_console.py"
+      - "src/index.js"
+      - "migrations/**"
+      - "tests/test_owner_console.py"
+      - "tests/test_migrations.py"
+      - "tests/test_workflow_safety.py"
+      - "tests/worker.test.mjs"
+      - ".github/workflows/owner-console-local-checks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile owner-console code
+        run: python -m compileall -q agent/brain
+      - name: Test owner-console commands and fake clients
+        run: python -m unittest discover -s tests -p 'test_owner_console.py' -v
+      - name: Test local ordered SQLite migrations
+        run: python -m unittest discover -s tests -p 'test_migrations.py' -v
+      - name: Test workflow safety assertions
+        run: python -m unittest discover -s tests -p 'test_workflow_safety.py' -v
+      - name: Test Worker API with in-memory fake D1
+        run: node tests/worker.test.mjs
+      - name: Run offline console self-test
+        run: python -m agent.brain.owner_console --self-test
