@@ -1,10 +1,9 @@
 """Bounded multi-model code-repair ensemble with diagnosis and review quorum.
 
 The active ensemble gathers independent diagnoses from Groq and OpenRouter,
-uses GitHub Models to propose one constrained patch, and requires Groq and
-OpenRouter to independently review it. Gemini remains available for explicitly
-dispatched diagnostics; Mistral is disabled. Cloudflare Workers AI remains
-reserved for the project's existing media/music-related tasks.
+uses Groq to propose one constrained patch, and requires both Groq and OpenRouter
+to independently review it. Gemini, GitHub Models, and Mistral are disabled for
+code repair. Both providers are called through the durable D1 usage ledger.
 All model outputs are untrusted, ledger-accounted, and subject to deterministic
 tests and human PR review. No model can execute tools, publish to Rubika, or
 merge code.
@@ -124,9 +123,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         diagnosers = _provider_list("CODE_AI_DIAGNOSER_PROVIDERS", "groq,openrouter")
-        proposer = (os.getenv("CODE_AI_PROPOSER_PROVIDER", "github_models") or "").strip().lower()
+        proposer = (os.getenv("CODE_AI_PROPOSER_PROVIDER", "groq") or "").strip().lower()
         reviewers = _provider_list("CODE_AI_REVIEWER_PROVIDERS", "groq,openrouter")
-        if proposer not in PROVIDERS or proposer in diagnosers:
+        # The proposer may also diagnose and review, but the two independent
+        # diagnoses and the two-provider review quorum are mandatory.
+        if proposer not in PROVIDERS:
             raise ProviderClientError("provider_role_configuration_invalid")
         if len(diagnosers) < 2 or len(reviewers) < 2:
             raise ProviderClientError("provider_quorum_invalid")
@@ -171,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         raw = args.failure_log.read_bytes()[:gemini.MAX_LOG_BYTES].decode("utf-8", errors="replace")
         secret_values = tuple(
             str(os.getenv(key, "") or "")
-            for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "AGENT_API_TOKEN", "GITHUB_TOKEN")
+            for key in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "AGENT_API_TOKEN")
         )
         log = gemini.sanitize_failure_log(raw, secrets=secret_values)
         selected = gemini.extract_candidate_paths(raw, root)
