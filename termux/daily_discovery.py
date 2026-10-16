@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.discovery.mob_official_complete import discover_all_official_posts
+from agent.discovery.mob_official_complete import discover_official_x_posts
 from agent.discovery.termux_sources import discover_tiktok_hashtags
 from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
 
@@ -58,8 +58,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         max_per_profile=8,
         max_age_days=90,
     )
-    print("2/2 Mob Entertainment: checking official newsroom, YouTube, Steam and X (metadata only)...", flush=True)
-    mob_candidates, mob_attempts = discover_all_official_posts(max_results=12)
+    print("2/2 Mob Entertainment: checking only official X posts via public discovery and X syndication (metadata only)...", flush=True)
+    mob_candidates, mob_attempts = discover_official_x_posts(max_results=12)
 
     lifecycle_policy = load_lifecycle_policy()
     # Lifecycle birth boundary is exclusive to official Mob news; TikTok edits
@@ -111,7 +111,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "tiktok_candidates": len(normalized["tiktok"]),
             "mob_official_candidates": len(normalized["mob_official"]),
             "mob_official_source": "Mob Entertainment official sources",
-            "mob_official_method": "official_newsroom_with_youtube_steam_and_x_fallbacks",
+            "mob_official_method": "official_x_syndication_and_verified_seed_urls",
             "mob_official_birth_cutoff_rejected": len(stale_mob),
             "tiktok_birth_cutoff_rejected": len(stale_tiktok),
             "tiktok_known_source_candidates": sum(
@@ -140,7 +140,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "tiktok_max_age_days": 90,
             "tiktok_max_results": 60,
             "mob_x_max_candidates_per_run": 12,
-            "mob_official_source_lanes": ["website", "youtube", "steam", "x"],
+            "mob_official_source_lanes": ["x"],
             "mob_x_source_handle": "@mobgamesstudios",
             "mob_x_api_credits_used": 0,
             "birth_cutoff_active_only_in_production_mode": True,
