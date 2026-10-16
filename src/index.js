@@ -929,7 +929,7 @@ async function ownerConsoleClaim(env, body) {
       "SELECT COUNT(*) AS total FROM owner_console_updates WHERE created_at >= ?"
     ).bind(dayStart).first();
     if (Number(countRow && countRow.total || 0) >= OWNER_CONSOLE_DAILY_COMMAND_LIMIT) {
-      return json({ ok: true, claimed: false, rate_limited: true }, 429);
+      return json({ ok: true, claimed: false, rate_limited: true });
     }
     return json({ ok: false, error: "owner_console_claim_denied" }, 503);
   } catch {
