@@ -500,7 +500,7 @@ class OperationsConsole:
         bot: RubikaBotAPI,
         control: ControlWorker,
         owner_chat_id: str,
-        owner_user_id: str,
+        owner_user_id: str | None,
         github_runs: Callable[[], list[dict[str, Any]]] | None = None,
     ):
         self.bot = bot
@@ -565,9 +565,17 @@ class OperationsConsole:
             return "\n\n".join(pieces)[:MAX_REPLY_CHARS]
         return "این فرمان پشتیبانی نمی‌شود. برای فهرست فرمان‌های مجاز /help را بفرست."
 
-    def process_update(self, update: Mapping[str, Any]) -> str:
+    def process_update(
+        self,
+        update: Mapping[str, Any],
+        *,
+        resolved_owner_user_id: str | None = None,
+    ) -> str:
         update_id = _message_identity(update)
-        message_text = _owner_private_text(update, self.owner_chat_id, self.owner_user_id)
+        effective_user_id = self.owner_user_id or resolved_owner_user_id
+        if not effective_user_id:
+            return "ignored"
+        message_text = _owner_private_text(update, self.owner_chat_id, effective_user_id)
         if update_id is None or message_text is None:
             return "ignored"
         command = parse_command(message_text)
@@ -613,12 +621,68 @@ class OperationsConsole:
         updates = data.get("updates", [])
         if not isinstance(updates, list):
             raise OwnerConsoleError("rubika_updates_invalid_shape")
-        stats = {"updates_received": len(updates), "answered": 0, "ignored": 0, "duplicates": 0, "uncertain": 0}
+        stats = {
+            "updates_received": len(updates),
+            "answered": 0,
+            "ignored": 0,
+            "duplicates": 0,
+            "uncertain": 0,
+            "bootstrapped": False,
+            "owner_identity_ambiguous": False,
+        }
+        next_offset = data.get("next_offset_id")
+        valid_next_offset = (
+            isinstance(next_offset, str)
+            and 1 <= len(next_offset) <= MAX_UPDATE_ID_CHARS
+        )
+
+        # The first poll must establish a baseline without replying to old backlog.
+        # This avoids sending surprise replies to historical chat messages.
+        if offset_id is None:
+            if valid_next_offset:
+                self.control.set_offset(next_offset)
+                stats["offset_advanced"] = True
+            else:
+                stats["offset_advanced"] = False
+            stats["bootstrapped"] = True
+            stats["ignored"] = len(updates[:MAX_UPDATES_PER_POLL])
+            return stats
+
+        resolved_owner_user_id = self.owner_user_id or None
+        if resolved_owner_user_id is None:
+            # RUBIKA_OWNER_USER_ID is an optional extra restriction. When it is not
+            # configured, infer the sender only if every message for the configured
+            # private owner chat in this batch has the same sender ID. Group/channel
+            # updates are rejected; multiple senders fail closed.
+            observed_senders: set[str] = set()
+            for candidate in updates[:MAX_UPDATES_PER_POLL]:
+                if not isinstance(candidate, dict):
+                    continue
+                message = candidate.get("new_message")
+                if not isinstance(message, dict) or _is_group_or_channel(candidate, message):
+                    continue
+                chat_id = candidate.get("chat_id") or message.get("chat_id")
+                sender_id = message.get("sender_id")
+                if (
+                    candidate.get("type") == "NewMessage"
+                    and str(chat_id or "") == self.owner_chat_id
+                    and isinstance(sender_id, (str, int))
+                    and str(sender_id).strip()
+                ):
+                    observed_senders.add(str(sender_id).strip())
+            if len(observed_senders) == 1:
+                resolved_owner_user_id = next(iter(observed_senders))
+            elif len(observed_senders) > 1:
+                stats["owner_identity_ambiguous"] = True
+
         for update in updates[:MAX_UPDATES_PER_POLL]:
             if not isinstance(update, dict):
                 stats["ignored"] += 1
                 continue
-            result = self.process_update(update)
+            result = self.process_update(
+                update,
+                resolved_owner_user_id=resolved_owner_user_id,
+            )
             if result in {"answered", "answered_unconfirmed"}:
                 stats["answered"] += 1
             elif result == "uncertain":
@@ -627,8 +691,8 @@ class OperationsConsole:
                 stats["duplicates"] += 1
             else:
                 stats["ignored"] += 1
-        next_offset = data.get("next_offset_id")
-        if isinstance(next_offset, str) and 1 <= len(next_offset) <= MAX_UPDATE_ID_CHARS:
+
+        if valid_next_offset:
             self.control.set_offset(next_offset)
             stats["offset_advanced"] = True
         else:
@@ -679,8 +743,8 @@ def _required_env() -> tuple[str, str, str, str, str]:
         raise OwnerConsoleError("rubika_token_missing_or_short")
     if len(owner_chat_id) < 3:
         raise OwnerConsoleError("rubika_owner_chat_id_missing")
-    if len(owner_user_id) < 3:
-        raise OwnerConsoleError("rubika_owner_user_id_missing")
+    # The owner user ID is an optional additional restriction. If absent, polling
+    # resolves a single sender only from updates in the fixed private owner chat.
     if len(api_token) < 32:
         raise OwnerConsoleError("control_api_token_missing_or_short")
     return token, owner_chat_id, owner_user_id, api_token, control_url
