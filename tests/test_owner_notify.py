@@ -8,9 +8,10 @@ from agent.brain import owner_notify
 
 
 class FakeRubikaBot:
-    def __init__(self, send_result=None, edit_result=None):
+    def __init__(self, send_result=None, edit_result=None, send_exception=None):
         self.send_result = send_result or {"status": "OK", "data": {"message_id": "rubika-msg-123"}}
         self.edit_result = edit_result or {"status": "OK"}
+        self.send_exception = send_exception
         self.sent = []
         self.edited = []
         self.posts = []
@@ -21,6 +22,8 @@ class FakeRubikaBot:
 
     def send_message(self, *, chat_id, text):
         self.sent.append({"chat_id": chat_id, "text": text})
+        if self.send_exception is not None:
+            raise self.send_exception
         return self.send_result
 
     def edit_message_text(self, *, chat_id, message_id, text):
@@ -124,6 +127,67 @@ class OwnerNotifyTests(unittest.TestCase):
         self.assertEqual(bot.posts, [])
         self.assertEqual(len(bot.edited), 1)
         self.assertEqual(bot.edited[0]["message_id"], "rubika-existing")
+
+    def test_invalid_access_edit_sends_one_replacement_and_persists_new_id(self):
+        bot = FakeRubikaBot(edit_result={"status": "INVALID_ACCESS"})
+        state = digest_state(message_id="rubika-inaccessible", message_body="stale digest")
+        commits = []
+
+        def worker_post(path, payload):
+            if path.endswith("/claim"):
+                return {"ok": True, "claimed": True, "lock_token": "b" * 32,
+                        "state": state}
+            if path.endswith("/commit"):
+                commits.append(payload)
+                return {"ok": True}
+            raise AssertionError(path)
+
+        with (
+            patch.object(owner_notify, "_worker_post", side_effect=worker_post),
+            patch.object(owner_notify, "_make_rubika_bot", return_value=bot),
+        ):
+            result = owner_notify.refresh_daily_digest()
+
+        self.assertTrue(result["sent"])
+        self.assertTrue(result["replaced"])
+        self.assertEqual(len(bot.edited), 1)
+        self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(bot.posts, [])
+        self.assertEqual(bot.sent[0]["chat_id"], "owner-chat-id")
+        self.assertEqual(commits[-1]["message_id"], "rubika-msg-123")
+        self.assertFalse(commits[-1]["message_creation_uncertain"])
+        self.assertEqual(commits[-1]["message_body"], owner_notify.render_daily_digest(state))
+
+    def test_ambiguous_replacement_send_is_marked_uncertain_and_not_retried(self):
+        bot = FakeRubikaBot(
+            edit_result={"status": "INVALID_ACCESS"},
+            send_exception=TimeoutError("simulated timeout"),
+        )
+        state = digest_state(message_id="rubika-inaccessible", message_body="stale digest")
+        commits = []
+
+        def worker_post(path, payload):
+            if path.endswith("/claim"):
+                return {"ok": True, "claimed": True, "lock_token": "b" * 32,
+                        "state": state}
+            if path.endswith("/commit"):
+                commits.append(payload)
+                return {"ok": True}
+            raise AssertionError(path)
+
+        with (
+            patch.object(owner_notify, "_worker_post", side_effect=worker_post),
+            patch.object(owner_notify, "_make_rubika_bot", return_value=bot),
+        ):
+            result = owner_notify.refresh_daily_digest()
+
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "rubika_digest_replacement_send_uncertain")
+        self.assertEqual(len(bot.edited), 1)
+        self.assertEqual(len(bot.sent), 1)
+        self.assertIsNone(commits[-1]["message_id"])
+        self.assertTrue(commits[-1]["message_creation_uncertain"])
+
 
     def test_uncertain_initial_send_does_not_create_duplicates(self):
         bot = FakeRubikaBot()
