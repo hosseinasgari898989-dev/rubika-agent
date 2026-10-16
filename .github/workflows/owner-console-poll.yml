@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for key in AGENT_API_TOKEN RUBIKA_TOKEN RUBIKA_OWNER_CHAT_ID RUBIKA_OWNER_USER_ID; do
+          for key in AGENT_API_TOKEN RUBIKA_TOKEN RUBIKA_OWNER_CHAT_ID; do
             if [[ -z "${!key:-}" ]]; then
               echo "::error::Required secret $key is missing; no Rubika updates were requested."
               exit 2
