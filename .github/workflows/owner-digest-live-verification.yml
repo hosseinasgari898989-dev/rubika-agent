@@ -37,29 +37,20 @@ jobs:
           done
       - name: Install project requirements
         run: python -m pip install --disable-pip-version-check -r requirements.txt
-      - name: Create or refresh the private digest
+      - name: Verify a real edit on the already-created private message
         shell: bash
         run: |
           set -euo pipefail
-          python -m agent.brain.owner_notify --event daily_digest_start > /tmp/digest-first.json
           python - <<'PY'
           import json
-          with open("/tmp/digest-first.json", encoding="utf-8") as f:
-              result = json.load(f)
-          print({"sent": result.get("sent"), "created": result.get("created"), "updated": result.get("updated"), "reason": result.get("reason")})
-          if result.get("sent") is not True:
-              raise SystemExit("initial_digest_send_failed")
-          PY
-      - name: Verify that the same private Rubika message can be edited
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m agent.brain.owner_notify --event success --workflow "Live owner digest verification" > /tmp/digest-edit.json
-          python - <<'PY'
-          import json
-          with open("/tmp/digest-edit.json", encoding="utf-8") as f:
-              result = json.load(f)
-          print({"sent": result.get("sent"), "updated": result.get("updated"), "reason": result.get("reason")})
+          from agent.brain.owner_notify import send_owner_notification
+          result = send_owner_notification(
+              "✅ بررسی زندهٔ ویرایش گزارش روزانه با موفقیت اجرا شد.",
+              category="success",
+              source="live_verification",
+          )
+          safe = {key: result.get(key) for key in ("sent", "created", "updated", "reason")}
+          print(json.dumps(safe, ensure_ascii=False, sort_keys=True))
           if result.get("sent") is not True or result.get("updated") is not True:
               raise SystemExit("same_message_edit_not_verified")
           PY
