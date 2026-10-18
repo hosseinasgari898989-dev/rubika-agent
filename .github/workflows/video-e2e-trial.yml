@@ -1,12 +1,14 @@
 name: Controlled video end-to-end trial (test channel only)
 
 on:
-  push:
-    branches:
-      - agent-brain-mega-v1
-    paths:
-      - "artifacts/video-e2e-trial.json"
-      - ".github/workflows/video-e2e-trial.yml"
+  # Publishing is manual only; changing a report or workflow file must never post media.
+  workflow_dispatch:
+    inputs:
+      confirm_test_channel_publish:
+        description: "Explicitly authorize publishing one video to the fixed Rubika test channel"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,6 +19,7 @@ concurrency:
 
 jobs:
   one-video-test-channel:
+    if: ${{ inputs.confirm_test_channel_publish == true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -31,7 +34,7 @@ jobs:
       - name: Check out experimental code
         uses: actions/checkout@v4
         with:
-          ref: agent-brain-mega-v1
+          ref: ${{ github.ref_name }}
 
       - name: Validate secrets and enforce test-channel-only publishing
         shell: bash
