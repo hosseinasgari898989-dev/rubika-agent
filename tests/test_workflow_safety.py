@@ -38,5 +38,25 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertEqual(enabled, {"mob_x"})
 
 
+    def test_video_e2e_trial_cannot_publish_on_push(self):
+        workflow = (ROOT / ".github" / "workflows" / "video-e2e-trial.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("\\n  push:\\n", workflow)
+        self.assertIn("confirm_test_channel_publish", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("if: ${{ inputs.confirm_test_channel_publish == true }}", workflow)
+        self.assertIn('RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230', workflow)
+        self.assertIn("ref: ${{ github.ref_name }}", workflow)
+
+    def test_main_channel_activation_is_documented_without_enabling_production(self):
+        runbook = (ROOT / "docs" / "MAIN_CHANNEL_ACTIVATION_RUNBOOK_FA.md").read_text(encoding="utf-8")
+        lifecycle = json.loads((ROOT / "config" / "agent_lifecycle.json").read_text(encoding="utf-8"))
+        self.assertIn("RUBIKA_AGENT_MAIN_PUBLISH_GATE_20261019", runbook)
+        self.assertEqual(lifecycle["mode"], "test")
+        self.assertIsNone(lifecycle["born_at"])
+        config = json.loads((ROOT / "config" / "mob_official_sources.json").read_text(encoding="utf-8"))
+        self.assertFalse(config["publishing"]["production_enabled"])
+
+
 if __name__ == "__main__":
     unittest.main()
