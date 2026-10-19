@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 36,
   "candidate_pool_size": 36,
-  "completed_at": "2026-10-19T10:14:23+00:00",
+  "completed_at": "2026-10-19T17:10:26+00:00",
   "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -30,7 +30,7 @@
   "queue_counts": {
     "failed": 1,
     "processing": 0,
-    "queued": 70,
+    "queued": 71,
     "sent": 6,
     "sent_today": 0,
     "skipped": 6,
@@ -39,16 +39,16 @@
   },
   "queue_status": "enqueued",
   "received_count": 1,
-  "report_generated_at": "2026-10-19T10:14:15.429381+00:00",
+  "report_generated_at": "2026-10-19T17:10:11.758409+00:00",
   "schema_version": 1,
   "selected_external_ids": [
-    "7697296799689673998"
+    "7698402908974468404"
   ],
   "selected_source_distribution": {
-    "saylex.aep812": 1
+    "poppytv_ae": 1
   },
   "selected_urls": [
-    "https://www.tiktok.com/@saylex.aep812/video/7697296799689673998"
+    "https://www.tiktok.com/@poppytv_ae/video/7698402908974468404"
   ],
   "skipped_existing_count": 35
 }
