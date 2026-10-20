@@ -1,11 +1,11 @@
 {
-  "candidate_pool_count": 37,
-  "candidate_pool_size": 37,
-  "completed_at": "2026-10-20T01:04:33+00:00",
+  "candidate_pool_count": 35,
+  "candidate_pool_size": 35,
+  "completed_at": "2026-10-20T15:50:52+00:00",
   "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 37,
+  "filter_eligible_count": 35,
   "filter_input_by_source": {
     "meloaep_": 8,
     "menezxl9": 8,
@@ -15,16 +15,17 @@
     "smyxae": 8
   },
   "filter_rejected_by_reason": {
-    "edit_signal_missing": 4,
-    "poppy_relevance_not_verified_in_visible_text": 7
+    "edit_signal_missing": 5,
+    "poppy_relevance_not_verified_in_visible_text": 8
   },
   "filter_rejected_by_source": {
-    "menezxl9": 4,
+    "menezxl9": 5,
     "rickkzn_": 1,
+    "saylex.aep812": 1,
     "smyxae": 6
   },
-  "filter_rejected_count": 11,
-  "inserted_count": 3,
+  "filter_rejected_count": 13,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
@@ -37,24 +38,12 @@
     "uncertain": 0,
     "usage_day": "2026-10-20"
   },
-  "queue_status": "enqueued",
-  "received_count": 3,
-  "report_generated_at": "2026-10-20T01:04:22.357561+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-10-20T15:50:42.300965+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7698209038206635272",
-    "7698432890459163924",
-    "7698527822419086613"
-  ],
-  "selected_source_distribution": {
-    "meloaep_": 1,
-    "rickkzn_": 1,
-    "smyxae": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@meloaep_/video/7698209038206635272",
-    "https://www.tiktok.com/@smyxae/video/7698432890459163924",
-    "https://www.tiktok.com/@rickkzn_/video/7698527822419086613"
-  ],
-  "skipped_existing_count": 34
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 35
 }
