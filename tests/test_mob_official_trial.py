@@ -278,7 +278,31 @@ class TestChannelPublishingGateTests(unittest.TestCase):
             "birth_datetime": datetime(2026, 10, 20, 0, 0, tzinfo=timezone.utc),
         }
         with tempfile.TemporaryDirectory() as folder:
-            candidates = self.report_file(folder, [self.row(published_at="2026-10-19T23:59:59Z")])
+            row = {
+                "platform": "mob_official",
+                "id": "x-1734258130186559716",
+                "external_id": "x-1734258130186559716",
+                "url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+                "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+                "title": "Official post",
+                "caption": "Original Mob caption",
+                "original_caption": "Original Mob caption",
+                "author": "@mobgamesstudios",
+                "source_key": "x.com/mobgamesstudios",
+                "source_name": "Mob Entertainment on X",
+                "source_platform": "x",
+                "official_source": True,
+                "published_at": "2026-10-19T23:59:59Z",
+                "media_type": "image",
+                "media_url": "https://pbs.twimg.com/media/photo.jpg",
+            }
+            candidates = Path(folder) / "termux_discovery.json"
+            candidates.write_text(json.dumps({
+                "schema_version": 1,
+                "source": "termux_phone",
+                "mode": "metadata_only_no_download_no_publish",
+                "candidates": {"tiktok": [], "mob_official": [row]},
+            }), encoding="utf-8")
             report_path = Path(folder) / "report.json"
             with (
                 patch.object(mob_official_trial, "CloudState", FakeCloud),

@@ -36,7 +36,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             "source_key": "x.com/mobgamesstudios",
             "author": "@mobgamesstudios",
             "official_source": True,
-            "published_at": "2026-10-14T12:00:00+00:00",
+            "published_at": "2026-10-20T00:00:00+00:00",
             "freshness_verified": True,
             "media_type": "image",
             "media_url": "https://pbs.twimg.com/media/example.jpg",
@@ -55,7 +55,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             self.assertEqual(report["summary"]["mob_official_candidates"], 1)
             self.assertEqual(report["summary"]["mob_official_source"], "Mob Entertainment official sources")
             self.assertEqual(report["summary"]["paid_providers_used"], [])
-            self.assertEqual(report["lifecycle"]["mode"], "test")
+            self.assertEqual(report["lifecycle"]["mode"], "production")
             self.assertFalse(report["summary"]["ready_to_publish"])
             self.assertEqual(set(report["candidates"]), {"tiktok", "mob_official"})
             self.assertEqual(report["candidates"]["mob_official"][0]["source_platform"], "x")
