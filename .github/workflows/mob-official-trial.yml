@@ -22,10 +22,10 @@ jobs:
       RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
       RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
     steps:
-      - name: Check out the experimental code
+      - name: Check out the current main agent
         uses: actions/checkout@v4
         with:
-          ref: agent-brain-mega-v1
+          ref: main
           persist-credentials: false
 
       - name: Validate secrets and lock publishing to the test channel

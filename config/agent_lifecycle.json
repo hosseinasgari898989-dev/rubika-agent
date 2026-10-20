@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "mode": "test",
-  "born_at": null,
+  "mode": "production",
+  "born_at": "2026-10-20T00:00:00Z",
   "cutoff_policy": "production accepts only posts timestamped at or after born_at",
-  "notes": "Keep mode=test while developing. At final main-channel activation, set mode=production and born_at to the approved UTC activation timestamp. Historical candidates stay available during testing; production rechecks the cutoff in discovery, intake, and before publishing."
+  "notes": "The lifecycle birth cutoff applies to official Mob news only. Edit discovery and queue processing must not use this cutoff. The current Mob publisher remains locked to the configured test channel."
 }

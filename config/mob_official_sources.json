@@ -100,10 +100,10 @@
   },
   "publishing": {
     "enabled": true,
-    "mode": "test_channel_only",
+    "mode": "production",
     "target_channel_guid": "c0EFohK0f3174377fb6fa422d3ccb230",
     "max_posts_per_run": 1,
-    "production_enabled": false,
-    "reason": "Official Mob items must come only from verified X posts by @mobgamesstudios. Non-X official sources are disabled. Publishing remains separately gated by the configured Rubika destination."
+    "production_enabled": true,
+    "reason": "Only verified Mob Entertainment X posts are eligible. Non-X official sources remain disabled. Production mode is enabled for the fixed Rubika test channel, with the official-news birth cutoff independently enforced."
   }
 }

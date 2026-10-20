@@ -61,24 +61,38 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("mob_candidates, stale_mob = filter_candidates_by_birth", discovery)
         self.assertNotIn("tiktok_candidates, stale_tiktok = filter_candidates_by_birth", discovery)
 
-    def test_official_news_publishing_is_locked_to_test_channel_only(self):
+    def test_official_news_is_x_only_production_with_fixed_test_target_and_birth_cutoff(self):
         config = json.loads((ROOT / "config" / "mob_official_sources.json").read_text(encoding="utf-8"))
         policy = json.loads((ROOT / "config" / "agent_lifecycle.json").read_text(encoding="utf-8"))
         publishing = config["publishing"]
         self.assertTrue(publishing["enabled"])
-        self.assertEqual(publishing["mode"], "test_channel_only")
+        self.assertEqual(publishing["mode"], "production")
+        self.assertTrue(publishing["production_enabled"])
         self.assertEqual(publishing["target_channel_guid"], "c0EFohK0f3174377fb6fa422d3ccb230")
         self.assertEqual(publishing["max_posts_per_run"], 1)
-        self.assertFalse(publishing["production_enabled"])
-        self.assertEqual(policy["mode"], "test")
-        workflow = (ROOT / ".github" / "workflows" / "mob-official-trial.yml").read_text(encoding="utf-8")
-        self.assertIn("--publish-test-channel", workflow)
-        self.assertIn("RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230", workflow)
-        enabled = {
+        self.assertEqual(policy["mode"], "production")
+        self.assertEqual(policy["born_at"], "2026-10-20T00:00:00Z")
+
+        sources = {
             row["id"] for row in config.get("official_sources", [])
             if row.get("enabled") is True
         }
-        self.assertEqual(enabled, {"mob_x"})
+        self.assertEqual(sources, {"mob_x"})
+
+        production = (ROOT / ".github" / "workflows" / "mob-x-news-production.yml").read_text(encoding="utf-8")
+        self.assertIn("RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved'", production)
+        self.assertIn("--source-platform x", production)
+        self.assertIn('RUBIKA_CHANNEL_GUID" != "c0EFohK0f3174377fb6fa422d3ccb230', production)
+        self.assertNotIn("Production Mob publishing cannot target the known test channel.", production)
+
+        trial = (ROOT / ".github" / "workflows" / "mob-official-trial.yml").read_text(encoding="utf-8")
+        self.assertIn("ref: main", trial)
+        self.assertIn("--publish-test-channel", trial)
+        self.assertIn("RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230", trial)
+
+        trial_code = (ROOT / "agent" / "brain" / "mob_official_trial.py").read_text(encoding="utf-8")
+        self.assertIn('if kind not in {"image", "video"} or not media_url:', trial_code)
+        self.assertIn('raise RuntimeError("original_media_unavailable")', trial_code)
 
 
 if __name__ == "__main__":

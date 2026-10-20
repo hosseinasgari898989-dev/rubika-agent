@@ -63,10 +63,11 @@ class LifecyclePolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(LifecyclePolicyError, "production_birth_timestamp"):
                 load_lifecycle_policy(path)
 
-    def test_current_repository_lifecycle_is_test_mode(self):
+    def test_current_repository_lifecycle_uses_the_official_mob_birth_boundary(self):
         policy = load_lifecycle_policy()
-        self.assertEqual(policy["mode"], "test")
-        self.assertIsNone(policy["born_at"])
+        self.assertEqual(policy["mode"], "production")
+        self.assertEqual(policy["born_at"], "2026-10-20T00:00:00Z")
+        self.assertIsNotNone(policy["birth_datetime"])
 
 
 if __name__ == "__main__":

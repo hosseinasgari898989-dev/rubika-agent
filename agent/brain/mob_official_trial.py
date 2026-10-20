@@ -116,16 +116,31 @@ def _official_publishing_policy() -> dict[str, Any]:
 
 def _official_publishing_config_enabled() -> bool:
     policy = _official_publishing_policy()
-    return policy.get("enabled") is True and policy.get("mode") == "production"
+    return (
+        policy.get("enabled") is True
+        and policy.get("mode") == "production"
+        and policy.get("production_enabled") is True
+        and policy.get("target_channel_guid") == TEST_CHANNEL_GUID
+        and policy.get("max_posts_per_run") == 1
+    )
 
 
 def _test_channel_publishing_config_enabled() -> bool:
     policy = _official_publishing_policy()
-    return (
+    if not (
         policy.get("enabled") is True
-        and policy.get("mode") == "test_channel_only"
         and policy.get("target_channel_guid") == TEST_CHANNEL_GUID
         and policy.get("max_posts_per_run") == 1
+    ):
+        return False
+    # A manual test-channel run stays available after production mode is enabled,
+    # but still requires this fixed target, an explicit config mode, and all normal gates.
+    return (
+        policy.get("mode") == "test_channel_only"
+        or (
+            policy.get("mode") == "production"
+            and policy.get("production_enabled") is True
+        )
     )
 
 
@@ -589,13 +604,29 @@ def run_trial(
             }
             _report(output_report, report)
             return report
-
-    if test_channel_publish:
-        if lifecycle_policy["mode"] != "test":
-            report["error"] = "test_channel_publish_requires_test_lifecycle"
+        configured_target = _official_publishing_policy().get("target_channel_guid")
+        if configured_target != TEST_CHANNEL_GUID or os.getenv("RUBIKA_CHANNEL_GUID", "").strip() != TEST_CHANNEL_GUID:
+            report["error"] = "official_publishing_target_mismatch"
             report["lifecycle"] = {
                 "mode": lifecycle_policy["mode"],
-                "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
+                "born_at": lifecycle_policy["born_at"],
+                "birth_cutoff_enabled": True,
+            }
+            _report(output_report, report)
+            return report
+
+    if test_channel_publish:
+        if (
+            lifecycle_policy["mode"] not in {"test", "production"}
+            or (
+                lifecycle_policy["mode"] == "production"
+                and lifecycle_policy.get("birth_datetime") is None
+            )
+        ):
+            report["error"] = "test_channel_publish_lifecycle_invalid"
+            report["lifecycle"] = {
+                "mode": lifecycle_policy.get("mode"),
+                "birth_cutoff_enabled": lifecycle_policy.get("mode") == "production",
             }
             _report(output_report, report)
             return report

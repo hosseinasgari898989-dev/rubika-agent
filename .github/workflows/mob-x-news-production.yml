@@ -51,7 +51,9 @@ jobs:
           publishing = cfg.get("publishing", {})
           if not (publishing.get("enabled") is True and publishing.get("mode") == "production" and publishing.get("production_enabled") is True):
               raise SystemExit("Mob production publishing is not explicitly enabled in config.")
-          print("Mob-only launch boundary and production publishing config verified.")
+          if publishing.get("target_channel_guid") != "c0EFohK0f3174377fb6fa422d3ccb230" or publishing.get("max_posts_per_run") != 1:
+              raise SystemExit("Mob production publishing must remain locked to the fixed test channel and one-post config cap.")
+          print("Mob-only launch boundary, production config, and fixed test destination verified.")
           PY
           missing=0
           for key in AGENT_API_TOKEN GROQ_API_KEY OPENROUTER_API_KEY RUBIKA_TOKEN RUBIKA_CHANNEL_GUID RUBIKA_OWNER_CHAT_ID; do
@@ -65,8 +67,8 @@ jobs:
             missing=1
           fi
           if [[ "$missing" -ne 0 ]]; then exit 2; fi
-          if [[ "$RUBIKA_CHANNEL_GUID" == "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
-            echo "::error::Production Mob publishing cannot target the known test channel."
+          if [[ "$RUBIKA_CHANNEL_GUID" != "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
+            echo "::error::Production Mob publishing is locked to the configured fixed test channel."
             exit 2
           fi
 

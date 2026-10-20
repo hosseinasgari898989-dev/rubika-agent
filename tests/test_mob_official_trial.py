@@ -209,9 +209,13 @@ class OfficialPreviewSafetyTests(unittest.TestCase):
             def get_seen_index(self):
                 return {"ids": set(), "hashes": set()}
 
+        test_policy = {"mode": "test", "born_at": None, "birth_datetime": None}
         with tempfile.TemporaryDirectory() as folder:
             report = Path(folder) / "report.json"
-            with patch.object(mob_official_trial, "CloudState", FakeCloud):
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=test_policy),
+            ):
                 result = run_trial(
                     publish=True,
                     limit=1,
@@ -256,9 +260,83 @@ class OfficialPreviewSafetyTests(unittest.TestCase):
 
 
 class TestChannelPublishingGateTests(unittest.TestCase):
-    def test_config_allows_only_test_channel_mode_not_production(self):
+    def test_config_allows_production_x_publishing_and_the_fixed_test_channel_trial(self):
+        self.assertTrue(mob_official_trial._official_publishing_config_enabled())
         self.assertTrue(mob_official_trial._test_channel_publishing_config_enabled())
-        self.assertFalse(mob_official_trial._official_publishing_config_enabled())
+
+    def test_test_channel_trial_in_production_still_applies_mob_birth_cutoff(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_seen_index(self):
+                return {"ids": set(), "hashes": set()}
+
+        production_policy = {
+            "mode": "production",
+            "born_at": "2026-10-20T00:00:00Z",
+            "birth_datetime": datetime(2026, 10, 20, 0, 0, tzinfo=timezone.utc),
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            candidates = self.report_file(folder, [self.row(published_at="2026-10-19T23:59:59Z")])
+            report_path = Path(folder) / "report.json"
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=production_policy),
+                patch.object(mob_official_trial, "publication_window_rejection", return_value=None),
+                patch.dict("os.environ", {
+                    "RUBIKA_CHANNEL_GUID": mob_official_trial.TEST_CHANNEL_GUID,
+                    "RUBIKA_TOKEN": "dummy-token",
+                }),
+            ):
+                result = run_trial(
+                    publish=False,
+                    test_channel_publish=True,
+                    limit=1,
+                    output_report=report_path,
+                    output_dir=Path(folder) / "media",
+                    candidate_report=candidates,
+                )
+
+        self.assertEqual(result["status"], "nothing_new")
+        self.assertEqual(result["lifecycle"]["mode"], "production")
+        self.assertTrue(result["lifecycle"]["birth_cutoff_enabled"])
+        self.assertEqual(result["lifecycle"]["rejected_before_or_unverified"], 1)
+        self.assertEqual(result["candidate_count"], 0)
+        self.assertFalse(result["publishing"])
+
+    def test_production_publish_refuses_any_destination_other_than_fixed_test_channel(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_seen_index(self):
+                return {"ids": set(), "hashes": set()}
+
+        production_policy = {
+            "mode": "production",
+            "born_at": "2026-10-20T00:00:00Z",
+            "birth_datetime": datetime(2026, 10, 20, 0, 0, tzinfo=timezone.utc),
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=production_policy),
+                patch.dict("os.environ", {
+                    "RUBIKA_CHANNEL_GUID": "not-the-test-channel",
+                    "RUBIKA_TOKEN": "dummy-token",
+                }),
+            ):
+                result = run_trial(
+                    publish=True,
+                    limit=1,
+                    output_report=Path(folder) / "report.json",
+                    output_dir=Path(folder) / "media",
+                    candidate_report=Path(folder) / "missing-candidates.json",
+                )
+
+        self.assertEqual(result["error"], "official_publishing_target_mismatch")
+        self.assertFalse(result["publishing"])
 
     def test_test_channel_publish_refuses_a_different_destination(self):
         class FakeCloud:
