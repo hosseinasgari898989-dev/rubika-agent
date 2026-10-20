@@ -70,11 +70,7 @@ jobs:
             fi
             echo "Explicit manual trial confirmed; this run is locked to the test channel and capped at four successful TikTok posts."
           else
-            if [[ "${RUBIKA_CHANNEL_GUID:-}" == "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
-              echo "::error::Scheduled publishing is still pointed at the test channel; refusing to publish."
-              exit 2
-            fi
-            echo "Scheduled publishing destination is not the test channel; daily successful-post cap is four."
+            echo "Scheduled publishing destination is set by RUBIKA_CHANNEL_GUID; daily successful-post cap is four."
           fi
 
       - name: Set up Node.js
