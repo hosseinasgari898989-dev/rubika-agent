@@ -47,7 +47,8 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("inputs.publish_four_tiktok_test == true", workflow)
         self.assertIn('if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]', workflow)
         self.assertIn('RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230"', workflow)
-        self.assertIn('RUBIKA_CHANNEL_GUID:-}" == "c0EFohK0f3174377fb6fa422d3ccb230"', workflow)
+        # The scheduled-run test-channel guard was removed on purpose (owner-approved).
+        self.assertNotIn('RUBIKA_CHANNEL_GUID:-}" == "c0EFohK0f3174377fb6fa422d3ccb230"', workflow)
         self.assertIn("PLATFORMS = (\"tiktok\",)", worker)
         self.assertIn("--daily-limit 4", workflow)
 
