@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 34,
   "candidate_pool_size": 34,
-  "completed_at": "2026-10-20T23:09:21+00:00",
+  "completed_at": "2026-10-21T07:28:56+00:00",
   "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -25,7 +25,7 @@
     "smyxae": 6
   },
   "filter_rejected_count": 14,
-  "inserted_count": 4,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
@@ -33,32 +33,17 @@
     "processing": 0,
     "queued": 72,
     "sent": 10,
-    "sent_today": 4,
+    "sent_today": 0,
     "skipped": 7,
     "uncertain": 0,
-    "usage_day": "2026-10-20"
+    "usage_day": "2026-10-21"
   },
-  "queue_status": "enqueued",
-  "received_count": 4,
-  "report_generated_at": "2026-10-20T23:09:14.090116+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-10-21T07:28:47.564610+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7698787158676507917",
-    "7698782975357390101",
-    "7698885851409042709",
-    "7698879317366951189"
-  ],
-  "selected_source_distribution": {
-    "meloaep_": 1,
-    "poppytv_ae": 1,
-    "rickkzn_": 1,
-    "saylex.aep812": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@saylex.aep812/video/7698787158676507917",
-    "https://www.tiktok.com/@poppytv_ae/video/7698782975357390101",
-    "https://www.tiktok.com/@meloaep_/video/7698885851409042709",
-    "https://www.tiktok.com/@rickkzn_/video/7698879317366951189"
-  ],
-  "skipped_existing_count": 2
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 34
 }
