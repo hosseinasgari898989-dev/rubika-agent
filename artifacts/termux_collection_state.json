@@ -1,11 +1,11 @@
 {
-  "candidate_pool_count": 34,
-  "candidate_pool_size": 34,
-  "completed_at": "2026-10-21T13:11:08+00:00",
+  "candidate_pool_count": 35,
+  "candidate_pool_size": 35,
+  "completed_at": "2026-10-21T21:58:23+00:00",
   "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 34,
+  "filter_eligible_count": 35,
   "filter_input_by_source": {
     "meloaep_": 8,
     "menezxl9": 8,
@@ -15,35 +15,47 @@
     "smyxae": 8
   },
   "filter_rejected_by_reason": {
-    "edit_signal_missing": 5,
+    "edit_signal_missing": 4,
     "poppy_relevance_not_verified_in_visible_text": 9
   },
   "filter_rejected_by_source": {
-    "menezxl9": 5,
+    "menezxl9": 4,
     "rickkzn_": 1,
     "saylex.aep812": 2,
     "smyxae": 6
   },
-  "filter_rejected_count": 14,
-  "inserted_count": 0,
+  "filter_rejected_count": 13,
+  "inserted_count": 3,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 2,
     "processing": 0,
-    "queued": 68,
+    "queued": 71,
     "sent": 14,
     "sent_today": 4,
     "skipped": 7,
     "uncertain": 0,
     "usage_day": "2026-10-21"
   },
-  "queue_status": "no_new_candidates",
-  "received_count": 0,
-  "report_generated_at": "2026-10-21T13:10:59.708606+00:00",
+  "queue_status": "enqueued",
+  "received_count": 3,
+  "report_generated_at": "2026-10-21T21:58:16.288845+00:00",
   "schema_version": 1,
-  "selected_external_ids": [],
-  "selected_source_distribution": {},
-  "selected_urls": [],
-  "skipped_existing_count": 34
+  "selected_external_ids": [
+    "7699139055509916948",
+    "7699229181837708551",
+    "7699152613102652693"
+  ],
+  "selected_source_distribution": {
+    "meloaep_": 1,
+    "menezxl9": 1,
+    "poppytv_ae": 1
+  },
+  "selected_urls": [
+    "https://www.tiktok.com/@poppytv_ae/video/7699139055509916948",
+    "https://www.tiktok.com/@meloaep_/video/7699229181837708551",
+    "https://www.tiktok.com/@menezxl9/video/7699152613102652693"
+  ],
+  "skipped_existing_count": 32
 }
