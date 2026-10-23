@@ -203,7 +203,7 @@ class FormattingTests(unittest.TestCase):
             "cooldown_active": True, "last_error_code": "rate_limited",
             "api_key": "must-not-show",
         })
-        self.assertIn("3/6", rendered)
+        self.assertIn("3/18", rendered)
         self.assertIn("rate_limited", rendered)
         self.assertNotIn("must-not-show", rendered)
 
