@@ -32,12 +32,13 @@
 - PR #41 merged as `97578088cebcdc58fa6cf520e07fb38c84410b8c`; PR #42 merged as `e3fc45cf190f7b592e9e545379e61395c13592b7`. Relevant GitHub Actions checks passed (PR #41 runs 40019377665/40019377673; PR #42 runs 40019699966/40019700005; main run 40019852168).
 - No Worker deploy, D1 write/migration, publishing workflow dispatch, media delivery, MEGA cleanup, or Rubika post was performed. Live Worker/Rubika credential checks were not part of this phase.
 
-## 2026-10-24 - Phase 2 in progress
+## 2026-10-24 - Phase 2 cloud migration and safety guards merged
 
-- PR #43 merged as `e9290cadee941a04542de5869f25884e28b9462c`; it corrected the stale Phase 1 progress entry. Backup `backup/pre-phase-2-20261024` was created before Phase 2 changes.
-- PR #44 merged as `d91139f255c01ec8b8416f872655fbed736e2b35`; it removed five confirmed no-op/retired workflow placeholders. Runs 40032158121 and 40032158184 passed.
-- Working branch: `feature/phase-2-remove-phone-path-20261024`, based on PR #44. This branch removes the phone-only `termux/bootstrap.sh` and `termux/daily.sh` entrypoints, removes the obsolete phone instructions, and replaces them with `docs/CLOUD_DISCOVERY.md`.
-- The active discovery architecture remains GitHub Actions + Termux Docker. `termux/daily_discovery.py` remains as the collector run by the cloud workflow, but its manual Git push option is removed. The report source is now `github_actions_termux_docker`; the report validator and legacy report consumer are updated accordingly.
-- The E2E workflows are being hardened: `video-e2e-trial.yml` becomes manual-only with a default-false confirmation and main checkout; `brain-e2e-dispatch.yml` requires both its existing repository gate and a default-false confirmation. Both retain the fixed test-channel target.
-- A refreshed main-channel activation runbook records the safe future process without changing any channel secret or gate.
-- No workflow was dispatched. No media was downloaded, no Rubika message was sent, and no Worker deploy or D1 migration/write was performed by this Phase 2 work. PR #45 CI passed: runs 40035042806 and 40035042822 succeeded; live Worker health and Rubika credential checks were skipped. No workflow was dispatched.
+- Backup created before Phase 2: `backup/pre-phase-2-20261024`.
+- PR #43 merged as `e9290cadee941a04542de5869f25884e28b9462c` to correct Phase 1 documentation; PR #44 merged as `d91139f255c01ec8b8416f872655fbed736e2b35` to remove five retired/no-op workflow placeholders.
+- PR #45 merged as `c855905cec91522f4182beccbd9aab7975729007`. It removed the phone-only `termux/bootstrap.sh` and `termux/daily.sh` entrypoints and the old phone runbook, documented GitHub Actions + Termux Docker as the active discovery path, removed manual Git push from the collector, updated the source tag to `github_actions_termux_docker`, pinned E2E publishers to `main`, made them manual-only with default-false explicit confirmation, and refreshed the activation/runbook docs.
+- PR #45 checks passed on its final head: Cloud bootstrap run `40035119306` and Agent brain run `40035119308`. A post-merge read-only Worker health smoke check `40035199767` also passed. Live Rubika credentials and live publish behavior were not tested.
+- A post-merge integration audit found one remaining intake validator that accepted only the historical `termux_phone` source tag. PR #46 corrected `agent/brain/queue_intake.py` to accept both `termux_phone` and `github_actions_termux_docker`, and added a regression test. This is important before the next fresh cloud report can be queued.
+- PR #46 merged as `92dd54b710204c97374810718bfdf6792dd1685a`. Both PR checks passed: Cloud bootstrap run `40035282944` and Agent brain run `40035282947`.
+- Current `main` SHA at this checkpoint: `92dd54b710204c97374810718bfdf6792dd1685a`. Post-merge Cloud bootstrap run `40035384915` was still in progress at the last check (dependency installation was running); do not treat that post-merge run as completed until GitHub reports its final conclusion.
+- No publishing workflow was dispatched. No media was downloaded, no Rubika message was sent, no secrets/channel target were changed, and no Worker deploy or D1 migration/write was performed by these PRs.
