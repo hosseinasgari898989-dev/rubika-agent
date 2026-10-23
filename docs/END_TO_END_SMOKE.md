@@ -1,60 +1,34 @@
-# یک اجرای واقعی از گزارش گوشی تا روبیکا
+# آزمایش سرتاسری دستی در GitHub Actions — فقط کانال تست
 
-این آزمایش دستی است و در هر اجرا حداکثر یک ویدئو را انتخاب می‌کند. مسیر اجرا:
-گزارش `artifacts/termux_discovery.json` ← دانلود در GitHub Actions ← بررسی محتوای تصویری/صوتی با مغز Cloudflare AI ← تبدیل به MP4 عمودی 1080×1920 ← MEGA ← D1 ← ارسال به کانال روبیکا.
+این راهنما برای آزمایشی است که واقعاً می‌تواند رسانه دانلود کند و پیام به روبیکا بفرستد. **این اجرا خودکار نیست و با push شدن گزارش یا تغییر کد شروع نمی‌شود.** قبل از شروع، مطمئن شو که انتشار به کانال تست را همین حالا تأیید می‌کنی.
 
-تاریخ انتشار برای انتخاب نامزد شرط نیست. ویدئو فقط در صورت موفقیت دانلود، اعتبارسنجی رسانه و عبور از همهٔ بررسی‌های مغز ارسال می‌شود. این workflow فقط وقتی اجرا می‌شود که فایل درخواست `artifacts/brain-e2e-request.json` روی شاخهٔ آزمایشی تغییر کند؛ push گزارش کشف به‌تنهایی ویدئو منتشر نمی‌کند.
+مسیر جمع‌آوری روزمره ابری است و در [docs/CLOUD_DISCOVERY.md](CLOUD_DISCOVERY.md) توضیح داده شده. دیگر نیازی به ساخت گزارش با گوشی یا اجرای فرمان Termux روی موبایل نیست.
 
-## ۱. ساخت توکن مشترک
+## پیش‌شرط‌ها
 
-در Termux:
+1. آخرین اجرای **Actions → Online Termux discovery and queue sync** باید گزارشی معتبر در `main` ثبت کرده باشد.
+2. workflow از شاخهٔ `main` می‌خواند و شناسهٔ مقصد در کد آن به کانال تست قفل شده است: `c0EFohK0f3174377fb6fa422d3ccb230`.
+3. برای workflow دسته‌ای، متغیر GitHub Actions با نام `RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014` باید از قبل توسط صاحب پروژه روی `approved` تنظیم شده باشد. علاوه بر آن، باید ورودی تأیید انتشار هنگام اجرای دستی روشن شود.
+4. Secretهای موردنیاز باید از قبل در **Settings → Secrets and variables → Actions** ثبت شده باشند: `AGENT_API_TOKEN`، `RUBIKA_TOKEN`، `MEGA_EMAIL` و `MEGA_PASSWORD`. برای مسیرهای وابسته به Relay، تنظیمات Relay نیز باید موجود و معتبر باشند. هیچ مقدار Secret را در فایل یا چت قرار نده.
 
-```bash
-cd ~/rubika-agent-github
-TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
-gh secret set AGENT_API_TOKEN --body "$TOKEN"
-umask 077
-printf '%s' "$TOKEN" > "$HOME/agent_api_token.txt"
-unset TOKEN
-echo "GitHub Actions secret created. Now add the matching Cloudflare Worker secret."
-```
+اگر هرکدام از پیش‌شرط‌ها برقرار نیست، آزمایش را اجرا نکن و مقصد کانال را برای دور زدن محافظ تغییر نده.
 
-مقدار توکن را در چت نفرست.
+## اجرای کنترل‌شده با حداکثر یک نامزد
 
-## ۲. ثبت همان توکن در Cloudflare
+1. در GitHub، فایل `artifacts/brain-e2e-request.json` را از طریق رابط وب باز کن و مقدار `candidate_limit` را روی `1` بگذار؛ `platform` را `tiktok` نگه دار. تغییر را مستقیم روی `main` commit کن. این commit به‌تنهایی انتشار را اجرا نمی‌کند.
+2. مطمئن شو گزارش `artifacts/termux_discovery.json` در `main` نامزد TikTok قابل‌قبول دارد.
+3. به **Actions → Discovery to Brain, MEGA/D1 and Rubika batch test → Run workflow** برو. شاخهٔ `main` را انتخاب کن و فقط در صورت تأیید آگاهانهٔ ارسال، گزینهٔ تأیید انتشار به کانال تست را روشن کن. workflow هم به متغیر `RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014=approved` و هم به این تأیید دستی نیاز دارد.
+4. بعد از پایان اجرا، Summary و Artifact گزارش را بررسی کن. فقط وقتی گزارش وضعیت `sent` و شناسهٔ پیام واقعی Rubika را ثبت کرده باشد، ارسال تأیید شده محسوب می‌شود. شروع workflow یا عبور CI، به‌تنهایی اثبات ارسال نیست.
 
-در داشبورد Cloudflare به **Workers & Pages → rubika-agent → Settings → Variables and Secrets** برو و یک Secret با نام `AGENT_API_TOKEN` بساز. مقدار آن باید دقیقاً همان متنی باشد که با این دستور در Termux نمایش داده می‌شود:
+این workflow از `artifacts/brain-e2e-request.json` و گزارش کشف موجود در `main` استفاده می‌کند. در یک اجرا حداکثر چهار نامزد قابل درخواست است؛ برای اولین تست، همان سقف یک‌موردی بالا را حفظ کن.
 
-```bash
-cat "$HOME/agent_api_token.txt"
-```
+## آزمایش جایگزین تک‌ویدئویی
 
-پس از ذخیرهٔ Secret در Cloudflare، فایل محلی را پاک کن:
+workflow **Controlled video end-to-end trial (test channel only)** نیز اکنون فقط با `workflow_dispatch` اجرا می‌شود و ورودی تأیید دستی‌اش به‌طور پیش‌فرض خاموش است. این مسیر از گزارش ثابت `artifacts/video-e2e-trial.json` استفاده می‌کند و مقصدش در workflow به کانال تست قفل شده است. هنگام اجرای دستی، شاخهٔ `main` را انتخاب کن و ورودی تأیید را فقط برای آزمایش موردنظر روشن کن.
 
-```bash
-rm -f "$HOME/agent_api_token.txt"
-```
+## کنترل ایمنی
 
-## ۳. اجرای یک تست
-
-در Termux اجرا کن:
-
-```bash
-cd ~/rubika-agent-github
-git pull --ff-only origin agent-brain-mega-v1
-printf '{"platform":"tiktok","requested_at":"%s"}\n' "$(date -u +%FT%TZ)" > artifacts/brain-e2e-request.json
-git add artifacts/brain-e2e-request.json
-git commit -m "Request one-item end-to-end test"
-git push origin agent-brain-mega-v1
-gh run list --workflow brain-e2e-dispatch.yml --branch agent-brain-mega-v1 --limit 1
-```
-
-این تست در صورت موفقیت مغز، یک ویدئو را در کانال روبیکا منتشر می‌کند. گزارش مرحلهٔ اجرا با نام `brain-e2e-report` به‌عنوان GitHub Actions Artifact ذخیره می‌شود.
-
-## وضعیت آماده‌سازی زیرساخت
-
-- D1 دیتابیس `rubika-agent-db` دارای migrationهای `0001`، `0002` و `0003` است.
-- Bindingهای Worker شامل `DB` و `AI` هستند.
-- Secretهای `RUBIKA_TOKEN`، `MEGA_EMAIL` و `MEGA_PASSWORD` باید در GitHub Actions موجود باشند؛ تست‌های قبلی پروژه نشان داده‌اند که ارسال به روبیکا و آپلود/دانلود آزمایشی MEGA کار می‌کنند.
-- اگر خروجی محتوا را رد کند یا یکی از بررسی‌ها نامطمئن باشد، ویدئو ارسال نمی‌شود و گزارش دلیل توقف را ثبت می‌کند.
-- برای YouTube هنوز Relay دانلود جداگانه لازم است؛ اولین تست را با TikTok اجرا کن.
+- این دو workflow فقط برای آزمایش واقعی هستند؛ collector ابری خودش رسانه دانلود یا پیام منتشر نمی‌کند.
+- این تغییر مستندات/محافظ‌ها به‌خودی‌خود هیچ workflow انتشار را اجرا نمی‌کند و هیچ پیام روبیکا نمی‌فرستد.
+- اگر دریافت رسانه، اعتبارسنجی، تشخیص تکراری یا رسید واقعی ارسال نامشخص باشد، نتیجه را موفق فرض نکن و ارسال را خودکار تکرار نکن.
+- مقصد کانال را از شناسهٔ تست به کانال اصلی تغییر نده. فعال‌سازی کانال اصلی به GUID تأییدشده، بررسی فقط‌خواندنی مقصد، گیت مستقل و تأیید صریح جداگانه نیاز دارد.
