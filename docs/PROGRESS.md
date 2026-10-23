@@ -33,3 +33,8 @@
 - Corrected the publisher test's import order and retained YouTube/Instagram metadata behavior without TikTok discovery fallbacks.
 - PR #41 merged as `97578088cebcdc58fa6cf520e07fb38c84410b8c`; PR #42 merged as `e3fc45cf190f7b592e9e545379e61395c13592b7`. Relevant GitHub Actions checks passed (PR #41 runs 40019377665/40019377673; PR #42 runs 40019699966/40019700005; main run 40019852168).
 - No Worker deploy, D1 write/migration, publishing workflow dispatch, media delivery, MEGA cleanup, or Rubika post was performed. Live Worker/Rubika credential checks were not part of this phase.
+
+## 2026-10-24 - Phase 2 started
+
+- PR #43 merged: Phase 0/1 status and CI evidence are now current.
+- Backup: `backup/pre-phase-2-20261024`; Phase 2 work starts from main after PR #43.
