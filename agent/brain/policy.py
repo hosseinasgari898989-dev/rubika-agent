@@ -76,7 +76,7 @@ def precheck_edit_candidate(candidate: Candidate) -> tuple[str, ...]:
             reasons.append("required_keyword_missing")
     elif not _has_poppy_relevance(candidate):
         reasons.append("poppy_relevance_not_found_by_python")
-    if _has_any(_candidate_content_text(candidate), NEGATIVE_TEXT_TERMS):
+    if candidate.platform != "tiktok" and _has_any(_candidate_content_text(candidate), NEGATIVE_TEXT_TERMS):
         reasons.append("negative_or_insulting_text_signal")
     return tuple(dict.fromkeys(reasons))
 
@@ -134,7 +134,7 @@ def evaluate_edit_candidate(
 
     text_insult_signal = _has_any(_candidate_content_text(candidate), NEGATIVE_TEXT_TERMS)
     checks["python_text_insult_signal"] = text_insult_signal
-    if text_insult_signal:
+    if candidate.platform != "tiktok" and text_insult_signal:
         reasons.append("negative_or_insulting_text_signal")
 
     minimum_short_side = policy.get("minimum_source_short_side", 480)

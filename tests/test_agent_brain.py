@@ -79,16 +79,22 @@ class BrainModelPolicyTests(unittest.TestCase):
         )
         self.assertIn("duplicate_file_hash", result.reasons)
 
-    def test_insulting_metadata_is_rejected(self):
+    def test_selected_tiktok_source_is_not_rejected_by_extra_negative_text_gate(self):
         result = evaluate_edit_candidate(
             self.candidate(title="Worst game ever - Poppy Playtime edit"),
             self.inspection(), moderation=self.moderation(),
         )
-        self.assertIn("negative_or_insulting_text_signal", result.reasons)
+        self.assertTrue(result.eligible, result.reasons)
+        self.assertTrue(result.checks["python_text_insult_signal"])
+        self.assertNotIn("negative_or_insulting_text_signal", result.reasons)
 
-    def test_python_text_policy_rejects_known_insult_phrases(self):
+    def test_non_tiktok_metadata_keeps_existing_negative_text_filter(self):
         result = evaluate_edit_candidate(
-            self.candidate(title="Poppy Playtime sucks - worst game ever"),
+            self.candidate(
+                platform="instagram",
+                canonical_url="https://www.instagram.com/reel/AbCdEf_1234/",
+                title="Poppy Playtime sucks - worst game ever",
+            ),
             self.inspection(), moderation=self.moderation(),
         )
         self.assertIn("negative_or_insulting_text_signal", result.reasons)
