@@ -47,4 +47,4 @@
 - No branch was deleted. Candidate-only old non-backup branches are listed in the handoff/report, not removed.
 - No publishing workflow was dispatched; no provider API request, media download, Rubika post, D1 write/migration, secret change or Worker deployment was performed during Phase 2c.
 
-Current main SHA after Phase 2: `087a880317a8140afd790c2742e6cea696123439`.
+Provider-cleanup implementation commit (PR #49): `087a880317a8140afd790c2742e6cea696123439`; final documentation checkpoint PR #50 merged as `01167e6837af9098ccde11fa450d259b66058227`.
