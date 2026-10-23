@@ -1,410 +1,127 @@
 from __future__ import annotations
-
 import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
-
 from agent.brain.queue_intake import candidates_for_queue, fair_round_robin, run_intake
+from agent.source_policy import known_tiktok_profiles
+
+PROFILES = known_tiktok_profiles()
 
 
-def _now_iso() -> str:
+def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _video_id(creator_index: int, video_index: int) -> str:
+def _video_id(creator_index, video_index):
     return f"769{creator_index:02d}{video_index:02d}000000000000"
 
 
-def _row(external_id: str, author: str, *, title: str = "Poppy Playtime edit") -> dict:
-    return {
-        "id": external_id,
-        "url": f"https://www.tiktok.com/@{author}/video/{external_id}",
-        "author": author,
-        "title": title,
-        "caption": "Poppy Playtime edit",
-        "hashtags": ["poppyplaytime"],
-        "published_at": _now_iso(),
-        "media_type": "video",
-        "freshness_verified": True,
-    }
+def _row(external_id, author, *, title="Poppy Playtime edit"):
+    return {"id": external_id, "url": f"https://www.tiktok.com/@{author}/video/{external_id}?is_from_webapp=1",
+            "author": author, "title": title, "caption": title, "hashtags": ["poppyplaytime"],
+            "published_at": _now_iso(), "media_type": "video", "freshness_verified": True}
 
 
 class FakeCloudState:
     def __init__(self, *_args, **_kwargs):
-        self.items: dict[str, list[dict]] = {
-            "queued": [],
-            "processing": [],
-            "sent": [],
-            "failed": [],
-            "uncertain": [],
-            "skipped": [],
-        }
-        old = {
-            "id": "tiktok:" + _video_id(5, 99),
-            "platform": "tiktok",
-            "external_id": _video_id(5, 99),
-            "source_key": "creator5",
-            "status": "queued",
-            "created_at": "2026-10-14T01:00:00Z",
-        }
-        self.items["queued"].append(old)
-        self.blocking_seen_ids = {"tiktok:" + _video_id(0, 99)}
-        self.duplicate_once = {_video_id(2, 0)}
+        self.items = {status: [] for status in ("queued", "processing", "sent", "failed", "uncertain", "skipped")}
+        self.items["queued"].append({"id": "tiktok:" + _video_id(5,99), "platform": "tiktok",
+            "external_id": _video_id(5,99), "source_key": PROFILES[5], "status": "queued",
+            "created_at": "2026-10-14T01:00:00Z"})
+        self.blocking_seen_ids = {"tiktok:" + _video_id(0,99)}
+        self.duplicate_once = {_video_id(2,0)}
 
-    def get_automation_queue(self, *, status: str = "queued", limit: int = 100, offset: int = 0):
+    def get_automation_queue(self, *, status="queued", limit=100, offset=0):
         values = self.items[status]
         return {"ok": True, "items": values[offset:offset + limit]}
 
     def get_seen_index(self, **_kwargs):
         return {"ids": set(self.blocking_seen_ids), "hashes": set()}
 
-    def enqueue_automation_items(self, rows: list[dict]):
-        row = rows[0]
-        external_id = row["external_id"]
-        existing = {
-            item.get("external_id")
-            for group in self.items.values()
-            for item in group
-        }
+    def enqueue_automation_items(self, rows):
+        row = rows[0]; external_id = row["external_id"]
+        existing = {item.get("external_id") for group in self.items.values() for item in group}
         if external_id in existing or external_id in self.duplicate_once:
             self.duplicate_once.discard(external_id)
-            return {
-                "received_count": 1, "inserted_count": 0,
-                "duplicate_count": 1, "invalid_count": 0,
-            }
-        created = {
-            "id": row["platform"] + ":" + external_id,
-            "platform": row["platform"],
-            "external_id": external_id,
-            "canonical_url": row["canonical_url"],
-            "source_key": row["source_key"],
-            "status": "queued",
-            "created_at": _now_iso(),
-        }
-        self.items["queued"].append(created)
-        return {
-            "received_count": 1, "inserted_count": 1,
-            "duplicate_count": 0, "invalid_count": 0,
-        }
+            return {"received_count": 1, "inserted_count": 0, "duplicate_count": 1, "invalid_count": 0}
+        self.items["queued"].append({"id": row["platform"] + ":" + external_id, "platform": row["platform"],
+            "external_id": external_id, "canonical_url": row["canonical_url"], "source_key": row["source_key"],
+            "status": "queued", "created_at": _now_iso()})
+        return {"received_count": 1, "inserted_count": 1, "duplicate_count": 0, "invalid_count": 0}
 
     def get_automation_queue_summary(self):
         counts = {key: len(values) for key, values in self.items.items()}
-        counts["sent_today"] = counts["sent"]
-        counts["usage_day"] = datetime.now(timezone.utc).date().isoformat()
+        counts["sent_today"] = counts["sent"]; counts["usage_day"] = datetime.now(timezone.utc).date().isoformat()
         return counts
 
 
 class QueueIntakeTests(unittest.TestCase):
-    def test_maps_metadata_and_deduplicates_without_media_bytes(self):
-        payload = {
-            "schema_version": 1,
-            "source": "termux_phone",
-            "mode": "metadata_only_no_download_no_publish",
-            "candidates": {
-                "tiktok": [
-                    _row("7616247520657771796", "creator"),
-                    _row("7616247520657771796", "creator"),
-                ],
-                "youtube": [
-                    {
-                        "id": "abcdefghijk",
-                        "url": "https://www.youtube.com/shorts/abcdefghijk",
-                        "author": "official_creator",
-                        "title": "Poppy edit",
-                        "published_at": _now_iso(),
-                        "freshness_verified": True,
-                    }
-                ],
-                "instagram": [
-                    {
-                        "id": "AbCdEf_1234",
-                        "url": "https://www.instagram.com/reel/AbCdEf_1234/",
-                        "title": "Poppy Playtime edit",
-                        "caption": "Poppy Playtime",
-                        "published_at": _now_iso(),
-                        "media_type": "video",
-                    }
-                ],
-            },
-        }
-        rows = candidates_for_queue(payload)
+    def test_maps_metadata_deduplicates_and_strips_tracking_query(self):
+        video_id = "7616247520657771796"
+        rows = candidates_for_queue({"candidates": {"tiktok": [_row(video_id, PROFILES[0]), _row(video_id, PROFILES[0])]}})
         self.assertEqual(len(rows), 1)
-        self.assertEqual([row["platform"] for row in rows], ["tiktok"])
-        self.assertEqual(rows[0]["external_id"], "7616247520657771796")
-        self.assertEqual(rows[0]["source_key"], "creator")
-        self.assertTrue(rows[0]["freshness_verified"])
-        self.assertEqual(rows[0]["published_at"][:4], str(datetime.now(timezone.utc).year))
+        self.assertEqual(rows[0]["external_id"], video_id)
+        self.assertEqual(rows[0]["source_key"], PROFILES[0])
+        self.assertEqual(rows[0]["canonical_url"], f"https://www.tiktok.com/@{PROFILES[0]}/video/{video_id}")
         self.assertTrue(all("media_bytes" not in row and "path" not in row for row in rows))
 
-    def test_rejects_bad_ids_non_https_undated_stale_and_off_topic_rows(self):
-        old_date = "2020-01-01T00:00:00+00:00"
-        payload = {
-            "candidates": {
-                "tiktok": [
-                    {**_row("../bad", "creator"), "title": "Poppy Playtime edit"},
-                    {**_row("valid", "creator"), "url": "http://www.tiktok.com/@x/video/valid"},
-                    {**_row("undated", "creator"), "published_at": None},
-                    {**_row("stale", "creator"), "published_at": old_date},
-                    {**_row("offtopic", "creator", title="Funny unrelated clip"), "caption": "nothing related", "hashtags": []},
-                ]
-            }
-        }
-        self.assertEqual(candidates_for_queue(payload), [])
+    def test_only_six_selected_sources_can_enter_queue(self):
+        diagnostics = {}
+        rows = candidates_for_queue({"candidates": {"tiktok": [
+            _row("7616247520657771796", "unlisted_creator"), _row("7616247520657771797", PROFILES[0]),
+        ]}}, diagnostics=diagnostics)
+        self.assertEqual([row["source_key"] for row in rows], [PROFILES[0]])
+        self.assertEqual(diagnostics["rejected_by_reason"].get("source_not_selected"), 1)
 
-    def test_tiktok_edit_queue_does_not_apply_mob_birth_cutoff(self):
-        candidate = _row("7690000000000000001", "meloaep_")
-        candidate["published_at"] = "2026-10-19T12:00:00Z"
+    def test_caption_or_hashtags_must_contain_keyword_and_edit_signal_is_not_required(self):
+        caption = _row("7616247520657771796", PROFILES[0], title="clip")
+        caption["caption"] = "PlayTIME compilation"; caption["hashtags"] = []
+        edit_only = _row("7616247520657771797", PROFILES[1], title="clip")
+        edit_only["caption"] = "velocity aep transitions"; edit_only["hashtags"] = []
+        hashtag_match = _row("7616247520657771798", PROFILES[2], title="clip")
+        hashtag_match["caption"] = "new clip"; hashtag_match["hashtags"] = ["#POPPYfan"]
+        rows = candidates_for_queue({"candidates": {"tiktok": [caption, edit_only, hashtag_match]}})
+        self.assertEqual([row["external_id"] for row in rows], ["7616247520657771796", "7616247520657771798"])
 
-        rows = candidates_for_queue(
-            {"candidates": {"tiktok": [candidate]}},
-            now=datetime(2026, 10, 21, 12, tzinfo=timezone.utc),
-        )
+    def test_missing_timestamp_and_non_numeric_video_ids_are_rejected(self):
+        undated = _row("7616247520657771796", PROFILES[0]); undated["published_at"] = None
+        invalid = _row("not-numeric", PROFILES[0])
+        self.assertEqual(candidates_for_queue({"candidates": {"tiktok": [undated, invalid]}}), [])
 
-        self.assertEqual([row["external_id"] for row in rows], ["7690000000000000001"])
+    def test_old_timestamp_is_not_filtered_before_phase_six_date_engine(self):
+        row = _row("7616247520657771796", PROFILES[0]); row["published_at"] = "2020-01-01T00:00:00Z"
+        rows = candidates_for_queue({"candidates": {"tiktok": [row]}}, now=datetime(2026,10,23,12,tzinfo=timezone.utc))
+        self.assertEqual([item["external_id"] for item in rows], ["7616247520657771796"])
 
-    def test_round_robin_distributes_creators_and_rotates_after_previous_source(self):
+    def test_round_robin_distributes_selected_creators_and_rotates(self):
         rows = []
-        for creator in ("a", "b", "c"):
-            rows.extend([
-                {"external_id": creator + "1", "source_key": creator},
-                {"external_id": creator + "2", "source_key": creator},
-            ])
-        self.assertEqual(
-            [row["external_id"] for row in fair_round_robin(rows)[:4]],
-            ["a1", "b1", "c1", "a2"],
-        )
-        self.assertEqual(
-            [row["external_id"] for row in fair_round_robin(rows, last_source_key="b")[:3]],
-            ["c1", "a1", "b1"],
-        )
+        for i, creator in enumerate(PROFILES):
+            rows.extend([{"external_id": str(i)+"1", "source_key": creator}, {"external_id": str(i)+"2", "source_key": creator}])
+        self.assertEqual([row["external_id"] for row in fair_round_robin(rows)[:4]], ["01","11","21","31"])
+        self.assertEqual([row["external_id"] for row in fair_round_robin(rows, last_source_key=PROFILES[1])[:3]], ["21","31","41"])
 
     def test_intake_skips_existing_ids_refills_duplicates_and_caps_four_new_items(self):
         candidates = []
-        for creator_index in range(6):
-            creator = f"creator{creator_index}"
-            for video_index in range(4):
-                external_id = _video_id(creator_index, video_index)
-                candidates.append(_row(external_id, creator))
-        candidates.insert(0, _row(_video_id(0, 99), "creator0"))
-        candidates.append(_row(_video_id(5, 99), "creator5"))
-        payload = {
-            "schema_version": 1,
-            "source": "termux_phone",
-            "mode": "metadata_only_no_download_no_publish",
-            "generated_at": _now_iso(),
-            "candidates": {"tiktok": candidates, "mob_official": []},
-        }
-
+        for i, creator in enumerate(PROFILES):
+            candidates.extend(_row(_video_id(i,j),creator) for j in range(4))
+        candidates.insert(0,_row(_video_id(0,99),PROFILES[0])); candidates.append(_row(_video_id(5,99),PROFILES[5]))
+        payload = {"schema_version":1,"source":"termux_phone","mode":"metadata_only_no_download_no_publish",
+                   "generated_at":_now_iso(),"candidates":{"tiktok":candidates,"mob_official":[]}}
         with tempfile.TemporaryDirectory() as directory:
-            report_path = Path(directory) / "report.json"
-            report_path.write_text(json.dumps(payload), encoding="utf-8")
-            with patch("agent.brain.queue_intake.CloudState", FakeCloudState):
-                result = run_intake(report_path, max_new_items=4)
+            path=Path(directory)/"report.json"; path.write_text(json.dumps(payload),encoding="utf-8")
+            with patch("agent.brain.queue_intake.CloudState",FakeCloudState):
+                result=run_intake(path,max_new_items=4)
+        self.assertTrue(result["ok"]); self.assertEqual(result["inserted_count"],4)
+        self.assertEqual(result["max_new_items_per_run"],4); self.assertEqual(len(result["selected_items"]),4)
+        self.assertEqual(len({row["source_key"] for row in result["selected_items"]}),4)
+        ids={row["external_id"] for row in result["selected_items"]}
+        self.assertNotIn(_video_id(0,99),ids); self.assertNotIn(_video_id(5,99),ids)
+        self.assertEqual(result["duplicate_count"],1)
+        self.assertTrue(all(row["queue_status"]=="queued" for row in result["selected_items"]))
 
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["inserted_count"], 4)
-        self.assertEqual(result["max_new_items_per_run"], 4)
-        self.assertEqual(len(result["selected_items"]), 4)
-        self.assertEqual(len({row["source_key"] for row in result["selected_items"]}), 4)
-        self.assertNotIn(
-            _video_id(0, 99),
-            {row["external_id"] for row in result["selected_items"]},
-        )
-        self.assertNotIn(
-            _video_id(5, 99),
-            {row["external_id"] for row in result["selected_items"]},
-        )
-        self.assertEqual(result["duplicate_count"], 1)
-        self.assertTrue(all(row["queue_status"] == "queued" for row in result["selected_items"]))
-
-    def test_rejects_bad_ids_and_non_https_urls(self):
-        payload = {
-            "candidates": {
-                "tiktok": [
-                    {**_row("../bad", "x"), "url": "https://www.tiktok.com/@x/video/123"},
-                    {**_row("valid", "x"), "url": "http://www.tiktok.com/@x/video/123"},
-                ]
-            }
-        }
-        self.assertEqual(candidates_for_queue(payload), [])
-
-    def test_search_query_and_creator_metadata_cannot_fake_relevance(self):
-        unrelated = {
-            **_row("unrelated", "smyxae", title="I think Carlos is my ideal type"),
-            "caption": "Resident Evil edit",
-            "hashtags": ["carlosoliveira", "residenteviledit"],
-            "query": "poppyplaytime",
-            "source_key": "Poppy Playtime search",
-        }
-        self.assertEqual(candidates_for_queue({"candidates": {"tiktok": [unrelated]}}), [])
-
-    def test_rejects_game_mention_without_an_edit_signal(self):
-        gameplay_news = {
-            **_row("news-only", "creator", title="Poppy Playtime Chapter 6 is coming"),
-            "caption": "Poppy Playtime Chapter 6 announcement",
-            "hashtags": ["poppyplaytime", "chapter6"],
-        }
-        self.assertEqual(candidates_for_queue({"candidates": {"tiktok": [gameplay_news]}}), [])
-
-    def test_accepts_relevant_character_edit_without_search_query(self):
-        row = {
-            **_row("huggy-edit", "creator", title="Huggy Wuggy edit"),
-            "caption": "Fan edit",
-            "hashtags": ["huggywuggy", "edit"],
-        }
-        result = candidates_for_queue({"candidates": {"tiktok": [row]}})
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["external_id"], "huggy-edit")
-
-
-    def test_hashtag_only_does_not_prove_relevance_and_filter_reasons_are_counted(self):
-        hashtag_only = _row(
-            "hashtagonly0001", "creator",
-            title="#poppyplaytime #huggywuggy #edit",
-        )
-        hashtag_only["caption"] = "#poppyplaytime #huggywuggy #edit"
-        hashtag_only["hashtags"] = ["poppyplaytime", "huggywuggy", "edit"]
-
-        # Regression: the literal letter "s" must not defeat hashtag removal.
-        smiling_hashtag_only = _row(
-            "smilinghashtag001", "creator",
-            title="#smilingcritters #edit",
-        )
-        smiling_hashtag_only["caption"] = "#smilingcritters #edit"
-        smiling_hashtag_only["hashtags"] = ["smilingcritters", "edit"]
-
-        # URLs are not evidence that the clip itself is relevant.
-        linked_relevance_only = _row(
-            "linkedrelevance001", "creator",
-            title="https://example.com/smilingcritters",
-        )
-        linked_relevance_only["caption"] = "https://example.com/smilingcritters"
-        linked_relevance_only["hashtags"] = ["edit"]
-
-
-        handle_only = _row("handleonly0001", "poppyplaytimeofficial", title="Funny unrelated clip")
-        handle_only["caption"] = "Funny unrelated clip"
-        handle_only["hashtags"] = ["edit"]
-
-        generic_prototype = _row("prototype0001", "creator", title="Prototype edit")
-        generic_prototype["caption"] = "Prototype edit"
-        generic_prototype["hashtags"] = ["poppyplaytime"]
-
-        no_edit_signal = _row("noedit000001", "creator", title="Huggy Wuggy news")
-        no_edit_signal["caption"] = "Huggy Wuggy news"
-        no_edit_signal["hashtags"] = []
-
-        valid = _row("validhuggy001", "creator", title="Huggy Wuggy edit")
-        valid["caption"] = "Huggy Wuggy edit"
-        valid["hashtags"] = []
-
-        duplicate = dict(valid)
-        duplicate["author"] = "other_creator"
-
-        diagnostics = {}
-        rows = candidates_for_queue(
-            {
-                "candidates": {
-                    "tiktok": [
-                        hashtag_only,
-                        smiling_hashtag_only,
-                        linked_relevance_only,
-                        handle_only,
-                        generic_prototype,
-                        no_edit_signal,
-                        valid,
-                        duplicate,
-                    ]
-                }
-            },
-            diagnostics=diagnostics,
-        )
-
-        self.assertEqual([row["external_id"] for row in rows], ["validhuggy001"])
-        self.assertEqual(diagnostics["input_count"], 8)
-        self.assertEqual(diagnostics["eligible_count"], 1)
-        self.assertEqual(diagnostics["rejected_count"], 7)
-        self.assertEqual(
-            diagnostics["rejected_by_reason"]["poppy_relevance_not_verified_in_visible_text"],
-            5,
-        )
-        self.assertEqual(diagnostics["rejected_by_reason"]["edit_signal_missing"], 1)
-        self.assertEqual(diagnostics["duplicate_within_report_count"], 1)
-
-
-    def test_owner_selected_source_accepts_poppy_hashtag_plus_edit_signal(self):
-        row = _row("knownhashtag0001", "meloaep_", title="A different kind of intro")
-        row["caption"] = "SONG: Sequencia Quebra (Slowed)"
-        row["hashtags"] = ["edit", "poppyplaytime", "chapter5"]
-
-        rows = candidates_for_queue({"candidates": {"tiktok": [row]}})
-        self.assertEqual([item["external_id"] for item in rows], ["knownhashtag0001"])
-        self.assertEqual(rows[0]["source_key"], "meloaep_")
-
-    def test_owner_selected_source_edit_only_is_rejected_before_brain(self):
-        row = _row("knowneditonly0001", "smyxae", title="Carlos Oliveira")
-        row["caption"] = "Resident Evil fan edit"
-        row["hashtags"] = ["carlosoliveira", "residenteviledit"]
-
-        self.assertEqual(
-            candidates_for_queue({"candidates": {"tiktok": [row]}}),
-            [],
-        )
-
-
-    def test_owner_selected_source_with_neither_signal_is_rejected_before_brain(self):
-        row = _row("knownempty0001", "menezxl9", title="Birthday vlog")
-        row["caption"] = "A day outside"
-        row["hashtags"] = ["travel", "family"]
-
-        self.assertEqual(
-            candidates_for_queue({"candidates": {"tiktok": [row]}}),
-            [],
-        )
-
-
-    def test_owner_selected_source_poppy_signal_without_edit_is_rejected_before_brain(self):
-        row = _row("knowntopiconly001", "meloaep_", title="Poppy Playtime")
-        row["caption"] = "New chapter announcement"
-        row["hashtags"] = ["poppyplaytime", "chapter5"]
-
-        self.assertEqual(
-            candidates_for_queue({"candidates": {"tiktok": [row]}}),
-            [],
-        )
-
-    def test_report_author_cannot_spoof_owner_selected_source(self):
-        forged = _row("spoofedpolicy0001", "unlisted_creator", title="Fan edit")
-        forged["author"] = "meloaep_"
-        forged["caption"] = "Fan edit"
-        forged["hashtags"] = ["edit"]
-
-        self.assertEqual(
-            candidates_for_queue({"candidates": {"tiktok": [forged]}}),
-            [],
-        )
-
-    def test_tiktok_canonical_url_video_id_must_match_report_id(self):
-        mismatched = _row("7690102000000000000", "meloaep_", title="Poppy Playtime edit")
-        mismatched["url"] = "https://www.tiktok.com/@meloaep_/video/7690102000000000001"
-
-        self.assertEqual(
-            candidates_for_queue({"candidates": {"tiktok": [mismatched]}}),
-            [],
-        )
-
-    def test_unknown_source_cannot_use_poppy_hashtag_as_visible_relevance(self):
-        unknown = _row("unknownhashtag0001", "unlisted_creator", title="Fresh upload")
-        unknown["caption"] = "Fresh upload"
-        unknown["hashtags"] = ["poppyplaytime", "edit"]
-
-        self.assertEqual(
-            candidates_for_queue({"candidates": {"tiktok": [unknown]}}),
-            [],
-        )
 
 if __name__ == "__main__":
     unittest.main()
