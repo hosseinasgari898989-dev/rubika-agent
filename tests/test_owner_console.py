@@ -140,8 +140,8 @@ class CommandParserTests(unittest.TestCase):
         self.assertEqual(console.parse_command("/queue").audit_name, "queue")
         self.assertEqual(console.parse_command("/report").name, "report")
         self.assertEqual(console.parse_command("/ai-status").audit_name, "ai-status")
-        self.assertEqual(console.parse_command("/ai-status GEMINI").audit_name, "ai-status:gemini")
-        self.assertEqual(console.parse_command("/ai-status github_models").provider, "github_models")
+        self.assertEqual(console.parse_command("/ai-status GROQ").audit_name, "ai-status:groq")
+        self.assertEqual(console.parse_command("/ai-status openrouter").provider, "openrouter")
         self.assertEqual(console.parse_command("/edit src/index.js").name, "unknown")
         self.assertEqual(console.parse_command("please run a command").name, "unknown")
         self.assertEqual(console.parse_command("/ai-status some-other-provider").name, "unknown")
@@ -197,9 +197,9 @@ class FormattingTests(unittest.TestCase):
         self.assertLessEqual(len(queue), console.MAX_REPLY_CHARS)
 
     def test_ai_report_only_shows_allowlisted_status_fields(self):
-        rendered = console.format_ai_status("gemini", {
+        rendered = console.format_ai_status("groq", {
             "ok": True, "ready": False, "status": "cooldown_active",
-            "calls_used": 3, "daily_limit": 6, "remaining": 3,
+            "calls_used": 3, "daily_limit": 18, "remaining": 15,
             "cooldown_active": True, "last_error_code": "rate_limited",
             "api_key": "must-not-show",
         })
@@ -230,8 +230,8 @@ class HTTPClientTests(unittest.TestCase):
         client = console.ControlWorker(
             "https://rubika-agent.h98609294.workers.dev", "t" * 40, opener=opener
         )
-        client.ai_status("gemini")
-        self.assertIn("provider=gemini", opener.requests[0][0].full_url)
+        client.ai_status("openrouter")
+        self.assertIn("provider=openrouter", opener.requests[0][0].full_url)
         with self.assertRaisesRegex(console.OwnerConsoleError, "code_ai_provider_not_enabled"):
             client.ai_status("unknown")
 
@@ -242,7 +242,7 @@ class HTTPClientTests(unittest.TestCase):
         with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_query_not_allowed"):
             client._request("GET", "/api/brain/owner-console/state?offset=private")
         with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_provider_invalid"):
-            client._request("GET", "/api/brain/ai-provider/status?provider=gemini&provider=groq")
+            client._request("GET", "/api/brain/ai-provider/status?provider=groq&provider=openrouter")
         with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_path_not_allowed"):
             client._request("GET", "/api/brain/owner-console/not-allowlisted")
         with self.assertRaisesRegex(console.OwnerConsoleError, "control_api_method_not_allowed"):
@@ -314,7 +314,7 @@ class OperationsConsoleTests(unittest.TestCase):
         instance, bot, control = self.make_console()
         self.assertEqual(instance.process_update(update(text="/ai-status")), "answered")
         self.assertEqual(control.ai_calls, list(console.PROVIDERS))
-        self.assertIn("GITHUB_MODELS", bot.sent[-1][1])
+        self.assertIn("GROQ", bot.sent[-1][1])
         self.assertEqual(control.queue_calls, 0)
 
     def test_report_gathers_status_queue_ai_and_latest_ci(self):
