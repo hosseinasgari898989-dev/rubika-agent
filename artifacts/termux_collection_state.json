@@ -1,26 +1,55 @@
 {
-  "schema_version": 1,
-  "completed_at": "2026-10-14T23:29:30+00:00",
-  "report_generated_at": "2026-10-14T23:29:19.664337+00:00",
-  "queue_status": "enqueued",
-  "inserted_count": 4,
-  "candidate_pool_count": 40,
-  "selected_source_distribution": {
-    "saylex.aep812": 1,
-    "poppytv_ae": 1,
-    "meloaep_": 1,
-    "menezxl9": 1
+  "candidate_pool_count": 35,
+  "candidate_pool_size": 35,
+  "completed_at": "2026-10-23T20:20:45+00:00",
+  "discovered_candidate_count": 48,
+  "duplicate_count": 0,
+  "duplicate_within_report_count": 0,
+  "filter_eligible_count": 35,
+  "filter_input_by_source": {
+    "meloaep_": 8,
+    "menezxl9": 8,
+    "poppytv_ae": 8,
+    "rickkzn_": 8,
+    "saylex.aep812": 8,
+    "smyxae": 8
   },
-  "selected_external_ids": [
-    "7694281183424695566",
-    "7692118289916366100",
-    "7692305726496050484",
-    "7693269088096800020"
-  ],
+  "filter_rejected_by_reason": {
+    "edit_signal_missing": 5,
+    "poppy_relevance_not_verified_in_visible_text": 8
+  },
+  "filter_rejected_by_source": {
+    "menezxl9": 5,
+    "rickkzn_": 1,
+    "saylex.aep812": 1,
+    "smyxae": 6
+  },
+  "filter_rejected_count": 13,
+  "inserted_count": 1,
+  "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
-  "verification": {
-    "workflow_run_id": 38654154614,
-    "workflow_run_url": "https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38654154614",
-    "note": "Created from the verified successful run because that run started before the five-hour state-marker step was added."
-  }
+  "queue_counts": {
+    "failed": 2,
+    "processing": 0,
+    "queued": 66,
+    "sent": 22,
+    "sent_today": 4,
+    "skipped": 7,
+    "uncertain": 0,
+    "usage_day": "2026-10-23"
+  },
+  "queue_status": "enqueued",
+  "received_count": 1,
+  "report_generated_at": "2026-10-23T20:20:37.439855+00:00",
+  "schema_version": 1,
+  "selected_external_ids": [
+    "7699891421825781013"
+  ],
+  "selected_source_distribution": {
+    "poppytv_ae": 1
+  },
+  "selected_urls": [
+    "https://www.tiktok.com/@poppytv_ae/video/7699891421825781013"
+  ],
+  "skipped_existing_count": 34
 }
