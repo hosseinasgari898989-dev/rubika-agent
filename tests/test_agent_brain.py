@@ -329,33 +329,30 @@ class PipelineTests(unittest.TestCase):
 
 
 class DeliveryStateMachineTests(unittest.TestCase):
-    def test_success_deletes_local_then_remote_only_after_success(self):
+    def test_success_deletes_local_and_retains_remote_staging_copy(self):
         events = []
         result = deliver_with_retry(
-            item_id="tiktok:123",
+            item_id="tiktok:7616247520657771796",
             send=lambda: {"status": "OK", "message_id": "m1"},
             record_attempt=lambda n, status, code: events.append((n, status, code)),
             delete_local=lambda: events.append(("local", "deleted")),
-            delete_remote=lambda: events.append(("remote", "deleted")),
             sleeper=lambda _: None,
         )
         self.assertEqual(result["status"], "sent")
-        self.assertEqual(result["cleanup"], "complete")
-        self.assertLess(events.index(("local", "deleted")), events.index(("remote", "deleted")))
+        self.assertEqual(result["cleanup"], "local_complete_remote_retained")
+        self.assertIn(("local", "deleted"), events)
+        self.assertNotIn(("remote", "deleted"), events)
 
     def test_failed_local_cleanup_keeps_remote_copy(self):
-        remote_deleted = []
         result = deliver_with_retry(
-            item_id="tiktok:123",
+            item_id="tiktok:7616247520657771796",
             send=lambda: {"status": "OK"},
             record_attempt=lambda *_: None,
             delete_local=lambda: (_ for _ in ()).throw(OSError()),
-            delete_remote=lambda: remote_deleted.append(True),
             sleeper=lambda _: None,
         )
         self.assertEqual(result["status"], "sent")
         self.assertEqual(result["cleanup"], "pending")
-        self.assertEqual(remote_deleted, [])
 
     def test_retries_definite_rejections_three_times_then_stops(self):
         events = []
