@@ -21,3 +21,14 @@
 - #37: appears redundant; recheck and close in Phase 2.
 - #38: reassess once docs are refreshed.
 - #39: port its manual-only E2E safety protection in Phase 2, then close the draft.
+
+## 2026-10-23 - Phase 1 implementation prepared; CI pending
+
+- Deleted the unknown-source TikTok path rather than merely narrowing it: removed the unknown-source policy defaults, public hashtag-feed discovery, legacy TikWM/search-engine TikTok search, ProxiTok RSS discovery, and the associated search-index/ProxiTok modules and tests. TikTok metadata now originates only from the six configured creator profiles.
+- Enforced the owner-selected source rule: caption or hashtags must contain a configured `poppy` or `playtime` substring (case-insensitive); no separate edit-marker gate. Basic media integrity, duplicate ID/SHA, minimum quality, and audio-stream checks remain.
+- Removed TikTok date/age filtering from discovery/intake; Phase 6's per-channel `since_utc` engine owns that rule. The separate official Mob lifecycle cutoff remains unchanged.
+- Canonical TikTok URLs now strip tracking parameters and resolve supported short links once; numeric video IDs remain required.
+- Cobalt quality uses configured 1080 maximum. Upscaling is disabled; sources below 1080 short-side remain native. Downloaded source dimensions are included in the existing validation JSON payload without a D1 migration.
+- Removed bold-markup markers from edit captions. Confirmed-success delivery removes the local copy but retains the MEGA copy for the scheduled 24-hour cleanup policy.
+- Corrected the publisher test's import order and retained YouTube/Instagram metadata behavior without TikTok discovery fallbacks.
+- No Worker deploy, D1 write/migration, publishing workflow dispatch, media delivery, MEGA cleanup, or Rubika post was performed. Validation is pending GitHub PR CI; live Worker/Rubika credential checks are not part of this phase.
