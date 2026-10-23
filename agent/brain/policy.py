@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from agent.source_policy import has_required_any_keyword, required_any_keywords
+from agent.source_policy import has_required_any_keyword, required_any_keywords, resolve_source_policy
 
 from .models import Candidate, Evaluation, InspectionResult
 
@@ -15,8 +15,38 @@ def required_moderation_fields(candidate: Candidate) -> tuple[str, ...]:
     return ("has_music",)
 
 
+NEGATIVE_TEXT_TERMS = (
+    "trash game", "worst game ever", "stupid game", "ugly character",
+    "this game sucks", "game is trash", "poppy playtime sucks",
+    "poppy playtime is trash", "huggy wuggy sucks", "catnap sucks",
+    "kissy missy sucks", "the game is garbage", "hate this game",
+    "بازی آشغال", "بازی مزخرف", "این بازی آشغاله", "این بازی مزخرفه",
+    "پاپی پلی تایم آشغاله", "پاپی پلی تایم مزخرفه",
+    "هاگی واگی زشته", "کت نپ زشته", "شخصیت احمق",
+    "افتضاح ترین بازی", "افتضاح‌ترین بازی",
+)
+
+
+def _normalize_text(value: str) -> str:
+    value = value.casefold().replace("ي", "ی").replace("ك", "ک")
+    value = value.replace("\\u200c", " ").replace("\\u200f", " ").replace("\\u200e", " ")
+    return re.sub(r"\\s+", " ", value).strip()
+
+
+def _has_any(text: str, terms: tuple[str, ...]) -> bool:
+    normalized = _normalize_text(text)
+    return any(_normalize_text(term) in normalized for term in terms)
+
+
 def _candidate_content_text(candidate: Candidate) -> str:
-    return " ".join((candidate.title, candidate.caption, " ".join(candidate.hashtags))).casefold()
+    return _normalize_text(" ".join((candidate.title, candidate.caption, " ".join(candidate.hashtags))))
+
+
+def _policy_for(candidate: Candidate) -> dict[str, Any]:
+    if candidate.platform == "tiktok":
+        return resolve_source_policy("tiktok", candidate.source_key)
+    supplied = candidate.source_policy or {}
+    return dict(supplied) if supplied else resolve_source_policy(candidate.platform, candidate.source_key)
 
 
 def _has_poppy_relevance(candidate: Candidate) -> bool:
@@ -37,16 +67,18 @@ def _tiktok_keyword_match(candidate: Candidate) -> bool:
 
 def precheck_edit_candidate(candidate: Candidate) -> tuple[str, ...]:
     """Fail closed on unselected TikTok handles and apply only the selected-channel keyword rule."""
+    reasons: list[str] = []
     if candidate.platform == "tiktok":
-        policy = candidate.source_policy or {}
-        if policy.get("known_source") is not True or policy.get("enabled") is not True:
+        source_policy = _policy_for(candidate)
+        if source_policy.get("known_source") is not True or source_policy.get("enabled") is not True:
             return ("source_not_selected",)
         if not _tiktok_keyword_match(candidate):
-            return ("required_keyword_missing",)
-        return ()
-    if not _has_poppy_relevance(candidate):
-        return ("poppy_relevance_not_found_by_python",)
-    return ()
+            reasons.append("required_keyword_missing")
+    elif not _has_poppy_relevance(candidate):
+        reasons.append("poppy_relevance_not_found_by_python")
+    if _has_any(_candidate_content_text(candidate), NEGATIVE_TEXT_TERMS):
+        reasons.append("negative_or_insulting_text_signal")
+    return tuple(dict.fromkeys(reasons))
 
 
 def evaluate_edit_candidate(
@@ -63,7 +95,7 @@ def evaluate_edit_candidate(
     trusted_source_keys = trusted_source_keys or set()
     moderation = moderation or {}
     required_fields = required_moderation_fields(candidate)
-    policy = candidate.source_policy or {}
+    policy = _policy_for(candidate)
     reasons: list[str] = []
     warnings: list[str] = []
     checks: dict[str, Any] = {}
@@ -91,7 +123,7 @@ def evaluate_edit_candidate(
         checks["policy_track"] = "selected_tiktok_channel" if selected else "unselected_tiktok_channel"
         if not selected:
             reasons.append("source_not_selected")
-        if not keyword_match:
+        elif not keyword_match:
             reasons.append("required_keyword_missing")
     else:
         relevant = _has_poppy_relevance(candidate)
@@ -99,6 +131,11 @@ def evaluate_edit_candidate(
         if not relevant:
             reasons.append("poppy_relevance_not_found_by_python")
         checks["policy_track"] = "non_tiktok_metadata"
+
+    text_insult_signal = _has_any(_candidate_content_text(candidate), NEGATIVE_TEXT_TERMS)
+    checks["python_text_insult_signal"] = text_insult_signal
+    if text_insult_signal:
+        reasons.append("negative_or_insulting_text_signal")
 
     minimum_short_side = policy.get("minimum_source_short_side", 480)
     if type(minimum_short_side) is not int or minimum_short_side < 1:
@@ -133,12 +170,14 @@ def evaluate_edit_candidate(
 
     for name in required_fields:
         value = moderation.get(name)
+        if name == "has_music" and inspection.has_audio is False:
+            continue
         if type(value) is bool:
             checks[name] = value
     missing = [
         name for name in required_fields
         if type(moderation.get(name)) is not bool
-        and not (name == "has_music" and checks.get("has_music") is False)
+        and not (name == "has_music" and (checks.get("has_music") is False or inspection.has_audio is False))
     ]
     checks["moderation_fields_missing"] = missing
     if "has_music" in missing:
@@ -148,7 +187,8 @@ def evaluate_edit_candidate(
     if type(moderation.get("has_music")) is bool:
         if moderation["has_music"] is False and inspection.has_audio is not False:
             reasons.append("music_not_detected")
-        checks["music_detection_method"] = moderation.get("music_detection_method", "workers_ai_audio_check")
+        if inspection.has_audio is not False:
+            checks["music_detection_method"] = moderation.get("music_detection_method", "workers_ai_audio_check")
 
     for key in ("music_probability", "music_decision_reason", "music_detection_method", "music_model", "music_confidence", "music_check_uncertain", "recovery_diagnostics"):
         value = moderation.get(key)
