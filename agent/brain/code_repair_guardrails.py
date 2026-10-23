@@ -110,7 +110,7 @@ def redact(text: str, secrets: tuple[str, ...] = ()) -> str:
             value = value.replace(secret, "[REDACTED]")
     value = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
                    lambda m: m.group(1) + "[REDACTED]", value)
-            value = re.sub(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b", "[REDACTED_GITHUB_TOKEN]", value)
+    value = re.sub(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b", "[REDACTED_GITHUB_TOKEN]", value)
     value = re.sub(r"\bsk-[A-Za-z0-9_-]{20,}\b", "[REDACTED_API_KEY]", value)
     value = re.sub(
         r"""(?im)^(\s*[A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY)\s*=\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s#]+)(?:\s+#.*)?\s*$""",
