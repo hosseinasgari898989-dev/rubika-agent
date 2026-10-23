@@ -27,7 +27,7 @@ jobs:
       - name: Read the last successful collection state
         uses: actions/checkout@v4
         with:
-          ref: agent-brain-mega-v1
+          ref: main
           persist-credentials: false
       - name: Decide whether a collection cycle is due
         id: decide
@@ -57,10 +57,10 @@ jobs:
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
       AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
     steps:
-      - name: Check out the current experimental agent brain
+      - name: Check out the main discovery code
         uses: actions/checkout@v4
         with:
-          ref: agent-brain-mega-v1
+          ref: main
           persist-credentials: true
 
       - name: Validate queue credential without exposing it
@@ -203,7 +203,7 @@ jobs:
               timeout 12m python -
             ' < "$RUNNER_TEMP/termux_docker_discovery.py"
 
-      - name: Validate report and push only the metadata report to the experimental branch
+      - name: Validate report and push only the metadata report to the main branch
         id: push_report
         shell: bash
         run: |
@@ -247,8 +247,8 @@ jobs:
           }, sort_keys=True))
           PY
 
-          git fetch origin agent-brain-mega-v1
-          git merge --ff-only origin/agent-brain-mega-v1
+          git fetch origin main
+          git merge --ff-only origin/main
           mkdir -p artifacts
           cp "$report" artifacts/termux_discovery.json
           git config user.name "github-actions[bot]"
@@ -260,7 +260,7 @@ jobs:
             exit 2
           fi
           git commit -m "Update online Termux metadata discovery report"
-          git push origin HEAD:refs/heads/agent-brain-mega-v1
+          git push origin HEAD:refs/heads/main
           echo "report_pushed=true" >> "$GITHUB_OUTPUT"
 
       # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
@@ -355,7 +355,7 @@ jobs:
             exit 0
           fi
           git commit -m "Record successful five-hour metadata intake"
-          git push origin HEAD:agent-brain-mega-v1
+          git push origin HEAD:main
 
       - name: Get safe advisory diagnosis for pipeline failure
         if: failure()

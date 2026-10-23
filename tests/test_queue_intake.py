@@ -154,6 +154,17 @@ class QueueIntakeTests(unittest.TestCase):
         }
         self.assertEqual(candidates_for_queue(payload), [])
 
+    def test_tiktok_edit_queue_does_not_apply_mob_birth_cutoff(self):
+        candidate = _row("7690000000000000001", "meloaep_")
+        candidate["published_at"] = "2026-10-19T12:00:00Z"
+
+        rows = candidates_for_queue(
+            {"candidates": {"tiktok": [candidate]}},
+            now=datetime(2026, 10, 21, 12, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual([row["external_id"] for row in rows], ["7690000000000000001"])
+
     def test_round_robin_distributes_creators_and_rotates_after_previous_source(self):
         rows = []
         for creator in ("a", "b", "c"):
@@ -257,6 +268,23 @@ class QueueIntakeTests(unittest.TestCase):
         hashtag_only["caption"] = "#poppyplaytime #huggywuggy #edit"
         hashtag_only["hashtags"] = ["poppyplaytime", "huggywuggy", "edit"]
 
+        # Regression: the literal letter "s" must not defeat hashtag removal.
+        smiling_hashtag_only = _row(
+            "smilinghashtag001", "creator",
+            title="#smilingcritters #edit",
+        )
+        smiling_hashtag_only["caption"] = "#smilingcritters #edit"
+        smiling_hashtag_only["hashtags"] = ["smilingcritters", "edit"]
+
+        # URLs are not evidence that the clip itself is relevant.
+        linked_relevance_only = _row(
+            "linkedrelevance001", "creator",
+            title="https://example.com/smilingcritters",
+        )
+        linked_relevance_only["caption"] = "https://example.com/smilingcritters"
+        linked_relevance_only["hashtags"] = ["edit"]
+
+
         handle_only = _row("handleonly0001", "poppyplaytimeofficial", title="Funny unrelated clip")
         handle_only["caption"] = "Funny unrelated clip"
         handle_only["hashtags"] = ["edit"]
@@ -282,6 +310,8 @@ class QueueIntakeTests(unittest.TestCase):
                 "candidates": {
                     "tiktok": [
                         hashtag_only,
+                        smiling_hashtag_only,
+                        linked_relevance_only,
                         handle_only,
                         generic_prototype,
                         no_edit_signal,
@@ -294,15 +324,87 @@ class QueueIntakeTests(unittest.TestCase):
         )
 
         self.assertEqual([row["external_id"] for row in rows], ["validhuggy001"])
-        self.assertEqual(diagnostics["input_count"], 6)
+        self.assertEqual(diagnostics["input_count"], 8)
         self.assertEqual(diagnostics["eligible_count"], 1)
-        self.assertEqual(diagnostics["rejected_count"], 5)
+        self.assertEqual(diagnostics["rejected_count"], 7)
         self.assertEqual(
             diagnostics["rejected_by_reason"]["poppy_relevance_not_verified_in_visible_text"],
-            3,
+            5,
         )
         self.assertEqual(diagnostics["rejected_by_reason"]["edit_signal_missing"], 1)
         self.assertEqual(diagnostics["duplicate_within_report_count"], 1)
+
+
+    def test_owner_selected_source_accepts_poppy_hashtag_plus_edit_signal(self):
+        row = _row("knownhashtag0001", "meloaep_", title="A different kind of intro")
+        row["caption"] = "SONG: Sequencia Quebra (Slowed)"
+        row["hashtags"] = ["edit", "poppyplaytime", "chapter5"]
+
+        rows = candidates_for_queue({"candidates": {"tiktok": [row]}})
+        self.assertEqual([item["external_id"] for item in rows], ["knownhashtag0001"])
+        self.assertEqual(rows[0]["source_key"], "meloaep_")
+
+    def test_owner_selected_source_edit_only_is_rejected_before_brain(self):
+        row = _row("knowneditonly0001", "smyxae", title="Carlos Oliveira")
+        row["caption"] = "Resident Evil fan edit"
+        row["hashtags"] = ["carlosoliveira", "residenteviledit"]
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [row]}}),
+            [],
+        )
+
+
+    def test_owner_selected_source_with_neither_signal_is_rejected_before_brain(self):
+        row = _row("knownempty0001", "menezxl9", title="Birthday vlog")
+        row["caption"] = "A day outside"
+        row["hashtags"] = ["travel", "family"]
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [row]}}),
+            [],
+        )
+
+
+    def test_owner_selected_source_poppy_signal_without_edit_is_rejected_before_brain(self):
+        row = _row("knowntopiconly001", "meloaep_", title="Poppy Playtime")
+        row["caption"] = "New chapter announcement"
+        row["hashtags"] = ["poppyplaytime", "chapter5"]
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [row]}}),
+            [],
+        )
+
+    def test_report_author_cannot_spoof_owner_selected_source(self):
+        forged = _row("spoofedpolicy0001", "unlisted_creator", title="Fan edit")
+        forged["author"] = "meloaep_"
+        forged["caption"] = "Fan edit"
+        forged["hashtags"] = ["edit"]
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [forged]}}),
+            [],
+        )
+
+    def test_tiktok_canonical_url_video_id_must_match_report_id(self):
+        mismatched = _row("7690102000000000000", "meloaep_", title="Poppy Playtime edit")
+        mismatched["url"] = "https://www.tiktok.com/@meloaep_/video/7690102000000000001"
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [mismatched]}}),
+            [],
+        )
+
+    def test_unknown_source_cannot_use_poppy_hashtag_as_visible_relevance(self):
+        unknown = _row("unknownhashtag0001", "unlisted_creator", title="Fresh upload")
+        unknown["caption"] = "Fresh upload"
+        unknown["hashtags"] = ["poppyplaytime", "edit"]
+
+        self.assertEqual(
+            candidates_for_queue({"candidates": {"tiktok": [unknown]}}),
+            [],
+        )
 
 if __name__ == "__main__":
     unittest.main()
