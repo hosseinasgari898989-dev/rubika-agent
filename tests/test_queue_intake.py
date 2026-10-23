@@ -61,7 +61,10 @@ class FakeCloudState:
 class QueueIntakeTests(unittest.TestCase):
     def test_maps_metadata_deduplicates_and_strips_tracking_query(self):
         video_id = "7616247520657771796"
-        rows = candidates_for_queue({"candidates": {"tiktok": [_row(video_id, PROFILES[0]), _row(video_id, PROFILES[0])]}})
+        tracked = _row(video_id, PROFILES[0])
+        plain = _row(video_id, PROFILES[0])
+        plain["url"] = f"https://www.tiktok.com/@{PROFILES[0]}/video/{video_id}"
+        rows = candidates_for_queue({"candidates": {"tiktok": [tracked, plain]}})
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["external_id"], video_id)
         self.assertEqual(rows[0]["source_key"], PROFILES[0])
