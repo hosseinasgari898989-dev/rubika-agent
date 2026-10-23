@@ -292,7 +292,7 @@ class PipelineTests(unittest.TestCase):
             def inspect(_path, _kind=None):
                 raw = b"silent video"
                 return InspectionResult(
-                    True, "video", hashlib.sha256(raw).hexdigest(), len(raw),
+                    True, "video", hashlib.sha256(raw).hexdigest(), 100_000,
                     "video/mp4", 1080, 1080, 3.0, False, "h264", None,
                 )
             result = stage_edit_batch(

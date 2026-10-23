@@ -54,7 +54,7 @@ class TermuxMetadataParserTests(unittest.TestCase):
         ]}
         found,_=discover_tiktok_profiles(profiles=(TIKTOK_PROFILES[0],),max_results=5,sleep_seconds=0,ydl_factory=FakeYDL)
         self.assertEqual({row["id"] for row in found},{"7610592632179297558","7610592632179297559"})
-        self.assertIsNone(next(row for row in found if row["id"].endswith("759"))["published_at"])
+        self.assertIsNone(next(row for row in found if row["id"].endswith("7559"))["published_at"])
 
     def test_youtube_search_is_metadata_only_and_keeps_only_short_duration(self):
         FakeYDL.instances = []
