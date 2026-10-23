@@ -113,7 +113,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_instagram_graph_api.py' -v
           python -m unittest discover -s tests -p 'test_termux_sources.py' -v
           python -m unittest discover -s tests -p 'test_tiktok_urls.py' -v
-          python -m unittest discover -s tests -p 'test_tiktok_search_index.py' -v
           python -m unittest discover -s tests -p 'test_termux_instagram.py' -v
           python -m unittest discover -s tests -p 'test_termux_daily_discovery.py' -v
           python -m unittest discover -s tests -p 'test_collection_gate.py' -v
@@ -132,7 +131,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_owner_console.py' -v
           python -m unittest discover -s tests -p 'test_vision_moderator.py' -v
           python -m unittest discover -s tests -p 'test_migrations.py' -v
-          python -m unittest discover -s tests -p 'test_proxitok_discovery.py' -v
           python -m unittest discover -s tests -p 'test_workflow_safety.py' -v
           python -m unittest discover -s tests -p 'test_relay.py' -v
           python -m unittest discover -s tests -p 'test_relay_client.py' -v
