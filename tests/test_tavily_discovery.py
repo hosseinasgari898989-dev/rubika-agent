@@ -47,7 +47,7 @@ class TavilyDiscoveryTests(unittest.TestCase):
         session=FakeSession([FakeResponse(payload={"results":[
             {"url":"https://instagram.com.example.invalid/reel/AbCdEf_1234/","title":"Lookalike"},
             {"url":"https://example.invalid/?url=https://www.instagram.com/reel/AbCdEf_1234/","title":"External"},
-            {"url":"https://www.instagram.com/reel/not-an-id/","title":"Bad ID"},
+            {"url":"https://www.instagram.com/reel/no/","title":"Bad ID"},
         ],"usage":{"credits":1}})])
         report=discover_social_urls("instagram",api_key=KEY,session=session,max_queries=1,sleep_seconds=0)
         self.assertEqual(report.candidates,())

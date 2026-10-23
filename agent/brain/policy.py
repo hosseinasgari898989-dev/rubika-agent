@@ -29,7 +29,7 @@ NEGATIVE_TEXT_TERMS = (
 
 def _normalize_text(value: str) -> str:
     value = value.casefold().replace("ي", "ی").replace("ك", "ک")
-    value = value.replace("\\u200c", " ").replace("\\u200f", " ").replace("\\u200e", " ")
+    value = value.replace("\u200c", " ").replace("\u200f", " ").replace("\u200e", " ")
     return re.sub(r"\\s+", " ", value).strip()
 
 
