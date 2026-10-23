@@ -2,6 +2,18 @@
 
 این سند وضعیت جاری است، نه فهرست کارهای قدیمی. قبل از ادامه همیشه SHA فعلی main، Runها، وضعیت Worker/D1 و gateهای انتشار را دوباره از سرویس زنده بخوان. هیچ secret/tokenی را چاپ نکن؛ ارسال باید به مقصدی برسد که صریحاً برای همان مرحله تأیید شده است.
 
+## آخرین checkpoint — 2026-10-24
+
+- PRهای #40، #41 و #42 فازهای ۰ و ۱ را ادغام کردند؛ PR #43 اصلاح وضعیت مستندات بود؛ PR #44 پنج workflow بازنشسته/بی‌عملکرد را حذف کرد. آخرین SHA ثبت‌شدهٔ main پس از PR #44 برابر `d91139f255c01ec8b8416f872655fbed736e2b35` بود؛ پیش از کار جدید، وضعیت زندهٔ `main` را دوباره بررسی کن.
+- شاخهٔ در حال کار برای Phase 2: `feature/phase-2-remove-phone-path-20261024`. تغییرات همین فاز تا زمان ادغام PR مربوطه پیشنهادی‌اند، نه تغییر قطعی `main`.
+- مسیر فعال کشف metadata، GitHub Actions + Termux Docker است؛ اجرای روزانه روی گوشی جزو معماری عادی نیست. راهنمای جاری: [docs/CLOUD_DISCOVERY.md](CLOUD_DISCOVERY.md). Phase 2 ورودی‌های قدیمیِ مخصوص گوشی را حذف می‌کند، اما `termux/daily_discovery.py` را نگه می‌دارد چون collector داخل Docker اجرا می‌شود.
+- تنظیمات فعلی `config/agent_lifecycle.json`: `mode=production` و `born_at=2026-10-20T00:00:00Z`. این مرز زمانی مخصوص خبر رسمی Mob است و به‌خودی‌خود به معنای فعال شدن کانال اصلی نیست.
+- `config/mob_official_sources.json` فقط X رسمی را فعال می‌کند و پیکربندی publication آن روی مقصد ثابت کانال آزمایشی با سقف یک پست است. workflow خبر نیز گیت مستقل `RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014` دارد و GUID ثابت کانال تست را مطالبه می‌کند.
+- workflow دسته‌ای E2E باید دستی اجرا شود و هم متغیر gate مخزن و هم تأیید صریح ورودی را لازم دارد؛ workflow آزمایش تک‌ویدئویی نیز دستی و با تأیید پیش‌فرض خاموش است. این workflowها به کانال اصلی هدایت نشده‌اند.
+- پردازشگر زمان‌بندی‌شدهٔ ادیت مقصد را از Secret `RUBIKA_CHANNEL_GUID` می‌خواند. به‌دلیل نبود گیت مستقل تولید برای این مسیر، این Secret را صرفاً برای تست تغییر نده. پیش از هر تغییر مقصد، runbook [docs/MAIN_CHANNEL_ACTIVATION_RUNBOOK_FA.md](MAIN_CHANNEL_ACTIVATION_RUNBOOK_FA.md) را بخوان.
+- Phase 2 هیچ workflow انتشار را dispatch نکرده، رسانه‌ای دانلود نکرده، پیام Rubika نفرستاده و Worker/D1 را deploy، migrate یا تغییر نداده است.
+
+
 ## مشخصات و مرزهای امن
 
 - GitHub: hosseinasgari898989-dev/rubika-agent
@@ -11,7 +23,7 @@
 - انتشار واقعی فقط بعد از تأیید مقصد اصلی و عبور از preflight read-only.
 - در این دوره هیچ پیام/ویدئویی در کانال اصلی ارسال نشده است. preflight معتبر بودن Bot را تأیید کرد، اما مقصد را به‌درستی مسدود کرد چون secret مربوط به RUBIKA_CHANNEL_GUID هنوز شناسهٔ کانال تست است.
 - Worker زنده در نسخهٔ 4f72c97e-75dd-4e9c-9c73-73e149027478 با ۱۰۰٪ ترافیک است. در بررسی 2026-10-16، کد زنده با src/index.js در main (blob SHA: 991f15ff06416ea7ca16530a8dad0d46de155ecd) دقیقاً برابر بود؛ بنابراین برای این فایل تغییر جدیدی برای Deploy باقی نمانده. PUBLISHING_ENABLED=false فقط وضعیت قابلیت‌های Worker API را نشان می‌دهد؛ ارسال مدیا از GitHub Actions/Python انجام می‌شود.
-- Lifecycle همچنان config/agent_lifecycle.json با mode=test است. آن را برای راه‌اندازی ادیت‌ها به production تغییر نده.
+- Lifecycle فعلی config/agent_lifecycle.json برابر mode=production و born_at=2026-10-20T00:00:00Z است؛ این مرز فقط برای مسیر خبر رسمی Mob اعمال می‌شود و مقصد انتشار هنوز کانال تست است. آن را به‌عنوان مجوز تغییر مقصد کانال اصلی تفسیر نکن.
 
 ## موتورهای هوش مصنوعی
 
@@ -46,7 +58,7 @@ Workers AI فقط برای تشخیص وجود موسیقی در صدای وید
 
 - کشف ابری فعال در .github/workflows/termux-docker-discovery.yml است: gate هر ۳۰ دقیقه اجرا می‌شود و فقط پس از گذشت ۵ ساعت از intake موفق D1، Termux Docker را برای کشف metadata به‌کار می‌گیرد. این مسیر روی گوشی فرمان روزانه نمی‌خواهد و خود ویدئو دانلود یا منتشر نمی‌کند.
 - گزارش metadata پس از بررسی به صف D1 اضافه می‌شود. پردازش صف در .github/workflows/daily-queue-processor.yml روزانه ساعت 07:00 UTC اجرا می‌شود و سقف آن حداکثر ۴ انتشار موفق است. برای هر آیتم اعتبارسنجی مدیا/منبع و ضدتکرار لازم است؛ وضعیت uncertain نباید خودکار دوباره ارسال شود.
-- SELECT فقط‌خواندنی D1 در بررسی فعلی: 34 TikTok و 30 YouTube در وضعیت queued؛ 3 TikTok sent، 6 skipped و 1 failed. مورد processing یا uncertain وجود ندارد. تحویل YouTube در config/tiktok_source_policy.json خاموش است، پس 30 مورد YouTube آمادهٔ انتشار نیستند. شمارش قبل از هر اجرا دوباره خوانده شود.
+- شمارش قبلی SELECT فقط‌خواندنی D1 (۳۴ TikTok و ۳۰ YouTube queued، ۳ TikTok sent، ۶ skipped و ۱ failed) مربوط به snapshot تاریخی 2026-10-16 است، نه شمارش زنده. پیش از تصمیم یا انتشار باید آمار صف و وضعیت processing/uncertain دوباره از D1 خوانده شود. تحویل YouTube در config/tiktok_source_policy.json خاموش است، پس نباید موارد YouTube را آمادهٔ انتشار فرض کرد.
 - چهار انتشار روزانه یک سقف موفقیت است، نه تضمین اینکه هر روز چهار ویدئو واجد شرایط پیدا می‌شود.
 - تغییر مقصد اصلی فقط از طریق secret درست RUBIKA_CHANNEL_GUID انجام شود. Workflow صف همان کانال secret را استفاده می‌کند و وقتی مقدار برابر شناسهٔ کانال تست باشد، عمداً متوقف می‌شود.
 
@@ -54,7 +66,7 @@ Workers AI فقط برای تشخیص وجود موسیقی در صدای وید
 
 - سیاست مالک: اخبار رسمی Mob فقط از حساب تأییدشدهٔ X با نام @mobgamesstudios گرفته و ارسال شوند. config/mob_official_sources.json فقط lane مربوط به X را فعال می‌کند؛ وب‌سایت، YouTube، Steam، TikTok و Instagram غیرفعال‌اند. نسخهٔ Termux در agent-brain-mega-v1 از discover_official_x_posts() استفاده می‌کند و گزارشش source_lanes=[x] دارد.
 - مسیر انتشار X در agent/brain/mob_official_trial.py و .github/workflows/mob-x-news-production.yml است. پنجرهٔ پنج‌ساعته براساس published_at تأییدشدهٔ همان پست X است، نه زمان commit در GitHub. انتشار production همچنان پشت gate و lifecycle=test قرار دارد.
-- Workflow انتشار Mob همچنان با متغیر RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 gate شده و config/agent_lifecycle.json روی test است؛ config برای آزمون یک‌پستۀ test-channel-only است. انتشار Mob در کانال اصلی هنوز فعال نیست.
+- Workflow انتشار Mob با متغیر RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 gate شده و config/agent_lifecycle.json از born_at تولیدی استفاده می‌کند؛ با این حال پیکربندی و workflow انتشار همچنان به شناسهٔ کانال تست ثابت و سقف یک پست محدودند. انتشار Mob در کانال اصلی فعال نیست.
 
 ## Rubka formatting و کتابخانه
 
@@ -65,9 +77,9 @@ Workers AI فقط برای تشخیص وجود موسیقی در صدای وید
 
 ## کاری که مانع انتشار اصلی است
 
-1. در GitHub: Settings → Secrets and variables → Actions → RUBIKA_CHANNEL_GUID را به GUID واقعی کانال اصلی تغییر بده. توکن/مقدار secret را در چت نفرست. مقدار فعلی همان کانال تست است و به همین علت مسیر عمداً متوقف می‌شود.
-2. اجرای workflow .github/workflows/rubika-main-channel-preflight.yml با workflow_dispatch باید تأیید کند Bot با get_me() احراز هویت می‌شود و get_chat() برای GUID اصلی موفق است؛ این preflight پیام نمی‌فرستد.
-3. سپس تصمیم جداگانه دربارهٔ فعال‌سازی production برای خبرهای Mob لازم است. پیش از آن، هیچ‌کدام از guardها را با تغییر کد دور نزن.
+1. پیش از هر تغییر Secret، گیت مستقل برای مسیر زمان‌بندی‌شدهٔ صف ادیت‌ها اضافه و با PR جداگانه بازبینی شود. این مسیر مقصد خود را از `RUBIKA_CHANNEL_GUID` می‌گیرد؛ تغییر Secret می‌تواند انتشار زمان‌بندی‌شده را به مقصد دیگری هدایت کند.
+2. پس از دریافت GUID دقیق و تأیید صاحب پروژه، workflow `.github/workflows/rubika-main-channel-preflight.yml` را با `workflow_dispatch` اجرا کن. آن فقط `get_me()` و `get_chat()` را بررسی می‌کند و نباید پیامی بفرستد.
+3. فعال‌سازی خبر Mob به گیت خودش، X-only، born_at و سقف یک پست وابسته است. فقط پس از تست و تأیید جداگانهٔ صاحب پروژه، مقصد/گیت را در PR مستقل عوض کن. runbook `docs/MAIN_CHANNEL_ACTIVATION_RUNBOOK_FA.md` را مرجع ترتیب امن قرار بده.
 
 ## قواعد ادامه
 
