@@ -62,7 +62,7 @@ def _tiktok_candidate(
         "title": str(title or "")[:1200],
         "caption": str(title or "")[:4000],
         "author": clean_user[:100],
-        "hashtags": list(dict.fromkeys(HASHTAG_RE.findall(str(title or "")))[:40],
+        "hashtags": list(dict.fromkeys(HASHTAG_RE.findall(str(title or "")))[:40]),
         "source_policy": source_policy,
         "creator_trust_tier": source_policy.get("trust_tier", "unselected"),
         "published_at": _to_iso_timestamp(timestamp),

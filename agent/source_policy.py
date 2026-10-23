@@ -93,6 +93,19 @@ def resolve_source_policy(platform: str, source_key: str) -> dict[str, Any]:
                 result["enabled"] = True
                 result["source_handle"] = row["handle"].strip().lstrip("@")
                 return result
+    if platform != "tiktok":
+        # Keep existing non-TikTok staging contracts compatible; TikTok unknown
+        # sources are the only path removed by the owner-selected source policy.
+        return {
+            "known_source": False,
+            "enabled": True,
+            "trust_tier": "unknown",
+            "source_handle": handle,
+            "minimum_source_short_side": 480,
+            "output_format": "square_1080x1080",
+            "require_poppy_relevance_check": False,
+            "require_edit_signal_check": False,
+        }
     return {
         "known_source": False,
         "enabled": False,
