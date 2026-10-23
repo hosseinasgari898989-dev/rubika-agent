@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 35,
   "candidate_pool_size": 35,
-  "completed_at": "2026-10-22T19:27:31+00:00",
+  "completed_at": "2026-10-23T01:26:29+00:00",
   "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -31,25 +31,25 @@
   "queue_counts": {
     "failed": 2,
     "processing": 0,
-    "queued": 68,
+    "queued": 69,
     "sent": 18,
-    "sent_today": 4,
+    "sent_today": 0,
     "skipped": 7,
     "uncertain": 0,
-    "usage_day": "2026-10-22"
+    "usage_day": "2026-10-23"
   },
   "queue_status": "enqueued",
   "received_count": 1,
-  "report_generated_at": "2026-10-22T19:27:24.484801+00:00",
+  "report_generated_at": "2026-10-23T01:26:18.935594+00:00",
   "schema_version": 1,
   "selected_external_ids": [
-    "7699525584312896788"
+    "7699589755071237383"
   ],
   "selected_source_distribution": {
-    "poppytv_ae": 1
+    "meloaep_": 1
   },
   "selected_urls": [
-    "https://www.tiktok.com/@poppytv_ae/video/7699525584312896788"
+    "https://www.tiktok.com/@meloaep_/video/7699589755071237383"
   ],
   "skipped_existing_count": 34
 }
