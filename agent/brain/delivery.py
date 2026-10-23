@@ -25,7 +25,6 @@ def deliver_with_retry(
     send: Callable[[], Any],
     record_attempt: Callable[[int, str, str | None], None],
     delete_local: Callable[[], None],
-    delete_remote: Callable[[], None] | None = None,
     max_attempts: int = 3,
     sleep_seconds: float = 1.0,
     sleeper: Callable[[float], None] = time.sleep,
@@ -58,16 +57,10 @@ def deliver_with_retry(
                 local_removed = True
             except Exception as exc:
                 cleanup_errors.append("local_cleanup_" + type(exc).__name__)
-            # Keep cloud copy as a safety net if local cleanup could not be verified.
-            if local_removed and delete_remote is not None:
-                try:
-                    delete_remote()
-                except Exception as exc:
-                    cleanup_errors.append("remote_cleanup_" + type(exc).__name__)
             return {
                 "item_id": item_id, "status": "sent", "attempts": attempt,
                 "message_id": str(message_id) if message_id is not None else None,
-                "cleanup": "complete" if not cleanup_errors else "pending",
+                "cleanup": "local_complete_remote_retained" if local_removed else "pending",
                 "cleanup_errors": cleanup_errors,
             }
 

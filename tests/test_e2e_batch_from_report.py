@@ -120,7 +120,8 @@ class BatchOrderTests(unittest.TestCase):
         )
 
     def test_edit_caption_has_channel_label_and_standard_branding(self):
-        self.assertTrue(EDIT_CAPTION.startswith("**𝔓𝔒𝔓𝔜 𝔓𝔏𝔄𝔜𝔗ℑ𝔐𝔈**"))
+        self.assertTrue(EDIT_CAPTION.startswith("𝔓𝔒𝔓𝔜 𝔓𝔏𝔄𝔜𝔗ℑ𝔐𝔈"))
+        self.assertNotIn("**", EDIT_CAPTION)
         self.assertIn("CHANEL» @poppy_play_time_HV", EDIT_CAPTION)
         self.assertIn("ˡⁱᵏᵉ", EDIT_CAPTION)
 

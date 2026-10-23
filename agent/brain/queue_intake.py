@@ -11,14 +11,15 @@ import json
 import os
 import re
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
 from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
 # Official Mob news lifecycle cutoffs are not applied to the TikTok edit queue.
-from agent.source_policy import resolve_source_policy
+from agent.source_policy import has_required_any_keyword, resolve_source_policy
+from agent.brain.tiktok_urls import normalize_tiktok_url
 
 
 # YouTube is paused for later; Instagram is no longer part of the normal edit queue.
@@ -29,96 +30,24 @@ MAX_ENQUEUE_ITEMS = 500
 DEFAULT_NEW_ITEMS_PER_RUN = 4
 MAX_NEW_ITEMS_PER_RUN = 4
 MAX_QUEUE_PAGES_PER_STATUS = 100
-MAX_CANDIDATE_AGE_DAYS = 90
-FUTURE_TIMESTAMP_TOLERANCE = timedelta(minutes=5)
-
-POPPY_RELEVANCE_TERMS = (
-    "poppy playtime", "poppyplaytime", "poppyplytime",
-    "huggy wuggy", "huggywuggy", "catnap", "cat nap",
-    "kissy missy", "mommy long legs", "mommylonglegs", "dogday",
-    "smiling critters", "smilingcritters", "nightmare critters",
-    "bobby bearhug", "craftycorn", "kickin chicken", "hoppy hopscotch",
-    "picky piggy", "bubba bubbaphant", "prototype1006",
-    "lily lovebraids", "lilylovebraids",
-)
-EDIT_MARKER_RE = re.compile(
-    r"(?:^|[^a-z0-9])(?:edit(?:s|ed|ing)?|aep|amv|fan[\s_-]?edit|"
-    r"capcut|velocity|transitions?|slowed|reverbed|vfx)(?:$|[^a-z0-9])"
-)
-EDIT_HASHTAG_SUFFIXES = ("edit", "edits", "aep", "amv")
 
 TIKTOK_CANONICAL_RE = re.compile(
-    r"^https://(?:www\.)?tiktok\.com/@([A-Za-z0-9._-]{1,40})/video/([A-Za-z0-9._-]{1,120})/?(?:[?#].*)?$",
+    r"^https://www\.tiktok\.com/@([A-Za-z0-9._-]{1,40})/video/([0-9]{10,25})$",
     re.IGNORECASE,
 )
 
 
-def _parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed.astimezone(timezone.utc)
-
-
-def _canonical_tiktok_identity(raw: Mapping[str, Any]) -> tuple[str, str] | None:
-    """Return creator handle and video ID from a canonical TikTok URL only."""
+def _canonical_tiktok_identity(raw: Mapping[str, Any]) -> tuple[str, str, str] | None:
+    """Return selected-source identity from a canonicalized numeric TikTok URL."""
     url = raw.get("url") or raw.get("canonical_url")
     if not isinstance(url, str):
         return None
-    match = TIKTOK_CANONICAL_RE.fullmatch(url.strip())
-    if match is None:
-        return None
-    return match.group(1), match.group(2)
+    return normalize_tiktok_url(url)
 
 
-def _visible_metadata_text(raw: Mapping[str, Any]) -> str:
-    """Return visible descriptive text without hashtags, queries, or creator handles."""
-    parts = [raw.get("title"), raw.get("caption")]
-    visible = " ".join(value for value in parts if isinstance(value, str))
-    visible = re.sub(r"https?://\S+", " ", visible, flags=re.IGNORECASE)
-    visible = re.sub(r"(?<!\w)#[^\s#]+", " ", visible)
-    return re.sub(r"\s+", " ", visible).strip().casefold()
-
-
-def _is_poppy_related(raw: Mapping[str, Any]) -> bool:
-    """Hashtags alone do not prove the actual clip is about Poppy Playtime."""
-    text = _visible_metadata_text(raw)
-    return any(term in text for term in POPPY_RELEVANCE_TERMS)
-
-
-def _owner_selected_poppy_signal(raw: Mapping[str, Any]) -> bool:
-    """Allow explicit Poppy tags for owner-selected sources, without accepting edit-only posts."""
-    parts = [raw.get("title"), raw.get("caption")]
-    hashtags = raw.get("hashtags")
-    if isinstance(hashtags, list):
-        parts.extend(value for value in hashtags if isinstance(value, str))
-    visible = " ".join(value for value in parts if isinstance(value, str))
-    visible = re.sub(r"https?://\S+", " ", visible, flags=re.IGNORECASE)
-    compact = re.sub(r"[^a-z0-9]+", "", visible.casefold())
-    return any(
-        re.sub(r"[^a-z0-9]+", "", term) in compact
-        for term in POPPY_RELEVANCE_TERMS
-    )
-
-
-def _has_edit_signal(raw: Mapping[str, Any]) -> bool:
-    """Known creators still need an edit marker; discovery provenance is not proof."""
-    parts = [raw.get("title"), raw.get("caption")]
-    hashtags = raw.get("hashtags")
-    if isinstance(hashtags, list):
-        clean_tags = [value.strip().lstrip("#").casefold() for value in hashtags if isinstance(value, str)]
-        parts.extend(clean_tags)
-        if any(tag.endswith(EDIT_HASHTAG_SUFFIXES) or tag in {
-            "velocity", "transition", "transitions", "slowed", "reverbed", "capcut", "vfx"
-        } for tag in clean_tags):
-            return True
-    text = " ".join(value for value in parts if isinstance(value, str)).casefold()
-    return bool(EDIT_MARKER_RE.search(text))
+def _has_required_keyword(raw: Mapping[str, Any]) -> bool:
+    caption = raw.get("caption")
+    return has_required_any_keyword(caption if isinstance(caption, str) else "", raw.get("hashtags"))
 
 
 def load_report(path: Path) -> dict[str, Any]:
@@ -144,13 +73,9 @@ def candidates_for_queue(
     now: datetime | None = None,
     diagnostics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Validate fresh queue metadata and optionally summarize rejection reasons."""
-    current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
+    """Validate queue metadata; per-channel publication dates are applied in Phase 6."""
+    if now is not None and now.tzinfo is None:
         raise ValueError("now_must_be_timezone_aware")
-    current = current.astimezone(timezone.utc)
-    oldest_allowed = current - timedelta(days=MAX_CANDIDATE_AGE_DAYS)
-    future_allowed = current + FUTURE_TIMESTAMP_TOLERANCE
 
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -192,7 +117,7 @@ def candidates_for_queue(
             if not isinstance(url, str) or canonical_identity is None:
                 reject("canonical_url_invalid", source_name)
                 continue
-            if not isinstance(external_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
+            if not isinstance(external_id, str) or not re.fullmatch(r"[0-9]{10,25}", external_id):
                 reject("external_id_invalid", source_name)
                 continue
             if external_id != canonical_identity[1]:
@@ -200,30 +125,15 @@ def candidates_for_queue(
                 continue
 
             source_policy = resolve_source_policy(platform, canonical_identity[0])
-            owner_selected = (
-                source_policy.get("known_source") is True
-                and source_policy.get("trust_tier") == "owner_selected"
-            )
-            topic_relevant = (
-                _owner_selected_poppy_signal(raw) if owner_selected else _is_poppy_related(raw)
-            )
-            if not topic_relevant:
-                reject("poppy_relevance_not_verified_in_visible_text", source_name)
+            if source_policy.get("known_source") is not True or source_policy.get("enabled") is not True:
+                reject("source_not_selected", source_name)
                 continue
-            if not _has_edit_signal(raw):
-                reject("edit_signal_missing", source_name)
+            if not _has_required_keyword(raw):
+                reject("required_keyword_missing", source_name)
                 continue
 
-            published_at = _parse_timestamp(raw.get("published_at"))
-            if published_at is None:
-                reject("published_timestamp_missing_or_invalid", source_name)
-                continue
-            if published_at < oldest_allowed:
-                reject("candidate_stale", source_name)
-                continue
-            if published_at > future_allowed:
-                reject("published_timestamp_in_future", source_name)
-                continue
+            raw_published_at = raw.get("published_at")
+            published_at = raw_published_at.strip() if isinstance(raw_published_at, str) and raw_published_at.strip() else None
 
             identity = (platform, external_id)
             if identity in seen:
@@ -234,11 +144,11 @@ def candidates_for_queue(
             rows.append({
                 "platform": platform,
                 "external_id": external_id,
-                "canonical_url": url[:2048],
+                "canonical_url": canonical_identity[2][:2048],
                 "source_key": source_key,
                 "title": str(raw.get("title") or "")[:500],
                 "caption": str(raw.get("caption") or "")[:4000],
-                "published_at": published_at.isoformat(),
+                "published_at": published_at,
                 "media_type": "video",
                 "author": canonical_identity[0][:100],
                 "query": str(raw.get("query") or "")[:200],
@@ -412,7 +322,7 @@ def run_intake(
         "invalid_count": invalid_count,
         "skipped_existing_count": skipped_existing_count,
         "max_new_items_per_run": max_new_items,
-        "selection_policy": "fresh_unique_poppy_relevant_round_robin_across_creators",
+        "selection_policy": "six_selected_sources_keyword_match_unique_round_robin",
         "selected_items": inserted_items,
         "selected_source_distribution": dict(inserted_sources),
         "queue_counts": queue_counts,

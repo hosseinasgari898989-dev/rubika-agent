@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterable, Mapping
 from .inspector import inspect_media
 from .models import Candidate, Evaluation, InspectionResult
 from .normalizer import normalize_video_square_1080
+from agent.source_policy import allow_upscale
 from .policy import evaluate_edit_candidate, precheck_edit_candidate
 from .recovery import call_with_bounded_retry, recovery_guidance, safe_error_code
 
@@ -27,6 +28,7 @@ class StagedMedia:
     evaluation: Evaluation
     storage_key: str | None = None
     caption: str = ""
+    downloaded_inspection: InspectionResult | None = None
 
 
 @dataclass
@@ -196,18 +198,27 @@ def stage_edit_batch(
             publish_path = original
             final_inspection = first
             if output_format == "square_1080x1080" and (first.width != 1080 or first.height != 1080):
-                destination = output / (
-                    _safe_component(platform) + "-" +
-                    _safe_component(candidate.external_id) + "-square1080x1080.mp4"
-                )
-                normalizer(original, destination)
-                publish_path = destination
-                final_inspection = inspector(publish_path, "video")
-                if not final_inspection.ok or final_inspection.width != 1080 or final_inspection.height != 1080:
-                    result.skipped.append({"item": identity, "reason": "normalized_output_invalid"})
-                    destination.unlink(missing_ok=True)
-                    original.unlink(missing_ok=True)
-                    continue
+                if (
+                    not allow_upscale()
+                    and first.width and first.height
+                    and min(first.width, first.height) < 1080
+                ):
+                    # Owner policy: preserve the validated source rather than inventing detail by upscaling.
+                    publish_path = original
+                    final_inspection = first
+                else:
+                    destination = output / (
+                        _safe_component(platform) + "-" +
+                        _safe_component(candidate.external_id) + "-square1080x1080.mp4"
+                    )
+                    normalizer(original, destination)
+                    publish_path = destination
+                    final_inspection = inspector(publish_path, "video")
+                    if not final_inspection.ok or final_inspection.width != 1080 or final_inspection.height != 1080:
+                        result.skipped.append({"item": identity, "reason": "normalized_output_invalid"})
+                        destination.unlink(missing_ok=True)
+                        original.unlink(missing_ok=True)
+                        continue
             elif output_format == "preserve_source":
                 # Preserve the aspect ratio for sources whose owner policy says
                 # that 1:1 normalization is not required, while giving the file
@@ -239,6 +250,7 @@ def stage_edit_batch(
                 evaluation=evaluation,
                 storage_key=storage_key,
                 caption=candidate.caption,
+                downloaded_inspection=first,
             )
             if persist_staged is not None:
                 persist_staged(staged)

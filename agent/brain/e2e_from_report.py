@@ -473,7 +473,6 @@ def run_one(
             send=send,
             record_attempt=record_attempt,
             delete_local=lambda: media_path.unlink(missing_ok=True),
-            delete_remote=lambda: storage.delete(remote_storage_key),
             max_attempts=3,
             sleep_seconds=1,
         )

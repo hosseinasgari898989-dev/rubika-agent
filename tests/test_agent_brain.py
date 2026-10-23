@@ -26,11 +26,11 @@ class BrainModelPolicyTests(unittest.TestCase):
     def candidate(self, **changes):
         values = dict(
             platform="tiktok",
-            canonical_url="https://www.tiktok.com/@creator/video/123",
-            external_id="123",
+            canonical_url="https://www.tiktok.com/@meloaep_/video/7616247520657771796",
+            external_id="7616247520657771796",
             title="Huggy Wuggy Poppy Playtime fan edit",
             caption="#PoppyPlaytime #edit",
-            source_key="@creator",
+            source_key="meloaep_",
             media_type="video",
             source_tier="unknown",
         )
@@ -66,7 +66,7 @@ class BrainModelPolicyTests(unittest.TestCase):
 
     def test_duplicate_external_id_is_rejected(self):
         result = evaluate_edit_candidate(
-            self.candidate(), self.inspection(), seen_external_ids={"123"},
+            self.candidate(), self.inspection(), seen_external_ids={"7616247520657771796"},
             moderation=self.moderation(),
         )
         self.assertIn("duplicate_external_id", result.reasons)
@@ -96,7 +96,7 @@ class BrainModelPolicyTests(unittest.TestCase):
     def test_python_does_not_require_edit_detection_or_edit_quality_questions(self):
         candidate = self.candidate(
             title="Poppy Playtime character montage",
-            caption="Huggy Wuggy and Catnap",
+            caption="Huggy Wuggy and Catnap #playtime",
         )
         result = evaluate_edit_candidate(
             candidate, self.inspection(), moderation=self.moderation()
@@ -105,7 +105,7 @@ class BrainModelPolicyTests(unittest.TestCase):
         self.assertNotIn("is_edit", result.checks)
         self.assertNotIn("high_effort", result.checks)
 
-    def test_compound_poppy_edit_hashtag_counts_as_edit_signal(self):
+    def test_compound_poppy_edit_hashtag_passes_without_edit_signal_gate(self):
         candidate = self.candidate(
             title="Yesterday was the anniversary of Poppy Playtime",
             caption="#poppyplaytime #poppyplaytimeedit #smyxae",
@@ -127,7 +127,7 @@ class BrainModelPolicyTests(unittest.TestCase):
             self.inspection(),
             moderation=self.moderation(),
         )
-        self.assertTrue(result.checks["is_edit"])
+        self.assertNotIn("is_edit", result.checks)
         self.assertEqual(result.decision, "eligible", result.reasons)
 
     def test_missing_poppy_metadata_is_rejected_locally(self):
@@ -135,7 +135,7 @@ class BrainModelPolicyTests(unittest.TestCase):
             self.candidate(title="Unrelated gameplay", caption="#gaming"),
             self.inspection(), moderation=self.moderation(),
         )
-        self.assertIn("poppy_relevance_not_found_by_python", result.reasons)
+        self.assertIn("required_keyword_missing", result.reasons)
 
     def test_no_music_is_not_eligible(self):
         result = evaluate_edit_candidate(
@@ -228,7 +228,7 @@ class PipelineTests(unittest.TestCase):
             external_id=external_id,
             title="Poppy Playtime Huggy Wuggy edit",
             caption="#PoppyPlaytime #edit",
-            source_key="@test",
+            source_key="meloaep_" if platform == "tiktok" else "@test",
             media_type="video",
         )
 
@@ -246,7 +246,7 @@ class PipelineTests(unittest.TestCase):
             def inspect(path, kind=None):
                 raw = Path(path).read_bytes()
                 return InspectionResult(
-                    True, "video", hashlib.sha256(raw).hexdigest(), len(raw), "video/mp4",
+                    True, "video", hashlib.sha256(raw).hexdigest(), 100_000, "video/mp4",
                     1080, 1080, 3.0, True, "h264", "aac",
                 )
 
@@ -280,7 +280,7 @@ class PipelineTests(unittest.TestCase):
                 output_dir=Path(folder) / "normalized",
             )
         self.assertEqual(result.status, "partial")
-        self.assertEqual(result.skipped[0]["reason"], "poppy_relevance_not_found_by_python")
+        self.assertEqual(result.skipped[0]["reason"], "required_keyword_missing")
 
     def test_pipeline_skips_music_model_when_video_has_no_audio(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -292,7 +292,7 @@ class PipelineTests(unittest.TestCase):
             def inspect(_path, _kind=None):
                 raw = b"silent video"
                 return InspectionResult(
-                    True, "video", hashlib.sha256(raw).hexdigest(), len(raw),
+                    True, "video", hashlib.sha256(raw).hexdigest(), 100_000,
                     "video/mp4", 1080, 1080, 3.0, False, "h264", None,
                 )
             result = stage_edit_batch(
@@ -302,7 +302,7 @@ class PipelineTests(unittest.TestCase):
                 output_dir=Path(folder) / "normalized",
                 inspector=inspect,
             )
-        self.assertEqual(result.skipped[0]["reason"], "music_not_detected")
+        self.assertEqual(result.skipped[0]["reason"], "no_audio")
 
     def test_partial_batch_never_reports_ready(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -314,7 +314,7 @@ class PipelineTests(unittest.TestCase):
             def inspect(path, kind=None):
                 raw = Path(path).read_bytes()
                 return InspectionResult(
-                    True, "video", hashlib.sha256(raw).hexdigest(), len(raw), "video/mp4",
+                    True, "video", hashlib.sha256(raw).hexdigest(), 100_000, "video/mp4",
                     1080, 1080, 3.0, True, "h264", "aac",
                 )
 
@@ -329,33 +329,30 @@ class PipelineTests(unittest.TestCase):
 
 
 class DeliveryStateMachineTests(unittest.TestCase):
-    def test_success_deletes_local_then_remote_only_after_success(self):
+    def test_success_deletes_local_and_retains_remote_staging_copy(self):
         events = []
         result = deliver_with_retry(
-            item_id="tiktok:123",
+            item_id="tiktok:7616247520657771796",
             send=lambda: {"status": "OK", "message_id": "m1"},
             record_attempt=lambda n, status, code: events.append((n, status, code)),
             delete_local=lambda: events.append(("local", "deleted")),
-            delete_remote=lambda: events.append(("remote", "deleted")),
             sleeper=lambda _: None,
         )
         self.assertEqual(result["status"], "sent")
-        self.assertEqual(result["cleanup"], "complete")
-        self.assertLess(events.index(("local", "deleted")), events.index(("remote", "deleted")))
+        self.assertEqual(result["cleanup"], "local_complete_remote_retained")
+        self.assertIn(("local", "deleted"), events)
+        self.assertNotIn(("remote", "deleted"), events)
 
     def test_failed_local_cleanup_keeps_remote_copy(self):
-        remote_deleted = []
         result = deliver_with_retry(
-            item_id="tiktok:123",
+            item_id="tiktok:7616247520657771796",
             send=lambda: {"status": "OK"},
             record_attempt=lambda *_: None,
             delete_local=lambda: (_ for _ in ()).throw(OSError()),
-            delete_remote=lambda: remote_deleted.append(True),
             sleeper=lambda _: None,
         )
         self.assertEqual(result["status"], "sent")
         self.assertEqual(result["cleanup"], "pending")
-        self.assertEqual(remote_deleted, [])
 
     def test_retries_definite_rejections_three_times_then_stops(self):
         events = []
@@ -430,7 +427,7 @@ class NormalizerGuardTests(unittest.TestCase):
                 Path(command[-1]).write_bytes(b"fake normalized square output")
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            with patch("agent.brain.normalizer.inspect_media", side_effect=fake_inspect):
+            with patch("agent.brain.normalizer.inspect_media", side_effect=fake_inspect), patch("agent.brain.normalizer.allow_upscale", return_value=True):
                 with patch("agent.brain.normalizer.subprocess.run", side_effect=fake_ffmpeg):
                     result = normalize_video_square_1080(source, destination)
 
@@ -450,13 +447,13 @@ class E2ECandidateSelectionTests(unittest.TestCase):
     def test_candidate_limit_and_offset_are_respected(self):
         rows = [
             {
-                "id": str(index),
-                "url": f"https://www.tiktok.com/@creator/video/{index}",
-                "title": f"Poppy Playtime fan edit {index}",
+                "id": video_id,
+                "url": f"https://www.tiktok.com/@meloaep_/video/{video_id}",
+                "title": f"Poppy Playtime fan edit {video_id}",
                 "caption": "#PoppyPlaytime #edit",
-                "author": "@creator",
+                "author": "meloaep_",
             }
-            for index in range(1, 4)
+            for video_id in ("7616247520657771796", "7616247520657771797", "7616247520657771798")
         ]
         with tempfile.TemporaryDirectory() as folder:
             report = Path(folder) / "discovery.json"
@@ -467,7 +464,7 @@ class E2ECandidateSelectionTests(unittest.TestCase):
             selected = _select_candidates(
                 report, "tiktok", set(), set(), limit=1, offset=1
             )
-        self.assertEqual([candidate.external_id for candidate in selected], ["2"])
+        self.assertEqual([candidate.external_id for candidate in selected], ["7616247520657771797"])
 
 
 if __name__ == "__main__":
