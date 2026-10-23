@@ -246,7 +246,7 @@ class PipelineTests(unittest.TestCase):
             def inspect(path, kind=None):
                 raw = Path(path).read_bytes()
                 return InspectionResult(
-                    True, "video", hashlib.sha256(raw).hexdigest(), len(raw), "video/mp4",
+                    True, "video", hashlib.sha256(raw).hexdigest(), 100_000, "video/mp4",
                     1080, 1080, 3.0, True, "h264", "aac",
                 )
 
@@ -314,7 +314,7 @@ class PipelineTests(unittest.TestCase):
             def inspect(path, kind=None):
                 raw = Path(path).read_bytes()
                 return InspectionResult(
-                    True, "video", hashlib.sha256(raw).hexdigest(), len(raw), "video/mp4",
+                    True, "video", hashlib.sha256(raw).hexdigest(), 100_000, "video/mp4",
                     1080, 1080, 3.0, True, "h264", "aac",
                 )
 

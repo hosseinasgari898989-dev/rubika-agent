@@ -49,12 +49,12 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             output = Path(folder) / "termux_discovery.json"
             with patch.object(
                 daily_discovery, "discover_tiktok_profiles", return_value=(tiktok, [])
-            ), patch.object(
+            ) as tiktok_search, patch.object(
                 daily_discovery, "discover_official_x_posts", return_value=(mob_x, [])
             ) as official_search:
                 report = daily_discovery.collect_daily_report(output_path=output)
 
-            daily_discovery.discover_tiktok_profiles.assert_called_once_with(max_results=48, max_per_profile=8)
+            tiktok_search.assert_called_once_with(max_results=48, max_per_profile=8)
             official_search.assert_called_once_with(max_results=12)
             self.assertEqual(report["summary"]["tiktok_candidates"], 1)
             self.assertEqual(report["summary"]["mob_official_candidates"], 1)
