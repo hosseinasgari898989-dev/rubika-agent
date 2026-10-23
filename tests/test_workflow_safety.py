@@ -127,7 +127,7 @@ class WorkflowSafetyTests(unittest.TestCase):
     def test_video_e2e_trial_is_manual_main_only_and_test_channel_locked(self):
         workflow = (ROOT / ".github" / "workflows" / "video-e2e-trial.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertNotIn("\\n  push:\\n", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
         self.assertIn("confirm_test_channel_publish", workflow)
         self.assertIn("default: false", workflow)
         self.assertIn("if: ${{ inputs.confirm_test_channel_publish == true }}", workflow)
@@ -137,7 +137,7 @@ class WorkflowSafetyTests(unittest.TestCase):
     def test_batch_e2e_requires_the_repo_gate_and_explicit_manual_confirmation(self):
         workflow = (ROOT / ".github" / "workflows" / "brain-e2e-dispatch.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertNotIn("\\n  push:\\n", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
         self.assertIn("default: false", workflow)
         self.assertIn("inputs.confirm_test_channel_publish == true", workflow)
         self.assertIn("vars.RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014 == 'approved'", workflow)
