@@ -758,7 +758,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         assert parse_command("/status").name == "status"
         assert parse_command("/queue").name == "queue"
-        assert parse_command("/ai-status gemini").audit_name == "ai-status:gemini"
+        assert parse_command("/ai-status groq").audit_name == "ai-status:groq"
         assert parse_command("not a command").name == "unknown"
         assert "انتشار" in format_status({
             "ok": True, "database": "connected", "agent": {"enabled": 0},
