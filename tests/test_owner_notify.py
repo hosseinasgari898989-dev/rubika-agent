@@ -243,7 +243,7 @@ class OwnerNotifyTests(unittest.TestCase):
     def test_digest_redacts_urls_and_counts_ai_failures(self):
         state = digest_state(events=[
             {"id": 1, "occurred_at": "2026-10-16T08:00:00Z", "category": "ai_error",
-             "source": "code_ai_github_models", "title": "AI repair call failed",
+             "source": "code_ai_groq", "title": "AI repair call failed",
              "detail": "error_code=provider_unavailable https://secret.example/?token=hidden"},
         ])
         state["counts"] = {"info": 0, "success": 0, "error": 0, "ai_success": 0, "ai_error": 1}
