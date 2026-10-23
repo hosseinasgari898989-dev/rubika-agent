@@ -4,14 +4,14 @@
 
 ## آخرین checkpoint — 2026-10-24
 
-- PRهای #40، #41 و #42 فازهای ۰ و ۱ را ادغام کردند؛ PR #43 اصلاح وضعیت مستندات بود؛ PR #44 پنج workflow بازنشسته/بی‌عملکرد را حذف کرد. آخرین SHA ثبت‌شدهٔ main پس از PR #44 برابر `d91139f255c01ec8b8416f872655fbed736e2b35` بود؛ پیش از کار جدید، وضعیت زندهٔ `main` را دوباره بررسی کن.
-- شاخهٔ در حال کار برای Phase 2: `feature/phase-2-remove-phone-path-20261024`. تغییرات همین فاز تا زمان ادغام PR مربوطه پیشنهادی‌اند، نه تغییر قطعی `main`.
-- مسیر فعال کشف metadata، GitHub Actions + Termux Docker است؛ اجرای روزانه روی گوشی جزو معماری عادی نیست. راهنمای جاری: [docs/CLOUD_DISCOVERY.md](CLOUD_DISCOVERY.md). Phase 2 ورودی‌های قدیمیِ مخصوص گوشی را حذف می‌کند، اما `termux/daily_discovery.py` را نگه می‌دارد چون collector داخل Docker اجرا می‌شود.
+- PRهای #40، #41 و #42 فازهای ۰ و ۱ را ادغام کردند؛ PR #43 وضعیت مستندات را اصلاح کرد و PR #44 پنج workflow بازنشسته/بی‌عملکرد را حذف کرد. PR #45 مسیر روزانه را روی GitHub Actions + Termux Docker یکپارچه کرد، مسیرهای مخصوص گوشی را حذف کرد و انتشار E2E را دستی و با تأیید صریح قفل کرد. PR #46 اصلاح سازگاری intake را ادغام کرد تا گزارش جدید `github_actions_termux_docker` و گزارش تاریخی `termux_phone` هر دو معتبر باشند. آخرین SHA ثبت‌شدهٔ `main`: `92dd54b710204c97374810718bfdf6792dd1685a`.
+- CI مربوط به PR #45 و PR #46 سبز بود. بعد از ادغام PR #46، اجرای Cloud bootstrap به شمارهٔ `40035384915` هنوز در جریان بود (در آخرین بررسی مرحلهٔ نصب وابستگی‌ها فعال بود)؛ نتیجهٔ نهایی آن را قبل از اعلام سلامت کامل دوباره از GitHub بخوان.
+- مسیر فعال کشف metadata، GitHub Actions + Termux Docker است؛ اجرای روزانه روی گوشی جزو معماری عادی نیست. راهنمای جاری: [docs/CLOUD_DISCOVERY.md](CLOUD_DISCOVERY.md). `termux/daily_discovery.py` باقی مانده چون collector داخل Docker اجرا می‌شود، اما ورودی‌های مخصوص گوشی و قابلیت push دستی گزارش حذف شده‌اند. گزارش تازه با `source=github_actions_termux_docker` ساخته می‌شود و intake از هر دو این مقدار و مقدار تاریخی `termux_phone` پشتیبانی می‌کند.
 - تنظیمات فعلی `config/agent_lifecycle.json`: `mode=production` و `born_at=2026-10-20T00:00:00Z`. این مرز زمانی مخصوص خبر رسمی Mob است و به‌خودی‌خود به معنای فعال شدن کانال اصلی نیست.
 - `config/mob_official_sources.json` فقط X رسمی را فعال می‌کند و پیکربندی publication آن روی مقصد ثابت کانال آزمایشی با سقف یک پست است. workflow خبر نیز گیت مستقل `RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014` دارد و GUID ثابت کانال تست را مطالبه می‌کند.
 - workflow دسته‌ای E2E باید دستی اجرا شود و هم متغیر gate مخزن و هم تأیید صریح ورودی را لازم دارد؛ workflow آزمایش تک‌ویدئویی نیز دستی و با تأیید پیش‌فرض خاموش است. این workflowها به کانال اصلی هدایت نشده‌اند.
 - پردازشگر زمان‌بندی‌شدهٔ ادیت مقصد را از Secret `RUBIKA_CHANNEL_GUID` می‌خواند. به‌دلیل نبود گیت مستقل تولید برای این مسیر، این Secret را صرفاً برای تست تغییر نده. پیش از هر تغییر مقصد، runbook [docs/MAIN_CHANNEL_ACTIVATION_RUNBOOK_FA.md](MAIN_CHANNEL_ACTIVATION_RUNBOOK_FA.md) را بخوان.
-- Phase 2 هیچ workflow انتشار را dispatch نکرده، رسانه‌ای دانلود نکرده، پیام Rubika نفرستاده و Worker/D1 را deploy، migrate یا تغییر نداده است.
+- در PRهای #45 و #46 هیچ workflow انتشار dispatch نشد، رسانه‌ای دانلود نشد، پیام Rubika ارسال نشد، Secret یا مقصد کانال تغییر نکرد، و Worker/D1 deploy، migrate یا تغییر داده نشد.
 
 
 ## مشخصات و مرزهای امن
