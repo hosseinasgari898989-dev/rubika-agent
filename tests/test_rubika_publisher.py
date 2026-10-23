@@ -1,5 +1,6 @@
-from agent.brain.edit_caption import EDIT_CAPTION
 from __future__ import annotations
+
+from agent.brain.edit_caption import EDIT_CAPTION
 
 import tempfile
 import unittest
