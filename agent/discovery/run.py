@@ -4,22 +4,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from . import v7
 from .instagram import InstagramDiscovery, discover_official_hashtag_urls, discover_public_indexed_urls
-from .proxitok import ProxiTokDiscovery, discover_public_rss
 from .tavily import discover_social_urls
+from agent.brain.tiktok_urls import normalize_tiktok_url
+from agent.source_policy import known_tiktok_profiles, resolve_source_policy
 
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_PATH = ROOT / "artifacts" / "discovery_report.json"
 TERMUX_REPORT_PATH = ROOT / "artifacts" / "termux_discovery.json"
-REQUIRED_CORE_COUNTS = {"tiktok": 5, "youtube": 5}
-TIKTOK_URL_RE = re.compile(r"^https://www\.tiktok\.com/@([A-Za-z0-9._-]{1,40})/video/(\d{10,25})/?$")
+REQUIRED_CORE_COUNTS = {"youtube": 5}
 YOUTUBE_SHORT_URL_RE = re.compile(r"^https://(?:www\.)?youtube\.com/(?:shorts/|watch\?v=)([A-Za-z0-9_-]{11})/?$")
 INSTAGRAM_URL_RE = re.compile(r"^https://(?:www\.)?instagram\.com/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$")
 
@@ -65,9 +64,11 @@ def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]
             url = raw_url.strip()
             canonical_id = ""
             if platform == "tiktok":
-                match = TIKTOK_URL_RE.fullmatch(url)
-                if match:
-                    canonical_id = match.group(2)
+                identity = normalize_tiktok_url(url)
+                selected = {handle.casefold() for handle in known_tiktok_profiles()}
+                if identity is not None and identity[0].casefold() in selected:
+                    canonical_id = identity[1]
+                    match = None
             elif platform == "youtube":
                 match = YOUTUBE_SHORT_URL_RE.fullmatch(url)
                 if match:
@@ -84,7 +85,15 @@ def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]
             if platform == "youtube":
                 safe["url"] = f"https://www.youtube.com/shorts/{canonical_id}"
             elif platform == "tiktok":
-                safe["url"] = f"https://www.tiktok.com/@{match.group(1)}/video/{canonical_id}"
+                identity = normalize_tiktok_url(url)
+                if identity is None or identity[1] != canonical_id:
+                    continue
+                source_policy = resolve_source_policy("tiktok", identity[0])
+                if source_policy.get("known_source") is not True:
+                    continue
+                safe["url"] = identity[2]
+                safe["author"] = identity[0]
+                safe["source_policy"] = source_policy
             else:
                 safe["url"] = f"https://www.instagram.com/{match.group(1).lower()}/{canonical_id}/"
             safe["title"] = str(safe.get("title") or "")[:1200]
@@ -139,12 +148,6 @@ def run_discovery(
     else:
         print("Discovery: no valid phone report; using the legacy metadata-only fallbacks.", flush=True)
 
-    if not phone_report_loaded and not termux_only and len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
-        print("TikTok fallback: legacy endpoints are attempted only when no phone report is available.", flush=True)
-        v7.tiktok_from_tikwm(store, seen["tiktok"])
-        if len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
-            v7.tiktok_from_search_engines(store, seen["tiktok"])
-
     if not phone_report_loaded and not termux_only and len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
         print("YouTube fallback: yt-dlp metadata search only; download=False.", flush=True)
         v7.discover_youtube_ytdlp(store, seen["youtube"])
@@ -198,29 +201,12 @@ def run_discovery(
     else:
         instagram = InstagramDiscovery(candidates=(), attempts=())
 
-    proxitok = ProxiTokDiscovery(candidates=(), attempts=())
-    if not phone_report_loaded and not termux_only and len(store["tiktok"]) < REQUIRED_CORE_COUNTS["tiktok"]:
-        print("TikTok fallback: public ProxiTok RSS feeds; no login or challenge bypass.", flush=True)
-        proxitok = discover_public_rss()
-        for item in proxitok.candidates:
-            if item.external_id in seen["tiktok"]:
-                continue
-            store["tiktok"][item.external_id] = {
-                "platform": "tiktok",
-                "id": item.external_id,
-                "url": item.canonical_url,
-                "title": item.title,
-                "author": item.source_key,
-                "method": item.discovery_method,
-                "query": item.discovery_tag,
-            }
-            seen["tiktok"].add(item.external_id)
 
     # Search-engine API use remains opt-in. No external API receives requests without a key.
     tavily_reports: dict[str, Any] = {}
     if not phone_report_loaded and not termux_only and os.getenv("TAVILY_API_KEY", "").strip():
-        for platform in ("tiktok", "instagram"):
-            target = REQUIRED_CORE_COUNTS["tiktok"] if platform == "tiktok" else 2
+        for platform in ("instagram",):
+            target = 2
             if len(store[platform]) >= target:
                 continue
             result = discover_social_urls(platform, max_results=target, max_queries=2)
@@ -280,7 +266,6 @@ def run_discovery(
             + v7.ATTEMPTS
             + instagram_attempts
             + instagram_graph.report()["attempts"]
-            + proxitok.report()["attempts"]
             + [attempt for result in tavily_reports.values() for attempt in result["attempts"]]
         ),
     }
