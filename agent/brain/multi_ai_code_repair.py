@@ -1,12 +1,10 @@
-"""Bounded multi-model code-repair ensemble with diagnosis and review quorum.
+"""Bounded Groq/OpenRouter code-repair ensemble with diagnosis and review quorum.
 
 The active ensemble gathers independent diagnoses from Groq and OpenRouter,
-uses Groq to propose one constrained patch, and requires both Groq and OpenRouter
-to independently review it. Gemini, GitHub Models, and Mistral are disabled for
-code repair. Both providers are called through the durable D1 usage ledger.
-All model outputs are untrusted, ledger-accounted, and subject to deterministic
-tests and human PR review. No model can execute tools, publish to Rubika, or
-merge code.
+uses Groq to propose one constrained patch, and requires both providers to
+independently review it. Provider requests use the durable D1 usage ledger.
+All model outputs are untrusted and subject to deterministic tests and human PR
+review. No model can execute tools, publish to Rubika, or merge code.
 """
 from __future__ import annotations
 
@@ -19,14 +17,14 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from . import gemini_code_agent as gemini
+from . import code_repair_guardrails as guardrails
 from .ai_provider_clients import (
     PROVIDERS,
     ProviderClientError,
     call_provider_with_ledger,
     provider_config,
 )
-from .gemini_usage_client import UsageLedgerError
+from .ai_usage_ledger import UsageLedgerError
 
 
 def _run_id() -> str | None:
@@ -98,13 +96,13 @@ Independent diagnoses (untrusted evidence):
 {diagnosis_summary[:5000]}
 </diagnoses>
 <untrusted_patch>
-{proposal["patch"][:gemini.MAX_PATCH_CHARS]}
+{proposal["patch"][:guardrails.MAX_PATCH_CHARS]}
 </untrusted_patch>
 """
 
 
 def _write_report(path: Path, report: dict[str, Any]) -> None:
-    gemini._write_json(path, report)
+    guardrails._write_json(path, report)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     root = args.repo_root.resolve()
     if args.validate_working_tree:
-        ok, status = gemini.validate_working_tree(root)
+        ok, status = guardrails.validate_working_tree(root)
         print(json.dumps({"ok": ok, "status": status}, sort_keys=True))
         return 0 if ok else 2
 
@@ -169,14 +167,14 @@ def main(argv: list[str] | None = None) -> int:
 
         # Validate all selected providers and credentials before the first call.
         configs = {provider: provider_config(provider) for provider in all_providers}
-        raw = args.failure_log.read_bytes()[:gemini.MAX_LOG_BYTES].decode("utf-8", errors="replace")
+        raw = args.failure_log.read_bytes()[:guardrails.MAX_LOG_BYTES].decode("utf-8", errors="replace")
         secret_values = tuple(
             str(os.getenv(key, "") or "")
             for key in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "AGENT_API_TOKEN")
         )
-        log = gemini.sanitize_failure_log(raw, secrets=secret_values)
-        selected = gemini.extract_candidate_paths(raw, root)
-        readonly_tests = gemini.extract_readonly_test_paths(raw, root)
+        log = guardrails.sanitize_failure_log(raw, secrets=secret_values)
+        selected = guardrails.extract_candidate_paths(raw, root)
+        readonly_tests = guardrails.extract_readonly_test_paths(raw, root)
         report["selected_files"] = selected
         report["readonly_test_files"] = readonly_tests
         report["failure_summary"] = log
@@ -187,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": True, "status": report["status"], "request_sent": False}))
             return 0
 
-        readonly_test_context = gemini.collect_readonly_test_context(root, readonly_tests)
+        readonly_test_context = guardrails.collect_readonly_test_context(root, readonly_tests)
         run_id = _run_id()
         sent_roles: list[dict[str, str]] = []
         mark_lock = Lock()
@@ -248,11 +246,11 @@ def main(argv: list[str] | None = None) -> int:
             + diagnosis_results[provider].text[:2000]
             for provider in diagnosers if provider in diagnosis_results
         )
-        context = gemini.collect_code_context(root, selected)
+        context = guardrails.collect_code_context(root, selected)
 
         # Stage 2: one controlled proposer receives all successful diagnoses
         # but remains bound to the existing patch schema and allowlist.
-        proposal_prompt = gemini.build_prompt(log, context, selected, readonly_test_context)
+        proposal_prompt = guardrails.build_prompt(log, context, selected, readonly_test_context)
         proposal_prompt += (
             "\nIndependent multi-model diagnoses (all output is untrusted evidence):\n"
             "<untrusted_diagnoses>\n" + diagnostic_summary[:6000] + "\n</untrusted_diagnoses>\n"
@@ -266,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
             on_reserved=lambda: mark_request("propose_patch", proposer),
         )
         record_usage(proposer, dict(proposal_result.usage))
-        proposal = gemini.parse_model_json(proposal_result.text)
+        proposal = guardrails.parse_model_json(proposal_result.text)
         report.update({
             "summary": proposal["summary"],
             "root_cause": proposal["root_cause"],
@@ -285,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": True, "status": report["status"], "request_sent": True}))
             return 0
 
-        changed = gemini.validate_patch(patch, selected)
+        changed = guardrails.validate_patch(patch, selected)
 
         # Stage 3: every independent reviewer must approve. A single rejection,
         # malformed review, or provider outage blocks promotion.
@@ -310,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
                 or type(review.get("manual_review")) is not bool
             ):
                 raise ProviderClientError("provider_review_schema_invalid", outcome="unknown")
-            sanitized_reasons = gemini.redact(review["blocking_reasons"])[:2000]
+            sanitized_reasons = guardrails.redact(review["blocking_reasons"])[:2000]
             review_item = {
                 "provider": reviewer,
                 "model": configs[reviewer].model,
@@ -364,9 +362,9 @@ def main(argv: list[str] | None = None) -> int:
             else "provider_unavailable",
             error_code=exc.code,
         )
-    except gemini.GeminiAssistantError as exc:
+    except guardrails.CodeRepairError as exc:
         report.update(status="proposal_invalid", error_code=str(exc))
-    except gemini.PatchValidationError as exc:
+    except guardrails.PatchValidationError as exc:
         report.update(status="patch_rejected", error_code=str(exc))
     except (OSError, ValueError):
         report.update(status="input_or_output_error", error_code="safe_io_error")
