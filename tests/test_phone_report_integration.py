@@ -11,11 +11,11 @@ from agent.source_policy import known_tiktok_profiles
 
 
 class PhoneReportIntegrationTests(unittest.TestCase):
-    def test_valid_phone_report_is_used_without_server_side_social_search(self):
+    def test_valid_cloud_collector_report_is_used_without_server_side_social_search(self):
         selected = known_tiktok_profiles()[0]
         payload = {
             "schema_version": 1, "generated_at": "2026-10-13T10:00:00+00:00",
-            "source": "termux_phone", "mode": "metadata_only_no_download_no_publish",
+            "source": "github_actions_termux_docker", "mode": "metadata_only_no_download_no_publish",
             "candidates": {
                 "tiktok": [{
                     "platform": "tiktok", "id": "7610592632179297558",
