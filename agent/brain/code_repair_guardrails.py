@@ -1,25 +1,18 @@
-"""Bounded Gemini CI repair proposal engine.
+"""Shared allowlists, sanitization, context selection and patch validation for code repair.
 
-The model never executes commands or writes directly to the repository. A separate
-workflow validates and tests a proposed patch, then opens a PR without auto-merging.
+This module contains no model-provider client and performs no network requests.
+Proposed patches remain untrusted and require deterministic tests and human review.
 """
 from __future__ import annotations
 
-import argparse
 import json
-import os
 import re
 import subprocess
 import tempfile
-import urllib.error
-import urllib.request
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any
 
-from .gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
 
-DEFAULT_MODEL = "gemini-3.8-flash"
-API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 MAX_LOG_BYTES = 2 * 1024 * 1024
 MAX_LOG_CHARS = 12_000
 MAX_FILES = 4
@@ -91,8 +84,8 @@ _USEFUL_LOG = re.compile(
 )
 
 
-class GeminiAssistantError(RuntimeError):
-    """Safe machine-readable assistant failure code."""
+class CodeRepairError(RuntimeError):
+    """Safe machine-readable code-repair output validation error."""
 
 
 class PatchValidationError(ValueError):
@@ -117,9 +110,6 @@ def redact(text: str, secrets: tuple[str, ...] = ()) -> str:
             value = value.replace(secret, "[REDACTED]")
     value = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
                    lambda m: m.group(1) + "[REDACTED]", value)
-    value = re.sub(r"(?i)(x-goog-api-key\s*[:=]\s*)[^\s,;]+",
-                   lambda m: m.group(1) + "[REDACTED]", value)
-    value = re.sub(r"\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED_API_KEY]", value)
     value = re.sub(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b", "[REDACTED_GITHUB_TOKEN]", value)
     value = re.sub(r"\bsk-[A-Za-z0-9_-]{20,}\b", "[REDACTED_API_KEY]", value)
     value = re.sub(
@@ -326,7 +316,7 @@ def validate_patch(patch: str, selected_paths: list[str]) -> list[str]:
         raise PatchValidationError("patch_hunks_do_not_match_file_headers")
     if not re.search(r"(?m)^@@ ", patch):
         raise PatchValidationError("patch_hunks_required")
-    if re.search(r"\bAIza[0-9A-Za-z_-]{20,}\b|\bgh[pousr]_[A-Za-z0-9_]{20,}\b", patch):
+    if re.search(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b", patch):
         raise PatchValidationError("patch_contains_credential_like_value")
     return changed
 
@@ -339,10 +329,10 @@ def parse_model_json(text: str) -> dict[str, Any]:
     try:
         value = json.loads(rendered)
     except json.JSONDecodeError:
-        raise GeminiAssistantError("gemini_output_invalid_json") from None
+        raise CodeRepairError("model_output_invalid_json") from None
     expected = {"summary", "root_cause", "patch", "confidence", "manual_review"}
     if not isinstance(value, dict) or set(value) != expected:
-        raise GeminiAssistantError("gemini_output_schema_invalid")
+        raise CodeRepairError("model_output_schema_invalid")
     if (
         not isinstance(value["summary"], str)
         or not isinstance(value["root_cause"], str)
@@ -350,151 +340,12 @@ def parse_model_json(text: str) -> dict[str, Any]:
         or value["confidence"] not in {"high", "medium", "low"}
         or type(value["manual_review"]) is not bool
     ):
-        raise GeminiAssistantError("gemini_output_field_invalid")
+        raise CodeRepairError("model_output_field_invalid")
     value["summary"] = redact(value["summary"])[:2000]
     value["root_cause"] = redact(value["root_cause"])[:2000]
     if len(value["patch"]) > MAX_PATCH_CHARS:
-        raise GeminiAssistantError("gemini_patch_too_large")
+        raise CodeRepairError("model_patch_too_large")
     return value
-
-
-def call_gemini(*, api_key: str, model: str, prompt: str, timeout_seconds: int = 45) -> tuple[dict[str, Any], dict[str, int]]:
-    """Make one request. The API key is in an HTTPS header, never the URL."""
-    key = (api_key or "").strip()
-    model_name = (model or DEFAULT_MODEL).strip()
-    if len(key) < 20 or not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", model_name):
-        raise GeminiAssistantError("gemini_configuration_invalid")
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "thinkingConfig": {"thinkingLevel": "low"},
-            "responseMimeType": "application/json",
-            "maxOutputTokens": 8192,
-            "temperature": 0.1,
-        },
-    }
-    request = urllib.request.Request(
-        f"{API_BASE}/{model_name}:generateContent",
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "x-goog-api-key": key,
-            "User-Agent": "Rubika-Agent-Gemini-Code-Assistant/1.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            payload = json.loads(response.read(1_000_000).decode("utf-8"))
-            status = getattr(response, "status", 200)
-    except urllib.error.HTTPError as exc:
-        raise GeminiAssistantError(f"gemini_http_{exc.code}") from None
-    except (urllib.error.URLError, TimeoutError, OSError):
-        raise GeminiAssistantError("gemini_network_error") from None
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise GeminiAssistantError("gemini_response_invalid_json") from None
-    if status != 200:
-        raise GeminiAssistantError(f"gemini_http_{status}")
-    candidates = payload.get("candidates")
-    if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], dict):
-        raise GeminiAssistantError("gemini_candidate_missing")
-    candidate = candidates[0]
-    if candidate.get("finishReason") != "STOP":
-        raise GeminiAssistantError("gemini_response_incomplete")
-    parts = candidate.get("content", {}).get("parts", [])
-    answer = "\n".join(
-        part.get("text", "") for part in parts
-        if isinstance(part, dict) and isinstance(part.get("text"), str)
-    ).strip()
-    if not answer:
-        raise GeminiAssistantError("gemini_text_missing")
-    proposal = parse_model_json(answer)
-    usage = payload.get("usageMetadata", {})
-    counts = {
-        name: item for name, item in (
-            ("promptTokenCount", usage.get("promptTokenCount")),
-            ("candidatesTokenCount", usage.get("candidatesTokenCount")),
-            ("totalTokenCount", usage.get("totalTokenCount")),
-        )
-        if type(item) is int and 0 <= item <= 10_000_000
-    }
-    return proposal, counts
-
-
-
-def call_gemini_with_ledger(
-    *,
-    api_key: str,
-    model: str,
-    prompt: str,
-    required: bool,
-    run_id: str | None = None,
-    usage_client: CodeAIUsageLedger | None = None,
-    on_reserved: Callable[[], None] | None = None,
-) -> tuple[dict[str, Any], dict[str, int]]:
-    """Reserve before a real Gemini request, then persist its outcome fail-closed."""
-    if not required:
-        if on_reserved is not None:
-            on_reserved()
-        return call_gemini(api_key=api_key, model=model, prompt=prompt)
-
-    ledger = usage_client or CodeAIUsageLedger.from_env()
-    reservation = ledger.reserve(
-        provider="gemini",
-        role="propose_patch",
-        run_id=run_id,
-    )
-    call_id = reservation.get("call_id")
-    if not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", call_id):
-        raise UsageLedgerError("usage_ledger_reservation_unconfirmed")
-
-    if on_reserved is not None:
-        on_reserved()
-    try:
-        proposal, usage = call_gemini(api_key=api_key, model=model, prompt=prompt)
-    except GeminiAssistantError as exc:
-        code = str(exc)
-        if code == "gemini_http_429":
-            outcome, ledger_error = "failed", "rate_limited"
-        elif code in {"gemini_network_error", "gemini_response_invalid_json"}:
-            # The request may have reached Google even if no valid response arrived.
-            outcome, ledger_error = "unknown", "provider_result_unknown"
-        else:
-            outcome, ledger_error = "failed", code
-        try:
-            ledger.finish(
-                provider="gemini",
-                call_id=call_id,
-                outcome=outcome,
-                error_code=ledger_error,
-            )
-        except UsageLedgerError:
-            raise GeminiAssistantError("usage_ledger_finish_failed") from None
-        raise
-    except Exception:
-        try:
-            ledger.finish(
-                provider="gemini",
-                call_id=call_id,
-                outcome="unknown",
-                error_code="provider_internal_error",
-            )
-        except UsageLedgerError:
-            raise GeminiAssistantError("usage_ledger_finish_failed") from None
-        raise GeminiAssistantError("gemini_internal_error") from None
-
-    try:
-        ledger.finish(
-            provider="gemini",
-            call_id=call_id,
-            outcome="succeeded",
-            usage=usage,
-        )
-    except UsageLedgerError:
-        # Never allow a proposed patch to progress if accounting the model request
-        # failed; its cost/outcome would otherwise be untracked.
-        raise GeminiAssistantError("usage_ledger_finish_failed") from None
-    return proposal, usage
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -531,106 +382,3 @@ def validate_working_tree(root: Path) -> tuple[bool, str]:
     if any(not is_allowed_repair_path(path) for path in changed + untracked):
         return False, "working_tree_path_not_allowed"
     return True, "working_tree_paths_validated"
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=Path("."))
-    parser.add_argument("--failure-log", type=Path)
-    parser.add_argument("--report-path", type=Path, default=Path("gemini-code-proposal.json"))
-    parser.add_argument("--patch-path", type=Path, default=Path("gemini-code-proposal.diff"))
-    parser.add_argument("--validate-working-tree", action="store_true")
-    args = parser.parse_args(argv)
-    root = args.repo_root.resolve()
-    if args.validate_working_tree:
-        ok, status = validate_working_tree(root)
-        print(json.dumps({"ok": ok, "status": status}, sort_keys=True))
-        return 0 if ok else 2
-
-    report: dict[str, Any] = {
-        "ok": False, "status": "not_started",
-        "model": os.getenv("GEMINI_MODEL", DEFAULT_MODEL),
-        "request_sent": False, "selected_files": [],
-        "summary": "", "root_cause": "", "confidence": "low",
-        "manual_review": True, "usage": {},
-    }
-    try:
-        if args.failure_log is None:
-            raise GeminiAssistantError("failure_log_required")
-        raw = args.failure_log.read_bytes()[:MAX_LOG_BYTES].decode("utf-8", errors="replace")
-        log = sanitize_failure_log(raw, secrets=(os.getenv("GEMINI_API_KEY", ""),))
-        selected = extract_candidate_paths(raw, root)
-        readonly_tests = extract_readonly_test_paths(raw, root)
-        report["selected_files"] = selected
-        report["readonly_test_files"] = readonly_tests
-        report["failure_summary"] = log
-        if not log or not selected:
-            report.update(ok=True, status="no_safe_context")
-            _write_json(args.report_path, report)
-            print(json.dumps({"ok": True, "status": report["status"], "request_sent": False}))
-            return 0
-        key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not key:
-            report.update(status="configuration_missing", error_code="gemini_api_key_missing")
-            _write_json(args.report_path, report)
-            print(json.dumps({"ok": False, "status": report["status"], "request_sent": False}))
-            return 0
-        context = collect_code_context(root, selected)
-        readonly_test_context = collect_readonly_test_context(root, readonly_tests)
-        ledger_required = os.getenv("GEMINI_LEDGER_REQUIRED", "").strip().lower() == "true"
-        run_id = None
-        if os.getenv("GITHUB_RUN_ID", "").strip():
-            run_id = os.getenv("GITHUB_RUN_ID", "").strip()
-            attempt = os.getenv("GITHUB_RUN_ATTEMPT", "").strip()
-            if attempt.isdigit():
-                run_id = run_id + "_" + attempt
-        proposal, usage = call_gemini_with_ledger(
-            api_key=key,
-            model=report["model"],
-            prompt=build_prompt(log, context, selected, readonly_test_context),
-            required=ledger_required,
-            run_id=run_id,
-            on_reserved=lambda: report.__setitem__("request_sent", True),
-        )
-        report["usage"] = usage
-        for field in ("summary", "root_cause", "confidence", "manual_review"):
-            report[field] = proposal[field]
-        patch = proposal["patch"]
-        if not patch.strip():
-            report.update(ok=True, status="no_patch")
-        elif proposal["confidence"] != "high" or proposal["manual_review"]:
-            report.update(ok=True, status="human_review_required")
-        else:
-            changed = validate_patch(patch, selected)
-            args.patch_path.parent.mkdir(parents=True, exist_ok=True)
-            args.patch_path.write_text(patch, encoding="utf-8")
-            report.update(ok=True, status="patch_ready", patch_path=str(args.patch_path), patch_files=changed)
-    except UsageLedgerError as exc:
-        blocked = exc.code in {
-            "code_ai_daily_budget_exhausted",
-            "code_ai_provider_cooldown_active",
-            "code_ai_provider_not_enabled",
-        }
-        report.update(
-            status="usage_ledger_blocked" if blocked else "usage_ledger_unavailable",
-            error_code=exc.code,
-        )
-    except GeminiAssistantError as exc:
-        report.update(status="assistant_unavailable", error_code=str(exc))
-    except PatchValidationError as exc:
-        report.update(status="patch_rejected", error_code=str(exc))
-    except (OSError, ValueError):
-        report.update(status="input_or_output_error", error_code="safe_io_error")
-    _write_json(args.report_path, report)
-    print(json.dumps({
-        "ok": report["ok"], "status": report["status"],
-        "request_sent": report["request_sent"],
-        "selected_files": report["selected_files"],
-        "patch_ready": report["status"] == "patch_ready",
-        "model": report["model"], "usage": report["usage"],
-    }, ensure_ascii=False, sort_keys=True))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

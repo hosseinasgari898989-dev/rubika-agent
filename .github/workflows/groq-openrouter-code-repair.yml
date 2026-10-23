@@ -204,7 +204,7 @@ jobs:
             echo "Patch application failed; working tree was reset." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if ! python -m agent.brain.gemini_code_agent --repo-root "$GITHUB_WORKSPACE" --validate-working-tree; then
+          if ! python -m agent.brain.multi_ai_code_repair --repo-root "$GITHUB_WORKSPACE" --validate-working-tree; then
             git reset --hard HEAD >/dev/null
             echo "tests_passed=false" >> "$GITHUB_OUTPUT"
             echo "Changed-file allowlist failed; working tree was reset." >> "$GITHUB_STEP_SUMMARY"
@@ -232,7 +232,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m agent.brain.gemini_code_agent --repo-root "$GITHUB_WORKSPACE" --validate-working-tree
+          python -m agent.brain.multi_ai_code_repair --repo-root "$GITHUB_WORKSPACE" --validate-working-tree
           short_sha="$(printf '%s' "$UPSTREAM_SHA" | cut -c1-12)"
           branch="agent-fix/groq-openrouter-$short_sha"
           if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then

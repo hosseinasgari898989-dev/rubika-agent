@@ -106,7 +106,7 @@ def translate_to_persian(
         ProviderClientError,
         call_provider_with_ledger,
     )
-    from agent.brain.gemini_usage_client import UsageLedgerError
+    from agent.brain.ai_usage_ledger import UsageLedgerError
 
     prompt = (
         "Translate the source excerpt into fluent, natural Persian (Farsi). "

@@ -15,7 +15,7 @@ class AIProviderLedgerTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
-    def add_call(self, call_id, *, day="2026-10-15", provider="gemini",
+    def add_call(self, call_id, *, day="2026-10-15", provider="legacy_provider_a",
                  role="diagnose", status="reserved", error_code=None):
         self.db.execute(
             "INSERT INTO ai_provider_calls "
@@ -53,7 +53,7 @@ class AIProviderLedgerTests(unittest.TestCase):
         used = self.db.execute(
             "SELECT COUNT(*) FROM ai_provider_calls "
             "WHERE usage_day = ? AND provider = ?",
-            ("2026-10-15", "gemini"),
+            ("2026-10-15", "legacy_provider_a"),
         ).fetchone()[0]
         self.assertEqual(used, 4)
 
@@ -67,17 +67,17 @@ class AIProviderLedgerTests(unittest.TestCase):
                 "INSERT INTO ai_provider_calls "
                 "(call_id, usage_day, provider, role, prompt_tokens) "
                 "VALUES (?, ?, ?, ?, ?)",
-                ("invalid-token-count-01", "2026-10-15", "gemini", "diagnose", -1),
+                ("invalid-token-count-01", "2026-10-15", "legacy_provider_a", "diagnose", -1),
             )
 
     def test_cooldown_state_only_accepts_known_throttling_reasons(self):
         self.db.execute(
             "INSERT INTO ai_provider_state (provider, cooldown_until, last_error_code) "
             "VALUES (?, ?, ?)",
-            ("gemini", "2026-10-15T12:05:00.000Z", "rate_limited"),
+            ("legacy_provider_a", "2026-10-15T12:05:00.000Z", "rate_limited"),
         )
         self.assertEqual(
-            self.db.execute("SELECT last_error_code FROM ai_provider_state WHERE provider = 'gemini'").fetchone()[0],
+            self.db.execute("SELECT last_error_code FROM ai_provider_state WHERE provider = 'legacy_provider_a'").fetchone()[0],
             "rate_limited",
         )
         with self.assertRaises(sqlite3.IntegrityError):
@@ -87,8 +87,8 @@ class AIProviderLedgerTests(unittest.TestCase):
                 ("other-provider", "2026-10-15T12:05:00.000Z", "secret_leaked"),
             )
 
-    def test_ledger_schema_accepts_each_explicit_code_repair_provider(self):
-        for provider in ("gemini", "groq", "openrouter", "github_models"):
+    def test_ledger_schema_preserves_legacy_and_current_provider_ids(self):
+        for provider in ("legacy_provider_a", "groq", "openrouter", "legacy_provider_b"):
             with self.subTest(provider=provider):
                 self.add_call("call-" + provider + "-accepted-0001", provider=provider)
                 self.db.execute(
@@ -99,7 +99,7 @@ class AIProviderLedgerTests(unittest.TestCase):
         providers = {
             row[0] for row in self.db.execute("SELECT provider FROM ai_provider_state")
         }
-        self.assertEqual(providers, {"gemini", "groq", "openrouter", "github_models"})
+        self.assertEqual(providers, {"legacy_provider_a", "groq", "openrouter", "legacy_provider_b"})
 
     def test_worker_enables_only_groq_openrouter_translation_roles_and_bounded_daily_cap(self):
         source = WORKER.read_text(encoding="utf-8")
@@ -108,8 +108,6 @@ class AIProviderLedgerTests(unittest.TestCase):
         self.assertIn('"translate_official"', source)
         self.assertIn('"code_ai_provider_not_enabled"', source)
         self.assertIn("CODE_AI_PROVIDER_LIMITS[provider]", source)
-        self.assertNotIn("const CODE_AI_PROVIDER_LIMITS = Object.freeze({ gemini:", source)
-        self.assertNotIn("github_models: 6", source)
 
     def test_reservation_is_atomic_and_rejects_active_cooldown(self):
         source = WORKER.read_text(encoding="utf-8")

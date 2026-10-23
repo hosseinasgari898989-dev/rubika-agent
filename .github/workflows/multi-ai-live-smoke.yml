@@ -1,12 +1,8 @@
 name: Groq and OpenRouter live API smoke test (post-deploy)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/multi-ai-live-smoke.yml"
-      - "agent/brain/ai_provider_clients.py"
-      - "agent/brain/gemini_usage_client.py"
+  # Manual only: this smoke test sends real provider requests and records usage in D1.
+  # Maintenance pushes must never create live-provider traffic implicitly.
   workflow_dispatch:
 
 permissions:
@@ -49,7 +45,7 @@ jobs:
           import os
           import sys
           from agent.brain.ai_provider_clients import PROVIDERS, ProviderClientError, provider_config
-          from agent.brain.gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
+          from agent.brain.ai_usage_ledger import CodeAIUsageLedger, UsageLedgerError
 
           expected = {"groq", "openrouter"}
           if set(PROVIDERS) != expected:
@@ -83,7 +79,7 @@ jobs:
               ProviderClientError,
               call_provider_with_ledger,
           )
-          from agent.brain.gemini_usage_client import (
+          from agent.brain.ai_usage_ledger import (
               CodeAIUsageLedger,
               UsageLedgerError,
           )
@@ -148,7 +144,7 @@ jobs:
               handle.write(f"- Providers with usable live responses: **{successes}/{len(providers)}**\n")
               handle.write("- Maximum provider requests: **one for Groq and one for OpenRouter**, with a **90-second timeout per request**; every attempted call is recorded in the Cloudflare D1 ledger.\n")
               handle.write("- Raw model response text and all secret values were omitted from logs.\n")
-              handle.write("- No Gemini request, patch, branch/PR write, or Rubika action was triggered by this smoke test.\n\n")
+              handle.write("- No code-repair proposal, branch/PR write, or Rubika action was triggered by this smoke test.\n\n")
               handle.write("| Provider | Model | Status | Response characters | Total tokens |\n|---|---|---|---:|---:|\n")
               for row in results:
                   usage = row.get("usage", {})

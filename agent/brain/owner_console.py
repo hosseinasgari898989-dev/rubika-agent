@@ -1,8 +1,8 @@
-"""Read-only Rubika operations console for the existing Rubika-Agent Worker.
+"""Read-only Rubika operations console implementation.
 
-The scheduled GitHub Actions job polls only the configured owner's private chat.
 It exposes aggregate status/report commands only; it cannot mutate the publishing
 queue, call model providers, run shell commands, change code, merge, or deploy.
+Scheduling and private-chat delivery are outside this module.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ DEFAULT_CONTROL_URL = "https://rubika-agent.h98609294.workers.dev"
 EXPECTED_CONTROL_HOST = "rubika-agent.h98609294.workers.dev"
 GITHUB_RUNS_URL = "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/runs?per_page=10"
 ALLOWED_RUBIKA_METHODS = {"getMe", "getUpdates", "sendMessage"}
-PROVIDERS = ("gemini", "groq", "openrouter", "github_models")
+PROVIDERS = ("groq", "openrouter")
 MAX_REPLY_CHARS = 3400
 MAX_UPDATES_PER_POLL = 20
 MAX_UPDATE_ID_CHARS = 200
@@ -515,8 +515,8 @@ class OperationsConsole:
                 "🤖 دستیار مدیریتی روبیکا — مرحلهٔ فقط‌خواندنی\n\n"
                 "/status — وضعیت Worker، پایگاه داده و آخرین اجرا\n"
                 "/queue — خلاصهٔ صف بدون تغییر وضعیت آن\n"
-                "/ai-status — وضعیت ledger و سهمیهٔ چهار provider\n"
-                "/ai-status gemini — وضعیت یک provider مشخص\n"
+                "/ai-status — وضعیت ledger و سهمیهٔ دو provider\n"
+                "/ai-status groq — وضعیت یک provider مشخص\n"
                 "/report — گزارش ترکیبی پروژه، صف، سهمیهٔ AI و CI اخیر\n"
                 "/help — همین راهنما\n\n"
                 "این نسخه فقط گزارش می‌خواند؛ کد را تغییر نمی‌دهد، فرمان اجرا نمی‌کند، "
@@ -758,7 +758,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         assert parse_command("/status").name == "status"
         assert parse_command("/queue").name == "queue"
-        assert parse_command("/ai-status gemini").audit_name == "ai-status:gemini"
+        assert parse_command("/ai-status groq").audit_name == "ai-status:groq"
         assert parse_command("not a command").name == "unknown"
         assert "انتشار" in format_status({
             "ok": True, "database": "connected", "agent": {"enabled": 0},

@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from unittest.mock import patch
 
 from agent.brain import ai_provider_clients as clients
-from agent.brain.gemini_usage_client import UsageLedgerError
+from agent.brain.ai_usage_ledger import UsageLedgerError
 
 
 class FakeResponse:
@@ -73,9 +73,9 @@ class ProviderClientTests(unittest.TestCase):
         with self.assertRaises(clients.ProviderClientError) as caught:
             clients.provider_config("openrouter", environ={})
         self.assertEqual(caught.exception.code, "openrouter_api_key_missing")
-        with self.assertRaises(clients.ProviderClientError) as caught:
-            clients.provider_config("mistral", environ={"MISTRAL_API_KEY": "m" * 32})
-        self.assertEqual(caught.exception.code, "provider_not_enabled")
+
+    def test_only_current_provider_clients_are_allowlisted(self):
+        self.assertEqual(set(clients.PROVIDERS), {"groq", "openrouter"})
 
     def test_current_provider_defaults_are_explicit_and_configurable(self):
         groq = clients.provider_config("groq", environ={"GROQ_API_KEY": "g" * 32})
@@ -86,14 +86,6 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(openrouter.model, "openrouter/free")
         self.assertEqual(openrouter.url, "https://openrouter.ai/api/v1/chat/completions")
 
-        for retired in ("gemini", "github_models", "mistral"):
-            with self.subTest(provider=retired), self.assertRaises(clients.ProviderClientError) as caught:
-                clients.provider_config(retired, environ={"GEMINI_API_KEY": "g" * 32, "GITHUB_TOKEN": "x" * 40})
-            self.assertEqual(caught.exception.code, "provider_not_enabled")
-    def test_gemini_is_disabled_before_any_network_request(self):
-        with self.assertRaises(clients.ProviderClientError) as caught:
-            clients.provider_config("gemini", environ={"GEMINI_API_KEY": "g" * 32})
-        self.assertEqual(caught.exception.code, "provider_not_enabled")
     def test_groq_openai_compatible_response_is_normalized(self):
         config = clients.ProviderConfig(
             "groq", "r" * 32, "llama-3.3-70b-versatile",
@@ -110,10 +102,6 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
 
-    def test_github_models_are_disabled(self):
-        with self.assertRaises(clients.ProviderClientError) as caught:
-            clients.provider_config("github_models", environ={"GITHUB_TOKEN": "g" * 40})
-        self.assertEqual(caught.exception.code, "provider_not_enabled")
     def test_openrouter_chat_completion_response_is_normalized(self):
         config = clients.ProviderConfig(
             "openrouter", "o" * 32, "openrouter/free",

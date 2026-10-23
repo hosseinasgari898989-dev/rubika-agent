@@ -1,4 +1,4 @@
-"""Authenticated, fail-closed client for the code-repair AI usage ledger.
+"""Authenticated, fail-closed client for the provider-neutral code-AI usage ledger.
 
 This client talks only to the existing Rubika-Agent Worker D1 accounting API.
 It does not call Cloudflare Workers AI or any model provider.

@@ -49,7 +49,7 @@ class MobTranslationTests(unittest.TestCase):
         self.assertEqual(call.call_args_list[0].kwargs["run_id"], call.call_args_list[1].kwargs["run_id"])
 
     def test_ledger_failure_fails_closed_without_untracked_fallback(self):
-        from agent.brain.gemini_usage_client import UsageLedgerError
+        from agent.brain.ai_usage_ledger import UsageLedgerError
 
         with patch(
             "agent.brain.ai_provider_clients.call_provider_with_ledger",

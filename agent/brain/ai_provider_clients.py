@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from .gemini_usage_client import CodeAIUsageLedger, UsageLedgerError
+from .ai_usage_ledger import CodeAIUsageLedger, UsageLedgerError
 
 PROVIDERS = frozenset({"groq", "openrouter"})
 ROLES = frozenset({"diagnose", "propose_patch", "review_patch", "translate_official"})
