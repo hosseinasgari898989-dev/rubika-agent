@@ -9,7 +9,7 @@ This implements the first operations-console roadmap slice: read-only status/rep
 - `/help` — available commands and safety boundaries.
 - `/status` — Worker/database health, agent config, item counts, latest recorded run.
 - `/queue` — queue counts and items sent today, using a new SELECT-only Worker endpoint.
-- `/ai-status` — current ledger budget/cooldown/readiness for the four allowlisted providers.
+- `/ai-status` — current ledger budget/cooldown/readiness for the two active providers.
 - `/ai-status groq`, `/ai-status openrouter` — one provider.
 - `/report` — combine status, queue, provider ledger and recent GitHub Actions run summaries.
 
