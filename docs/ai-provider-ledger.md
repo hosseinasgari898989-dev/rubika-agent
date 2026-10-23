@@ -1,53 +1,54 @@
-# AI provider ledger — current main configuration
+# AI provider ledger — active configuration
 
-This document describes the current deployed arrangement. Older multi-provider rollout notes and Gemini/Mistral/GitHub Models experiments are historical only.
+This document describes the active Python repair/translation path and its accounting rules.
 
 ## Active providers and roles
 
-The active provider allowlist is **Groq** and **OpenRouter Free**. Gemini, Mistral, and GitHub Models are not active code-repair or translation providers.
+The active provider allowlist contains **Groq** and **OpenRouter Free** only.
 
 | Role | Active behavior |
 |---|---|
-| Diagnose CI failures | Groq and OpenRouter provide separate diagnoses from sanitized logs/read-only test context. |
+| Diagnose CI failures | Groq and OpenRouter provide independent diagnoses from sanitized logs and read-only test context. |
 | Propose a code patch | Groq proposes one constrained patch. |
-| Review the patch | Groq and OpenRouter review independently. |
-| Translate official Mob news | Groq is tried first; OpenRouter is the bounded fallback if Groq returns an unusable result. |
-| Detect music in video audio | Cloudflare Workers AI, using `@cf/cloudflare/clef-omni`, handles this separately. |
+| Review a patch | Groq and OpenRouter review independently. |
+| Translate official Mob news | Groq is tried first; OpenRouter is the bounded fallback if needed. |
+| Detect music in video audio | Cloudflare Workers AI, using `@cf/cloudflare/clef-omni`, handles this separate task. |
 
-Workers AI must **not** be used for code repair, error diagnosis, or news translation. The old Worker translation route returns `410 translation_route_retired`. The live Worker code has a single `env.AI.run(...)` call, for audio-based music moderation. Music decisions that are uncertain require human review; they are not auto-approved for publication.
+Workers AI is not used for code repair, error diagnosis or news translation. The existing Worker translation route returns `410 translation_route_retired`; the private-chat Worker AI and music moderation logic are outside this provider cleanup.
 
 ## Metering and safety
 
-Every Groq/OpenRouter repair or Mob translation request must reserve a D1 usage slot before it contacts the provider, then finish the ledger record with the result. If a reservation cannot be confirmed, the request is not sent. Ambiguous requests are not automatically retried. Safe provider error codes are retained in the ledger; raw credentials, provider response bodies and secrets must not be logged.
+Every Python repair or official-news translation request reserves a D1 usage slot before contacting a provider and records its outcome afterward. If reservation cannot be confirmed, the model request is not sent. Ambiguous requests are not automatically retried. Raw credentials, provider response bodies and secrets must not be logged.
 
 The current Worker policy is:
 
-- Per-provider daily cap: **18 reservations** for Groq and **18** for OpenRouter.
-- Shared daily cap: **36 reservations** across both providers.
-- Allowed roles: `diagnose`, `propose_patch`, `review_patch`, and `translate_official`.
-- The ledger schema role change is migration `0008_ai_provider_translation_role.sql`; the live D1 schema was read back and confirms `translate_official` is permitted.
-- The repository still keeps historical providers in its older migration history for data compatibility, but the live Worker allowlist and Python clients reject retired providers.
+- Daily cap: **18 reservations per provider**, with a **36-reservation combined cap**.
+- Allowed roles: `diagnose`, `propose_patch`, `review_patch` and `translate_official`.
+- The role extension is represented by migration `0008_ai_provider_translation_role.sql`; this cleanup does not run migrations or write to D1.
+- Historical provider identifiers in older schema files are retained for database compatibility. The active Python client accepts only the two providers listed above.
 
-## Automatic repair workflow
+## Bounded repair workflow
 
-`.github/workflows/groq-openrouter-code-repair.yml` watches failures from the CI, scheduled edit-queue, cloud discovery, and live-provider-smoke workflows on `main`. It checks that the failed SHA is still the current `main`, verifies credential presence and the live D1 budget/cooldown, and applies a further safety guard for missing credentials, Rubika destination/auth failures, and provider quota or ledger errors.
+The workflow is `.github/workflows/groq-openrouter-code-repair.yml`. It listens for completed runs from the main CI, scheduled queue processor, cloud discovery, and live-provider smoke workflows.
 
-If allowed to proceed, it needs two diagnoses, one Groq proposal, and independent Groq/OpenRouter review. The proposed diff is untrusted. It must pass the changed-file allowlist, compile checks, all Python unit tests, Worker tests, and the repository self-test in a disposable runner. Only then may the workflow open a review PR. It never auto-merges, deploys the Worker, changes secrets, changes D1 schema, or publishes to Rubika. It is fail-closed when it has no safe file context.
+It starts its repair job only when an eligible upstream run failed on `main`. A successful upstream run results in a skipped repair job; that is expected behavior, not proof that the repair engine is dead.
 
-The workflow has a daily cap of three non-skipped attempts. Normal successful CI runs cause the repair workflow to be skipped; this is expected and does not mean a repair failed.
+Before any model call, the workflow checks that the failed SHA is still current `main`, verifies the required credentials, checks both providers' live D1 budget/cooldown status, and blocks known credential, destination, quota and ledger failures. If those guards pass, it requests two diagnoses, one Groq proposal, and independent reviews from both providers. The patch is untrusted and must pass the changed-file allowlist, compile checks, Python tests, Worker tests and repository self-test before the workflow can open a review PR. It does not auto-merge, deploy the Worker, migrate D1 or publish to Rubika.
 
-## Live verification evidence — 2026-10-16
+A daily cap limits the workflow to three non-skipped repair attempts. The workflow requires GitHub Actions secrets `AGENT_API_TOKEN`, `GROQ_API_KEY` and `OPENROUTER_API_KEY`; it uses GitHub's built-in `GITHUB_TOKEN` permission for creating a proposed branch/PR after validation.
 
-- The live Groq/OpenRouter provider smoke workflow completed successfully in GitHub Actions run [38924738525](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38924738525): one ledgered request to Groq and one to OpenRouter returned usable responses. A metered Groq-first Persian-translation check also returned Persian text without a source URL. This proves these bounded calls worked at that time; it is not a guarantee of future free-tier availability.
-- The latest repository CI after the recent provider, caption, and documentation changes is [run 38929244036](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38929244036), conclusion **success**, at commit `226bf30ee7ab02d8f0f83fa29f49ddcf476d0a2d`. Earlier run `38928819444` also passed **384 tests**, Worker API tests, the installed Rubka API surface check and `agent.preflight self-test`.
-- D1 read-only queries show successful Groq/OpenRouter diagnosis calls and a successful `translate_official` call. A previous OpenRouter result was recorded as `provider_text_missing`; the adapter preserves that reason and does not blindly retry the same call.
-- Production Rubika sending is **not yet cleared**. A read-only bot-authentication preflight succeeded, but the next guard correctly stopped because the repository secret `RUBIKA_CHANNEL_GUID` still equals the known test-channel GUID. No main-channel message was sent by that preflight.
-- The Mob production publisher is still gated by the explicit Actions variable `RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014`, `config/agent_lifecycle.json` is still in test mode, and `config/mob_official_sources.json` remains test-channel-only. Therefore the five-hour Mob publisher is configured and guarded, but is not production-enabled.
+## Live-provider evidence and limits
+
+A historical live smoke run, [38924738525](https://github.com/hosseinasgari898989-dev/rubika-agent/actions/runs/38924738525), recorded one successful ledgered call to each active provider. That evidence proves those calls worked at that time only; it is not a current availability check or a promise of free-tier capacity.
+
+The workflow `.github/workflows/multi-ai-live-smoke.yml` remains available by manual dispatch only. It sends real provider requests and records usage in D1, so routine pushes must not launch it implicitly. This cleanup does not dispatch it; current live availability therefore remains unverified.
+
+The source repository does not contain a workflow named `ai-health-check.yml`. Do not infer present-day provider health from skipped repair runs or from old smoke evidence. A live health check must be explicitly approved and carried out separately.
 
 ## Credentials
 
-The workflow uses GitHub Actions secrets `GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `AGENT_API_TOKEN`. The official Mob publisher also needs `RUBIKA_TOKEN`, `RUBIKA_CHANNEL_GUID`, and its other configured credentials. Never commit or print secret values. Do not change secrets or bypass a destination gate in code to make a test green.
+The repair workflow uses `AGENT_API_TOKEN`, `GROQ_API_KEY` and `OPENROUTER_API_KEY`, plus GitHub's built-in token permission to open a review PR. Never commit or print secret values. Do not alter secrets or bypass destination gates to make a check pass.
 
 ## Important limits
 
-Live provider smoke tests prove that individual model calls can work; they do not prove that every possible failure can be repaired automatically. A model can return incorrect reasoning or an unsafe proposal, a provider can be rate-limited, and test/live source conditions can vary. Deterministic tests, code-path restrictions, a human-reviewed PR and a separate main-channel preflight remain mandatory.
+Successful past calls do not prove that every failure can be repaired. A provider can be rate-limited, models can return incorrect output, and current quotas can change. Deterministic tests, constrained file paths, a human-reviewed PR and separate deployment/publication authorization remain mandatory.
