@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +55,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
 
             tiktok_search.assert_called_once_with(max_results=48, max_per_profile=8)
             official_search.assert_called_once_with(max_results=12)
+            self.assertEqual(report["source"], "github_actions_termux_docker")
             self.assertEqual(report["summary"]["tiktok_candidates"], 1)
             self.assertEqual(report["summary"]["mob_official_candidates"], 1)
             self.assertEqual(report["summary"]["mob_official_source"], "Mob Entertainment official sources")
@@ -77,19 +77,15 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 "x-1734258130186559716",
             )
 
-    def test_push_refuses_to_publish_report_from_non_main_branch(self):
-        calls = []
+    def test_manual_cli_cannot_push_a_report_to_github(self):
+        self.assertFalse(hasattr(daily_discovery, "push_report_to_main_branch"))
+        with patch.object(daily_discovery.argparse.ArgumentParser, "error", side_effect=SystemExit(2)), \
+             patch.object(daily_discovery, "collect_daily_report") as collect:
+            with self.assertRaises(SystemExit) as result:
+                daily_discovery.main(["--push"])
+        self.assertEqual(result.exception.code, 2)
+        collect.assert_not_called()
 
-        def fake_git(args):
-            calls.append(args)
-            if args == ["branch", "--show-current"]:
-                return subprocess.CompletedProcess(args, 0, "agent-brain-mega-v1\n", "")
-            return subprocess.CompletedProcess(args, 0, "", "")
-
-        with patch.object(daily_discovery, "_git", side_effect=fake_git):
-            with self.assertRaisesRegex(RuntimeError, "wrong_branch"):
-                daily_discovery.push_report_to_main_branch()
-        self.assertEqual(calls, [["branch", "--show-current"]])
 
 
 if __name__ == "__main__":
