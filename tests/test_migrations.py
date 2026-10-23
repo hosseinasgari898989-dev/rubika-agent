@@ -144,14 +144,14 @@ class D1MigrationTests(unittest.TestCase):
             db.execute(
                 "INSERT INTO owner_digest_events (window_id, category, source, title, detail) "
                 "VALUES (?, ?, ?, ?, ?)",
-                ("window1234567890abcdef", "ai_error", "code_ai_github_models",
+                ("window1234567890abcdef", "ai_error", "code_ai_groq",
                  "AI repair call failed", "error_code=provider_unavailable"),
             )
             event = db.execute(
                 "SELECT category, source, title FROM owner_digest_events WHERE window_id = ?",
                 ("window1234567890abcdef",),
             ).fetchone()
-            self.assertEqual(event, ("ai_error", "code_ai_github_models", "AI repair call failed"))
+            self.assertEqual(event, ("ai_error", "code_ai_groq", "AI repair call failed"))
 
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute(
