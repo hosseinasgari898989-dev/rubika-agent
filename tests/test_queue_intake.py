@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
-from agent.brain.queue_intake import candidates_for_queue, fair_round_robin, run_intake
+from agent.brain.queue_intake import candidates_for_queue, fair_round_robin, load_report, run_intake
 from agent.source_policy import known_tiktok_profiles
 
 PROFILES = known_tiktok_profiles()
@@ -59,6 +59,21 @@ class FakeCloudState:
 
 
 class QueueIntakeTests(unittest.TestCase):
+    def test_report_loader_accepts_cloud_source_and_historical_phone_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            for source in ("github_actions_termux_docker", "termux_phone"):
+                payload = {
+                    "schema_version": 1,
+                    "source": source,
+                    "mode": "metadata_only_no_download_no_publish",
+                    "generated_at": _now_iso(),
+                    "candidates": {"tiktok": [], "mob_official": []},
+                }
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.subTest(source=source):
+                    self.assertEqual(load_report(path)["source"], source)
+
     def test_maps_metadata_deduplicates_and_strips_tracking_query(self):
         video_id = "7616247520657771796"
         tracked = _row(video_id, PROFILES[0])
@@ -113,7 +128,7 @@ class QueueIntakeTests(unittest.TestCase):
         for i, creator in enumerate(PROFILES):
             candidates.extend(_row(_video_id(i,j),creator) for j in range(4))
         candidates.insert(0,_row(_video_id(0,99),PROFILES[0])); candidates.append(_row(_video_id(5,99),PROFILES[5]))
-        payload = {"schema_version":1,"source":"termux_phone","mode":"metadata_only_no_download_no_publish",
+        payload = {"schema_version":1,"source":"github_actions_termux_docker","mode":"metadata_only_no_download_no_publish",
                    "generated_at":_now_iso(),"candidates":{"tiktok":candidates,"mob_official":[]}}
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/"report.json"; path.write_text(json.dumps(payload),encoding="utf-8")
