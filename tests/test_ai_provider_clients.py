@@ -74,6 +74,9 @@ class ProviderClientTests(unittest.TestCase):
             clients.provider_config("openrouter", environ={})
         self.assertEqual(caught.exception.code, "openrouter_api_key_missing")
 
+    def test_only_current_provider_clients_are_allowlisted(self):
+        self.assertEqual(set(clients.PROVIDERS), {"groq", "openrouter"})
+
     def test_current_provider_defaults_are_explicit_and_configurable(self):
         groq = clients.provider_config("groq", environ={"GROQ_API_KEY": "g" * 32})
         self.assertEqual(groq.model, "openai/gpt-oss-20b")
