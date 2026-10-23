@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.discovery.mob_official_complete import discover_official_x_posts
-from agent.discovery.termux_sources import discover_tiktok_hashtags
+from agent.discovery.termux_sources import discover_tiktok_profiles
 from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
 
 
@@ -47,24 +47,16 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
 
 def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, Any]:
     """Collect TikTok edit metadata and official Mob X posts without downloads or publishing."""
-    print("1/2 TikTok: checking owner-selected profiles and public hashtag pages (metadata only)...", flush=True)
-    tiktok_candidates, tiktok_attempts = discover_tiktok_hashtags(
-        include_unknown_sources=True,
-        # Keep enough metadata candidates per creator to replenish the next batch
-        # when recent IDs are already in D1; still metadata-only, never media bytes.
-        max_results=60,
-        known_source_max_results=48,
-        unknown_source_max_results=12,
+    print("1/2 TikTok: checking the six selected creator profiles (metadata only)...", flush=True)
+    tiktok_candidates, tiktok_attempts = discover_tiktok_profiles(
+        max_results=48,
         max_per_profile=8,
-        max_age_days=90,
     )
     print("2/2 Mob Entertainment: checking only official X posts via public discovery and X syndication (metadata only)...", flush=True)
     mob_candidates, mob_attempts = discover_official_x_posts(max_results=12)
 
     lifecycle_policy = load_lifecycle_policy()
-    # Lifecycle birth boundary is exclusive to official Mob news; TikTok edits
-    # keep their dedicated source-freshness and relevance filters.
-    stale_tiktok: list[dict[str, str]] = []
+    # The lifecycle birth boundary applies to the separate official Mob-news lane only.
     mob_candidates, stale_mob = filter_candidates_by_birth(
         mob_candidates, policy=lifecycle_policy
     )
@@ -72,7 +64,6 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         "source": "agent_lifecycle",
         "mode": lifecycle_policy["mode"],
         "birth_cutoff_enabled": lifecycle_policy["mode"] == "production",
-        "tiktok_rejected": len(stale_tiktok),
         "mob_official_rejected": len(stale_mob),
     }
 
@@ -90,6 +81,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             item_id = row.get("id") or row.get("external_id")
             url = row.get("url") or row.get("canonical_url")
             if not isinstance(item_id, str) or not item_id or not isinstance(url, str):
+                continue
+            if platform == "tiktok" and not (isinstance(row.get("source_policy"), dict) and row["source_policy"].get("known_source") is True):
                 continue
             if item_id in seen:
                 continue
@@ -113,20 +106,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "mob_official_source": "Mob Entertainment official sources",
             "mob_official_method": "official_x_syndication_and_verified_seed_urls",
             "mob_official_birth_cutoff_rejected": len(stale_mob),
-            "tiktok_birth_cutoff_rejected": len(stale_tiktok),
-            "tiktok_known_source_candidates": sum(
-                1 for row in normalized["tiktok"]
-                if isinstance(row.get("source_policy"), dict)
-                and row["source_policy"].get("known_source") is True
-            ),
-            "tiktok_unknown_source_candidates": sum(
-                1 for row in normalized["tiktok"]
-                if not (
-                    isinstance(row.get("source_policy"), dict)
-                    and row["source_policy"].get("known_source") is True
-                )
-            ),
-            "tiktok_method": "yt_dlp_owner_selected_profiles_plus_public_hashtag_pages",
+            "tiktok_selected_source_candidates": len(normalized["tiktok"]),
+            "tiktok_method": "yt_dlp_selected_creator_profiles_only",
             "agent_lifecycle_mode": lifecycle_policy["mode"],
             "paid_providers_used": [],
             "ready_to_publish": False,
@@ -136,14 +117,13 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         "limits": {
             "tiktok_max_creator_profiles": 6,
             "tiktok_max_per_known_profile": 8,
-            "tiktok_unknown_source_max_candidates": 12,
-            "tiktok_max_age_days": 90,
+            "tiktok_date_filtering": "deferred_to_phase_6_since_utc_engine",
             "tiktok_max_results": 60,
             "mob_x_max_candidates_per_run": 12,
             "mob_official_source_lanes": ["x"],
             "mob_x_source_handle": "@mobgamesstudios",
             "mob_x_api_credits_used": 0,
-            "birth_cutoff_active_only_in_production_mode": True,
+            "mob_birth_cutoff_active_only_in_production_mode": True,
             "media_downloads": 0,
             "rubika_posts": 0,
         },

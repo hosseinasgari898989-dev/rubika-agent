@@ -37,18 +37,6 @@ TIKTOK_CANONICAL_RE = re.compile(
 )
 
 
-def _parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed.astimezone(timezone.utc)
-
-
 def _canonical_tiktok_identity(raw: Mapping[str, Any]) -> tuple[str, str, str] | None:
     """Return selected-source identity from a canonicalized numeric TikTok URL."""
     url = raw.get("url") or raw.get("canonical_url")
@@ -85,11 +73,9 @@ def candidates_for_queue(
     now: datetime | None = None,
     diagnostics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Validate fresh queue metadata and optionally summarize rejection reasons."""
-    current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
+    """Validate queue metadata; per-channel publication dates are applied in Phase 6."""
+    if now is not None and now.tzinfo is None:
         raise ValueError("now_must_be_timezone_aware")
-    current = current.astimezone(timezone.utc)
 
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -146,10 +132,8 @@ def candidates_for_queue(
                 reject("required_keyword_missing", source_name)
                 continue
 
-            published_at = _parse_timestamp(raw.get("published_at"))
-            if published_at is None:
-                reject("published_timestamp_missing_or_invalid", source_name)
-                continue
+            raw_published_at = raw.get("published_at")
+            published_at = raw_published_at.strip() if isinstance(raw_published_at, str) and raw_published_at.strip() else None
 
             identity = (platform, external_id)
             if identity in seen:
@@ -164,7 +148,7 @@ def candidates_for_queue(
                 "source_key": source_key,
                 "title": str(raw.get("title") or "")[:500],
                 "caption": str(raw.get("caption") or "")[:4000],
-                "published_at": published_at.isoformat(),
+                "published_at": published_at,
                 "media_type": "video",
                 "author": canonical_identity[0][:100],
                 "query": str(raw.get("query") or "")[:200],

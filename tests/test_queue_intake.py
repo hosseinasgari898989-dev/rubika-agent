@@ -86,10 +86,12 @@ class QueueIntakeTests(unittest.TestCase):
         rows = candidates_for_queue({"candidates": {"tiktok": [caption, edit_only, hashtag_match]}})
         self.assertEqual([row["external_id"] for row in rows], ["7616247520657771796", "7616247520657771798"])
 
-    def test_missing_timestamp_and_non_numeric_video_ids_are_rejected(self):
+    def test_missing_timestamp_is_deferred_to_phase_six_but_non_numeric_ids_reject(self):
         undated = _row("7616247520657771796", PROFILES[0]); undated["published_at"] = None
         invalid = _row("not-numeric", PROFILES[0])
-        self.assertEqual(candidates_for_queue({"candidates": {"tiktok": [undated, invalid]}}), [])
+        rows = candidates_for_queue({"candidates": {"tiktok": [undated, invalid]}})
+        self.assertEqual([row["external_id"] for row in rows], ["7616247520657771796"])
+        self.assertIsNone(rows[0]["published_at"])
 
     def test_old_timestamp_is_not_filtered_before_phase_six_date_engine(self):
         row = _row("7616247520657771796", PROFILES[0]); row["published_at"] = "2020-01-01T00:00:00Z"
