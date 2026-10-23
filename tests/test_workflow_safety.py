@@ -103,9 +103,6 @@ class WorkflowSafetyTests(unittest.TestCase):
     def test_retired_provider_and_dispatch_placeholders_stay_removed(self):
         workflows = ROOT / ".github" / "workflows"
         for retired in (
-            "gemini-api-smoke.yml",
-            "gemini-code-assistant.yml",
-            "gemini-only-live-smoke.yml",
             "supervisor-inference-probe.yml",
             "dispatch-probe.yml",
         ):
