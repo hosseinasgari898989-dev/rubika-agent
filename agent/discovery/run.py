@@ -43,7 +43,7 @@ def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != 1
-        or payload.get("source") != "termux_phone"
+        or payload.get("source") not in {"termux_phone", "github_actions_termux_docker"}
         or payload.get("mode") != "metadata_only_no_download_no_publish"
         or not isinstance(payload.get("candidates"), dict)
     ):
@@ -100,7 +100,7 @@ def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]
             safe["title"] = str(safe.get("title") or "")[:1200]
             safe["caption"] = str(safe.get("caption") or "")[:4000]
             safe["author"] = str(safe.get("author") or "")[:100]
-            safe["method"] = str(safe.get("method") or "termux_phone")[:80]
+            safe["method"] = str(safe.get("method") or "github_actions_termux_docker")[:80]
             seen_ids.add(item_id)
             accepted[platform].append(safe)
     return accepted, str(payload.get("generated_at") or "") or None, "loaded"

@@ -10,17 +10,15 @@
 - No live workflow was dispatched and no Rubika post was sent. No production database or Worker changes were made.
 - CI run 40010773585 succeeded: 398 Python tests, Worker JS tests, Rubka API surface check, and self-test all passed. Live Worker and Rubika credential checks were skipped. The separate pre-change main baseline was not independently run because shell clone failed on DNS.
 
-## Open PR triage
-- #8-#11: superseded repair harnesses; close in Phase 2.
-- #16: retired provider path; close in Phase 2.
-- #17: keep for discovery hardening review.
-- #18: confirmed regex issue, fixed in Phase 0 handover.
-- #19: keep for Phase 2 stale-client review.
-- #21-#22: overlapping old phone-path work; close in Phase 2 when replacement is verified.
+## Open PR triage (refreshed 2026-10-24)
+
+- #8-#11, #16, #21, #22 and #37: closed as superseded; none were merged.
+- #17: keep for discovery hardening review; do not merge without inspecting the live workflow diff.
+- #18: the confirmed metadata-regex defect was fixed in the merged Phase 0/1 work; verify the diff before closing as superseded.
+- #19: stale Worker-supervisor client cleanup still requires a diff review.
 - #23: private assistant experiment, out of scope.
-- #37: appears redundant; recheck and close in Phase 2.
-- #38: reassess once docs are refreshed.
-- #39: port its manual-only E2E safety protection in Phase 2, then close the draft.
+- #38: contains a historical audit/documentation proposal; compare it with the newly refreshed docs before deciding whether to close.
+- #39: draft E2E safety PR; its manual-only publishing protections are being ported to the current main-based workflow in Phase 2. Close only after the replacement passes CI.
 
 ## 2026-10-23 - Phase 1 complete (PRs #41 and #42 merged; CI green)
 
@@ -34,7 +32,12 @@
 - PR #41 merged as `97578088cebcdc58fa6cf520e07fb38c84410b8c`; PR #42 merged as `e3fc45cf190f7b592e9e545379e61395c13592b7`. Relevant GitHub Actions checks passed (PR #41 runs 40019377665/40019377673; PR #42 runs 40019699966/40019700005; main run 40019852168).
 - No Worker deploy, D1 write/migration, publishing workflow dispatch, media delivery, MEGA cleanup, or Rubika post was performed. Live Worker/Rubika credential checks were not part of this phase.
 
-## 2026-10-24 - Phase 2 started
+## 2026-10-24 - Phase 2 in progress
 
-- PR #43 merged: Phase 0/1 status and CI evidence are now current.
-- Backup: `backup/pre-phase-2-20261024`; Phase 2 work starts from main after PR #43.
+- PR #43 merged as `e9290cadee941a04542de5869f25884e28b9462c`; it corrected the stale Phase 1 progress entry. Backup `backup/pre-phase-2-20261024` was created before Phase 2 changes.
+- PR #44 merged as `d91139f255c01ec8b8416f872655fbed736e2b35`; it removed five confirmed no-op/retired workflow placeholders. Runs 40032158121 and 40032158184 passed.
+- Working branch: `feature/phase-2-remove-phone-path-20261024`, based on PR #44. This branch removes the phone-only `termux/bootstrap.sh` and `termux/daily.sh` entrypoints, removes the obsolete phone instructions, and replaces them with `docs/CLOUD_DISCOVERY.md`.
+- The active discovery architecture remains GitHub Actions + Termux Docker. `termux/daily_discovery.py` remains as the collector run by the cloud workflow, but its manual Git push option is removed. The report source is now `github_actions_termux_docker`; the report validator and legacy report consumer are updated accordingly.
+- The E2E workflows are being hardened: `video-e2e-trial.yml` becomes manual-only with a default-false confirmation and main checkout; `brain-e2e-dispatch.yml` requires both its existing repository gate and a default-false confirmation. Both retain the fixed test-channel target.
+- A refreshed main-channel activation runbook records the safe future process without changing any channel secret or gate.
+- No workflow was dispatched. No media was downloaded, no Rubika message was sent, and no Worker deploy or D1 migration/write was performed by this Phase 2 work. PR #45 CI passed: runs 40035042806 and 40035042822 succeeded; live Worker health and Rubika credential checks were skipped. No workflow was dispatched.

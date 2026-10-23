@@ -112,6 +112,39 @@ class WorkflowSafetyTests(unittest.TestCase):
             with self.subTest(retired=retired):
                 self.assertFalse((workflows / retired).exists())
 
+    def test_legacy_phone_termux_entrypoints_are_removed(self):
+        self.assertFalse((ROOT / "termux" / "bootstrap.sh").exists())
+        self.assertFalse((ROOT / "termux" / "daily.sh").exists())
+        self.assertFalse((ROOT / "docs" / "TERMUX_DAILY_DISCOVERY.md").exists())
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        cloud_doc = (ROOT / "docs" / "CLOUD_DISCOVERY.md").read_text(encoding="utf-8")
+        self.assertIn("docs/CLOUD_DISCOVERY.md", readme)
+        self.assertIn("Termux Docker", cloud_doc)
+        self.assertIn("GitHub Actions", cloud_doc)
+        self.assertNotIn("bash termux/daily.sh", readme)
+        self.assertNotIn("bash termux/bootstrap.sh", readme)
+
+    def test_video_e2e_trial_is_manual_main_only_and_test_channel_locked(self):
+        workflow = (ROOT / ".github" / "workflows" / "video-e2e-trial.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
+        self.assertIn("confirm_test_channel_publish", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("if: ${{ inputs.confirm_test_channel_publish == true }}", workflow)
+        self.assertIn("RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230", workflow)
+        self.assertIn("ref: main", workflow)
+
+    def test_batch_e2e_requires_the_repo_gate_and_explicit_manual_confirmation(self):
+        workflow = (ROOT / ".github" / "workflows" / "brain-e2e-dispatch.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("inputs.confirm_test_channel_publish == true", workflow)
+        self.assertIn("vars.RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014 == 'approved'", workflow)
+        self.assertIn("RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230", workflow)
+        self.assertIn("ref: main", workflow)
+        self.assertIn("cloud discovery report", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

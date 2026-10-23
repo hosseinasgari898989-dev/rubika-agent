@@ -4,13 +4,19 @@ on:
   # A request-file commit must never start a real-media workflow automatically.
   # Run manually only after the separate publication gate has been deliberately approved.
   workflow_dispatch:
+    inputs:
+      confirm_test_channel_publish:
+        description: "Explicitly authorize real media processing and publishing to the fixed test channel"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   batch-e2e:
-    if: ${{ vars.RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014 == 'approved' }}
+    if: ${{ vars.RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014 == 'approved' && inputs.confirm_test_channel_publish == true }}
     runs-on: ubuntu-24.04
     env:
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
@@ -36,10 +42,13 @@ jobs:
           done
           if [ "$missing" -ne 0 ]; then exit 2; fi
 
-      - name: Check out experimental brain branch
+      - name: Check out the main-branch cloud discovery report
         uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
 
-      - name: Validate the batch request and phone discovery report
+      - name: Validate the batch request and cloud discovery report
         run: |
           python - <<'PY'
           import json, os
@@ -50,7 +59,7 @@ jobs:
           if not request_path.is_file():
               raise SystemExit("E2E request file missing; no media action attempted.")
           if not report_path.is_file():
-              raise SystemExit("Discovery report missing; run the Termux collector first.")
+              raise SystemExit("Cloud discovery report missing; run the GitHub Actions Termux Docker discovery workflow first.")
           request = json.loads(request_path.read_text(encoding="utf-8"))
           platform = request.get("platform", "tiktok")
           candidate_limit = request.get("candidate_limit", 4)
