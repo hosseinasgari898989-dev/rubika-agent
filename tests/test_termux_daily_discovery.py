@@ -72,18 +72,18 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 "x-1734258130186559716",
             )
 
-    def test_push_refuses_to_publish_report_from_main_branch(self):
+    def test_push_refuses_to_publish_report_from_non_main_branch(self):
         calls = []
 
         def fake_git(args):
             calls.append(args)
             if args == ["branch", "--show-current"]:
-                return subprocess.CompletedProcess(args, 0, "main\n", "")
+                return subprocess.CompletedProcess(args, 0, "agent-brain-mega-v1\n", "")
             return subprocess.CompletedProcess(args, 0, "", "")
 
         with patch.object(daily_discovery, "_git", side_effect=fake_git):
             with self.assertRaisesRegex(RuntimeError, "wrong_branch"):
-                daily_discovery.push_report_to_experimental_branch()
+                daily_discovery.push_report_to_main_branch()
         self.assertEqual(calls, [["branch", "--show-current"]])
 
 

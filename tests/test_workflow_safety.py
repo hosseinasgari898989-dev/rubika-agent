@@ -18,6 +18,12 @@ class WorkflowSafetyTests(unittest.TestCase):
         # Merely changing the request file must not launch downloads or publication.
         self.assertNotIn("\n  push:\n", workflow)
 
+    def test_online_discovery_uses_main_as_single_source_of_truth(self):
+        workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        self.assertIn("ref: main", workflow)
+        self.assertIn("git push origin HEAD:refs/heads/main", workflow)
+        self.assertNotIn("agent-brain-mega-v1", workflow)
+
     def test_unused_private_command_poller_is_removed_only(self):
         workflows = ROOT / ".github" / "workflows"
         self.assertFalse((workflows / "owner-console-poll.yml").exists())

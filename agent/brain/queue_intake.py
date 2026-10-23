@@ -18,6 +18,7 @@ from typing import Any, Mapping
 from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
 # Official Mob news lifecycle cutoffs are not applied to the TikTok edit queue.
+from agent.source_policy import resolve_source_policy
 
 
 # YouTube is paused for later; Instagram is no longer part of the normal edit queue.
@@ -46,6 +47,11 @@ EDIT_MARKER_RE = re.compile(
 )
 EDIT_HASHTAG_SUFFIXES = ("edit", "edits", "aep", "amv")
 
+TIKTOK_CANONICAL_RE = re.compile(
+    r"^https://(?:www\.)?tiktok\.com/@([A-Za-z0-9._-]{1,40})/video/([A-Za-z0-9._-]{1,120})/?(?:[?#].*)?$",
+    re.IGNORECASE,
+)
+
 
 def _parse_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
@@ -59,19 +65,45 @@ def _parse_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _canonical_tiktok_identity(raw: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Return creator handle and video ID from a canonical TikTok URL only."""
+    url = raw.get("url") or raw.get("canonical_url")
+    if not isinstance(url, str):
+        return None
+    match = TIKTOK_CANONICAL_RE.fullmatch(url.strip())
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
 def _visible_metadata_text(raw: Mapping[str, Any]) -> str:
     """Return visible descriptive text without hashtags, queries, or creator handles."""
     parts = [raw.get("title"), raw.get("caption")]
     visible = " ".join(value for value in parts if isinstance(value, str))
-    visible = re.sub(r"https?://\\S+", " ", visible, flags=re.IGNORECASE)
-    visible = re.sub(r"(?<!\\w)#[^\\s#]+", " ", visible)
-    return re.sub(r"\\s+", " ", visible).strip().casefold()
+    visible = re.sub(r"https?://\S+", " ", visible, flags=re.IGNORECASE)
+    visible = re.sub(r"(?<!\w)#[^\s#]+", " ", visible)
+    return re.sub(r"\s+", " ", visible).strip().casefold()
 
 
 def _is_poppy_related(raw: Mapping[str, Any]) -> bool:
     """Hashtags alone do not prove the actual clip is about Poppy Playtime."""
     text = _visible_metadata_text(raw)
     return any(term in text for term in POPPY_RELEVANCE_TERMS)
+
+
+def _owner_selected_poppy_signal(raw: Mapping[str, Any]) -> bool:
+    """Allow explicit Poppy tags for owner-selected sources, without accepting edit-only posts."""
+    parts = [raw.get("title"), raw.get("caption")]
+    hashtags = raw.get("hashtags")
+    if isinstance(hashtags, list):
+        parts.extend(value for value in hashtags if isinstance(value, str))
+    visible = " ".join(value for value in parts if isinstance(value, str))
+    visible = re.sub(r"https?://\S+", " ", visible, flags=re.IGNORECASE)
+    compact = re.sub(r"[^a-z0-9]+", "", visible.casefold())
+    return any(
+        re.sub(r"[^a-z0-9]+", "", term) in compact
+        for term in POPPY_RELEVANCE_TERMS
+    )
 
 
 def _has_edit_signal(raw: Mapping[str, Any]) -> bool:
@@ -122,6 +154,7 @@ def candidates_for_queue(
 
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
+
     def reject(reason: str, source: str) -> None:
         if diagnostics is None:
             return
@@ -153,14 +186,33 @@ def candidates_for_queue(
             if not isinstance(raw, dict):
                 reject("invalid_candidate_shape", source_name)
                 continue
-            if not _is_poppy_related(raw):
+            canonical_identity = _canonical_tiktok_identity(raw)
+            url = raw.get("url") or raw.get("canonical_url")
+            external_id = raw.get("id") or raw.get("external_id")
+            if not isinstance(url, str) or canonical_identity is None:
+                reject("canonical_url_invalid", source_name)
+                continue
+            if not isinstance(external_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
+                reject("external_id_invalid", source_name)
+                continue
+            if external_id != canonical_identity[1]:
+                reject("canonical_url_id_mismatch", source_name)
+                continue
+
+            source_policy = resolve_source_policy(platform, canonical_identity[0])
+            owner_selected = (
+                source_policy.get("known_source") is True
+                and source_policy.get("trust_tier") == "owner_selected"
+            )
+            topic_relevant = (
+                _owner_selected_poppy_signal(raw) if owner_selected else _is_poppy_related(raw)
+            )
+            if not topic_relevant:
                 reject("poppy_relevance_not_verified_in_visible_text", source_name)
                 continue
             if not _has_edit_signal(raw):
                 reject("edit_signal_missing", source_name)
                 continue
-
-            # The Mob-only birth boundary is intentionally not applied to edit videos.
 
             published_at = _parse_timestamp(raw.get("published_at"))
             if published_at is None:
@@ -173,25 +225,12 @@ def candidates_for_queue(
                 reject("published_timestamp_in_future", source_name)
                 continue
 
-            external_id = raw.get("id") or raw.get("external_id")
-            url = raw.get("url") or raw.get("canonical_url")
-            if not isinstance(external_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
-                reject("external_id_invalid", source_name)
-                continue
-            if not isinstance(url, str) or not url.startswith("https://"):
-                reject("canonical_url_invalid", source_name)
-                continue
-
             identity = (platform, external_id)
             if identity in seen:
                 reject("duplicate_within_report", source_name)
                 continue
             seen.add(identity)
-            source_key = str(
-                raw.get("author") or raw.get("source_key") or raw.get("channel") or ""
-            ).strip()[:200]
-            if not source_key:
-                source_key = platform + "_public_discovery"
+            source_key = canonical_identity[0][:200]
             rows.append({
                 "platform": platform,
                 "external_id": external_id,
@@ -201,7 +240,7 @@ def candidates_for_queue(
                 "caption": str(raw.get("caption") or "")[:4000],
                 "published_at": published_at.isoformat(),
                 "media_type": "video",
-                "author": str(raw.get("author") or "")[:100],
+                "author": canonical_identity[0][:100],
                 "query": str(raw.get("query") or "")[:200],
                 "freshness_source": str(raw.get("freshness_source") or "")[:100],
                 "freshness_verified": raw.get("freshness_verified") is True,

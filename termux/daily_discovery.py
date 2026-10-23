@@ -24,7 +24,7 @@ from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_PATH = ROOT / "artifacts" / "termux_discovery.json"
-TARGET_BRANCH = "agent-brain-mega-v1"
+TARGET_BRANCH = "main"
 EXPECTED_REPO_SUFFIX = "hosseinasgari898989-dev/rubika-agent"
 
 
@@ -162,7 +162,7 @@ def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def push_report_to_experimental_branch(report_path: str | Path = REPORT_PATH) -> None:
+def push_report_to_main_branch(report_path: str | Path = REPORT_PATH) -> None:
     """Push the report only, refusing main, other repositories, and unrelated staged files."""
     branch = _git(["branch", "--show-current"])
     if branch.returncode != 0 or branch.stdout.strip() != TARGET_BRANCH:
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--push",
         action="store_true",
-        help="commit and push only artifacts/termux_discovery.json to the experimental branch",
+        help="commit and push only artifacts/termux_discovery.json to the main branch",
     )
     args = parser.parse_args(argv)
 
@@ -222,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Metadata report saved: {REPORT_PATH}", flush=True)
     if args.push:
         try:
-            push_report_to_experimental_branch()
+            push_report_to_main_branch()
         except Exception as exc:
             print(f"GitHub push failed safely: {str(exc)}", file=sys.stderr, flush=True)
             return 3
