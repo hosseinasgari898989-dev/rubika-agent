@@ -27,7 +27,7 @@ This file summarizes the active main-branch architecture. Older phone-only disco
 - Cloudflare D1 stores the durable metadata, queue, provider call ledger and outcomes.
 - Cloudflare Workers AI is reserved exclusively for music detection from video audio using Clef Omni. Ambiguous audio decisions require human review. Workers AI is not used for code repair or official-news translation.
 - Groq and OpenRouter are the active external providers for code repair. Groq proposes a constrained patch, both providers diagnose and review independently, all requests reserve a D1 slot first, and uncertain provider calls are not blindly retried.
-- Official Mob translation uses Groq first and OpenRouter as a bounded fallback, with the translation role recorded in D1. Gemini, Mistral and GitHub Models are retired from active repair/translation paths.
+- Official Mob translation uses Groq first and OpenRouter as a bounded fallback, with the translation role recorded in D1. The active repair/translation path is restricted to Groq and OpenRouter.
 - No model may publish to Rubika, merge a PR, or bypass tests. The bounded self-repair workflow can open a review PR only after the changed-file allowlist and deterministic tests pass.
 
 ## Delivery and failure handling
