@@ -1,3 +1,4 @@
+from agent.brain.edit_caption import EDIT_CAPTION
 from __future__ import annotations
 
 import tempfile
@@ -133,6 +134,16 @@ class RubikaPublisherMediaTests(unittest.TestCase):
     def test_image_never_falls_back_to_generic_file_attachment(self):
         self.publisher.send_media(self.media_path, "image", "A test caption")
         self.assertNotIn("send_file", [method for method, _ in self.fake_bot.calls])
+
+    def test_edit_caption_uses_plain_native_video_payload_without_bold_metadata(self):
+        video_path = Path(self.tempdir.name) / "edit_video.mp4"
+        video_path.write_bytes(b"fake-video-for-adapter-test")
+        self.publisher.send_media(video_path, "video", EDIT_CAPTION)
+        self.assertFalse(self.fake_bot.posts)
+        method, payload = self.fake_bot.calls[-1]
+        self.assertEqual(method, "send_video")
+        self.assertEqual(payload["text"], EDIT_CAPTION)
+        self.assertNotIn("**", payload["text"])
 
     def test_video_uses_native_inline_video_method_with_caption(self):
         video_path = Path(self.tempdir.name) / "official_video.mp4"
