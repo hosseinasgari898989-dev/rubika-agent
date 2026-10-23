@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from .inspector import inspect_media
+from agent.source_policy import allow_upscale
 
 
 class NormalizeError(RuntimeError):
@@ -29,6 +30,12 @@ def normalize_video_square_1080(
         raise NormalizeError("source_invalid:" + ",".join(inspection.errors))
     if not inspection.supports_square_normalization:
         raise NormalizeError("source_below_minimum_square_normalization_resolution")
+    if (
+        not allow_upscale()
+        and inspection.width and inspection.height
+        and min(inspection.width, inspection.height) < 1080
+    ):
+        raise NormalizeError("upscale_disallowed_native_source_required")
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     command = [

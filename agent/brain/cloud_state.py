@@ -307,6 +307,7 @@ class CloudState:
         """Build the exact pending-review D1 payload without making a network call."""
         candidate = staged.candidate
         inspection = staged.inspection
+        downloaded_inspection = getattr(staged, "downloaded_inspection", None) or inspection
         evaluation = staged.evaluation
         validation = {
             "ok": bool(inspection.ok),
@@ -316,6 +317,8 @@ class CloudState:
             "mime_type": inspection.mime_type,
             "width": inspection.width,
             "height": inspection.height,
+            "downloaded_width": downloaded_inspection.width,
+            "downloaded_height": downloaded_inspection.height,
             "duration_seconds": inspection.duration_seconds,
             "has_audio": inspection.has_audio,
             "video_codec": inspection.video_codec,

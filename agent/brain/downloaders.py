@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
+from agent.source_policy import download_quality_max
 
 from .models import Candidate
 from .relay_client import AuthorizedYouTubeRelay, RelayClientError
@@ -124,7 +125,7 @@ class CobaltDownloader:
                 self.api_url,
                 json={
                     "url": candidate.canonical_url,
-                    "videoQuality": "720",
+                    "videoQuality": str(download_quality_max()),
                     "filenameStyle": "basic",
                     "youtubeVideoCodec": "h264",
                 },
