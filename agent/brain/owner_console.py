@@ -1,8 +1,8 @@
-"""Read-only Rubika operations console for the existing Rubika-Agent Worker.
+"""Read-only Rubika operations console implementation.
 
-The scheduled GitHub Actions job polls only the configured owner's private chat.
 It exposes aggregate status/report commands only; it cannot mutate the publishing
 queue, call model providers, run shell commands, change code, merge, or deploy.
+Scheduling and private-chat delivery are outside this module.
 """
 from __future__ import annotations
 
