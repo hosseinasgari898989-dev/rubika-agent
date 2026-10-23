@@ -58,7 +58,7 @@ def load_report(path: Path) -> dict[str, Any]:
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != 1
-        or payload.get("source") != "termux_phone"
+        or payload.get("source") not in {"termux_phone", "github_actions_termux_docker"}
         or payload.get("mode") != "metadata_only_no_download_no_publish"
         or not isinstance(payload.get("candidates"), dict)
     ):
