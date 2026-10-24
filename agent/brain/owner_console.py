@@ -1,8 +1,8 @@
-"""Read-only Rubika operations console implementation.
+"""Owner-only Rubika operations console and link-intake menu.
 
-It exposes aggregate status/report commands only; it cannot mutate the publishing
-queue, call model providers, run shell commands, change code, merge, or deploy.
-Scheduling and private-chat delivery are outside this module.
+The console can display read-only reports and collect one X status link for a later
+processing slice. It does not download media, translate, publish, execute shell
+commands, change code, merge, or deploy.
 """
 from __future__ import annotations
 
@@ -860,7 +860,7 @@ class OperationsConsole:
                     self._persist_conversation_state()
                     self._send_once(
                         "✅ لینک دریافت شد: " + canonical
-                        + "\\nپردازش لینک در به‌روزرسانی بعدی پیاده‌سازی می‌شود. فعلاً دانلود، ترجمه یا انتشار انجام نشده.",
+                        + "\nپردازش لینک در به‌روزرسانی بعدی پیاده‌سازی می‌شود. فعلاً دانلود، ترجمه یا انتشار انجام نشده.",
                         menu_inline_keypad(),
                     )
                 else:
