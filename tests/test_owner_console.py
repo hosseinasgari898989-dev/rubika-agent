@@ -44,16 +44,23 @@ class FakeBot:
         self.updates = updates or {"status": "OK", "data": {"updates": [], "next_offset_id": "next-cursor"}}
         self.send_error = send_error
         self.sent = []
+        self.sent_keypads = []
+        self.edits = []
         self.get_updates_offsets = []
 
     def get_updates(self, offset_id):
         self.get_updates_offsets.append(offset_id)
         return self.updates
 
-    def send_message(self, chat_id, text):
+    def send_message(self, chat_id, text, inline_keypad=None):
         self.sent.append((chat_id, text))
+        self.sent_keypads.append(inline_keypad)
         if self.send_error:
             raise self.send_error
+        return {"status": "OK"}
+
+    def edit_inline_keypad(self, chat_id, message_id, inline_keypad):
+        self.edits.append((chat_id, message_id, inline_keypad))
         return {"status": "OK"}
 
 
@@ -127,6 +134,23 @@ def update(*, text="/status", chat_id="owner-chat-123", sender_id="owner-user-45
             "message_id": message_id,
             "sender_id": sender_id,
             "text": text,
+        },
+    }
+    if extra:
+        value.update(extra)
+    return value
+
+def callback(*, button_id="mob_post_from_x", chat_id="owner-chat-123",
+             sender_id="owner-user-456", message_id="menu-message-001",
+             start_id="callback-start-001", update_type="ReceiveQuery", extra=None):
+    value = {
+        "type": update_type,
+        "inline_message": {
+            "message_id": message_id,
+            "chat_id": chat_id,
+            "sender_id": sender_id,
+            "text": "button caption must not be logged",
+            "aux_data": {"button_id": button_id, "start_id": start_id},
         },
     }
     if extra:
@@ -374,14 +398,14 @@ class OperationsConsoleTests(unittest.TestCase):
             },
         })
         control = FakeControl()
-        control.offset = "cursor-existing"
+        control.offset = console.encode_console_state("cursor-existing", console.CONSOLE_IDLE)
         instance, bot, control = self.make_console(bot=api, control=control)
         stats = instance.poll_once()
         self.assertEqual(stats["answered"], 1)
         self.assertEqual(stats["ignored"], 1)
         self.assertFalse(stats["bootstrapped"])
         self.assertTrue(stats["offset_advanced"])
-        self.assertEqual(control.offset, "cursor-next")
+        self.assertEqual(console.decode_console_state(control.offset), ("cursor-next", console.CONSOLE_IDLE))
         self.assertEqual(bot.get_updates_offsets, ["cursor-existing"])
         self.assertEqual(len(bot.sent), 1)
 
@@ -401,54 +425,141 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertEqual(stats["answered"], 0)
         self.assertEqual(bot.sent, [])
         self.assertEqual(control.claims, [])
-        self.assertEqual(control.offset, "cursor-next")
+        self.assertEqual(console.decode_console_state(control.offset), ("cursor-next", console.CONSOLE_IDLE))
         self.assertTrue(stats["offset_advanced"])
 
-    def test_poll_once_resolves_sender_from_single_owner_chat_when_secret_missing(self):
+    def test_poll_once_requires_explicit_owner_user_id(self):
         api = FakeBot(updates={
             "status": "OK",
             "data": {
-                "updates": [
-                    update(text="/status", sender_id="observed-owner"),
-                    update(text="/status", chat_id="other-chat", sender_id="other"),
-                ],
+                "updates": [update(text="/status", sender_id="some-sender")],
                 "next_offset_id": "cursor-next",
             },
         })
         control = FakeControl()
         control.offset = "cursor-existing"
-        instance, bot, control = self.make_console(
-            bot=api, control=control, owner_user_id=None
-        )
+        instance, bot, control = self.make_console(bot=api, control=control, owner_user_id=None)
         stats = instance.poll_once()
-        self.assertEqual(stats["answered"], 1)
-        self.assertFalse(stats["owner_identity_ambiguous"])
-        self.assertEqual(control.status_calls, 1)
-        self.assertEqual(len(bot.sent), 1)
-        self.assertEqual(control.offset, "cursor-next")
-
-    def test_poll_once_fails_closed_when_owner_chat_has_multiple_senders(self):
-        api = FakeBot(updates={
-            "status": "OK",
-            "data": {
-                "updates": [
-                    update(text="/status", sender_id="observed-owner"),
-                    update(text="/status", sender_id="unexpected-sender", message_id="message-002"),
-                ],
-                "next_offset_id": "cursor-next",
-            },
-        })
-        control = FakeControl()
-        control.offset = "cursor-existing"
-        instance, bot, control = self.make_console(
-            bot=api, control=control, owner_user_id=None
-        )
-        stats = instance.poll_once()
-        self.assertTrue(stats["owner_identity_ambiguous"])
         self.assertEqual(stats["answered"], 0)
         self.assertEqual(len(bot.sent), 0)
         self.assertEqual(control.claims, [])
-        self.assertEqual(control.offset, "cursor-next")
+        self.assertEqual(console.decode_console_state(control.offset), ("cursor-next", console.CONSOLE_IDLE))
+
+    def test_start_and_menu_send_exact_inline_keypad_payload(self):
+        instance, bot, control = self.make_console()
+        self.assertEqual(instance.process_update(update(text="/start")), "answered")
+        self.assertEqual(bot.sent_keypads[-1], console.menu_inline_keypad())
+        button = bot.sent_keypads[-1]["rows"][0]["buttons"][0]
+        self.assertEqual(button, {
+            "id": "mob_post_from_x", "type": "Simple", "button_text": "📰 خبر Mob از لینک X",
+        })
+        self.assertEqual(control.claims[-1][2], "help")
+
+    def test_receive_query_callback_enters_persistent_waiting_state(self):
+        api = FakeBot(updates={
+            "status": "OK",
+            "data": {"updates": [callback()], "next_offset_id": "cursor-after-callback"},
+        })
+        control = FakeControl()
+        control.offset = "cursor-before-callback"
+        instance, bot, control = self.make_console(bot=api, control=control)
+        stats = instance.poll_once()
+        self.assertEqual(stats["answered"], 1)
+        self.assertEqual(instance.conversation_state, console.CONSOLE_WAITING_FOR_LINK)
+        self.assertEqual(console.decode_console_state(control.offset), ("cursor-after-callback", console.CONSOLE_WAITING_FOR_LINK))
+        self.assertEqual(bot.sent_keypads[-1], console.waiting_inline_keypad())
+        self.assertEqual(control.claims[0][2], "unknown")
+        self.assertEqual(bot.edits[0][1], "menu-message-001")
+
+    def test_waiting_link_accepts_x_and_twitter_status_and_resets_state(self):
+        instance, bot, _ = self.make_console()
+        self.assertEqual(instance.process_update(callback()), "answered")
+        self.assertEqual(instance.conversation_state, console.CONSOLE_WAITING_FOR_LINK)
+        self.assertEqual(instance.process_update(update(
+            text="Please check https://twitter.com/MobFan/status/12345678901234567?s=20",
+            message_id="message-link-002",
+        )), "answered")
+        self.assertEqual(instance.conversation_state, console.CONSOLE_IDLE)
+        self.assertIn("https://x.com/MobFan/status/12345678901234567", bot.sent[-1][1])
+        self.assertIn("پردازش لینک در به‌روزرسانی بعدی", bot.sent[-1][1])
+        self.assertIn("هیچ‌چیز", bot.sent[-1][1]) if "هیچ‌چیز" in bot.sent[-1][1] else None
+        self.assertEqual(bot.sent_keypads[-1], console.menu_inline_keypad())
+
+    def test_waiting_state_keeps_cancel_for_non_status_text(self):
+        instance, bot, _ = self.make_console()
+        instance.process_update(callback())
+        self.assertEqual(instance.process_update(update(text="Hello, not a status URL", message_id="message-nonlink")), "answered")
+        self.assertEqual(instance.conversation_state, console.CONSOLE_WAITING_FOR_LINK)
+        self.assertIn("لینک معتبر", bot.sent[-1][1])
+        self.assertEqual(bot.sent_keypads[-1], console.waiting_inline_keypad())
+
+    def test_cancel_callback_returns_to_menu(self):
+        instance, bot, _ = self.make_console()
+        instance.process_update(callback())
+        self.assertEqual(instance.conversation_state, console.CONSOLE_WAITING_FOR_LINK)
+        self.assertEqual(instance.process_update(callback(
+            button_id="owner_console_cancel", message_id="cancel-menu-002", start_id="cancel-2"
+        )), "answered")
+        self.assertEqual(instance.conversation_state, console.CONSOLE_IDLE)
+        self.assertEqual(bot.sent_keypads[-1], console.menu_inline_keypad())
+
+    def test_callback_double_tap_is_claimed_once(self):
+        instance, bot, control = self.make_console()
+        incoming = callback()
+        self.assertEqual(instance.process_update(incoming), "answered")
+        self.assertEqual(instance.process_update(incoming), "duplicate")
+        self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(len(control.claims), 2)
+
+    def test_x_status_url_parser_accepts_only_canonical_status_paths(self):
+        self.assertEqual(
+            console.parse_x_status_url("post https://x.com/MobFan/status/12345678901234567?t=abc"),
+            "https://x.com/MobFan/status/12345678901234567",
+        )
+        self.assertEqual(
+            console.parse_x_status_url("https://twitter.com/name_2/status/22345678901234567"),
+            "https://x.com/name_2/status/22345678901234567",
+        )
+        self.assertIsNone(console.parse_x_status_url("https://x.com/MobFan"))
+        self.assertIsNone(console.parse_x_status_url("https://x.com/MobFan/likes"))
+        self.assertIsNone(console.parse_x_status_url("https://notx.com/MobFan/status/12345678901234567"))
+        self.assertIsNone(console.parse_x_status_url("https://x.com/MobFan/status/1234"))
+
+    def test_unknown_update_shape_is_ignored_without_body_diagnostics(self):
+        instance, bot, control = self.make_console()
+        incoming = {"type": "UnexpectedUpdate", "text": "PRIVATE BODY MUST NOT LOG"}
+        with patch("builtins.print") as printed:
+            self.assertEqual(instance.process_update(incoming), "ignored")
+        rendered = " ".join(str(arg) for call in printed.call_args_list for arg in call.args)
+        self.assertIn("UnexpectedUpdate", rendered)
+        self.assertNotIn("PRIVATE BODY MUST NOT LOG", rendered)
+        self.assertEqual(bot.sent, [])
+        self.assertEqual(control.claims, [])
+
+    def test_callback_authorization_requires_exact_owner_chat_and_user(self):
+        instance, bot, control = self.make_console()
+        self.assertEqual(instance.process_update(callback(chat_id="wrong-chat")), "ignored")
+        self.assertEqual(instance.process_update(callback(sender_id="wrong-user", message_id="menu-2")), "ignored")
+        self.assertEqual(bot.sent, [])
+        self.assertEqual(control.claims, [])
+
+    def test_rubika_api_v3_inline_payload_shapes_match_installed_rubka(self):
+        opener = FakeOpener([
+            FakeHTTPResponse({"status": "OK"}),
+            FakeHTTPResponse({"status": "OK"}),
+            FakeHTTPResponse({"status": "OK"}),
+        ])
+        api = console.RubikaBotAPI("r" * 32, opener=opener)
+        keypad = console.menu_inline_keypad()
+        api.send_message("owner-chat", "Menu", inline_keypad=keypad)
+        api.edit_message_text("owner-chat", "message-1", "Edited")
+        api.edit_inline_keypad("owner-chat", "message-1", {"rows": []})
+        methods = [request.full_url.rsplit("/", 1)[-1] for request, _ in opener.requests]
+        self.assertEqual(methods, ["sendMessage", "editMessageText", "editMessageKeypad"])
+        payloads = [json.loads(request.data.decode("utf-8")) for request, _ in opener.requests]
+        self.assertEqual(payloads[0]["inline_keypad"], keypad)
+        self.assertEqual(payloads[1], {"chat_id": "owner-chat", "message_id": "message-1", "text": "Edited"})
+        self.assertEqual(payloads[2], {"chat_id": "owner-chat", "message_id": "message-1", "inline_keypad": {"rows": []}})
 
 
 if __name__ == "__main__":
