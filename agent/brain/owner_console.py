@@ -981,15 +981,14 @@ def format_github_runs(runs: list[dict[str, Any]]) -> str:
 def _required_env() -> tuple[str, str, str, str, str]:
     token = os.getenv("RUBIKA_TOKEN", "").strip()
     owner_chat_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "").strip()
-    owner_user_id = os.getenv("RUBIKA_OWNER_USER_ID", "").strip()
+    # For this private console, Rubika owner chat ID is also the sender ID.
+    owner_user_id = owner_chat_id
     api_token = os.getenv("AGENT_API_TOKEN", "").strip()
     control_url = os.getenv("AGENT_API_BASE_URL", DEFAULT_CONTROL_URL).strip()
     if len(token) < 16:
         raise OwnerConsoleError("rubika_token_missing_or_short")
     if len(owner_chat_id) < 3:
         raise OwnerConsoleError("rubika_owner_chat_id_missing")
-    if len(owner_user_id) < 3:
-        raise OwnerConsoleError("rubika_owner_user_id_missing")
     if len(api_token) < 32:
         raise OwnerConsoleError("control_api_token_missing_or_short")
     return token, owner_chat_id, owner_user_id, api_token, control_url
