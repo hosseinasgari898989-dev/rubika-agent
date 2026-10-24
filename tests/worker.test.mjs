@@ -1611,9 +1611,9 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 {
   const htmlPath = path.join(root, "docs/console/index.html");
   const html = fs.readFileSync(htmlPath, "utf8");
-  assert.equal((html.match(/<\\/script>/g) || []).length, 1, "owner console HTML must contain exactly one </script> closing tag");
+  assert.equal((html.match(/<\/script>/g) || []).length, 1, "owner console HTML must contain exactly one </script> closing tag");
 
-  const opening = html.match(/<script\\s*>/i);
+  const opening = html.match(/<script\s*>/i);
   assert.ok(opening, "owner console HTML must contain its inline script");
   const start = opening.index + opening[0].length;
   const end = html.indexOf("</script>", start);
@@ -1627,14 +1627,14 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 
   // Only the Worker API and GitHub API are actual network-request origins.
   // The third syntactic fetch occurrence is text inside a mock downloadable example, not an executed request.
-  const fetchArgs = [...inlineJs.matchAll(/\\bfetch\\s*\\(\\s*([^,\\)\\s]+)/g)].map(match => match[1]);
+  const fetchArgs = [...inlineJs.matchAll(/\bfetch\s*\(\s*([^,)\s]+)/g)].map(match => match[1]);
   assert.deepEqual(fetchArgs, ["url", "this.base+path", "req"], "unexpected fetch site: only the two approved API requests and the inert example may appear");
-  assert.equal((inlineJs.match(/\\bawait\\s+fetch\\s*\\(/g) || []).length, 2, "only two runtime fetch requests are allowed");
-  assert.match(inlineJs, /apiBase:\\s*"https:\\/\\/rubika-agent\\.h98609294\\.workers\\.dev"/, "Worker API base must be the approved Worker");
-  assert.match(inlineJs, /base:"https:\\/\\/api\\.github\\.com"/, "GitHub API base must be api.github.com");
-  assert.match(inlineJs, /const base = \\(S\\.apiBase\\|\\|""\\)\\.replace/, "Worker requests must use the configured Worker API base");
-  assert.match(inlineJs, /url = base \\+ path/, "Worker requests must be built from the approved base");
-  assert.equal((inlineJs.match(/\\b(?:XMLHttpRequest|WebSocket|EventSource)\\b|\\bsendBeacon\\s*\\(|\\bimportScripts\\s*\\(/g) || []).length, 0,
+  assert.equal((inlineJs.match(/\bawait\s+fetch\s*\(/g) || []).length, 2, "only two runtime fetch requests are allowed");
+  assert.match(inlineJs, /apiBase:\s*"https:\/\/rubika-agent\.h98609294\.workers\.dev"/, "Worker API base must be the approved Worker");
+  assert.match(inlineJs, /base:"https:\/\/api\.github\.com"/, "GitHub API base must be api.github.com");
+  assert.match(inlineJs, /const base = \(S\.apiBase\|\|""\)\.replace/, "Worker requests must use the configured Worker API base");
+  assert.match(inlineJs, /url = base \+ path/, "Worker requests must be built from the approved base");
+  assert.equal((inlineJs.match(/\b(?:XMLHttpRequest|WebSocket|EventSource)\b|\bsendBeacon\s*\(|\bimportScripts\s*\(/g) || []).length, 0,
     "no alternate network request primitive is allowed");
 }
 
