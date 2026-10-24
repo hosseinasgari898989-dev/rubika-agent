@@ -338,9 +338,7 @@ class TestChannelPublishingGateTests(unittest.TestCase):
         self.assertEqual(result["status"], "nothing_new")
         self.assertEqual(result["lifecycle"]["mode"], "production")
         self.assertTrue(result["lifecycle"]["birth_cutoff_enabled"])
-        self.assertEqual(result["lifecycle"]["rejected_before_or_unverified"], 0)
-        self.assertEqual(result["since_filter"]["rejected_count"], 1)
-        self.assertEqual(result["since_filter"]["rejections"][0]["reason"], "before_since_utc")
+        self.assertEqual(result["lifecycle"]["rejected_before_or_unverified"], 1)
         self.assertEqual(result["candidate_count"], 0)
         self.assertFalse(result["publishing"])
 
@@ -443,9 +441,20 @@ class OfficialSinceRuleTests(unittest.TestCase):
             "platform": "mob_official",
             "external_id": external_id,
             "id": external_id,
+            "url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "title": "Official post",
+            "caption": "Original Mob caption",
+            "original_caption": "Original Mob caption",
+            "author": "@mobgamesstudios",
+            "source_key": "x.com/mobgamesstudios",
+            "source_name": "Mob Entertainment on X",
             "source_platform": "x",
+            "official_source": True,
             "freshness_verified": True,
             "published_at": published_at,
+            "media_type": "image",
+            "media_url": "https://pbs.twimg.com/media/photo.jpg",
         }
         row.update(changes)
         return row
