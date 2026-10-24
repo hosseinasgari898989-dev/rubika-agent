@@ -4,9 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8");
+const screensSource = fs.readFileSync(path.join(root, "src/panel_screens.js"), "utf8");
+const screensModuleUrl = "data:text/javascript;base64," + Buffer.from(screensSource).toString("base64");
+const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8")
+  .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";');
 const panelModuleUrl = "data:text/javascript;base64," + Buffer.from(panelSource).toString("base64");
 const importedPanel = await import(panelModuleUrl);
+const screens = await import(screensModuleUrl);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
 const workerImport = 'import { handleOwnerPanel } from "./owner_panel.js";';
 assert.ok(originalSource.includes(workerImport), "Worker must import owner panel handler");
@@ -929,9 +933,24 @@ class PanelFakeStatement {
       const value = this.db.state.get(this.values[0]);
       return value === undefined ? null : { value };
     }
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) {
+      return { c: this.db.links.length };
+    }
     return null;
   }
+  async all() {
+    if (this.sql.includes("SELECT url, status, created_at FROM panel_links")) {
+      return { results: this.db.links.slice().reverse().slice(0, 8).map(row => ({ ...row })) };
+    }
+    return { results: [] };
+  }
   async run() {
+    if (this.sql.startsWith("DELETE FROM panel_links")) {
+      const count = this.db.links.length;
+      this.db.links = [];
+      this.db.linkDeleteCalls += 1;
+      return { meta: { changes: count } };
+    }
     if (this.sql.startsWith("INSERT INTO panel_state")) {
       this.db.state.set(this.values[0], String(this.values[1]));
       return { meta: { changes: 1 } };
@@ -959,6 +978,8 @@ class PanelFakeDB {
     this.ownerChat = null;
     this.state = new Map();
     this.events = new Set();
+    this.links = [];
+    this.linkDeleteCalls = 0;
   }
   prepare(sql) { return new PanelFakeStatement(this, sql); }
 }
@@ -1376,5 +1397,214 @@ async function postPanelUpdate(state, update, secret) {
   });
 }
 
-console.log("Worker tests passed: live panel tracking, parallel edits, bounded owner timings, optimized page rendering, smart placement configuration, safe diagnostics, and owner isolation.");
+
+// Stage-two panel screen D1 mocks exercise the real screen module without a live database.
+class ScreenFakeStatement {
+  constructor(db, sql) { this.db = db; this.sql = sql; this.values = []; }
+  bind(...values) { this.values = values; return this; }
+  check() { this.db.queryCount += 1; if (this.db.failReads) throw new Error("mock D1 unavailable"); }
+  async first() {
+    this.check();
+    if (this.sql.includes("FROM owner_digest_state")) return this.db.digestState ? { ...this.db.digestState } : null;
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM automation_queue WHERE status='sent'")) {
+      const day = new Date().toISOString().slice(0, 10);
+      return { c: this.db.queue.filter(row => row.status === "sent" && String(row.sent_at || "").slice(0, 10) === day).length };
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM automation_queue WHERE status=?")) {
+      return { c: this.db.queue.filter(row => row.status === this.values[0]).length };
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) return { c: this.db.links.length };
+    return null;
+  }
+  async all() {
+    this.check();
+    if (this.sql.includes("FROM owner_digest_events WHERE window_id=? GROUP BY category")) {
+      const rows = this.db.digestEvents.filter(row => row.window_id === this.values[0]);
+      const totals = new Map();
+      for (const row of rows) totals.set(row.category, (totals.get(row.category) || 0) + 1);
+      return { results: [...totals.entries()].map(([category, c]) => ({ category, c })) };
+    }
+    if (this.sql.includes("FROM owner_digest_events WHERE window_id=? ORDER BY id DESC LIMIT 8")) {
+      return { results: this.db.digestEvents.filter(row => row.window_id === this.values[0])
+        .sort((a, b) => b.id - a.id).slice(0, 8).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM owner_digest_events WHERE category IN")) {
+      return { results: this.db.digestEvents.filter(row => ["error", "ai_error"].includes(row.category))
+        .sort((a, b) => b.id - a.id).slice(0, 8).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM brain_events")) {
+      return { results: this.db.brainEvents.filter(row => ["error", "critical"].includes(String(row.level).toLowerCase()))
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 5).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM runs ORDER BY started_at DESC")) {
+      return { results: this.db.runs.slice().sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))
+        .slice(0, 6).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM automation_queue GROUP BY status")) {
+      const totals = new Map();
+      for (const row of this.db.queue) totals.set(row.status, (totals.get(row.status) || 0) + 1);
+      return { results: [...totals.entries()].map(([status, c]) => ({ status, c })) };
+    }
+    if (this.sql.includes("FROM automation_queue WHERE status=? ORDER BY updated_at DESC")) {
+      const status = this.values[0], limit = this.values[1], offset = this.values[2];
+      return { results: this.db.queue.filter(row => row.status === status)
+        .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
+        .slice(offset, offset + limit).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM ai_provider_calls ORDER BY started_at DESC")) {
+      return { results: this.db.aiCalls.slice().sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))
+        .slice(0, 8).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("SELECT url, status, created_at FROM panel_links")) {
+      return { results: this.db.links.slice().reverse().slice(0, 8).map(row => ({ ...row })) };
+    }
+    return { results: [] };
+  }
+  async run() {
+    this.check();
+    if (this.sql.startsWith("DELETE FROM panel_links")) {
+      const count = this.db.links.length;
+      this.db.links = [];
+      return { meta: { changes: count } };
+    }
+    return { meta: { changes: 1 } };
+  }
+}
+class ScreenFakeDB {
+  constructor(seed = {}) {
+    this.digestState = seed.digestState || null;
+    this.digestEvents = seed.digestEvents || [];
+    this.brainEvents = seed.brainEvents || [];
+    this.runs = seed.runs || [];
+    this.queue = seed.queue || [];
+    this.aiCalls = seed.aiCalls || [];
+    this.links = seed.links || [];
+    this.failReads = seed.failReads === true;
+    this.queryCount = 0;
+  }
+  prepare(sql) { return new ScreenFakeStatement(this, sql); }
+}
+const screenEnv = (seed = {}) => ({ DB: new ScreenFakeDB(seed) });
+const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "skipped"];
+{
+  assert.equal(screens.clean("**Bold** __italic__ ||spoiler||", 100), "Bold italic spoiler");
+  assert.equal(screens.when("2026-10-24T00:00:00Z"), "10/24 03:30");
+  assert.equal(screens.isScreenId("p_ql_queued_0"), true);
+  assert.equal(screens.isScreenId("p_ql_sent_12"), true);
+}
+{
+  const emptyPages = [
+    ["p_digest", "خلاصهٔ ۲۴ ساعت"], ["p_errors", "خطاها"], ["p_runs", "آخرین اجراها"],
+    ["p_qs", "صف انتشار"], ["p_ailog", "تاریخچهٔ تماس‌های AI"], ["p_links", "لینک‌های X"],
+    ["p_links_clear", "همهٔ 0 لینک"],
+  ];
+  for (const [id, phrase] of emptyPages) {
+    const result = await screens.buildScreen(screenEnv(), id);
+    assert.equal(result.text.includes(phrase), true, id + " should render when tables are empty");
+    assert.equal(result.text.includes("d1_error"), false, id + " should not report an error on empty tables");
+  }
+}
+{
+  const today = new Date().toISOString().slice(0, 10);
+  const seed = {
+    digestState: { window_id: "window-1", window_started_at: "2026-10-24T00:00:00Z", window_ends_at: "2026-10-25T00:00:00Z" },
+    digestEvents: [
+      { id: 1, window_id: "window-1", category: "error", occurred_at: "2026-10-24T00:00:00Z", source: "worker", title: "**Digest title**", detail: "||safe detail||" },
+      { id: 2, window_id: "window-1", category: "ai_success", occurred_at: "2026-10-24T01:00:00Z", source: "ai", title: "AI completed", detail: null },
+      { id: 3, window_id: "old-window", category: "error", occurred_at: "2026-10-23T00:00:00Z", source: "old", title: "Old event", detail: null },
+    ],
+    brainEvents: [{ level: "error", code: "worker_failed", created_at: "2026-10-24T02:00:00Z" }],
+    runs: [{ trigger_type: "daily", status: "success", started_at: "2026-10-24T03:00:00Z", found_count: 4, eligible_count: 3, sent_count: 2, skipped_count: 1, failed_count: 0 }],
+    queue: screenStatuses.map((status, i) => ({ status, platform: "rubika", title: "Queue_" + status, last_error_code: status === "failed" ? "network_error" : null, updated_at: "2026-10-24T0" + i + ":00:00Z", sent_at: status === "sent" ? today + "T09:00:00Z" : null })),
+    aiCalls: [{ provider: "groq", role: "code_repair", status: "success", error_code: null, started_at: "2026-10-24T04:00:00Z" }],
+    links: [{ url: "https://x.com/Test/status/2107878755079213476", status: "queued", created_at: "2026-10-24T05:00:00Z" }],
+  };
+  const seeded = screenEnv(seed);
+  for (const [id, phrase] of [
+    ["p_digest", "Digest title"], ["p_errors", "Digest title"], ["p_runs", "success"],
+    ["p_qs", "در انتظار: 1"], ["p_ailog", "groq/code_repair"], ["p_links", "@Test"],
+    ["p_links_clear", "همهٔ 1 لینک"],
+  ]) {
+    const result = await screens.buildScreen(seeded, id);
+    assert.equal(result.text.includes(phrase), true, id + " should show seeded data");
+    assert.equal(result.text.includes("d1_error"), false, id + " should not fail with seeded data");
+  }
+  for (const status of screenStatuses) {
+    const id = "p_ql_" + status + "_0";
+    assert.equal(screens.isScreenId(id), true, id + " should be recognized");
+    const result = await screens.buildScreen(screenEnv(seed), id);
+    assert.equal(result.text.includes("Queue_" + status), true, id + " should show items for its allowed status");
+  }
+  const invalidDb = new ScreenFakeDB({ queue: seed.queue });
+  const invalidPage = await screens.buildScreen({ DB: invalidDb }, "p_ql_unknown_0");
+  assert.equal(invalidPage.text.includes("گزینهٔ نامعتبر"), true);
+  assert.equal(invalidDb.queryCount, 0, "invalid queue status must not query D1");
+}
+{
+  const ids = ["p_digest", "p_errors", "p_runs", "p_qs", "p_ailog", "p_links", "p_links_clear", "p_links_clear_yes"]
+    .concat(screenStatuses.map(status => "p_ql_" + status + "_0"));
+  for (const id of ids) {
+    const result = await screens.buildScreen(screenEnv({ failReads: true }), id);
+    assert.equal(result.text.includes("d1_error"), true, id + " should turn D1 failures into d1_error");
+  }
+  const statusText = panel.fmtStatus({ ok: true, agent: { enabled: 1 }, capabilities: { publishing: false }, item_counts: [], recent_runs: [] });
+  assert.equal(statusText.includes("پایگاه داده"), false);
+}
+
+// New textual commands render the imported screens directly on the single tracked panel (without loading frames).
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "one-live-screen-panel");
+    state.DB.state.set("mode", "waiting_link");
+    const secret = await panel.hookSecret(state);
+    const commands = [
+      ["/digest", "خلاصهٔ ۲۴ ساعت"], ["/errors", "خطاها"], ["/runs", "آخرین اجراها"],
+      ["/links", "لینک‌های X"], ["/ailog", "تاریخچهٔ تماس‌های AI"], ["/queue", "صف انتشار"],
+    ];
+    for (let i = 0; i < commands.length; i += 1) {
+      await postPanelUpdate(state, {
+        update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+          message_id: "stage-two-command-" + i, chat_id: "b0actualowner", text: commands[i][0],
+        } },
+      }, secret);
+      const editCalls = calls.filter(call => call.method === "editMessageText");
+      assert.equal(editCalls.length, i + 1, commands[i][0] + " should edit exactly one page");
+      assert.equal(editCalls.at(-1).payload.message_id, "one-live-screen-panel");
+      assert.equal(editCalls.at(-1).payload.text.includes(commands[i][1]), true, commands[i][0] + " should render its screen");
+      assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("در حال دریافت")), false);
+      assert.equal(state.DB.state.get("mode"), "idle");
+    }
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+  });
+}
+
+// Link deletion requires the explicit confirmation screen; a direct confirmation ID is harmless.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.links = [{ url: "https://x.com/Test/status/2107878755079213476", status: "queued", created_at: "2026-10-24T05:00:00Z" }];
+    state.DB.state.set("panel_mid", "link-confirmation-panel");
+    const secret = await panel.hookSecret(state);
+    const click = async (button, messageId) => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+      } },
+    }, secret);
+    await click("p_links_clear_yes", "direct-yes-1");
+    assert.equal(state.DB.links.length, 1, "direct confirmation ID must not delete links");
+    assert.equal(state.DB.linkDeleteCalls, 0);
+    await click("p_links_clear", "open-confirm-2");
+    assert.equal(state.DB.links.length, 1, "opening confirmation must not delete links");
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("پاک شود؟"), true);
+    await click("p_links_clear_yes", "confirmed-yes-3");
+    assert.equal(state.DB.links.length, 0, "confirmed action should clear links");
+    assert.equal(state.DB.linkDeleteCalls, 1);
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("پاک شدند"), true);
+  });
+}
+
+console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
 
