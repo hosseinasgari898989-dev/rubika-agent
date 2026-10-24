@@ -192,7 +192,11 @@ async function edit(env, chat, mid, src, keypad) {
     if (hasKeypad) operations.push(
       rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad }),
     );
-    await Promise.all(operations);
+    const results = await Promise.all(operations.map((operation) =>
+      operation.then(() => null, (error) => ({ error })),
+    ));
+    const failure = results.find(Boolean);
+    if (failure) throw failure.error;
     try { await bumpCounter(env, "panel_edit_ok"); } catch { /* diagnostics must not block panel rendering */ }
     return targetMid;
   } catch (e) {
