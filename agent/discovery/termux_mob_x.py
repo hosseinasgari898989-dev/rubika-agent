@@ -488,6 +488,13 @@ def discover_mob_x_posts(
     seed_ids = seed_ids[:limit]
     index_limit = max(1, limit - len(seed_ids))
     index_ids: list[str] = []
+    source_post_ids: dict[str, set[str]] = {
+        "owner_seed_urls": set(seed_ids),
+        "unifapi_public_profile": set(),
+        "bing_rss": set(),
+        "public_profile_mirror": set(),
+        "duckduckgo_html": set(),
+    }
     attempts: list[dict[str, Any]] = [{
         "source": "mob_x",
         "engine": "owner_seed_urls",
@@ -530,8 +537,10 @@ def discover_mob_x_posts(
                             continue
                     else:
                         post_id = raw_id if POST_ID_RE.fullmatch(raw_id) else None
-                    if post_id and post_id not in seed_ids and post_id not in index_ids:
-                        index_ids.append(post_id)
+                    if post_id:
+                        source_post_ids["unifapi_public_profile"].add(post_id)
+                        if post_id not in seed_ids and post_id not in index_ids:
+                            index_ids.append(post_id)
                     if len(index_ids) >= index_limit:
                         break
                 profile_result = "post_ids_found" if index_ids else "no_usable_post_ids"
@@ -547,7 +556,7 @@ def discover_mob_x_posts(
         "engine": "unifapi_public_profile",
         "http_status": profile_status,
         "result": profile_result,
-        "post_urls_found": len(index_ids),
+        "post_urls_found": len(source_post_ids["unifapi_public_profile"]),
     }
     if profile_error_type:
         profile_attempt["error_type"] = profile_error_type
@@ -573,6 +582,7 @@ def discover_mob_x_posts(
                 continue
             for row in _rss_items(str(getattr(response, "text", "") or "")):
                 for post_id in _post_ids_from_search_result(row.get("link", ""), row.get("description", "")):
+                    source_post_ids["bing_rss"].add(post_id)
                     if post_id not in index_ids:
                         index_ids.append(post_id)
                 if len(index_ids) >= index_limit:
@@ -593,7 +603,7 @@ def discover_mob_x_posts(
         "engine": "bing_rss",
         "http_status": bing_status,
         "result": bing_result,
-        "post_urls_found": len(index_ids),
+        "post_urls_found": len(source_post_ids["bing_rss"]),
     })
 
     # Search engines can lag behind the account. Try multiple public mirrors if needed.
@@ -602,6 +612,7 @@ def discover_mob_x_posts(
             client, timeout_seconds=timeout_seconds, limit=index_limit
         )
         attempts.append(mirror_attempt)
+        source_post_ids["public_profile_mirror"].update(mirror_ids)
         index_ids.extend(mirror_ids)
 
     if not index_ids:
@@ -620,8 +631,10 @@ def discover_mob_x_posts(
                 parser.feed(str(getattr(response, "text", "") or ""))
                 for anchor in parser.anchors:
                     post_id = _post_id_from_url(anchor.get("href", ""))
-                    if post_id and post_id not in index_ids:
-                        index_ids.append(post_id)
+                    if post_id:
+                        source_post_ids["duckduckgo_html"].add(post_id)
+                        if post_id not in index_ids:
+                            index_ids.append(post_id)
                     if len(index_ids) >= index_limit:
                         break
                 ddg_result = "indexed_post_urls_found" if index_ids else "no_indexed_official_posts"
@@ -642,7 +655,7 @@ def discover_mob_x_posts(
             "engine": "duckduckgo_html",
             "http_status": ddg_status,
             "result": ddg_result,
-            "post_urls_found": len(index_ids),
+            "post_urls_found": len(source_post_ids["duckduckgo_html"]),
         })
 
     post_ids = list(dict.fromkeys([*seed_ids, *index_ids]))[:limit]
@@ -657,11 +670,41 @@ def discover_mob_x_posts(
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
     output.sort(key=lambda row: str(row.get("published_at") or ""), reverse=True)
+    verified_by_id = {
+        str(row.get("external_id") or "").removeprefix("x-"): row
+        for row in output
+        if isinstance(row, dict)
+    }
+    for attempt in attempts:
+        engine = str(attempt.get("engine") or "")
+        if engine in source_post_ids:
+            attempt["candidate_post_ids"] = sorted(
+                post_id for post_id in source_post_ids[engine] if post_id in verified_by_id
+            )
+            attempt["posts_returned"] = len(attempt["candidate_post_ids"])
+    mirror_attempt = next(
+        (attempt for attempt in attempts if attempt.get("engine") == "public_profile_mirror"),
+        None,
+    )
+    if isinstance(mirror_attempt, dict):
+        chosen_host = str(mirror_attempt.get("host_used") or "")
+        outcomes = mirror_attempt.get("outcomes")
+        if isinstance(outcomes, list):
+            for outcome in outcomes:
+                if not isinstance(outcome, dict):
+                    continue
+                outcome["candidate_post_ids"] = (
+                    sorted(post_id for post_id in source_post_ids["public_profile_mirror"] if post_id in verified_by_id)
+                    if str(outcome.get("host") or "") == chosen_host else []
+                )
+                outcome["posts_returned"] = len(outcome["candidate_post_ids"])
     attempts.append({
         "source": "mob_x",
         "engine": "public_syndication",
         "result": "metadata_found" if output else "no_complete_media_posts",
         "candidate_count": len(output),
+        "candidate_post_ids": sorted(verified_by_id),
+        "posts_returned": len(output),
         "skipped": skipped,
     })
     return output, attempts
