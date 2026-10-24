@@ -103,7 +103,7 @@ export function normalize(body) {
   };
 }
 export function isPrivateChat(ev) {
-  if (!ev.chat || ev.isGroupish) return false;
+  if (!ev.chat || ev.isGroupish || ev.botAuthored) return false;
   const l = ev.chat.toLowerCase();
   if (l.startsWith("g0") || l.startsWith("c0")) return false;
   if (ev.types.length) return ev.types.every((t) => PRIVATE_TYPES.has(t));
