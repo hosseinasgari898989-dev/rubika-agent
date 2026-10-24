@@ -567,5 +567,19 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertEqual(payloads[2], {"chat_id": "owner-chat", "message_id": "message-1", "inline_keypad": {"rows": []}})
 
 
+class EnvironmentConfigTests(unittest.TestCase):
+    def test_owner_chat_id_is_also_used_as_owner_user_id(self):
+        # This configuration intentionally has no RUBIKA_OWNER_USER_ID secret.
+        env = {
+            "RUBIKA_TOKEN": "r" * 32,
+            "RUBIKA_OWNER_CHAT_ID": "owner-chat-123",
+            "AGENT_API_TOKEN": "a" * 40,
+        }
+        with patch.dict(console.os.environ, env, clear=True):
+            _, owner_chat_id, owner_user_id, _, control_url = console._required_env()
+        self.assertEqual(owner_user_id, owner_chat_id)
+        self.assertEqual(control_url, console.DEFAULT_CONTROL_URL)
+
+
 if __name__ == "__main__":
     unittest.main()
