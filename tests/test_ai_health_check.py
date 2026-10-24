@@ -126,7 +126,8 @@ class AIHealthCheckTests(unittest.TestCase):
         self.assertIn("python -m agent.brain.ai_health_check", workflow)
 
         source = (ROOT / "agent" / "brain" / "ai_health_check.py").read_text(encoding="utf-8")
-        self.assertIn("max_output_tokens=MAX_OUTPUT_TOKENS", source)
+        self.assertIn("max_output_tokens=max_tokens", source)
+        self.assertIn("MAX_OUTPUT_TOKENS = 10", source)
         self.assertIn("FOLLOWUP_OUTPUT_TOKENS = 64", source)
         self.assertIn('"empty response"', source)
         self.assertNotIn("call_provider_with_ledger(", source)
