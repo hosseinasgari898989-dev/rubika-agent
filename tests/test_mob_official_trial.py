@@ -306,6 +306,7 @@ class TestChannelPublishingGateTests(unittest.TestCase):
                 "source_platform": "x",
                 "official_source": True,
                 "published_at": "2026-10-19T23:59:59Z",
+                "freshness_verified": True,
                 "media_type": "image",
                 "media_url": "https://pbs.twimg.com/media/photo.jpg",
             }
@@ -477,8 +478,6 @@ class OfficialSinceRuleTests(unittest.TestCase):
         )
 
     def test_publish_run_sends_one_oldest_unseen_post_and_preserves_deduplication(self):
-        from contextlib import nullcontext
-
         class FakeCloud:
             def __init__(self, *args, **kwargs):
                 self.upserted = []
@@ -567,7 +566,6 @@ class OfficialSinceRuleTests(unittest.TestCase):
         self.assertEqual(result["selected"]["external_id"], "x-oldest-valid")
         self.assertEqual(len(publisher.calls), 1)
         self.assertEqual(result["backlog_count"], 1)
-        self.assertTrue(any(row[0] == "mob_official:x-seen" for row in []))  # seen IDs are skipped before media.
         evaluations = {row.get("external_id"): row.get("result") for row in result["candidate_evaluations"]}
         self.assertEqual(evaluations["x-oldhash"], "duplicate_media_hash")
         self.assertNotIn("x-seen", evaluations)
