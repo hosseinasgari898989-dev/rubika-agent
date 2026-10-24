@@ -35,10 +35,11 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("permissions:", workflow)
         self.assertIn("contents: read", workflow)
         self.assertIn("python -m agent.brain.owner_console --once", workflow)
-        for secret in ("RUBIKA_TOKEN", "RUBIKA_OWNER_CHAT_ID", "RUBIKA_OWNER_USER_ID", "AGENT_API_TOKEN"):
+        for secret in ("RUBIKA_TOKEN", "RUBIKA_OWNER_CHAT_ID", "AGENT_API_TOKEN"):
             with self.subTest(secret=secret):
                 self.assertIn(f"secrets.{secret}", workflow)
         self.assertIn("persist-credentials: false", workflow)
+        self.assertNotIn("RUBIKA_OWNER_USER_ID", workflow)
         self.assertNotIn("RUBIKA_CHANNEL_GUID", workflow)
         self.assertNotIn("send_media", workflow)
         # Keep independent automations intact.
