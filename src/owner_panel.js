@@ -215,6 +215,19 @@ async function registerWebhook(env, origin) {
 
 // ---------- D1 helpers
 const getOwner = async (env) => (await env.DB.prepare("SELECT chat_id FROM panel_owner WHERE id=1").first())?.chat_id ?? null;
+const hasOwnerAccess = async (env, chatId, primaryOwner) => {
+  try {
+    const row = await env.DB.prepare("SELECT id FROM console_owners WHERE chat_id = ? AND enabled = 1").bind(chatId).first();
+    return Boolean(row);
+  } catch {
+    // Keep the existing singleton owner usable until migration 0010 is applied.
+    return safeEqual(primaryOwner || "", chatId);
+  }
+};
+const sha256Hex = async (value) => {
+  const digest = await crypto.subtle.digest("SHA-256", te.encode(value));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+};
 const getState = async (env, k, d) => (await env.DB.prepare("SELECT value FROM panel_state WHERE key=?").bind(k).first())?.value ?? d;
 const setState = (env, k, v) => env.DB.prepare(
   "INSERT INTO panel_state(key,value,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
@@ -471,20 +484,65 @@ const COMMANDS = {
 };
 
 async function tryClaim(env, ev) {
-  const m = /^\/claim\s+(\S{1,128})\s*$/.exec(ev.text);
+  const m = /^\\/claim\\s+(\\S{1,128})\\s*$/.exec(ev.text);
   if (!m) return;
   if (Number(await getState(env, "claim_fails", "0")) >= 5) return;
-  const code = env.OWNER_SETUP_CODE || "";
-  if (code.length < 8) { await send(env, ev.chat, "⚠️ کد راه‌اندازی در Worker تنظیم نشده یا کوتاه‌تر از ۸ نویسه است."); return; }
-  if (!safeEqual(m[1], code)) {
-    await setState(env, "claim_fails", Number(await getState(env, "claim_fails", "0")) + 1);
-    await send(env, ev.chat, "❌ کد نادرست است.");
+  const supplied = m[1];
+  const primaryOwner = await getOwner(env);
+  const setupCode = env.OWNER_SETUP_CODE || "";
+
+  // The bootstrap secret is accepted only while the singleton owner has not been claimed.
+  if (!primaryOwner && setupCode.length >= 8 && safeEqual(supplied, setupCode)) {
+    const r = await env.DB.prepare("INSERT OR IGNORE INTO panel_owner(id,chat_id) VALUES(1,?)").bind(ev.chat).run();
+    if (r.meta?.changes !== 1) return;
+    try {
+      await env.DB.prepare("INSERT OR IGNORE INTO console_owners (chat_id, label, role, enabled, claimed_at, last_seen_at) VALUES (?, 'مالک اصلی', 'owner', 1, datetime('now'), datetime('now'))")
+        .bind(ev.chat).run();
+    } catch { /* migration 0010 may not be applied yet; panel_owner remains the compatibility fallback */ }
+    try { await rubika(env, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch { /* best effort */ }
+    await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا چت تأییدشده به پنل دسترسی دارد.\\n\\n" + HOME_TEXT, HOME_KB);
     return;
   }
-  const r = await env.DB.prepare("INSERT OR IGNORE INTO panel_owner(id,chat_id) VALUES(1,?)").bind(ev.chat).run();
-  if (r.meta?.changes !== 1) return;
-  try { await rubika(env, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch { /* best effort */ }
-  await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا فقط همین چت به پنل دسترسی دارد.\n\n" + HOME_TEXT, HOME_KB);
+
+  // Invites only grant access after the original owner setup is complete.
+  if (!primaryOwner) {
+    await setState(env, "claim_fails", Number(await getState(env, "claim_fails", "0")) + 1);
+    await send(env, ev.chat, "❌ کد دعوت نامعتبر است یا راه‌اندازی اولیه هنوز انجام نشده.");
+    return;
+  }
+  try {
+    const existing = await env.DB.prepare("SELECT id FROM console_owners WHERE chat_id = ?").bind(ev.chat).first();
+    if (existing) {
+      await send(env, ev.chat, "این چت قبلاً ثبت شده است.");
+      return;
+    }
+    const codeHash = await sha256Hex(supplied);
+    const now = new Date().toISOString();
+    const invite = await env.DB.prepare("SELECT id FROM console_owner_invites WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?")
+      .bind(codeHash, now).first();
+    if (!invite) {
+      await setState(env, "claim_fails", Number(await getState(env, "claim_fails", "0")) + 1);
+      await send(env, ev.chat, "❌ کد دعوت نامعتبر یا منقضی شده است.");
+      return;
+    }
+    const label = "ناظر " + idTail(ev.chat);
+    const results = await env.DB.batch([
+      env.DB.prepare("UPDATE console_owner_invites SET used_at = ?, used_by = ? WHERE id = ? AND used_at IS NULL AND expires_at > ?")
+        .bind(now, ev.chat, invite.id, now),
+      env.DB.prepare("INSERT INTO console_owners (chat_id, label, role, enabled, claimed_at, last_seen_at) SELECT ?, ?, 'viewer', 1, ?, ? WHERE changes() = 1")
+        .bind(ev.chat, label, now, now),
+      env.DB.prepare("INSERT INTO brain_events (item_id, level, code, details_json) SELECT NULL, 'info', 'console_owner_claim', ? WHERE changes() > 0")
+        .bind(JSON.stringify({ method: "invite", role: "viewer" })),
+    ]);
+    if (!results[0]?.meta?.changes || !results[1]?.meta?.changes) {
+      await send(env, ev.chat, "❌ این کد قبلاً استفاده شده یا منقضی شده است.");
+      return;
+    }
+    try { await rubika(env, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch { /* best effort */ }
+    await send(env, ev.chat, "✅ **دعوت پذیرفته شد.** دسترسی شما ثبت شد.\\n\\n" + HOME_TEXT, HOME_KB);
+  } catch {
+    await send(env, ev.chat, "⚠️ امکان بررسی کد دعوت نیست؛ پایگاه داده یا migration لازم آماده نیست.");
+  }
 }
 
 const idTail = (value) => String(value ?? "").slice(-4);
@@ -494,11 +552,19 @@ async function processEvent(env, selfFetch, origin, ev) {
   const receivedAt = Date.now();
   const timedEnv = withPanelTiming(env, timing);
   const owner = await getOwner(timedEnv);
+  if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev) && /^\\/claim\\s+\\S{1,128}\\s*$/.test(ev.text)) {
+    await tryClaim(timedEnv, ev);
+    return;
+  }
   if (!owner) {
     if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev)) await tryClaim(timedEnv, ev);
     return;
   }
-  if (!safeEqual(owner, ev.chat)) return;
+  if (!(await hasOwnerAccess(timedEnv, ev.chat, owner))) return;
+  try {
+    await timedEnv.DB.prepare("UPDATE console_owners SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE chat_id = ? AND enabled = 1")
+      .bind(ev.chat).run();
+  } catch { /* migration 0010 may not be applied yet; keep existing panel behavior */ }
   const msgAge = messageAgeSeconds(ev.time, receivedAt);
   try {
     const lastEvent = {
