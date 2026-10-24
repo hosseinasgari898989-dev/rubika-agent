@@ -4,10 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const source = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
+const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8");
+const panelModuleUrl = "data:text/javascript;base64," + Buffer.from(panelSource).toString("base64");
+const importedPanel = await import(panelModuleUrl);
+const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
+const workerImport = 'import { handleOwnerPanel } from "./owner_panel.js";';
+assert.ok(originalSource.includes(workerImport), "Worker must import owner panel handler");
+const source = originalSource.replace(workerImport, `const { handleOwnerPanel } = await import("${panelModuleUrl}");`);
 const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString("base64");
 const imported = await import(moduleUrl);
 const worker = imported.default;
+const panel = importedPanel;
 
 class FakeStatement {
   constructor(db, sql) {
@@ -810,7 +817,7 @@ function makeOmniAI(probability = 0.97) {
 }
 
 
-console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval gate, canonical URLs, queue bounds, event redaction, Clef Omni music moderation and uncapped daily usage accounting.");
+
 
 {
   const state = env();
@@ -906,4 +913,230 @@ console.log("Worker API tests passed: auth, D1 writes, run lifecycle, approval g
   assert.equal(response.status, 404);
   assert.equal(response.body.error, "not_found");
 }
+// Owner panel unit tests: run in the existing Node Worker test suite with fake D1 and mocked Rubika Bot API.
+class PanelFakeStatement {
+  constructor(db, sql) {
+    this.db = db;
+    this.sql = sql;
+    this.values = [];
+  }
+  bind(...values) { this.values = values; return this; }
+  async first() {
+    if (this.sql.includes("SELECT chat_id FROM panel_owner WHERE id=1")) {
+      return this.db.ownerChat ? { chat_id: this.db.ownerChat } : null;
+    }
+    if (this.sql.includes("SELECT value FROM panel_state WHERE key=?")) {
+      const value = this.db.state.get(this.values[0]);
+      return value === undefined ? null : { value };
+    }
+    return null;
+  }
+  async run() {
+    if (this.sql.startsWith("INSERT INTO panel_state")) {
+      this.db.state.set(this.values[0], String(this.values[1]));
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT OR IGNORE INTO panel_owner")) {
+      if (this.db.ownerChat) return { meta: { changes: 0 } };
+      this.db.ownerChat = this.values[0];
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT OR IGNORE INTO panel_events")) {
+      const key = this.values[0];
+      const has = this.db.events.has(key);
+      this.db.events.add(key);
+      return { meta: { changes: has ? 0 : 1 } };
+    }
+    if (this.sql.startsWith("DELETE FROM panel_events")) {
+      this.db.events.clear();
+      return { meta: { changes: 1 } };
+    }
+    return { meta: { changes: 1 } };
+  }
+}
+class PanelFakeDB {
+  constructor() {
+    this.ownerChat = null;
+    this.state = new Map();
+    this.events = new Set();
+  }
+  prepare(sql) { return new PanelFakeStatement(this, sql); }
+}
+const panelEnv = () => ({
+  DB: new PanelFakeDB(),
+  RUBIKA_TOKEN: "rubika-panel-test-token-with-sufficient-length",
+  OWNER_SETUP_CODE: "correct-setup-code",
+  AGENT_API_TOKEN: TOKEN,
+});
+async function withMockRubikaFetch(fn) {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const method = String(url).split("/").at(-1);
+    let payload = {};
+    try { payload = JSON.parse(init.body || "{}"); } catch {}
+    calls.push({ method, payload });
+    return new Response(JSON.stringify({ status: "OK", data: { message_id: "mock-reply" } }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  };
+  try { await fn(calls); } finally { globalThis.fetch = originalFetch; }
+}
+async function postPanelUpdate(state, update, secret) {
+  const pending = [];
+  const ctx = { waitUntil(promise) { pending.push(promise); } };
+  const response = await worker.fetch(new Request(
+    "https://worker.test/panel/hook/" + secret + "/ReceiveUpdate",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(update) }
+  ), state, ctx);
+  await Promise.all(pending);
+  return response;
+}
+
+// md() reports Rubika metadata offsets in JavaScript UTF-16 code units, including astral emoji.
+{
+  const formatted = panel.md("😀**سلام🌟**");
+  assert.equal(formatted.text, "😀سلام🌟");
+  assert.deepEqual(formatted.metadata.meta_data_parts, [
+    { type: "Bold", from_index: 2, length: 6 },
+  ]);
+}
+
+// normalize() covers new-message button aux_data, inline-message event, and ordinary text.
+{
+  const click = panel.normalize({
+    update: {
+      type: "NewMessage", chat_id: "b0paneltest",
+      new_message: { message_id: "m-aux", chat_id: "b0paneltest", text: "", aux_data: { button_id: "p_status" } },
+    },
+  });
+  assert.equal(click.kind, "click");
+  assert.equal(click.button, "p_status");
+  assert.equal(click.chat, "b0paneltest");
+
+  const inline = panel.normalize({
+    inline_message: { message_id: "m-inline", chat_id: "b0paneltest", text: "  inline text  " },
+  });
+  assert.equal(inline.kind, "click");
+  assert.equal(inline.text, "inline text");
+
+  const textEvent = panel.normalize({
+    update: {
+      type: "NewMessage", chat_id: "b0paneltest",
+      new_message: { message_id: "m-text", chat_id: "b0paneltest", text: "  سلام دنیا  " },
+    },
+  });
+  assert.equal(textEvent.kind, "text");
+  assert.equal(textEvent.text, "سلام دنیا");
+}
+
+// Private-chat recognition accepts b0 IDs, rejects groups/channels, and rejects bot-authored input.
+{
+  const event = overrides => ({
+    chat: "b0paneltest", types: [], isGroupish: false, botAuthored: false, ...overrides,
+  });
+  assert.equal(panel.isPrivateChat(event({})), true);
+  assert.equal(panel.isPrivateChat(event({ chat: "g0grouptest" })), false);
+  assert.equal(panel.isPrivateChat(event({ chat: "c0channeltest" })), false);
+  assert.equal(panel.isPrivateChat(event({ botAuthored: true })), false);
+  assert.equal(panel.isPrivateChat(event({ types: ["group"] })), false);
+}
+
+// Link parsing canonicalises X/Twitter post URLs and rejects unrelated text.
+{
+  assert.equal(panel.parseXLink("New post https://twitter.com/Test_User/status/2107878755079213476?s=20"),
+    "https://x.com/Test_User/status/2107878755079213476");
+  assert.equal(panel.parseXLink("https://example.com/not-a-post"), null);
+}
+
+// safeEqual compares values without treating differing lengths or Unicode values as equal.
+{
+  assert.equal(panel.safeEqual("same-value", "same-value"), true);
+  assert.equal(panel.safeEqual("same-value", "same-value-extra"), false);
+  assert.equal(panel.safeEqual("سلام😀", "سلام😀"), true);
+  assert.equal(panel.safeEqual("سلام", "سلامی"), false);
+}
+
+// A hook with an incorrect secret is deliberately indistinguishable from a missing route (404).
+{
+  const state = panelEnv();
+  const expected = await panel.hookSecret(state);
+  const incorrect = (expected[0] === "0" ? "1" : "0") + expected.slice(1);
+  const response = await postPanelUpdate(state, { update: { type: "NewMessage" } }, incorrect);
+  assert.equal(response.status, 404);
+}
+
+// A wrong claim code never registers an owner.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    const secret = await panel.hookSecret(state);
+    const response = await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0wrongclaim", new_message: {
+        message_id: "wrong-1", chat_id: "b0wrongclaim", text: "/claim incorrect-code",
+      } },
+    }, secret);
+    assert.equal(response.status, 200);
+    assert.equal(state.DB.ownerChat, null);
+    assert.equal(state.DB.state.get("claim_fails"), "1");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "sendMessage");
+  });
+}
+
+// The correct claim code binds the first private chat and sends the owner keypad.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    const secret = await panel.hookSecret(state);
+    const response = await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0ownerclaim", new_message: {
+        message_id: "claim-1", chat_id: "b0ownerclaim", text: "/claim correct-setup-code",
+      } },
+    }, secret);
+    assert.equal(response.status, 200);
+    assert.equal(state.DB.ownerChat, "b0ownerclaim");
+    assert.equal(calls.some(call => call.method === "sendMessage" && call.payload.inline_keypad), true);
+  });
+}
+
+// Five bad claims permanently lock the claim path for this owner-panel setup.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    const secret = await panel.hookSecret(state);
+    for (let i = 1; i <= 5; i += 1) {
+      await postPanelUpdate(state, {
+        update: { type: "NewMessage", chat_id: "b0claimlocked", new_message: {
+          message_id: "wrong-" + i, chat_id: "b0claimlocked", text: "/claim incorrect-code",
+        } },
+      }, secret);
+    }
+    assert.equal(state.DB.state.get("claim_fails"), "5");
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0claimlocked", new_message: {
+        message_id: "correct-after-lock", chat_id: "b0claimlocked", text: "/claim correct-setup-code",
+      } },
+    }, secret);
+    assert.equal(state.DB.ownerChat, null);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 5);
+  });
+}
+
+// A non-owner private chat receives no reply.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0notowner", new_message: {
+        message_id: "non-owner-1", chat_id: "b0notowner", text: "/menu",
+      } },
+    }, secret);
+    assert.equal(calls.length, 0);
+  });
+}
+
+console.log("Worker tests passed: existing APIs plus owner panel UTF-16 metadata, normalization, private-owner guard, X links, constant-time equality, hidden bad-secret hook, claim/lockout, keypad and non-owner isolation.");
 

@@ -1,3 +1,4 @@
+import { handleOwnerPanel } from "./owner_panel.js";
 const SERVICE = "rubika-agent";
 const PUBLISHING_ENABLED = false;
 const MAX_BODY_BYTES = 32 * 1024;
@@ -1349,9 +1350,12 @@ async function approvedQueue(env, url) {
   }
 }
 
-export default {
-  async fetch(request, env) {
+const worker = {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/panel/")) {
+      return handleOwnerPanel(request, env, ctx, (r) => worker.fetch(r, env, ctx));
+    }
     const path = url.pathname;
 
     if (path === "/" || path === "/health" || path === "/api/health") {
@@ -1464,3 +1468,5 @@ export default {
     return json({ ok: false, error: "not_found" }, 404);
   }
 };
+
+export default worker;
