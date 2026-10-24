@@ -17,7 +17,7 @@ Unsupported text/commands only receive a short help prompt. They are never inter
 
 ## Security and audit
 
-- A message is accepted only if it is a private `NewMessage` matching both configured `RUBIKA_OWNER_CHAT_ID` and `RUBIKA_OWNER_USER_ID`. Group/channel, other-user, edited and malformed updates are ignored.
+- A message or inline callback is accepted only when its chat is private and its `chat_id` equals the configured `RUBIKA_OWNER_CHAT_ID`. `sender_id` is not compared. Groups/channels, other chat IDs, Bot-authored messages, edited messages and malformed events are ignored. If Rubika does not include an explicit private chat type, the private-chat GUID format is used as a fail-closed fallback.
 - Worker endpoints are authenticated under `/api/brain/owner-console/`. Inputs are restricted to fixed command names, SHA-256 update/chat identifiers and allowlisted outcomes.
 - D1 stores an opaque updates cursor and a minimal audit row (hashed chat identity, normalized command, status and safe result code), not message bodies or raw owner IDs.
 - Duplicate updates are claimed once; uncertain message-delivery results are not automatically retried. The Worker limits claimed commands to 80 per UTC day.
@@ -26,7 +26,7 @@ Unsupported text/commands only receive a short help prompt. They are never inter
 
 ## Scheduling and required configuration
 
-The GitHub Actions workflow polls every five minutes (actual start may be delayed by GitHub). It triggers only on schedule or manual dispatch, not on pushes or pull requests. It requires the following Actions secrets: `RUBIKA_TOKEN`, `RUBIKA_OWNER_CHAT_ID`, `RUBIKA_OWNER_USER_ID`, and `AGENT_API_TOKEN`. Missing secrets stop the workflow and only the missing secret name is logged.
+The GitHub Actions workflow polls every five minutes (actual start may be delayed by GitHub). It triggers only on schedule or manual dispatch, not on pushes or pull requests. It requires the following Actions secrets: `RUBIKA_TOKEN`, `RUBIKA_OWNER_CHAT_ID`, and `AGENT_API_TOKEN`. A separate sender-ID secret is not required. Missing secrets stop the workflow and only the missing secret name is logged.
 
 ## Migrations and activation
 

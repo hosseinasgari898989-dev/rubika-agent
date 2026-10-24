@@ -125,7 +125,7 @@ class FakeControl:
         }
 
 
-def update(*, text="/status", chat_id="owner-chat-123", sender_id="owner-user-456",
+def update(*, text="/status", chat_id="b0owner-chat-123", sender_id="owner-user-456",
            message_id="message-001", update_type="NewMessage", extra=None):
     value = {
         "type": update_type,
@@ -140,7 +140,7 @@ def update(*, text="/status", chat_id="owner-chat-123", sender_id="owner-user-45
         value.update(extra)
     return value
 
-def callback(*, button_id="mob_post_from_x", chat_id="owner-chat-123",
+def callback(*, button_id="mob_post_from_x", chat_id="b0owner-chat-123",
              sender_id="owner-user-456", message_id="menu-message-001",
              start_id="callback-start-001", update_type="ReceiveQuery", extra=None):
     value = {
@@ -171,32 +171,48 @@ class CommandParserTests(unittest.TestCase):
         self.assertEqual(console.parse_command("/ai-status some-other-provider").name, "unknown")
         self.assertEqual(console.parse_command("/status argument").name, "unknown")
 
-    def test_private_message_gate_requires_exact_chat_and_sender(self):
-        accepted = console._owner_private_text(
-            update(text="/status"), "owner-chat-123", "owner-user-456"
-        )
+    def test_private_message_gate_requires_private_configured_chat_not_sender_id(self):
+        accepted = console._owner_private_text(update(text="/status"), "b0owner-chat-123")
         self.assertEqual(accepted, "/status")
+        self.assertEqual(
+            console._owner_private_text(update(sender_id="different-sender"), "b0owner-chat-123"),
+            "/status",
+        )
+        # An explicit private-chat type is also accepted if the configured chat matches.
+        self.assertEqual(
+            console._owner_private_text(
+                update(chat_id="configured-private-chat", extra={"chat_type": "private"}),
+                "configured-private-chat",
+            ),
+            "/status",
+        )
+        self.assertIsNone(console._owner_private_text(update(chat_id="other-chat"), "b0owner-chat-123"))
+        self.assertIsNone(console._owner_private_text(update(chat_id="g0group-chat-123"), "b0owner-chat-123"))
+        self.assertIsNone(console._owner_private_text(update(chat_id="c0channel-chat-123"), "b0owner-chat-123"))
         self.assertIsNone(console._owner_private_text(
-            update(chat_id="other-chat"), "owner-chat-123", "owner-user-456"
+            update(extra={"chat_type": "group"}), "b0owner-chat-123"
         ))
         self.assertIsNone(console._owner_private_text(
-            update(sender_id="other-user"), "owner-chat-123", "owner-user-456"
+            update(extra={"chat_type": "channel"}), "b0owner-chat-123"
         ))
         self.assertIsNone(console._owner_private_text(
-            update(extra={"chat_type": "group"}), "owner-chat-123", "owner-user-456"
+            update(update_type="UpdatedMessage"), "b0owner-chat-123"
         ))
+        bot_update = update(text="/status", sender_id="anything")
+        bot_update["new_message"]["sender_type"] = "Bot"
+        self.assertIsNone(console._owner_private_text(bot_update, "b0owner-chat-123"))
         self.assertIsNone(console._owner_private_text(
-            update(update_type="UpdatedMessage"), "owner-chat-123", "owner-user-456"
+            update(extra={"chat_type": "unknown"}), "b0owner-chat-123"
         ))
 
     def test_message_identity_is_stable_and_does_not_include_raw_id_in_storage(self):
         item = update()
         first = console._message_identity(item)
         second = console._message_identity(item)
-        expected = hashlib.sha256(b"owner-chat-123|message-001").hexdigest()
+        expected = hashlib.sha256(b"b0owner-chat-123|message-001").hexdigest()
         self.assertEqual(first, expected)
         self.assertEqual(first, second)
-        self.assertNotIn("owner-chat-123", first)
+        self.assertNotIn("b0owner-chat-123", first)
         self.assertEqual(len(first), 64)
 
 
@@ -303,14 +319,13 @@ class HTTPClientTests(unittest.TestCase):
 
 
 class OperationsConsoleTests(unittest.TestCase):
-    def make_console(self, bot=None, control=None, github_runs=None, owner_user_id="owner-user-456"):
+    def make_console(self, bot=None, control=None, github_runs=None):
         api = bot or FakeBot()
         worker = control or FakeControl()
         instance = console.OperationsConsole(
             bot=api,
             control=worker,
-            owner_chat_id="owner-chat-123",
-            owner_user_id=owner_user_id,
+            owner_chat_id="b0owner-chat-123",
             github_runs=github_runs or (lambda: []),
         )
         return instance, api, worker
@@ -371,10 +386,15 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertEqual(len(bot.sent), 1)
         self.assertEqual(len(control.claims), 2)
 
-    def test_non_owner_updates_are_ignored_without_claim_or_reply(self):
+    def test_non_owner_or_bot_authored_updates_are_ignored_without_claim_or_reply(self):
         instance, bot, control = self.make_console()
-        result = instance.process_update(update(text="/status", sender_id="attacker"))
-        self.assertEqual(result, "ignored")
+        other_chat = update(text="/status", chat_id="other-chat", message_id="other-chat-message")
+        self.assertEqual(instance.process_update(other_chat), "ignored")
+        group_chat = update(text="/status", chat_id="g0group-chat-123", message_id="group-chat-message")
+        self.assertEqual(instance.process_update(group_chat), "ignored")
+        bot_message = update(text="/status", message_id="bot-authored-message")
+        bot_message["new_message"]["sender_type"] = "Bot"
+        self.assertEqual(instance.process_update(bot_message), "ignored")
         self.assertEqual(bot.sent, [])
         self.assertEqual(control.claims, [])
 
@@ -428,21 +448,21 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertEqual(console.decode_console_state(control.offset), ("cursor-next", console.CONSOLE_IDLE))
         self.assertTrue(stats["offset_advanced"])
 
-    def test_poll_once_requires_explicit_owner_user_id(self):
+    def test_poll_once_accepts_configured_private_chat_without_sender_id_match(self):
         api = FakeBot(updates={
             "status": "OK",
             "data": {
-                "updates": [update(text="/status", sender_id="some-sender")],
+                "updates": [update(text="/status", sender_id="different-sender")],
                 "next_offset_id": "cursor-next",
             },
         })
         control = FakeControl()
         control.offset = "cursor-existing"
-        instance, bot, control = self.make_console(bot=api, control=control, owner_user_id=None)
+        instance, bot, control = self.make_console(bot=api, control=control)
         stats = instance.poll_once()
-        self.assertEqual(stats["answered"], 0)
-        self.assertEqual(len(bot.sent), 0)
-        self.assertEqual(control.claims, [])
+        self.assertEqual(stats["answered"], 1)
+        self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(len(control.claims), 1)
         self.assertEqual(console.decode_console_state(control.offset), ("cursor-next", console.CONSOLE_IDLE))
 
     def test_start_and_menu_send_exact_inline_keypad_payload(self):
@@ -530,16 +550,17 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertIsNone(console.parse_x_status_url("https://notx.com/MobFan/status/12345678901234567"))
         self.assertIsNone(console.parse_x_status_url("https://x.com/MobFan/status/1234"))
 
-    def test_owner_gate_diagnostics_report_only_boolean_match_flags(self):
-        incoming = update(text="/start")
+    def test_update_diagnostics_log_only_last_four_type_and_chat_id_characters(self):
+        incoming = update(text="PRIVATE MESSAGE BODY")
         with patch("builtins.print") as printed:
-            console._log_owner_gate_diagnostic(incoming, "owner-chat-123", "owner-chat-123")
+            console._log_update_diagnostic(incoming)
         rendered = " ".join(str(arg) for call in printed.call_args_list for arg in call.args)
-        self.assertIn('"chat_matches_owner":true', rendered)
-        self.assertIn('"sender_matches_owner":false', rendered)
-        self.assertIn('"identity_valid":true', rendered)
-        self.assertNotIn("owner-chat-123", rendered)
-        self.assertNotIn("/start", rendered)
+        payload = json.loads(printed.call_args.args[0])
+        self.assertEqual(payload, {"type_tail": "sage", "chat_id_tail": "-123"})
+        self.assertNotIn("NewMessage", rendered)
+        self.assertNotIn("b0owner-chat-123", rendered)
+        self.assertNotIn("owner-user-456", rendered)
+        self.assertNotIn("PRIVATE MESSAGE BODY", rendered)
 
     def test_unknown_update_shape_is_ignored_without_body_diagnostics(self):
         instance, bot, control = self.make_console()
@@ -547,17 +568,20 @@ class OperationsConsoleTests(unittest.TestCase):
         with patch("builtins.print") as printed:
             self.assertEqual(instance.process_update(incoming), "ignored")
         rendered = " ".join(str(arg) for call in printed.call_args_list for arg in call.args)
-        self.assertIn("UnexpectedUpdate", rendered)
+        self.assertIn('"type_tail":"date"', rendered)
+        self.assertNotIn("UnexpectedUpdate", rendered)
         self.assertNotIn("PRIVATE BODY MUST NOT LOG", rendered)
+        self.assertEqual(set(json.loads(printed.call_args.args[0])), {"type_tail", "chat_id_tail"})
         self.assertEqual(bot.sent, [])
         self.assertEqual(control.claims, [])
 
-    def test_callback_authorization_requires_exact_owner_chat_and_user(self):
+    def test_callback_authorization_requires_private_owner_chat_not_sender_id(self):
         instance, bot, control = self.make_console()
         self.assertEqual(instance.process_update(callback(chat_id="wrong-chat")), "ignored")
-        self.assertEqual(instance.process_update(callback(sender_id="wrong-user", message_id="menu-2")), "ignored")
-        self.assertEqual(bot.sent, [])
-        self.assertEqual(control.claims, [])
+        self.assertEqual(instance.process_update(callback(chat_id="g0group-chat-123", message_id="menu-group")), "ignored")
+        self.assertEqual(instance.process_update(callback(sender_id="different-sender", message_id="menu-2")), "answered")
+        self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(len(control.claims), 1)
 
     def test_rubika_api_v3_inline_payload_shapes_match_installed_rubka(self):
         opener = FakeOpener([
@@ -579,16 +603,15 @@ class OperationsConsoleTests(unittest.TestCase):
 
 
 class EnvironmentConfigTests(unittest.TestCase):
-    def test_owner_chat_id_is_also_used_as_owner_user_id(self):
-        # This configuration intentionally has no RUBIKA_OWNER_USER_ID secret.
+    def test_required_environment_uses_only_existing_owner_chat_setting(self):
         env = {
             "RUBIKA_TOKEN": "r" * 32,
-            "RUBIKA_OWNER_CHAT_ID": "owner-chat-123",
+            "RUBIKA_OWNER_CHAT_ID": "b0owner-chat-123",
             "AGENT_API_TOKEN": "a" * 40,
         }
         with patch.dict(console.os.environ, env, clear=True):
-            _, owner_chat_id, owner_user_id, _, control_url = console._required_env()
-        self.assertEqual(owner_user_id, owner_chat_id)
+            _, owner_chat_id, _, control_url = console._required_env()
+        self.assertEqual(owner_chat_id, "b0owner-chat-123")
         self.assertEqual(control_url, console.DEFAULT_CONTROL_URL)
 
 

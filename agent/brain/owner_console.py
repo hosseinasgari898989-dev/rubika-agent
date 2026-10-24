@@ -384,34 +384,81 @@ def _is_group_or_channel(update: Mapping[str, Any], message: Mapping[str, Any]) 
         update.get("chat_type"), message.get("chat_type"),
         update.get("type"), message.get("type"),
     ]
-    if update.get("is_group") is True or message.get("is_group") is True:
-        return True
+    for container in (update, message):
+        if container.get("is_group") is True or container.get("is_channel") is True:
+            return True
+    chat = update.get("chat") or message.get("chat")
+    if isinstance(chat, Mapping):
+        values.extend((chat.get("type"), chat.get("chat_type")))
+        if chat.get("is_group") is True or chat.get("is_channel") is True:
+            return True
     return any(
-        isinstance(value, str) and value.casefold() in {"group", "supergroup", "channel", "channelmessage"}
+        isinstance(value, str) and value.casefold().replace("_", "").replace(" ", "")
+        in {"group", "supergroup", "channel", "channelmessage"}
         for value in values
     )
 
 
-def _owner_private_text(
-    update: Mapping[str, Any], owner_chat_id: str, owner_user_id: str
-) -> str | None:
+_PRIVATE_CHAT_TYPES = {"private", "privatechat", "user", "userchat", "personal"}
+
+
+def _is_private_chat(
+    update: Mapping[str, Any], message: Mapping[str, Any], chat_id: Any
+) -> bool:
+    """Fail closed unless the payload identifies a private chat or uses its private GUID prefix."""
+    if not isinstance(chat_id, str) or not chat_id:
+        return False
+    if _is_group_or_channel(update, message):
+        return False
+    lowered_id = chat_id.casefold()
+    # Rubika GUIDs distinguish private chats (b0) from groups (g0) and channels (c0).
+    if lowered_id.startswith(("g0", "c0")):
+        return False
+
+    explicit_types: list[str] = []
+    for container in (update, message):
+        value = container.get("chat_type")
+        if isinstance(value, str) and value.strip():
+            explicit_types.append(value.strip().casefold().replace("_", "").replace(" ", ""))
+    chat = update.get("chat") or message.get("chat")
+    if isinstance(chat, Mapping):
+        for value in (chat.get("chat_type"), chat.get("type")):
+            if isinstance(value, str) and value.strip():
+                explicit_types.append(value.strip().casefold().replace("_", "").replace(" ", ""))
+
+    if explicit_types:
+        return all(value in _PRIVATE_CHAT_TYPES for value in explicit_types)
+    return lowered_id.startswith("b0")
+
+
+def _is_bot_authored_message(update: Mapping[str, Any], message: Mapping[str, Any]) -> bool:
+    """Reject Bot-authored messages without comparing or logging sender_id."""
+    values = (message.get("sender_type"), update.get("sender_type"))
+    if any(isinstance(value, str) and value.casefold() == "bot" for value in values):
+        return True
+    return any(
+        container.get(field) is True
+        for container in (update, message)
+        for field in ("is_bot", "is_self", "is_me")
+    )
+
+
+def _owner_private_text(update: Mapping[str, Any], owner_chat_id: str) -> str | None:
     if update.get("type") != "NewMessage":
         return None
     message = update.get("new_message")
-    if not isinstance(message, dict) or _is_group_or_channel(update, message):
+    if not isinstance(message, Mapping) or _is_bot_authored_message(update, message):
         return None
     chat_id = update.get("chat_id") or message.get("chat_id")
-    sender_id = message.get("sender_id")
-    if str(chat_id or "") != owner_chat_id or str(sender_id or "") != owner_user_id:
+    if chat_id != owner_chat_id or not _is_private_chat(update, message, chat_id):
         return None
-    text = message.get("text")
-    if not isinstance(text, str):
+    text_value = message.get("text")
+    if not isinstance(text_value, str):
         return None
-    clean = text.strip()
+    clean = text_value.strip()
     if not clean or len(clean) > MAX_REPLY_CHARS:
         return None
     return clean
-
 
 
 def _safe_button_id(value: Any) -> str | None:
@@ -422,49 +469,22 @@ def _safe_button_id(value: Any) -> str | None:
 
 
 def _log_update_diagnostic(update: Any) -> None:
-    """Log only update type and sanitized button ID; never text, chat, or message IDs."""
+    """Log only the final four characters of update type and chat ID."""
     if not isinstance(update, Mapping):
-        update_type = "unknown"
-        button_id = None
+        update_type = ""
+        chat_id = ""
     else:
-        raw_type = update.get("type")
-        update_type = re.sub(r"[^A-Za-z0-9_-]", "", str(raw_type or "unknown"))[:40] or "unknown"
-        message = update.get("inline_message")
-        aux = message.get("aux_data") if isinstance(message, Mapping) else None
-        button_id = _safe_button_id(aux.get("button_id")) if isinstance(aux, Mapping) else None
-    print(json.dumps({"update_type": update_type, "button_id": button_id}, separators=(",", ":")))
-
-
-def _log_owner_gate_diagnostic(
-    update: Mapping[str, Any], owner_chat_id: str, owner_user_id: str | None
-) -> None:
-    """Log only boolean gate results; never log IDs or message contents."""
-    update_type = update.get("type")
-    if update_type == "NewMessage":
-        message = update.get("new_message")
-    elif update_type == "ReceiveQuery":
-        message = update.get("inline_message")
-    else:
-        return
-    if not isinstance(message, Mapping):
-        message = {}
-    chat_id = update.get("chat_id") or message.get("chat_id")
-    sender_id = message.get("sender_id")
-    message_id = message.get("message_id")
-    text_value = message.get("text")
+        update_type = re.sub(r"[^A-Za-z0-9_-]", "", str(update.get("type") or ""))[:80]
+        nested = update.get("new_message")
+        if not isinstance(nested, Mapping):
+            nested = update.get("inline_message")
+        if not isinstance(nested, Mapping):
+            nested = {}
+        raw_chat_id = update.get("chat_id") or nested.get("chat_id") or ""
+        chat_id = re.sub(r"[^A-Za-z0-9_-]", "", str(raw_chat_id))
     print(json.dumps({
-        "owner_gate": {
-            "update_type": re.sub(r"[^A-Za-z0-9_-]", "", str(update_type or "unknown"))[:40],
-            "message_payload_present": bool(message),
-            "chat_id_present": isinstance(chat_id, str) and bool(chat_id),
-            "chat_matches_owner": bool(owner_chat_id) and str(chat_id or "") == owner_chat_id,
-            "sender_id_present": isinstance(sender_id, str) and bool(sender_id),
-            "sender_matches_owner": bool(owner_user_id) and str(sender_id or "") == owner_user_id,
-            "message_id_is_string": isinstance(message_id, str) and bool(message_id),
-            "identity_valid": _message_identity(update) is not None,
-            "text_present": isinstance(text_value, str) and bool(text_value.strip()),
-            "group_or_channel": _is_group_or_channel(update, message),
-        }
+        "type_tail": update_type[-4:] or None,
+        "chat_id_tail": chat_id[-4:] or None,
     }, separators=(",", ":")))
 
 
@@ -550,35 +570,40 @@ def parse_x_status_url(text: str) -> str | None:
 def _owner_private_event(
     update: Mapping[str, Any],
     owner_chat_id: str,
-    owner_user_id: str,
 ) -> tuple[str, str | None, str | None, Mapping[str, Any]] | None:
-    """Return (kind, text, button_id, nested payload) only for the exact configured owner."""
+    """Accept only events from the configured private chat; sender_id is not an auth gate."""
     update_type = update.get("type")
     if update_type == "NewMessage":
         message = update.get("new_message")
+        if not isinstance(message, Mapping):
+            return None
         kind = "message"
-        text = message.get("text") if isinstance(message, Mapping) else None
+        text_value = _owner_private_text(update, owner_chat_id)
     elif update_type == "ReceiveQuery":
         message = update.get("inline_message")
+        if not isinstance(message, Mapping):
+            return None
         kind = "callback"
-        text = None
+        text_value = None
     else:
         return None
-    if not isinstance(message, Mapping) or _is_group_or_channel(update, message):
+
+    if kind == "message" and _is_bot_authored_message(update, message):
         return None
     chat_id = update.get("chat_id") or message.get("chat_id")
-    sender_id = message.get("sender_id")
-    if str(chat_id or "") != owner_chat_id or str(sender_id or "") != owner_user_id:
+    if chat_id != owner_chat_id or not _is_private_chat(update, message, chat_id):
         return None
     if kind == "message":
-        if not isinstance(text, str) or not text.strip() or len(text) > MAX_REPLY_CHARS:
+        if not isinstance(text_value, str):
             return None
-        return kind, text.strip(), None, message
+        return kind, text_value, None, message
+
     aux_data = message.get("aux_data")
     button_id = _safe_button_id(aux_data.get("button_id")) if isinstance(aux_data, Mapping) else None
     if not button_id:
         return None
     return kind, None, button_id, message
+
 
 def _nonnegative_count(value: Any) -> int:
     return value if type(value) is int and value >= 0 else 0
@@ -736,13 +761,11 @@ class OperationsConsole:
         bot: RubikaBotAPI,
         control: ControlWorker,
         owner_chat_id: str,
-        owner_user_id: str | None,
         github_runs: Callable[[], list[dict[str, Any]]] | None = None,
     ):
         self.bot = bot
         self.control = control
         self.owner_chat_id = owner_chat_id
-        self.owner_user_id = owner_user_id
         self.github_runs = github_runs or fetch_recent_github_runs
         self.conversation_state = CONSOLE_IDLE
         self._rubika_offset: str | None = None
@@ -839,15 +862,11 @@ class OperationsConsole:
     def process_update(
         self,
         update: Mapping[str, Any],
-        *,
-        resolved_owner_user_id: str | None = None,
     ) -> str:
         _log_update_diagnostic(update)
-        if isinstance(update, Mapping):
-            _log_owner_gate_diagnostic(update, self.owner_chat_id, self.owner_user_id)
-        if not self.owner_chat_id or not self.owner_user_id:
+        if not self.owner_chat_id:
             return "ignored"
-        event = _owner_private_event(update, self.owner_chat_id, self.owner_user_id)
+        event = _owner_private_event(update, self.owner_chat_id)
         update_id = _message_identity(update)
         if event is None or update_id is None:
             return "ignored"
@@ -949,15 +968,6 @@ class OperationsConsole:
             stats["ignored"] = len(updates[:MAX_UPDATES_PER_POLL])
             return stats
 
-        # The workflow requires the configured owner user ID; no sender inference.
-        if not self.owner_user_id:
-            stats["ignored"] = len(updates[:MAX_UPDATES_PER_POLL])
-            if valid_next_offset:
-                self._rubika_offset = next_offset
-                self.control.set_offset(encode_console_state(next_offset, self.conversation_state))
-                stats["offset_advanced"] = True
-            return stats
-
         for update in updates[:MAX_UPDATES_PER_POLL]:
             if not isinstance(update, Mapping):
                 _log_update_diagnostic(update)
@@ -1016,8 +1026,6 @@ def format_github_runs(runs: list[dict[str, Any]]) -> str:
 def _required_env() -> tuple[str, str, str, str, str]:
     token = os.getenv("RUBIKA_TOKEN", "").strip()
     owner_chat_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "").strip()
-    # For this private console, Rubika owner chat ID is also the sender ID.
-    owner_user_id = owner_chat_id
     api_token = os.getenv("AGENT_API_TOKEN", "").strip()
     control_url = os.getenv("AGENT_API_BASE_URL", DEFAULT_CONTROL_URL).strip()
     if len(token) < 16:
@@ -1026,7 +1034,7 @@ def _required_env() -> tuple[str, str, str, str, str]:
         raise OwnerConsoleError("rubika_owner_chat_id_missing")
     if len(api_token) < 32:
         raise OwnerConsoleError("control_api_token_missing_or_short")
-    return token, owner_chat_id, owner_user_id, api_token, control_url
+    return token, owner_chat_id, api_token, control_url
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1051,14 +1059,13 @@ def main(argv: list[str] | None = None) -> int:
     if not args.once:
         parser.error("use --once; the scheduled workflow owns polling cadence")
     try:
-        token, owner_chat_id, owner_user_id, api_token, control_url = _required_env()
+        token, owner_chat_id, api_token, control_url = _required_env()
         bot = RubikaBotAPI(token)
         control = ControlWorker(control_url, api_token)
         console = OperationsConsole(
             bot=bot,
             control=control,
             owner_chat_id=owner_chat_id,
-            owner_user_id=owner_user_id,
         )
         stats = console.poll_once()
         print(json.dumps({"ok": True, "mode": "poll-once", **stats}, sort_keys=True))
