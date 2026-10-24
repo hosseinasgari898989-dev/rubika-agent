@@ -1026,11 +1026,14 @@ async function postPanelUpdate(state, update, secret) {
   const textEvent = panel.normalize({
     update: {
       type: "NewMessage", chat_id: "b0paneltest",
-      new_message: { message_id: "m-text", chat_id: "b0paneltest", text: "  سلام دنیا  " },
+      new_message: { message_id: "m-text", chat_id: "b0paneltest", text: "  سلام دنیا  ", time: 1234567890 },
     },
   });
   assert.equal(textEvent.kind, "text");
   assert.equal(textEvent.text, "سلام دنیا");
+  assert.equal(textEvent.time, 1234567890);
+  assert.equal(panel.normalize({ update: { type: "NewMessage", chat_id: "b0paneltest",
+    new_message: { message_id: "m-no-time", text: "hello", time: "1234567890" } } }).time, null);
 }
 
 // Private-chat recognition accepts b0 IDs, rejects groups/channels, and rejects bot-authored input.
@@ -1176,16 +1179,17 @@ async function postPanelUpdate(state, update, secret) {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "old-live-panel-4321");
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "status-command-4321", chat_id: "b0actualowner", text: "/status",
+        message_id: "status-click-4321", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_edit_failed");
     assert.equal(state.DB.state.get("panel_edit_fail"), "1");
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-2");
-    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "mock-reply-1"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "old-live-panel-4321"), true);
     const failedEdit = calls.find(call => call.method === "editMessageText");
     const fallbackSend = calls.filter(call => call.method === "sendMessage").at(-1);
     assert.equal(fallbackSend.payload.text, failedEdit.payload.text);
@@ -1204,16 +1208,17 @@ async function postPanelUpdate(state, update, secret) {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "old-http-panel-3322");
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "status-command-3322", chat_id: "b0actualowner", text: "/status",
+        message_id: "status-click-3322", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_http_503");
     assert.equal(state.DB.state.get("panel_edit_fail"), "1");
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-2");
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 2);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
   }, ({ method }) => method === "editMessageText"
     ? new Response(JSON.stringify({ status: "UNAVAILABLE" }), { status: 503 })
     : null);
@@ -1227,6 +1232,9 @@ async function postPanelUpdate(state, update, secret) {
     state.DB.state.set("last_error", "rubika_editmessagetext_http_503");
     state.DB.state.set("panel_edit_ok", "9");
     state.DB.state.set("panel_edit_fail", "2");
+    state.DB.state.set("last_timings", JSON.stringify([
+      { msg_age_s: 1.25, total_ms: 10, rubika_calls: 2, rubika_ms: 6, d1_ms: 3 },
+    ]));
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
@@ -1243,6 +1251,8 @@ async function postPanelUpdate(state, update, secret) {
     assert.equal(debugSend.payload.text.includes("rubika_editmessagetext_http_503"), true);
     assert.equal(debugSend.payload.text.includes("panel_edit_ok: 9"), true);
     assert.equal(debugSend.payload.text.includes("panel_edit_fail: 2"), true);
+    assert.equal(debugSend.payload.text.includes('"msg_age_s":1.25'), true);
+    assert.equal(debugSend.payload.text.includes('"rubika_calls":2'), true);
     assert.equal(debugSend.payload.text.includes("chat_tail: wner"), true);
     assert.equal(debugSend.payload.text.includes("message_id_tail: 1234"), true);
     assert.equal(debugSend.payload.text.includes("b0actualowner"), false);
@@ -1294,5 +1304,77 @@ async function postPanelUpdate(state, update, secret) {
     : null);
 }
 
-console.log("Worker tests passed: existing APIs plus live panel tracking, best-effort replacement/deletion, edit counters, safe diagnostics, and owner isolation.");
+
+// Non-report pages fetch data before rendering and only edit the existing live panel once.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "existing-live-status-4321");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "status-click-single-1", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_status" },
+      } },
+    }, secret);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 1);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 1);
+    assert.equal(calls.every(call => !("message_id" in call.payload) || call.payload.message_id === "existing-live-status-4321"), true);
+    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+  });
+}
+
+// The last five owner events retain numeric-only timing records with a numeric message timestamp.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "older-live-panel");
+    const secret = await panel.hookSecret(state);
+    for (let i = 1; i <= 6; i += 1) {
+      await postPanelUpdate(state, {
+        update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+          message_id: "timing-event-" + i, chat_id: "b0actualowner", text: "/menu",
+          time: Math.floor(Date.now() / 1000) - 2,
+        } },
+      }, secret);
+    }
+    const history = JSON.parse(state.DB.state.get("last_timings"));
+    assert.equal(history.length, 5);
+    for (const row of history) {
+      assert.equal(typeof row.msg_age_s, "number");
+      assert.equal(Number.isFinite(row.msg_age_s), true);
+      assert.equal(typeof row.total_ms, "number");
+      assert.equal(typeof row.rubika_calls, "number");
+      assert.equal(typeof row.rubika_ms, "number");
+      assert.equal(typeof row.d1_ms, "number");
+      assert.equal(row.rubika_calls, 2);
+      assert.equal(row.total_ms >= 0, true);
+      assert.equal(row.rubika_ms >= 0, true);
+      assert.equal(row.d1_ms >= 0, true);
+      assert.deepEqual(Object.keys(row).sort(), ["d1_ms", "msg_age_s", "rubika_calls", "rubika_ms", "total_ms"]);
+    }
+    assert.equal(calls.filter(call => call.method === "deleteMessage").length, 6);
+  });
+}
+
+// Missing or nonnumeric message time is saved as null, without exposing timing details outside the owner panel.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "timing-no-time-1", chat_id: "b0actualowner", text: "/menu", time: "not-numeric",
+      } },
+    }, secret);
+    const history = JSON.parse(state.DB.state.get("last_timings"));
+    assert.equal(history.at(-1).msg_age_s, null);
+  });
+}
+
+console.log("Worker tests passed: live panel tracking, parallel edits, bounded owner timings, optimized page rendering, smart placement configuration, safe diagnostics, and owner isolation.");
 

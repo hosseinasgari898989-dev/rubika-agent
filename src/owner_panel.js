@@ -6,6 +6,8 @@ const MAX_BODY = 64 * 1024;
 const PRIVATE_TYPES = new Set(["private", "privatechat", "user", "userchat", "personal"]);
 const X_LINK = /https?:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/([A-Za-z0-9_]{1,15})\/status\/([0-9]{15,22})/i;
 const te = new TextEncoder();
+const PANEL_TIMING = Symbol("panel_timing");
+const elapsedMs = (startedAt) => Math.max(0, Math.round(performance.now() - startedAt));
 
 export class PanelError extends Error {
   constructor(code) {
@@ -97,6 +99,7 @@ export function normalize(body) {
   return {
     kind, chat: typeof chat === "string" ? chat : "", mid: typeof m.message_id === "string" ? m.message_id : "",
     text: typeof m.text === "string" ? m.text.trim().slice(0, 3400) : "", button, types,
+    time: typeof m.time === "number" && Number.isFinite(m.time) ? m.time : null,
     isGroupish: [u, m, u.chat].some((o) => bad(o, "is_group") || bad(o, "is_channel")),
     botAuthored: String(m.sender_type || u.sender_type || "").toLowerCase() === "bot"
       || [u, m].some((o) => bad(o, "is_bot") || bad(o, "is_self") || bad(o, "is_me")),
@@ -117,21 +120,28 @@ export function parseXLink(text) {
 // ---------- Rubika Bot API (token never appears in errors/logs)
 async function rubika(env, method, payload) {
   const methodName = String(method || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "unknown";
-  let res;
+  const timing = env && env[PANEL_TIMING];
+  if (timing) timing.rubika_calls += 1;
+  const startedAt = performance.now();
   try {
-    res = await fetch(RUBIKA_API + "/" + env.RUBIKA_TOKEN + "/" + method, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-    });
-  } catch { throw new PanelError("rubika_" + methodName + "_network"); }
-  let data = null;
-  try { data = await res.json(); } catch { /* ignore */ }
-  if (!res.ok || !data || data.status !== "OK") {
-    const statusCode = res.ok
-      ? String(data && data.status || "bad").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30)
-      : "http_" + res.status;
-    throw new PanelError("rubika_" + methodName + "_" + statusCode);
+    let res;
+    try {
+      res = await fetch(RUBIKA_API + "/" + env.RUBIKA_TOKEN + "/" + method, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
+    } catch { throw new PanelError("rubika_" + methodName + "_network"); }
+    let data = null;
+    try { data = await res.json(); } catch { /* ignore */ }
+    if (!res.ok || !data || data.status !== "OK") {
+      const statusCode = res.ok
+        ? String(data && data.status || "bad").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30)
+        : "http_" + res.status;
+      throw new PanelError("rubika_" + methodName + "_" + statusCode);
+    }
+    return data;
+  } finally {
+    if (timing) timing.rubika_ms += elapsedMs(startedAt);
   }
-  return data;
 }
 const responseMessageId = (response) => {
   const mid = response && response.data && response.data.message_id;
@@ -176,8 +186,17 @@ async function edit(env, chat, mid, src, keypad) {
   const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
     keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
   try {
-    await rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base);
-    if (hasKeypad) await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad });
+    const operations = [
+      rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base),
+    ];
+    if (hasKeypad) operations.push(
+      rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad }),
+    );
+    const results = await Promise.all(operations.map((operation) =>
+      operation.then(() => null, (error) => ({ error })),
+    ));
+    const failure = results.find(Boolean);
+    if (failure) throw failure.error;
     try { await bumpCounter(env, "panel_edit_ok"); } catch { /* diagnostics must not block panel rendering */ }
     return targetMid;
   } catch (e) {
@@ -203,6 +222,81 @@ const getState = async (env, k, d) => (await env.DB.prepare("SELECT value FROM p
 const setState = (env, k, v) => env.DB.prepare(
   "INSERT INTO panel_state(key,value,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
 ).bind(k, String(v)).run();
+
+function timedStatement(statement, timing) {
+  return new Proxy(statement, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target);
+      if (property === "bind" && typeof value === "function") {
+        return (...args) => timedStatement(value.apply(target, args), timing);
+      }
+      if (["first", "run", "all", "raw", "exec"].includes(String(property)) && typeof value === "function") {
+        return async (...args) => {
+          const startedAt = performance.now();
+          try { return await value.apply(target, args); }
+          finally { timing.d1_ms += elapsedMs(startedAt); }
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+function withPanelTiming(env, timing) {
+  const scoped = Object.create(env);
+  Object.defineProperty(scoped, PANEL_TIMING, { value: timing });
+  if (env.DB) {
+    const db = env.DB;
+    Object.defineProperty(scoped, "DB", {
+      value: new Proxy(db, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target);
+          if (property === "prepare" && typeof value === "function") {
+            return (...args) => timedStatement(value.apply(target, args), timing);
+          }
+          if (["batch", "exec"].includes(String(property)) && typeof value === "function") {
+            return async (...args) => {
+              const startedAt = performance.now();
+              try { return await value.apply(target, args); }
+              finally { timing.d1_ms += elapsedMs(startedAt); }
+            };
+          }
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }),
+    });
+  }
+  return scoped;
+}
+function messageAgeSeconds(messageTime, receivedAt) {
+  if (typeof messageTime !== "number" || !Number.isFinite(messageTime)) return null;
+  const messageMs = Math.abs(messageTime) >= 1e12 ? messageTime : messageTime * 1000;
+  const age = (receivedAt - messageMs) / 1000;
+  return Number.isFinite(age) ? Math.round(age * 1000) / 1000 : null;
+}
+async function recordPanelTiming(env, timing, msgAge) {
+  try {
+    const raw = await getState(env, "last_timings", "[]");
+    let history = [];
+    try { history = JSON.parse(raw); } catch { /* discard malformed prior diagnostics */ }
+    if (!Array.isArray(history)) history = [];
+    history = history.filter((item) => item && typeof item === "object" && !Array.isArray(item))
+      .map((item) => ({
+        msg_age_s: typeof item.msg_age_s === "number" && Number.isFinite(item.msg_age_s) ? item.msg_age_s : null,
+        total_ms: Number.isFinite(item.total_ms) && item.total_ms >= 0 ? item.total_ms : 0,
+        rubika_calls: Number.isSafeInteger(item.rubika_calls) && item.rubika_calls >= 0 ? item.rubika_calls : 0,
+        rubika_ms: Number.isFinite(item.rubika_ms) && item.rubika_ms >= 0 ? item.rubika_ms : 0,
+        d1_ms: Number.isFinite(item.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
+      })).slice(-4);
+    const row = {
+      msg_age_s: msgAge,
+      total_ms: elapsedMs(timing.startedAt),
+      rubika_calls: timing.rubika_calls,
+      rubika_ms: timing.rubika_ms,
+      d1_ms: timing.d1_ms,
+    };
+    await setState(env, "last_timings", JSON.stringify([...history, row].slice(-5)));
+  } catch { /* diagnostics must never break owner commands */ }
+}
 async function firstSeen(env, key) {
   const r = await env.DB.prepare("INSERT OR IGNORE INTO panel_events(event_key) VALUES(?)").bind(key).run();
   if (Math.random() < 0.05) await env.DB.prepare("DELETE FROM panel_events WHERE created_at < datetime('now','-2 days')").run();
@@ -258,6 +352,17 @@ async function debugText(env) {
   };
   const editOk = await readCounter("panel_edit_ok");
   const editFail = await readCounter("panel_edit_fail");
+  let timings = [];
+  try {
+    const parsed = JSON.parse(await getState(env, "last_timings", "[]"));
+    if (Array.isArray(parsed)) timings = parsed.slice(-5).map((item) => ({
+      msg_age_s: typeof item?.msg_age_s === "number" && Number.isFinite(item.msg_age_s) ? item.msg_age_s : null,
+      total_ms: Number.isFinite(item?.total_ms) && item.total_ms >= 0 ? item.total_ms : 0,
+      rubika_calls: Number.isSafeInteger(item?.rubika_calls) && item.rubika_calls >= 0 ? item.rubika_calls : 0,
+      rubika_ms: Number.isFinite(item?.rubika_ms) && item.rubika_ms >= 0 ? item.rubika_ms : 0,
+      d1_ms: Number.isFinite(item?.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
+    }));
+  } catch { /* invalid or old timing state */ }
   let event = null;
   try { event = JSON.parse(await getState(env, "last_event", "null")); } catch { /* invalid older state */ }
   const types = Array.isArray(event && event.types)
@@ -269,6 +374,7 @@ async function debugText(env) {
     "last_error: " + lastError,
     "panel_edit_ok: " + editOk,
     "panel_edit_fail: " + editFail,
+    "last_timings: " + JSON.stringify(timings),
     "last_event:",
     "kind: " + (clean(event && event.kind, 16) || "none"),
     "types: " + types,
@@ -283,6 +389,19 @@ async function renderData(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const env = ui.env;
   const chat = ui.chat;
   const previousMid = await getState(env, "panel_mid", "");
+  const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
+
+  if (id !== "p_report") {
+    let out;
+    if (id === "p_status") out = fmtStatus(await api(ui, "/api/status"));
+    else if (id === "p_queue") out = fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary"));
+    else out = "🤖 **دفتر سهمیهٔ هوش مصنوعی**\n\n" + await aiBlock(ui);
+
+    if (fresh) return sendFreshPanel(ui, out, refreshKb(id), previousMid);
+    if (targetMid) return edit(env, chat, targetMid, out, refreshKb(id));
+    return send(env, chat, out, refreshKb(id));
+  }
+
   let mid;
   if (fresh || !previousMid) {
     const response = fresh
@@ -290,25 +409,17 @@ async function renderData(ui, id, { fresh = false, clickedMid = "" } = {}) {
       : await send(env, chat, "⏳ در حال دریافت…", refreshKb(id));
     mid = responseMessageId(response);
   } else {
-    const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
     mid = await edit(env, chat, targetMid, "⏳ در حال دریافت…", refreshKb(id));
   }
 
-  let out;
-  if (id === "p_status") out = fmtStatus(await api(ui, "/api/status"));
-  else if (id === "p_queue") out = fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary"));
-  else if (id === "p_ai") out = "🤖 **دفتر سهمیهٔ هوش مصنوعی**\n\n" + await aiBlock(ui);
-  else {
-    const parts = ["🧾 **گزارش Rubika-Agent**"];
-    mid = await edit(env, chat, mid, "⏳ ۱ از ۳ — وضعیت Worker…", refreshKb(id));
-    parts.push(fmtStatus(await api(ui, "/api/status")));
-    mid = await edit(env, chat, mid, "⏳ ۲ از ۳ — صف انتشار…", refreshKb(id));
-    parts.push(fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary")));
-    mid = await edit(env, chat, mid, "⏳ ۳ از ۳ — هوش مصنوعی…", refreshKb(id));
-    parts.push(await aiBlock(ui));
-    out = parts.join("\n\n");
-  }
-  await edit(env, chat, mid, out, refreshKb(id));
+  const parts = ["🧾 **گزارش Rubika-Agent**"];
+  mid = await edit(env, chat, mid, "⏳ ۱ از ۳ — وضعیت Worker…", refreshKb(id));
+  parts.push(fmtStatus(await api(ui, "/api/status")));
+  mid = await edit(env, chat, mid, "⏳ ۲ از ۳ — صف انتشار…", refreshKb(id));
+  parts.push(fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary")));
+  mid = await edit(env, chat, mid, "⏳ ۳ از ۳ — هوش مصنوعی…", refreshKb(id));
+  parts.push(await aiBlock(ui));
+  await edit(env, chat, mid, parts.join("\n\n"), refreshKb(id));
 }
 
 async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
@@ -363,43 +474,49 @@ async function tryClaim(env, ev) {
 const idTail = (value) => String(value ?? "").slice(-4);
 async function processEvent(env, selfFetch, origin, ev) {
   if (!ev) return;
-  const owner = await getOwner(env);
+  const timing = { startedAt: performance.now(), rubika_calls: 0, rubika_ms: 0, d1_ms: 0 };
+  const receivedAt = Date.now();
+  const timedEnv = withPanelTiming(env, timing);
+  const owner = await getOwner(timedEnv);
   if (!owner) {
-    if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev)) await tryClaim(env, ev);
+    if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev)) await tryClaim(timedEnv, ev);
     return;
   }
   if (!safeEqual(owner, ev.chat)) return;
-  const lastEvent = {
-    kind: clean(ev.kind, 16) || "unknown",
-    types: Array.isArray(ev.types) ? ev.types.slice(0, 4).map((value) => clean(value, 24)).filter(Boolean) : [],
-    chat_tail: idTail(ev.chat),
-    message_id_tail: idTail(ev.mid),
-    button: clean(ev.button, 60),
-    botAuthored: ev.botAuthored === true,
-  };
-  try { await setState(env, "last_event", JSON.stringify(lastEvent)); } catch { /* diagnostics must not block owner commands */ }
-  if (ev.botAuthored || !isPrivateChat(ev)) return;
-  const key = ev.kind === "click"
-    ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
-    : "t|" + ev.chat + "|" + ev.mid;
-  if (!(await firstSeen(env, key))) return;
-  const ui = { env, chat: ev.chat, selfFetch, origin };
+  const msgAge = messageAgeSeconds(ev.time, receivedAt);
   try {
+    const lastEvent = {
+      kind: clean(ev.kind, 16) || "unknown",
+      types: Array.isArray(ev.types) ? ev.types.slice(0, 4).map((value) => clean(value, 24)).filter(Boolean) : [],
+      chat_tail: idTail(ev.chat),
+      message_id_tail: idTail(ev.mid),
+      button: clean(ev.button, 60),
+      botAuthored: ev.botAuthored === true,
+    };
+    try { await setState(timedEnv, "last_event", JSON.stringify(lastEvent)); } catch { /* diagnostics must not block owner commands */ }
+    if (ev.botAuthored || !isPrivateChat(ev)) return;
+    const key = ev.kind === "click"
+      ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
+      : "t|" + ev.chat + "|" + ev.mid;
+    if (!(await firstSeen(timedEnv, key))) return;
+    const ui = { env: timedEnv, chat: ev.chat, selfFetch, origin };
     if (ev.kind === "click") { await render(ui, ev.button, { clickedMid: ev.mid }); return; }
     const word = ev.text.split(/\s+/)[0].split("@")[0].toLowerCase();
-    if (word === "/register") { await registerWebhook(env, origin); await send(env, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
+    if (word === "/register") { await registerWebhook(timedEnv, origin); await send(timedEnv, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
     if (COMMANDS[word]) { await render(ui, COMMANDS[word], { fresh: true }); return; }
-    if ((await getState(env, "mode", "idle")) === "waiting_link") {
+    if ((await getState(timedEnv, "mode", "idle")) === "waiting_link") {
       const link = parseXLink(ev.text);
-      if (!link) { await send(env, ev.chat, "لینک معتبر نیست. شکل درست: x.com/نام/status/شناسه", CANCEL_KB); return; }
-      await env.DB.prepare("INSERT OR IGNORE INTO panel_links(url) VALUES(?)").bind(link).run();
-      await setState(env, "mode", "idle");
-      await send(env, ev.chat, "✅ لینک ذخیره شد:\n" + String.fromCharCode(96) + link + String.fromCharCode(96) + "\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.", HOME_KB);
+      if (!link) { await send(timedEnv, ev.chat, "لینک معتبر نیست. شکل درست: x.com/نام/status/شناسه", CANCEL_KB); return; }
+      await timedEnv.DB.prepare("INSERT OR IGNORE INTO panel_links(url) VALUES(?)").bind(link).run();
+      await setState(timedEnv, "mode", "idle");
+      await send(timedEnv, ev.chat, "✅ لینک ذخیره شد:\n" + String.fromCharCode(96) + link + String.fromCharCode(96) + "\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.", HOME_KB);
       return;
     }
-    await send(env, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
+    await send(timedEnv, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
   } catch (e) {
-    try { await send(env, ev.chat, "❌ خطا: " + esc(e && e.code || "unknown"), BACK_KB); } catch { /* ignore */ }
+    try { await send(timedEnv, ev.chat, "❌ خطا: " + esc(e && e.code || "unknown"), BACK_KB); } catch { /* ignore */ }
+  } finally {
+    await recordPanelTiming(timedEnv, timing, msgAge);
   }
 }
 
