@@ -36,6 +36,10 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Check Cloudflare Worker JavaScript syntax
         run: node --check --input-type=module < src/index.js
+      - name: Check owner panel JavaScript syntax
+        run: node --check --input-type=module < src/owner_panel.js
+      - name: Lint owner panel JavaScript
+        run: npx --yes eslint@9.38.0 --no-config-lookup --rule 'no-dupe-keys:error' --rule 'no-unreachable:error' --rule 'no-unused-vars:error' --rule 'valid-typeof:error' --rule 'no-constant-condition:error' --rule 'no-constant-binary-expression:error' src/owner_panel.js
       - name: Verify installed Rubka API surface
         run: |
           python - <<'PY'
