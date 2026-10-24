@@ -1839,5 +1839,145 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     "no alternate network request primitive is allowed");
 }
 
+// Phase-two console endpoints use the fake D1 database and audit each successful mutation to brain_events.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/owners"), state));
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.items, []);
+
+  response = await read(await worker.fetch(request("/api/console/owners", {
+    method: "POST", body: { chat_id: "owner-chat-001", label: "مالک اصلی", role: "owner", enabled: 1 },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.item.role, "owner");
+  const ownerId = response.body.item.id;
+
+  response = await read(await worker.fetch(request("/api/console/owners", {
+    method: "POST", body: { chat_id: "viewer-chat-002", label: "ناظر", role: "viewer", enabled: 1 },
+  }), state));
+  assert.equal(response.status, 201);
+  const viewerId = response.body.item.id;
+
+  response = await read(await worker.fetch(request("/api/console/owners", {
+    method: "POST", body: { id: viewerId, enabled: 0 },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(Number(response.body.item.enabled), 0);
+
+  response = await read(await worker.fetch(request("/api/console/owners/" + viewerId, { method: "DELETE" }), state));
+  assert.equal(response.status, 200);
+  response = await read(await worker.fetch(request("/api/console/owners/" + ownerId, { method: "DELETE" }), state));
+  assert.equal(response.status, 409, "the last enabled owner must not be removable");
+
+  response = await read(await worker.fetch(request("/api/console/owners/invite", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 201);
+  assert.match(response.body.invite_code, /^INV-[A-F0-9]{32}$/);
+  assert.ok(Date.parse(response.body.expires_at) > Date.now());
+  assert.equal([...state.DB.consoleInvites.values()].some(row => row.code_hash === response.body.invite_code), false,
+    "plaintext invitation code must not be stored in D1");
+  assert.equal(state.DB.events.some(event => event.code === "console_owner_create"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_owner_update"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_owner_delete"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_owner_invite"), true);
+  assert.equal(state.DB.events.some(event => JSON.stringify(event).includes(response.body.invite_code)), false,
+    "audit logs must never contain the plaintext invite code");
+}
+
+// Rules follow the HTML's {ok, version, rules, updated_at} contract and optimistic base_version.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/rules"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.version, 1);
+  assert.equal(response.body.rules.publishing_enabled, false);
+  assert.equal(response.body.rules.test_channel_only, true);
+
+  response = await read(await worker.fetch(request("/api/console/rules", {
+    method: "PUT",
+    body: { base_version: 1, rules: { publishing_enabled: true, test_channel_only: false, daily_success_cap: 4, daily_edit_count: 7 } },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.version, 2);
+  assert.equal(response.body.rules.publishing_enabled, false, "publishing must remain disabled");
+  assert.equal(response.body.rules.test_channel_only, true);
+  assert.equal(JSON.parse(state.DB.consoleRules.rules_json).publishing_enabled, false);
+
+  response = await read(await worker.fetch(request("/api/console/rules", {
+    method: "PUT", body: { base_version: 1, rules: { daily_edit_count: 8 } },
+  }), state));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "version_conflict");
+  assert.equal(response.body.server.version, 2);
+  assert.equal(state.DB.events.filter(event => event.code === "console_rules_update").length, 1);
+}
+
+// Channels are configuration only; production role cannot be enabled and no publish path is called.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/channels"), state));
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.items, []);
+
+  response = await read(await worker.fetch(request("/api/console/channels", {
+    method: "POST", body: { label: "کانال تست", rubika_channel_id: "@test_channel", role: "test" },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.item.role, "test");
+  assert.equal(Number(response.body.item.enabled), 1);
+  const testChannelId = response.body.item.id;
+
+  response = await read(await worker.fetch(request("/api/console/channels", {
+    method: "POST", body: { label: "کانال اصلی", rubika_channel_id: "@main_channel", role: "production", enabled: 1 },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.item.role, "production");
+  assert.equal(Number(response.body.item.enabled), 0);
+
+  response = await read(await worker.fetch(request("/api/console/channels", {
+    method: "POST", body: { label: "تکراری", rubika_channel_id: "@test_channel", role: "test" },
+  }), state));
+  assert.equal(response.status, 409);
+
+  response = await read(await worker.fetch(request("/api/console/channels/" + testChannelId, { method: "DELETE" }), state));
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.events.some(event => event.code === "console_channel_create"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_channel_delete"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_channel_create" && String(event.details_json).includes("production") && String(event.details_json).includes("enabled")) === true, true);
+}
+
+// Jobs are durable queue records only: creating one does not run a worker, workflow, or publisher.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/jobs", {
+    method: "POST", body: { type: "ai_health_check", params: { source: "console-test" } },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.match(response.body.job_id, /^job_[a-f0-9]{24}$/);
+  const jobId = response.body.job_id;
+
+  response = await read(await worker.fetch(request("/api/console/jobs/" + encodeURIComponent(jobId)), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.job.id, jobId);
+  assert.equal(response.body.job.type, "ai_health_check");
+  assert.equal(response.body.job.status, "queued");
+  assert.equal(response.body.job.progress, 0);
+  assert.equal(response.body.job.result, null);
+
+  response = await read(await worker.fetch(request("/api/console/jobs?limit=5"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 1);
+
+  response = await read(await worker.fetch(request("/api/console/jobs", {
+    method: "POST", body: { type: "run_arbitrary_workflow", params: {} },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "invalid_job_type");
+  assert.equal(state.DB.events.some(event => event.code === "console_job_create"), true);
+  assert.equal(state.DB.consoleJobs.get(jobId).status, "queued");
+}
+
 console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
 
