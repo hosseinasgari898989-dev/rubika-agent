@@ -9,11 +9,15 @@ from unittest.mock import patch
 
 from agent.brain import mob_official_trial
 from agent.brain.mob_official_trial import (
+    filter_candidates_by_since,
     filter_official_candidates_by_source,
+    load_official_candidates_from_report,
     load_x_candidates_from_report,
     preview_freshness_rejection,
     publication_window_rejection,
     run_trial,
+    since_rule_rejection,
+    sort_candidates_oldest_first,
 )
 
 
@@ -33,18 +37,19 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             "source_name": "Mob Entertainment on X",
             "source_platform": "x",
             "official_source": True,
-            "published_at": "2026-10-14T12:00:00+00:00",
+            "published_at": "2026-10-20T12:00:00+00:00",
+            "freshness_verified": True,
             "media_type": "image",
             "media_url": "https://pbs.twimg.com/media/photo.jpg",
         }
         row.update(changes)
         return row
 
-    def report_file(self, folder: str, rows):
+    def report_file(self, folder: str, rows, source="termux_phone"):
         path = Path(folder) / "termux_discovery.json"
         path.write_text(json.dumps({
             "schema_version": 1,
-            "source": "termux_phone",
+            "source": source,
             "mode": "metadata_only_no_download_no_publish",
             "candidates": {
                 "tiktok": [],
@@ -66,6 +71,14 @@ class MobOfficialTrialReportTests(unittest.TestCase):
         self.assertEqual(status, "ok")
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["external_id"], "x-1734258130186559716")
+
+    def test_accepts_phone_and_github_actions_termux_docker_report_sources(self):
+        for source in ("termux_phone", "github_actions_termux_docker"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as folder:
+                path = self.report_file(folder, [self.row()], source=source)
+                candidates, status = load_official_candidates_from_report(path)
+            self.assertEqual(status, "ok")
+            self.assertEqual(len(candidates), 1)
 
     def test_rejects_invalid_report_schema_and_missing_file(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -293,6 +306,7 @@ class TestChannelPublishingGateTests(unittest.TestCase):
                 "source_platform": "x",
                 "official_source": True,
                 "published_at": "2026-10-19T23:59:59Z",
+                "freshness_verified": True,
                 "media_type": "image",
                 "media_url": "https://pbs.twimg.com/media/photo.jpg",
             }
@@ -307,7 +321,6 @@ class TestChannelPublishingGateTests(unittest.TestCase):
             with (
                 patch.object(mob_official_trial, "CloudState", FakeCloud),
                 patch.object(mob_official_trial, "load_lifecycle_policy", return_value=production_policy),
-                patch.object(mob_official_trial, "publication_window_rejection", return_value=None),
                 patch.dict("os.environ", {
                     "RUBIKA_CHANNEL_GUID": mob_official_trial.TEST_CHANNEL_GUID,
                     "RUBIKA_TOKEN": "dummy-token",
@@ -421,6 +434,150 @@ class TestChannelPublishingGateTests(unittest.TestCase):
         self.assertEqual(result["error"], "test_channel_publishing_config_disabled")
         self.assertFalse(result["publishing"])
 
+
+class OfficialSinceRuleTests(unittest.TestCase):
+    def row(self, external_id, published_at, **changes):
+        row = {
+            "platform": "mob_official",
+            "external_id": external_id,
+            "id": external_id,
+            "url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "title": "Official post",
+            "caption": "Original Mob caption",
+            "original_caption": "Original Mob caption",
+            "author": "@mobgamesstudios",
+            "source_key": "x.com/mobgamesstudios",
+            "source_name": "Mob Entertainment on X",
+            "source_platform": "x",
+            "official_source": True,
+            "freshness_verified": True,
+            "published_at": published_at,
+            "media_type": "image",
+            "media_url": "https://pbs.twimg.com/media/photo.jpg",
+        }
+        row.update(changes)
+        return row
+
+    def test_since_cutoff_rejects_old_accepts_new_and_rejects_unverified_time(self):
+        cutoff = "2026-10-20T00:00:00Z"
+        now = datetime(2026, 10, 24, tzinfo=timezone.utc)
+        old = self.row("old", "2026-10-19T23:59:59Z")
+        boundary = self.row("boundary", cutoff)
+        newer = self.row("newer", "2026-10-21T00:00:00Z")
+        unverified = self.row("unverified", "2026-10-22T00:00:00Z", freshness_verified=False)
+
+        self.assertEqual(since_rule_rejection(old, cutoff, now=now), "before_since_utc")
+        self.assertIsNone(since_rule_rejection(boundary, cutoff, now=now))
+        self.assertIsNone(since_rule_rejection(newer, cutoff, now=now))
+        self.assertEqual(since_rule_rejection(unverified, cutoff, now=now), "publication_time_unverified")
+        accepted, rejected = filter_candidates_by_since([newer, old, boundary, unverified], cutoff)
+        self.assertEqual([row["external_id"] for row in accepted], ["newer", "boundary"])
+        self.assertEqual([row["reason"] for row in rejected], ["before_since_utc", "publication_time_unverified"])
+
+    def test_candidates_are_sorted_oldest_first_stably(self):
+        candidates = [
+            self.row("newest", "2026-10-23T00:00:00Z"),
+            self.row("oldest", "2026-10-20T00:00:01Z"),
+            self.row("middle", "2026-10-21T00:00:00Z"),
+        ]
+        self.assertEqual(
+            [row["external_id"] for row in sort_candidates_oldest_first(candidates)],
+            ["oldest", "middle", "newest"],
+        )
+
+    def test_publish_run_sends_one_oldest_unseen_post_and_preserves_deduplication(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                self.upserted = []
+                self.attempts = []
+
+            def get_seen_index(self):
+                return {"ids": {"mob_official:x-seen", "x-seen"}, "hashes": {"sha-known"}}
+
+            def upsert_item(self, item):
+                self.upserted.append(item)
+
+            def record_attempt(self, item_id, attempt_number, status, **kwargs):
+                self.attempts.append((item_id, status, kwargs))
+
+        class FakePublisher:
+            def __init__(self):
+                self.calls = []
+
+            def send_media(self, media_path, media_type, caption):
+                self.calls.append((str(media_path), media_type, caption))
+                return {"status": "OK", "data": {"message_id": "message-1"}}
+
+        cutoff = "2026-10-20T00:00:00Z"
+        policy = {
+            "mode": "production",
+            "born_at": cutoff,
+            "birth_datetime": datetime(2026, 10, 20, tzinfo=timezone.utc),
+        }
+        candidates = [
+            self.row("x-newer", "2026-10-23T00:00:00Z"),
+            self.row("x-oldhash", "2026-10-20T00:30:00Z"),
+            self.row("x-seen", "2026-10-20T01:00:00Z"),
+            self.row("x-oldest-valid", "2026-10-20T02:00:00Z"),
+        ]
+        publisher = FakePublisher()
+        media_hash = {
+            "x-oldhash": "sha-known",
+            "x-oldest-valid": "sha-new",
+            "x-newer": "sha-newer",
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source_media = {}
+            for candidate in candidates:
+                if candidate["external_id"] == "x-seen":
+                    continue
+                media_path = root / (candidate["external_id"] + ".jpg")
+                media_path.write_bytes(b"fake image bytes")
+                source_media[candidate["external_id"]] = media_path
+
+            def fake_download(item, output_dir):
+                return source_media[item["external_id"]], {
+                    "sha256": media_hash[item["external_id"]],
+                    "media_type": "image",
+                    "size_bytes": 16,
+                    "mime_type": "image/jpeg",
+                }
+
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=policy),
+                patch.object(mob_official_trial, "_official_publishing_config_enabled", return_value=True),
+                patch.object(mob_official_trial, "discover_official_x_posts", return_value=(candidates, [])),
+                patch.object(mob_official_trial, "format_mob_post", side_effect=lambda value: {
+                    "original_caption": value.get("original_caption") or "Original caption",
+                    "persian_translation": "ترجمه تأییدشده",
+                    "translation_status": "translated",
+                    "caption": "ترجمه تأییدشده",
+                }),
+                patch.object(mob_official_trial, "download_and_validate", side_effect=fake_download),
+                patch.object(mob_official_trial, "RubikaPublisher", return_value=publisher),
+                patch.dict("os.environ", {
+                    "RUBIKA_CHANNEL_GUID": mob_official_trial.TEST_CHANNEL_GUID,
+                    "RUBIKA_TOKEN": "dummy-token",
+                }),
+            ):
+                result = run_trial(
+                    publish=True,
+                    limit=1,
+                    output_report=root / "report.json",
+                    output_dir=root / "media",
+                    source_platform="x",
+                )
+
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(result["selected"]["external_id"], "x-oldest-valid")
+        self.assertEqual(len(publisher.calls), 1)
+        self.assertEqual(result["backlog_count"], 1)
+        evaluations = {row.get("external_id"): row.get("result") for row in result["candidate_evaluations"]}
+        self.assertEqual(evaluations["x-oldhash"], "duplicate_media_hash")
+        self.assertNotIn("x-seen", evaluations)
 
 if __name__ == "__main__":
     unittest.main()

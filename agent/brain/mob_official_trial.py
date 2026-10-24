@@ -26,7 +26,7 @@ from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.inspector import inspect_media
 from agent.brain.mob_translation import format_mob_post
 from agent.brain.rubika_publisher import RubikaPublisher
-from agent.discovery.mob_official_complete import discover_all_official_posts
+from agent.discovery.mob_official_complete import discover_all_official_posts, discover_official_x_posts
 from agent.lifecycle import candidate_passes_birth_cutoff, load_lifecycle_policy
 
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
@@ -73,7 +73,7 @@ def publication_window_rejection(
     now: datetime | None = None,
     window_hours: int = 5,
 ) -> str | None:
-    """Require a verified original X publication timestamp inside the news-only window."""
+    """Backward-compatible validator for callers that still explicitly use a rolling window."""
     if type(window_hours) is not int or not 1 <= window_hours <= 24:
         return "publication_window_policy_invalid"
     if str(candidate.get("source_platform") or "").strip().casefold() != "x":
@@ -99,6 +99,82 @@ def publication_window_rejection(
     if published < current - timedelta(hours=window_hours):
         return "outside_recent_publication_window"
     return None
+
+
+def since_rule_rejection(
+    candidate: dict[str, Any],
+    since_utc: str | None,
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    """Accept only verified original X publication times at or after configured since_utc."""
+    if str(candidate.get("source_platform") or "").strip().casefold() != "x":
+        return "official_x_source_required"
+    if candidate.get("freshness_verified") is not True:
+        return "publication_time_unverified"
+    raw_published = candidate.get("published_at")
+    if not isinstance(raw_published, str) or not raw_published.strip():
+        return "publication_time_unverified"
+    if not isinstance(since_utc, str) or not since_utc.strip():
+        return "since_policy_invalid"
+    try:
+        published = datetime.fromisoformat(raw_published.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "publication_time_unverified"
+    try:
+        cutoff = datetime.fromisoformat(since_utc.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "since_policy_invalid"
+    if published.tzinfo is None:
+        return "publication_time_unverified"
+    if cutoff.tzinfo is None:
+        return "since_policy_invalid"
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        return "since_policy_invalid"
+    published = published.astimezone(timezone.utc)
+    cutoff = cutoff.astimezone(timezone.utc)
+    current = current.astimezone(timezone.utc)
+    if published > current + timedelta(minutes=5):
+        return "publication_time_in_future"
+    if published < cutoff:
+        return "before_since_utc"
+    return None
+
+
+def filter_candidates_by_since(
+    candidates: list[dict[str, Any]],
+    since_utc: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, str]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        reason = since_rule_rejection(candidate, since_utc)
+        if reason:
+            rejected.append({
+                "id": str(candidate.get("external_id") or candidate.get("id") or "")[:120],
+                "reason": reason,
+            })
+        else:
+            accepted.append(candidate)
+    return accepted, rejected
+
+
+def sort_candidates_oldest_first(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable oldest-first order using verified original publication timestamps."""
+    def key(candidate: dict[str, Any]) -> tuple[int, float, str]:
+        raw = candidate.get("published_at")
+        try:
+            parsed = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError
+            epoch = parsed.astimezone(timezone.utc).timestamp()
+            return (0, epoch, str(candidate.get("external_id") or candidate.get("id") or ""))
+        except (TypeError, ValueError, OverflowError):
+            return (1, 0.0, str(candidate.get("external_id") or candidate.get("id") or ""))
+    return sorted(candidates, key=key)
 
 
 TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
@@ -425,7 +501,7 @@ def load_official_candidates_from_report(report_path: Path) -> tuple[list[dict[s
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != 1
-        or payload.get("source") != "termux_phone"
+        or payload.get("source") not in {"termux_phone", "github_actions_termux_docker"}
         or payload.get("mode") != "metadata_only_no_download_no_publish"
     ):
         return [], "termux_report_invalid"
@@ -566,6 +642,7 @@ def run_trial(
         "status": "failed",
         "publishing": False,
         "candidate_count": 0,
+        "backlog_count": 0,
         "selected": None,
         "attempts": [],
         "error": None,
@@ -650,6 +727,9 @@ def run_trial(
             "result": source_result,
             "candidate_count": len(candidates),
         }]
+    elif source_platform == "x":
+        # Production X news and the read-only probe share this exact X-only discovery path.
+        candidates, source_attempts = discover_official_x_posts(max_results=25)
     else:
         candidates, source_attempts = discover_all_official_posts(max_results=12)
 
@@ -668,27 +748,17 @@ def run_trial(
             "result": "lane_candidates_found" if candidates else "no_candidates_in_requested_lane",
         })
 
-    news_window_rejections: list[dict[str, str]] = []
+    since_rejections: list[dict[str, str]] = []
     if source_platform == "x" and (publish or test_channel_publish):
-        recent_x_candidates: list[dict[str, Any]] = []
-        window_now = datetime.now(timezone.utc)
-        for item in candidates:
-            reason = publication_window_rejection(
-                item, now=window_now, window_hours=published_within_hours
-            )
-            if reason:
-                news_window_rejections.append({
-                    "id": str(item.get("external_id") or item.get("id") or "")[:120],
-                    "reason": reason,
-                })
-            else:
-                recent_x_candidates.append(item)
-        candidates = recent_x_candidates
-        report["publication_window"] = {
+        since_utc = _official_publishing_policy().get("since_utc")
+        candidates, since_rejections = filter_candidates_by_since(candidates, since_utc)
+        candidates = sort_candidates_oldest_first(candidates)
+        report["since_filter"] = {
             "source_platform": "x",
-            "hours": published_within_hours,
-            "rejected_count": len(news_window_rejections),
-            "rejections": news_window_rejections[:25],
+            "since_utc": since_utc,
+            "rejected_count": len(since_rejections),
+            "rejections": since_rejections[:50],
+            "ordering": "oldest_first",
         }
 
     candidates, birth_rejections = filter_candidates_by_birth_for_trial(candidates, lifecycle_policy)
@@ -731,9 +801,9 @@ def run_trial(
             "rejected_count": len(preview_rejections),
         }] if not publish else []),
         *([{
-            "source": "official_x_publication_window",
-            "hours": published_within_hours,
-            "rejected_count": len(news_window_rejections),
+            "source": "official_x_since_cutoff",
+            "since_utc": report.get("since_filter", {}).get("since_utc"),
+            "rejected_count": len(since_rejections),
         }] if source_platform == "x" and (publish or test_channel_publish) else []),
     ]
     report["candidate_count"] = len(candidates)
@@ -743,8 +813,8 @@ def run_trial(
         report["error"] = (
             "no_recent_verified_official_mob_posts_found"
             if preview_rejections
-            else "no_official_x_posts_in_recent_window"
-            if news_window_rejections
+            else "no_official_x_posts_since_configured_cutoff"
+            if since_rejections
             else "no_verified_official_posts_in_" + source_platform + "_lane"
             if source_platform is not None
             else "no_verified_official_mob_posts_found"
@@ -755,6 +825,7 @@ def run_trial(
     ready_candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
     unseen_candidate_count = 0
     report["candidate_evaluations"] = []
+    report["backlog_count"] = 0
     for item in candidates:
         external_id = str(item.get("external_id") or "")
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id):
@@ -801,6 +872,8 @@ def run_trial(
         if result == "ready":
             ready_candidates.append((item, candidate_formatted))
 
+    # Count valid translated, unseen candidates pending this single-item run.
+    report["backlog_count"] = len(ready_candidates)
     if not ready_candidates:
         if unseen_candidate_count == 0:
             report["status"] = "nothing_new"
@@ -817,6 +890,7 @@ def run_trial(
     media_path: Path | None = None
     validation: dict[str, Any] | None = None
     media_failures: list[dict[str, str]] = []
+    duplicate_media_count = 0
     try:
         # A bad or temporarily unreachable video must not block another valid official
         # post. Each candidate gets an isolated directory so a partial download can
@@ -850,6 +924,7 @@ def run_trial(
                 continue
 
             if candidate_validation["sha256"] in seen["hashes"]:
+                duplicate_media_count += 1
                 for evaluation in report["candidate_evaluations"]:
                     if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
                         evaluation["result"] = "duplicate_media_hash"
@@ -875,6 +950,7 @@ def run_trial(
             break
 
         if selected is None or formatted is None or media_path is None or validation is None:
+            report["backlog_count"] = max(0, len(ready_candidates) - duplicate_media_count)
             report["media_candidate_failures"] = media_failures[:12]
             if media_failures:
                 report["status"] = "failed"
@@ -993,6 +1069,7 @@ def run_trial(
                 return report
             report["status"] = "published"
             report["publishing"] = True
+            report["backlog_count"] = max(0, len(ready_candidates) - duplicate_media_count - 1)
             report["rubika_message_id_recorded"] = message_id is not None
             # Keep the published local copy. The existing cleanup policy requires
             # age and durable sent-state checks before removing retained media.

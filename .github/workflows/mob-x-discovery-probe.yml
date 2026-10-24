@@ -1,0 +1,190 @@
+name: Mob X discovery read-only probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-public-x-discovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Check out current code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install discovery dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Probe the production X discovery path without side effects
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          from agent.discovery.mob_official_complete import discover_official_x_posts
+
+          CONFIG = json.loads(Path("config/mob_official_sources.json").read_text(encoding="utf-8"))
+          SINCE_UTC = str((CONFIG.get("publishing") or {}).get("since_utc") or "")
+          CUTOFF = datetime.fromisoformat(SINCE_UTC.replace("Z", "+00:00"))
+          if CUTOFF.tzinfo is None:
+              raise SystemExit("configured_since_utc_must_include_timezone")
+
+          posts, attempts = discover_official_x_posts(max_results=25)
+          posts_by_id = {
+              str(row.get("external_id") or "").removeprefix("x-"): row
+              for row in posts if isinstance(row, dict)
+          }
+
+          def safe_code(value):
+              cleaned = re.sub(r"[^A-Za-z0-9_.-]", "", str(value or ""))[:60]
+              return cleaned or "unknown"
+
+          def parsed_time(value):
+              if not isinstance(value, str) or not value.strip():
+                  return None
+              try:
+                  parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+              except ValueError:
+                  return None
+              if parsed.tzinfo is None:
+                  return None
+              return parsed.astimezone(timezone.utc)
+
+          def summarize_source(name, attempt, ids):
+              rows = []
+              for post_id in dict.fromkeys(str(value) for value in ids if value):
+                  row = posts_by_id.get(post_id)
+                  if row:
+                      rows.append(row)
+              dates = [parsed_time(row.get("published_at")) for row in rows]
+              dates = [value for value in dates if value is not None]
+              cutoff = CUTOFF.astimezone(timezone.utc)
+              since_count = sum(
+                  1 for row in rows
+                  if row.get("freshness_verified") is True
+                  and (published := parsed_time(row.get("published_at"))) is not None
+                  and published >= cutoff
+              )
+              media_count = sum(
+                  1 for row in rows
+                  if row.get("media_type") in {"image", "video"}
+                  and isinstance(row.get("media_url"), str)
+                  and row["media_url"].startswith("https://")
+              )
+              status = attempt.get("http_status")
+              status_class = f"{status // 100}xx" if type(status) is int and 100 <= status <= 599 else "unknown"
+              result_code = safe_code(attempt.get("error_code") or attempt.get("result"))
+              return {
+                  "source": safe_code(name),
+                  "http_status_class": status_class,
+                  "result_code": result_code,
+                  "posts_returned": len(rows),
+                  "newest_published_at": max(dates).isoformat().replace("+00:00", "Z") if dates else None,
+                  "oldest_published_at": min(dates).isoformat().replace("+00:00", "Z") if dates else None,
+                  "posts_since_utc": since_count,
+                  "posts_with_media": media_count,
+              }
+
+          source_rows = []
+          for attempt in attempts:
+              if not isinstance(attempt, dict):
+                  continue
+              engine = str(attempt.get("engine") or attempt.get("source") or "unknown")
+              if engine == "mob_x_only_policy":
+                  continue
+              if engine == "public_profile_mirror" and isinstance(attempt.get("outcomes"), list):
+                  chosen_host = str(attempt.get("host_used") or "")
+                  for outcome in attempt["outcomes"]:
+                      if not isinstance(outcome, dict):
+                          continue
+                      host = safe_code(outcome.get("host") or "mirror")
+                      ids = outcome.get("candidate_post_ids", []) if host == safe_code(chosen_host) else []
+                      source_rows.append(summarize_source("twstalker_" + host, outcome, ids))
+                  continue
+              source_rows.append(summarize_source(engine, attempt, attempt.get("candidate_post_ids", [])))
+
+          source_rows.sort(key=lambda row: row["source"])
+          cutoff_utc = CUTOFF.astimezone(timezone.utc)
+          total_since = sum(
+              1 for row in posts
+              if row.get("freshness_verified") is True
+              and (published := parsed_time(row.get("published_at"))) is not None
+              and published >= cutoff_utc
+          )
+          total_media = sum(
+              1 for row in posts
+              if row.get("media_type") in {"image", "video"}
+              and isinstance(row.get("media_url"), str)
+              and row["media_url"].startswith("https://")
+          )
+          totals = {
+              "unique_posts_returned": len(posts),
+              "unique_posts_since_utc": total_since,
+              "unique_posts_with_media": total_media,
+          }
+          report = {
+              "schema_version": 1,
+              "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+              "source": "production_x_discovery_path_read_only_probe",
+              "since_utc": SINCE_UTC,
+              "sources": source_rows,
+              "totals": totals,
+              "posts": [
+                  {
+                      "external_id": str(row.get("external_id") or ""),
+                      "published_at": row.get("published_at"),
+                      "freshness_verified": row.get("freshness_verified") is True,
+                      "has_media": bool(row.get("media_url")) and row.get("media_type") in {"image", "video"},
+                      "media_type": row.get("media_type"),
+                  }
+                  for row in posts
+              ],
+              "side_effects": {
+                  "media_downloads": 0,
+                  "rubika_posts": 0,
+                  "d1_reads": 0,
+                  "d1_writes": 0,
+              },
+          }
+          Path("artifacts/mob-x-discovery-probe.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
+              encoding="utf-8",
+          )
+
+          headers = ("Source/mirror", "HTTP", "Result/error code", "Posts", "Newest published_at", "Oldest published_at", "Since count", "Media count")
+          print(" | ".join(headers))
+          print("-" * 160)
+          for row in source_rows:
+              print(" | ".join(str(row[key] if row[key] is not None else "-") for key in (
+                  "source", "http_status_class", "result_code", "posts_returned",
+                  "newest_published_at", "oldest_published_at", "posts_since_utc", "posts_with_media"
+              )))
+          print("TOTALS | unique posts={unique_posts_returned} | since={unique_posts_since_utc} | media={unique_posts_with_media}".format(**totals))
+          print("Side effects: downloads=0; Rubika posts=0; D1 reads=0; D1 writes=0")
+          PY
+
+      - name: Upload probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mob-x-discovery-probe
+          path: artifacts/mob-x-discovery-probe.json
+          if-no-files-found: error
+          retention-days: 14
