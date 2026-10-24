@@ -1382,6 +1382,48 @@ async function postPanelUpdate(state, update, secret) {
   });
 }
 
+// A console invitation is hashed in D1, grants one viewer claim, and cannot be reused.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0existingowner";
+    state.DB.consoleOwners.set(1, {
+      id: 1, chat_id: "b0existingowner", label: "مالک اصلی", role: "owner", enabled: 1,
+      claimed_at: new Date().toISOString(), last_seen_at: null,
+    });
+    state.DB.nextConsoleOwnerId = 2;
+    const inviteCode = "INV-" + "A".repeat(32);
+    const codeHash = createHash("sha256").update(inviteCode).digest("hex");
+    state.DB.consoleInvites.set(1, {
+      id: 1, code_hash: codeHash, created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(), used_at: null, used_by: null,
+    });
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0invitedviewer", new_message: {
+        message_id: "invite-claim-1", chat_id: "b0invitedviewer", text: "/claim " + inviteCode,
+      } },
+    }, secret);
+    const invited = [...state.DB.consoleOwners.values()].find(row => row.chat_id === "b0invitedviewer");
+    assert.ok(invited, "invite claim should register a new console owner");
+    assert.equal(invited.role, "viewer");
+    assert.equal(Number(invited.enabled), 1);
+    assert.ok(state.DB.consoleInvites.get(1).used_at);
+    assert.equal(state.DB.consoleInvites.get(1).used_by, "b0invitedviewer");
+    assert.equal(state.DB.brainEvents.some(event => event.code === "console_owner_claim"), true);
+    assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("دعوت پذیرفته شد")), true);
+
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0secondviewer", new_message: {
+        message_id: "invite-claim-2", chat_id: "b0secondviewer", text: "/claim " + inviteCode,
+      } },
+    }, secret);
+    assert.equal([...state.DB.consoleOwners.values()].filter(row => row.chat_id.startsWith("b0")).length, 2,
+      "one-time invite must not register a second user");
+    assert.equal(state.DB.consoleInvites.get(1).used_by, "b0invitedviewer");
+  });
+}
+
 // Five bad claims permanently lock the claim path for this owner-panel setup.
 {
   await withMockRubikaFetch(async calls => {
