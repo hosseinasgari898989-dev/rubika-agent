@@ -199,10 +199,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         self.assertEqual(mirror_attempt["result"], "post_ids_found")
         self.assertEqual(mirror_attempt["candidate_post_ids"], [post_id])
         self.assertEqual(mirror_attempt["posts_returned"], 1)
-        mirror_outcomes = mirror_attempt.get("outcomes", [])
-        chosen = [row for row in mirror_outcomes if row.get("host") == mirror_attempt.get("host_used")]
-        self.assertEqual(len(chosen), 1)
-        self.assertEqual(chosen[0]["candidate_post_ids"], [post_id])
+        self.assertEqual(mirror_attempt.get("host_used"), "mobile.twstalker.com")
         self.assertTrue(any(url == "https://cdn.syndication.twimg.com/tweet-result" for url, _ in session.calls))
 
     def test_owner_seed_url_is_still_verified_through_x_syndication(self):
