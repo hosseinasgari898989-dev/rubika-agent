@@ -178,6 +178,14 @@ class CommandParserTests(unittest.TestCase):
             console._owner_private_text(update(sender_id="different-sender"), "b0owner-chat-123"),
             "/status",
         )
+        # An explicit private-chat type is also accepted if the configured chat matches.
+        self.assertEqual(
+            console._owner_private_text(
+                update(chat_id="configured-private-chat", extra={"chat_type": "private"}),
+                "configured-private-chat",
+            ),
+            "/status",
+        )
         self.assertIsNone(console._owner_private_text(update(chat_id="other-chat"), "b0owner-chat-123"))
         self.assertIsNone(console._owner_private_text(update(chat_id="g0group-chat-123"), "b0owner-chat-123"))
         self.assertIsNone(console._owner_private_text(update(chat_id="c0channel-chat-123"), "b0owner-chat-123"))
@@ -378,10 +386,15 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertEqual(len(bot.sent), 1)
         self.assertEqual(len(control.claims), 2)
 
-    def test_non_owner_updates_are_ignored_without_claim_or_reply(self):
+    def test_non_owner_or_bot_authored_updates_are_ignored_without_claim_or_reply(self):
         instance, bot, control = self.make_console()
-        result = instance.process_update(update(text="/status", sender_id="attacker"))
-        self.assertEqual(result, "ignored")
+        other_chat = update(text="/status", chat_id="other-chat", message_id="other-chat-message")
+        self.assertEqual(instance.process_update(other_chat), "ignored")
+        group_chat = update(text="/status", chat_id="g0group-chat-123", message_id="group-chat-message")
+        self.assertEqual(instance.process_update(group_chat), "ignored")
+        bot_message = update(text="/status", message_id="bot-authored-message")
+        bot_message["new_message"]["sender_type"] = "Bot"
+        self.assertEqual(instance.process_update(bot_message), "ignored")
         self.assertEqual(bot.sent, [])
         self.assertEqual(control.claims, [])
 
