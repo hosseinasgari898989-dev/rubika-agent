@@ -303,30 +303,46 @@ async function tryClaim(env, ev) {
   await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا فقط همین چت به پنل دسترسی دارد.\n\n" + HOME_TEXT, HOME_KB);
 }
 
+const idTail = (value) => String(value ?? "").slice(-4);
 async function processEvent(env, selfFetch, origin, ev) {
-  if (!ev || ev.botAuthored || !isPrivateChat(ev)) return;
+  if (!ev) return;
   const owner = await getOwner(env);
-  if (!owner) { if (ev.kind === "text") await tryClaim(env, ev); return; }
+  if (!owner) {
+    if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev)) await tryClaim(env, ev);
+    return;
+  }
   if (!safeEqual(owner, ev.chat)) return;
-  const key = ev.kind === "click" ? `c|${ev.chat}|${ev.mid}|${ev.button}|${Math.floor(Date.now() / 4000)}` : `t|${ev.chat}|${ev.mid}`;
+  const lastEvent = {
+    kind: clean(ev.kind, 16) || "unknown",
+    types: Array.isArray(ev.types) ? ev.types.slice(0, 4).map((value) => clean(value, 24)).filter(Boolean) : [],
+    chat_tail: idTail(ev.chat),
+    message_id_tail: idTail(ev.mid),
+    button: clean(ev.button, 60),
+    botAuthored: ev.botAuthored === true,
+  };
+  try { await setState(env, "last_event", JSON.stringify(lastEvent)); } catch { /* diagnostics must not block owner commands */ }
+  if (ev.botAuthored || !isPrivateChat(ev)) return;
+  const key = ev.kind === "click"
+    ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
+    : "t|" + ev.chat + "|" + ev.mid;
   if (!(await firstSeen(env, key))) return;
   const ui = { env, chat: ev.chat, selfFetch, origin };
   try {
-    if (ev.kind === "click") { await render(ui, ev.button, ev.mid || null); return; }
+    if (ev.kind === "click") { await render(ui, ev.button); return; }
     const word = ev.text.split(/\s+/)[0].split("@")[0].toLowerCase();
     if (word === "/register") { await registerWebhook(env, origin); await send(env, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
-    if (COMMANDS[word]) { await render(ui, COMMANDS[word], null); return; }
+    if (COMMANDS[word]) { await render(ui, COMMANDS[word]); return; }
     if ((await getState(env, "mode", "idle")) === "waiting_link") {
       const link = parseXLink(ev.text);
       if (!link) { await send(env, ev.chat, "لینک معتبر نیست. شکل درست: x.com/نام/status/شناسه", CANCEL_KB); return; }
       await env.DB.prepare("INSERT OR IGNORE INTO panel_links(url) VALUES(?)").bind(link).run();
       await setState(env, "mode", "idle");
-      await send(env, ev.chat, `✅ لینک ذخیره شد:\n\`${link}\`\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.`, HOME_KB);
+      await send(env, ev.chat, "✅ لینک ذخیره شد:\n" + String.fromCharCode(96) + link + String.fromCharCode(96) + "\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.", HOME_KB);
       return;
     }
     await send(env, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
   } catch (e) {
-    try { await send(env, ev.chat, `❌ خطا: ${esc(e && e.code || "unknown")}`, BACK_KB); } catch { /* ignore */ }
+    try { await send(env, ev.chat, "❌ خطا: " + esc(e && e.code || "unknown"), BACK_KB); } catch { /* ignore */ }
   }
 }
 
