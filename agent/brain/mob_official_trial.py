@@ -119,9 +119,12 @@ def since_rule_rejection(
         return "since_policy_invalid"
     try:
         published = datetime.fromisoformat(raw_published.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "publication_time_unverified"
+    try:
         cutoff = datetime.fromisoformat(since_utc.strip().replace("Z", "+00:00"))
     except ValueError:
-        return "publication_time_unverified" if not isinstance(raw_published, str) else "since_policy_invalid"
+        return "since_policy_invalid"
     if published.tzinfo is None:
         return "publication_time_unverified"
     if cutoff.tzinfo is None:
@@ -940,7 +943,6 @@ def run_trial(
             formatted = candidate_formatted
             media_path = final_path
             validation = candidate_validation
-            report["backlog_count"] = max(0, len(ready_candidates) - duplicate_media_count - 1)
             for evaluation in report["candidate_evaluations"]:
                 if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
                     evaluation["result"] = "selected_media_validated"
@@ -1067,6 +1069,7 @@ def run_trial(
                 return report
             report["status"] = "published"
             report["publishing"] = True
+            report["backlog_count"] = max(0, len(ready_candidates) - duplicate_media_count - 1)
             report["rubika_message_id_recorded"] = message_id is not None
             # Keep the published local copy. The existing cleanup policy requires
             # age and durable sent-state checks before removing retained media.
