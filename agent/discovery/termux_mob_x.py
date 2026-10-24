@@ -587,7 +587,7 @@ def discover_mob_x_posts(
                         index_ids.append(post_id)
                 if len(index_ids) >= index_limit:
                     break
-            if index_ids:
+            if source_post_ids["bing_rss"]:
                 bing_result = "indexed_post_urls_found"
                 break
         except requests.RequestException as exc:
