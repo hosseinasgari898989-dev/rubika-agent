@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1604,6 +1605,37 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(state.DB.linkDeleteCalls, 1);
     assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("پاک شدند"), true);
   });
+}
+
+// Lightweight CI checks for the owner console HTML. The HTML itself must remain byte-for-byte unchanged.
+{
+  const htmlPath = path.join(root, "docs/console/index.html");
+  const html = fs.readFileSync(htmlPath, "utf8");
+  assert.equal((html.match(/<\/script>/g) || []).length, 1, "owner console HTML must contain exactly one </script> closing tag");
+
+  const opening = html.match(/<script\s*>/i);
+  assert.ok(opening, "owner console HTML must contain its inline script");
+  const start = opening.index + opening[0].length;
+  const end = html.indexOf("</script>", start);
+  assert.ok(end >= start, "owner console inline script must have a closing tag");
+  const inlineJs = html.slice(start, end);
+  const syntax = spawnSync(process.execPath, ["--check", "--input-type=module"], {
+    input: inlineJs,
+    encoding: "utf8",
+  });
+  assert.equal(syntax.status, 0, "owner console inline JavaScript must pass node --check: " + (syntax.stderr || syntax.stdout || ""));
+
+  // Only the Worker API and GitHub API are actual network-request origins.
+  // The third syntactic fetch occurrence is text inside a mock downloadable example, not an executed request.
+  const fetchArgs = [...inlineJs.matchAll(/\bfetch\s*\(\s*([^,)\s]+)/g)].map(match => match[1]);
+  assert.deepEqual(fetchArgs, ["url", "this.base+path", "req"], "unexpected fetch site: only the two approved API requests and the inert example may appear");
+  assert.equal((inlineJs.match(/\bawait\s+fetch\s*\(/g) || []).length, 2, "only two runtime fetch requests are allowed");
+  assert.match(inlineJs, /apiBase:\s*"https:\/\/rubika-agent\.h98609294\.workers\.dev"/, "Worker API base must be the approved Worker");
+  assert.match(inlineJs, /base:"https:\/\/api\.github\.com"/, "GitHub API base must be api.github.com");
+  assert.match(inlineJs, /const base = \(S\.apiBase\|\|""\)\.replace/, "Worker requests must use the configured Worker API base");
+  assert.match(inlineJs, /url = base \+ path/, "Worker requests must be built from the approved base");
+  assert.equal((inlineJs.match(/\b(?:XMLHttpRequest|WebSocket|EventSource)\b|\bsendBeacon\s*\(|\bimportScripts\s*\(/g) || []).length, 0,
+    "no alternate network request primitive is allowed");
 }
 
 console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");

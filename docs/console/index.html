@@ -1,0 +1,2741 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>کنسول مالک — Rubika-Agent</title>
+<!--
+ASSUMPTIONS (فرض‌ها)
+1. پنل هرگز منتشر نمی‌کند؛ تنها مسیر انتشار «کانال آزمایشی» است و فقط اگر capabilities.publishing===true و rules.test_channel_only===true و تأیید کاربر.
+2. Secretها فقط با «نام» نمایش داده می‌شوند. هیچ مقداری لاگ/نمایش داده نمی‌شود. توکن‌ها در لاگ درخواست‌ها redact می‌شوند.
+3. endpointهای «برنامه‌ریزی‌شده» ممکن است 404 بدهند؛ در آن صورت کارت «هنوز فعال نشده» + مثال پاسخ نمایش داده می‌شود.
+4. زمان تهران با Intl (Asia/Tehran) محاسبه می‌شود؛ fallback ثابت UTC+3:30.
+5. Cron پارسر محلی است (۵ فیلد، * , - /). "۵ اجرای بعدی" با پیمایش دقیقه‌ای حداکثر ۱ سال آینده محاسبه می‌شود (بر مبنای UTC، چون GitHub Actions cron با UTC است) و سپس به وقت تهران نمایش داده می‌شود.
+6. GitHub Contents API با base64 UTF-8 صحیح (TextEncoder) برای فارسی.
+7. فایل‌های حساس (.env, *.key, *.pem, secrets) در ویرایشگر ریپو مسدودند.
+8. ویرایش فایل به‌صورت پیش‌فرض روی شاخهٔ feature جدید؛ commit مستقیم روی main نیاز به تایپ «تایید» دارد.
+9. حالت Mock داده‌های واقع‌نما تولید می‌کند (۶۰ ردیف صف و ...) و تأخیر/خطای تصادفی شبیه‌سازی می‌کند.
+10. کش stale-while-revalidate 15 ثانیه برای GETها.
+11. فونت Vazirmatn فقط اگر روی دستگاه نصب باشد؛ هیچ فونت خارجی لود نمی‌شود.
+12. ذخیرهٔ توکن پیش‌فرض sessionStorage.
+-->
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --panel2:#eef1f5; --txt:#15181d; --muted:#5d6672;
+  --line:#dce1e8; --brand:#2563eb; --brand2:#1d4ed8; --ok:#128a4e; --warn:#b45309;
+  --err:#c62424; --chip:#e7ecf3; --shadow:0 2px 10px rgba(16,24,40,.08);
+  --radius:14px;
+}
+html[data-theme="dark"]{
+  --bg:#0e1116; --panel:#161b22; --panel2:#1d232c; --txt:#e7ecf3; --muted:#9aa6b4;
+  --line:#2a323d; --brand:#4f8cff; --brand2:#3b7bff; --ok:#3fd07f; --warn:#f0b357;
+  --err:#ff6b6b; --chip:#232b36; --shadow:0 2px 12px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
+  font-family:Vazirmatn,Tahoma,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.75}
+body{overflow-x:hidden;padding-bottom:env(safe-area-inset-bottom)}
+button,input,select,textarea{font-family:inherit;font-size:1rem;color:inherit}
+a{color:var(--brand);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:3px solid var(--brand);outline-offset:2px;border-radius:6px}
+.hidden{display:none !important}
+/* layout */
+#app{display:flex;min-height:100vh}
+#sidebar{width:240px;flex:0 0 240px;background:var(--panel);border-left:1px solid var(--line);
+  position:sticky;top:0;height:100vh;overflow-y:auto;padding:12px 10px}
+#main{flex:1;min-width:0;display:flex;flex-direction:column}
+header#topbar{position:sticky;top:0;z-index:40;background:var(--panel);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:8px;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top))}
+#pageWrap{padding:12px;flex:1}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;padding:8px 10px}
+.brand .dot{width:10px;height:10px;border-radius:50%;background:var(--brand)}
+.navlink{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;color:var(--txt);
+  min-height:44px;cursor:pointer;border:0;background:none;width:100%;text-align:right}
+.navlink:hover{background:var(--panel2);text-decoration:none}
+.navlink.active{background:var(--brand);color:#fff}
+.navlink .ic{width:22px;text-align:center}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:8px 14px;
+  border-radius:10px;border:1px solid var(--line);background:var(--panel2);cursor:pointer;font-weight:600}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn.danger{background:var(--err);border-color:var(--err);color:#fff}
+.btn.ghost{background:transparent}
+.btn.sm{min-height:34px;padding:4px 10px;font-size:.86rem;font-weight:600}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow);margin-bottom:12px}
+.card h3{margin:0 0 8px;font-size:1rem}
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
+.stat .v{font-size:1.5rem;font-weight:800}
+.stat .l{color:var(--muted);font-size:.82rem}
+.muted{color:var(--muted)}
+.small{font-size:.82rem}
+.chip{display:inline-flex;align-items:center;gap:4px;background:var(--chip);border-radius:999px;padding:2px 10px;font-size:.78rem;margin:2px}
+.chip.ok{background:rgba(18,138,78,.16);color:var(--ok)}
+.chip.err{background:rgba(198,36,36,.15);color:var(--err)}
+.chip.warn{background:rgba(180,83,9,.16);color:var(--warn)}
+.chip.info{background:rgba(37,99,235,.14);color:var(--brand)}
+label.field{display:block;margin-bottom:10px}
+label.field > span{display:block;font-size:.85rem;color:var(--muted);margin-bottom:4px}
+input[type=text],input[type=password],input[type=number],select,textarea{
+  width:100%;padding:10px;min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--panel2)}
+textarea{min-height:120px;line-height:1.8}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row.end{justify-content:flex-end}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+th,td{padding:8px;border-bottom:1px solid var(--line);text-align:right;vertical-align:top}
+th{color:var(--muted);font-weight:600;white-space:nowrap}
+.tblwrap{overflow-x:auto}
+.skel{background:linear-gradient(90deg,var(--panel2),var(--line),var(--panel2));background-size:200% 100%;
+  animation:sk 1.2s infinite;border-radius:8px;height:16px;margin:8px 0}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.empty{text-align:center;padding:26px;color:var(--muted)}
+.toastwrap{position:fixed;bottom:84px;left:12px;right:12px;z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:var(--panel);border:1px solid var(--line);border-right:5px solid var(--brand);
+  border-radius:10px;padding:10px 12px;box-shadow:var(--shadow);pointer-events:auto}
+.toast.ok{border-right-color:var(--ok)} .toast.err{border-right-color:var(--err)} .toast.warn{border-right-color:var(--warn)}
+.modalbg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:300;display:flex;align-items:center;justify-content:center;padding:12px}
+.modal{background:var(--panel);border-radius:16px;max-width:560px;width:100%;max-height:88vh;overflow:auto;padding:16px;border:1px solid var(--line)}
+#bottomnav{display:none}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:10px}
+.tabs button{white-space:nowrap;min-height:38px;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel);cursor:pointer}
+.tabs button.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+pre{background:var(--panel2);padding:10px;border-radius:10px;overflow:auto;direction:ltr;text-align:left;font-size:.8rem;max-height:420px}
+code{direction:ltr;unicode-bidi:embed}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:.87rem}
+.kv b{font-weight:600;color:var(--muted)}
+.kv span{word-break:break-all;text-align:left;direction:ltr}
+.jt{font-family:ui-monospace,Menlo,Consolas,monospace;direction:ltr;text-align:left;font-size:.8rem}
+.jt .k{color:var(--brand)} .jt .s{color:var(--ok)} .jt .n{color:var(--warn)}
+.jt details{margin-right:12px}
+.badge{display:inline-block;padding:1px 8px;border-radius:6px;font-size:.75rem;background:var(--chip)}
+.bar{height:8px;border-radius:6px;background:var(--panel2);overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--brand)}
+.listitem{border-bottom:1px solid var(--line);padding:10px 0;cursor:pointer}
+.listitem:last-child{border-bottom:0}
+.editor{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;direction:ltr}
+.editor .gut{background:var(--panel2);color:var(--muted);padding:8px 6px;text-align:right;font-family:ui-monospace,monospace;
+  font-size:.78rem;line-height:1.6;user-select:none;min-width:44px;overflow:hidden}
+.editor textarea{border:0;border-radius:0;background:var(--panel);font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:.82rem;line-height:1.6;min-height:420px;white-space:pre;overflow-wrap:normal;overflow-x:auto}
+.diff div{font-family:ui-monospace,monospace;font-size:.78rem;direction:ltr;text-align:left;white-space:pre-wrap;padding:0 4px}
+.diff .add{background:rgba(18,138,78,.18)} .diff .del{background:rgba(198,36,36,.18)}
+.lock{position:fixed;inset:0;background:var(--bg);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px}
+.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;min-height:44px}
+.switch input{width:auto;min-height:auto;transform:scale(1.3);margin-left:6px}
+.sep{height:1px;background:var(--line);margin:10px 0}
+@media(max-width:860px){
+  #sidebar{display:none}
+  #pageWrap{padding:10px 10px 90px}
+  #bottomnav{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:50;background:var(--panel);
+    border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom))}
+  #bottomnav button{flex:1;min-height:52px;border:0;background:none;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:2px;font-size:.68rem;color:var(--muted);cursor:pointer}
+  #bottomnav button.active{color:var(--brand);font-weight:700}
+  #bottomnav .ic{font-size:1.1rem}
+  table.resp thead{display:none}
+  table.resp tr{display:block;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;padding:6px;background:var(--panel)}
+  table.resp td{display:flex;justify-content:space-between;gap:8px;border-bottom:1px dashed var(--line);padding:6px}
+  table.resp td:last-child{border-bottom:0}
+  table.resp td::before{content:attr(data-l);color:var(--muted);font-size:.78rem}
+  .toastwrap{bottom:76px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar"><div class="brand"><span class="dot"></span><span>کنسول مالک</span></div><nav id="navlist"></nav></aside>
+  <div id="main">
+    <header id="topbar">
+      <button class="btn sm ghost" id="btnBack" aria-label="برگشت">◀ برگشت</button>
+      <strong id="pageTitle" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">داشبورد</strong>
+      <span id="mockBadge" class="chip warn hidden">داده نمایشی</span>
+      <button class="btn sm ghost" id="btnTheme" aria-label="تغییر تم">🌓</button>
+      <button class="btn sm ghost" id="btnRefresh" aria-label="بازخوانی">⟳</button>
+    </header>
+    <div id="pageWrap"><div id="page"></div></div>
+  </div>
+</div>
+<nav id="bottomnav"></nav>
+<div class="toastwrap" id="toasts" aria-live="polite"></div>
+<div id="modalRoot"></div>
+<div id="lockRoot"></div>
+
+<script>
+"use strict";
+/* ============================ CONFIG ============================ */
+const VERSION = "1.0.0";
+const DEFAULTS = {
+  apiBase: "https://rubika-agent.h98609294.workers.dev",
+  ghOwner: "hosseinasgari898989-dev",
+  ghRepo: "rubika-agent",
+  persianDigits: true,
+  jalali: true,
+  autoRefresh: 30,
+  pageSize: 20,
+  lockMinutes: 0
+};
+const SECRET_NAMES = [
+  {n:"RUBIKA_TOKEN", w:"Cloudflare Worker (wrangler secret)", d:"توکن ربات روبیکا — فقط روی Worker. مقدار هرگز در چت/لاگ نمایش داده نمی‌شود."},
+  {n:"OWNER_SETUP_CODE", w:"Cloudflare Worker", d:"کد اولیهٔ ثبت مالک. مقدار هرگز در چت/لاگ نمایش داده نمی‌شود."},
+  {n:"AGENT_API_TOKEN", w:"Cloudflare Worker", d:"توکن Bearer برای /api/brain/* و /api/console/*. مقدار هرگز در چت/لاگ نمایش داده نمی‌شود."},
+  {n:"CLOUDFLARE_API_TOKEN", w:"GitHub → Settings → Secrets → Actions", d:"برای deploy ورکر توسط Actions. مقدار هرگز در چت/لاگ نمایش داده نمی‌شود."}
+];
+const ROLLBACK_POINTS = ["backup/stable-panel-pr63-20261024","backup/stable-panel-working-20261024"];
+const KNOWN_WORKFLOWS = [
+  {file:"daily-queue-processor.yml", cron:"0 7 * * *", fa:"پردازش روزانهٔ صف"},
+  {file:"owner-daily-digest.yml", cron:"5 7 * * *", fa:"خلاصهٔ روزانهٔ مالک"},
+  {file:"owner-digest-refresh.yml", cron:"7,22,37,52 * * * *", fa:"تازه‌سازی دایجست"},
+  {file:"mob-x-news-production.yml", cron:"7 */5 * * *", fa:"خبر X (Mob)"},
+  {file:"owner-console-poll.yml", cron:"*/5 * * * *", fa:"polling کنسول مالک"},
+  {file:"termux-docker-discovery.yml", cron:"7,37 * * * *", fa:"کشف منابع"},
+  {file:"queue-intake.yml", cron:"", fa:"ورود به صف (دستی)"},
+  {file:"ai-health-check.yml", cron:"", fa:"سلامت هوش مصنوعی (دستی)"}
+];
+const D1_TABLES = ["agent_config","sources","items","runs","delivery_attempts","brain_events","ai_usage_daily",
+  "automation_queue","ai_provider_calls","ai_provider_state","owner_digest_state","owner_digest_events",
+  "owner_console_state","owner_console_updates","panel_owner","panel_events","panel_state","panel_links"];
+
+/* ===== API_CONTRACT: ثبت همهٔ endpointها ===== */
+const API_CONTRACT = {
+  status:            {m:"GET",  p:"/api/status", auth:false, planned:false, desc:"وضعیت کلی سرویس"},
+  queueSummary:      {m:"GET",  p:"/api/brain/owner-console/queue-summary", auth:true, planned:false, desc:"خلاصهٔ صف (فقط‌خواندنی)"},
+  aiProviderStatus:  {m:"GET",  p:"/api/brain/ai-provider/status", auth:true, planned:false, desc:"وضعیت provider هوش مصنوعی"},
+  automationQueue:   {m:"GET",  p:"/api/brain/automation-queue", auth:true, planned:false, desc:"ردیف‌های صف خودکار"},
+  queueState:        {m:"POST", p:"/api/brain/automation-queue/{id}/state", auth:true, planned:false, desc:"تغییر وضعیت ردیف صف"},
+  itemsSeen:         {m:"GET",  p:"/api/brain/items/seen", auth:true, planned:false, desc:"آیتم‌های دیده‌شده"},
+  ownerDigestClaim:  {m:"POST", p:"/api/brain/owner-digest/claim", auth:true, planned:false, desc:"فقط در عیب‌یابی؛ کنسول خودکار صدا نمی‌زند"},
+  events:            {m:"GET",  p:"/api/console/events", auth:true, planned:true, desc:"رخدادها (owner_digest_events)"},
+  runs:              {m:"GET",  p:"/api/console/runs", auth:true, planned:true, desc:"اجراها"},
+  deliveryAttempts:  {m:"GET",  p:"/api/console/delivery-attempts", auth:true, planned:true, desc:"تلاش‌های ارسال"},
+  brainEvents:       {m:"GET",  p:"/api/console/brain-events", auth:true, planned:true, desc:"رخدادهای مغز"},
+  consoleItems:      {m:"GET",  p:"/api/console/items", auth:true, planned:true, desc:"آیتم‌ها"},
+  patchItem:         {m:"PATCH",p:"/api/console/items/{id}", auth:true, planned:true, desc:"ویرایش آیتم"},
+  queueAction:       {m:"POST", p:"/api/console/queue/{id}/action", auth:true, planned:true, desc:"اقدام روی صف"},
+  sourcesList:       {m:"GET",  p:"/api/console/sources", auth:true, planned:true, desc:"منابع"},
+  sourcesCreate:     {m:"POST", p:"/api/console/sources", auth:true, planned:true, desc:"افزودن منبع"},
+  sourcesPatch:      {m:"PATCH",p:"/api/console/sources/{id}", auth:true, planned:true, desc:"ویرایش منبع"},
+  sourcesDelete:     {m:"DELETE",p:"/api/console/sources/{id}", auth:true, planned:true, desc:"حذف منبع"},
+  channelsList:      {m:"GET",  p:"/api/console/channels", auth:true, planned:true, desc:"کانال‌های مقصد"},
+  channelsCreate:    {m:"POST", p:"/api/console/channels", auth:true, planned:true, desc:"افزودن کانال"},
+  channelsDelete:    {m:"DELETE",p:"/api/console/channels/{id}", auth:true, planned:true, desc:"حذف کانال"},
+  ownersList:        {m:"GET",  p:"/api/console/owners", auth:true, planned:true, desc:"مالک‌ها"},
+  ownersCreate:      {m:"POST", p:"/api/console/owners", auth:true, planned:true, desc:"افزودن مالک"},
+  ownersDelete:      {m:"DELETE",p:"/api/console/owners/{id}", auth:true, planned:true, desc:"حذف مالک"},
+  ownersInvite:      {m:"POST", p:"/api/console/owners/invite", auth:true, planned:true, desc:"کد دعوت یک‌بارمصرف"},
+  rulesGet:          {m:"GET",  p:"/api/console/rules", auth:true, planned:true, desc:"قوانین"},
+  rulesPut:          {m:"PUT",  p:"/api/console/rules", auth:true, planned:true, desc:"ذخیرهٔ قوانین (قفل خوش‌بینانه)"},
+  linksGet:          {m:"GET",  p:"/api/console/links", auth:true, planned:true, desc:"لینک‌های panel_links"},
+  linksPost:         {m:"POST", p:"/api/console/links", auth:true, planned:true, desc:"افزودن لینک"},
+  linksClear:        {m:"POST", p:"/api/console/links/clear", auth:true, planned:true, desc:"پاک‌سازی لینک‌ها"},
+  mobPreview:        {m:"POST", p:"/api/console/mob/preview", auth:true, planned:true, desc:"پیش‌نمایش خبر X"},
+  mobPublishTest:    {m:"POST", p:"/api/console/mob/publish-test", auth:true, planned:true, desc:"انتشار فقط در کانال آزمایشی"},
+  jobsCreate:        {m:"POST", p:"/api/console/jobs", auth:true, planned:true, desc:"ساخت job"},
+  jobsList:          {m:"GET",  p:"/api/console/jobs", auth:true, planned:true, desc:"لیست jobها"},
+  jobGet:            {m:"GET",  p:"/api/console/jobs/{id}", auth:true, planned:true, desc:"وضعیت job"},
+  aiCalls:           {m:"GET",  p:"/api/console/ai/calls", auth:true, planned:true, desc:"لاگ تماس‌های AI"},
+  d1Tables:          {m:"GET",  p:"/api/console/d1/tables", auth:true, planned:true, desc:"جدول‌های D1"},
+  d1Query:           {m:"POST", p:"/api/console/d1/query", auth:true, planned:true, desc:"کوئری SELECT فقط‌خواندنی"},
+  megaInventory:     {m:"GET",  p:"/api/console/mega/inventory", auth:true, planned:true, desc:"موجودی Mega"},
+  audit:             {m:"GET",  p:"/api/console/audit", auth:true, planned:true, desc:"لاگ ممیزی سمت سرور"}
+};
+const PLANNED_SAMPLE = {
+  events: {ok:true, items:[{id:1,occurred_at:"2026-01-01T07:05:00Z",category:"success",source:"digest",title:"ارسال شد",detail:"..."}], total:1},
+  runs: {ok:true, items:[{id:1,trigger_type:"schedule",status:"success",started_at:"",finished_at:"",found_count:0,eligible_count:0,sent_count:0,skipped_count:0,failed_count:0,summary:""}]},
+  jobs: {ok:true, items:[{id:"j1",type:"ai_health_check",status:"done",progress:100,result:{},error:null}]},
+  rules: {ok:true, version:1, rules:{publishing_enabled:false,test_channel_only:true,daily_success_cap:4}, updated_at:""}
+};
+
+/* ============================ STATE ============================ */
+const Store = {
+  ss(){ return S.remember ? localStorage : sessionStorage; },
+  loadCfg(){
+    let raw = localStorage.getItem("ra_cfg") || sessionStorage.getItem("ra_cfg");
+    let c = {}; try{ c = raw? JSON.parse(raw):{} }catch(e){ c={} }
+    return Object.assign({}, DEFAULTS, c);
+  },
+  saveCfg(){
+    const c = {apiBase:S.apiBase, ghOwner:S.ghOwner, ghRepo:S.ghRepo, persianDigits:S.persianDigits,
+      jalali:S.jalali, autoRefresh:S.autoRefresh, pageSize:S.pageSize, lockMinutes:S.lockMinutes,
+      mock:S.mock, remember:S.remember, theme:S.theme};
+    (S.remember?localStorage:sessionStorage).setItem("ra_cfg", JSON.stringify(c));
+    if(!S.remember) localStorage.removeItem("ra_cfg");
+  },
+  loadTok(){
+    const g=k=> localStorage.getItem(k) || sessionStorage.getItem(k) || "";
+    return {api:g("ra_tok_api"), gh:g("ra_tok_gh")};
+  },
+  saveTok(){
+    const st = S.remember?localStorage:sessionStorage, other = S.remember?sessionStorage:localStorage;
+    other.removeItem("ra_tok_api"); other.removeItem("ra_tok_gh");
+    if(S.apiToken) st.setItem("ra_tok_api",S.apiToken); else st.removeItem("ra_tok_api");
+    if(S.ghToken) st.setItem("ra_tok_gh",S.ghToken); else st.removeItem("ra_tok_gh");
+  },
+  wipe(){ ["ra_cfg","ra_tok_api","ra_tok_gh","ra_pin","ra_audit"].forEach(k=>{localStorage.removeItem(k);sessionStorage.removeItem(k)}); }
+};
+const S = Object.assign({}, DEFAULTS, {
+  mock:false, remember:false, theme:"auto", apiToken:"", ghToken:"",
+  reqLog:[], audit:[], cache:new Map(), pageState:{}, locked:false, lastActivity:Date.now(),
+  statusData:null, rules:null, rulesVersion:0, dirty:null, abort:null, timers:[]
+});
+(function initState(){
+  const c = Store.loadCfg(); Object.assign(S, c);
+  const raw = localStorage.getItem("ra_cfg")||sessionStorage.getItem("ra_cfg");
+  try{ const o=JSON.parse(raw||"{}"); S.remember = !!o.remember; S.mock=!!o.mock; S.theme=o.theme||"auto"; }catch(e){}
+  const t = Store.loadTok(); S.apiToken=t.api; S.ghToken=t.gh;
+  if(location.search.indexOf("mock=1")>=0) S.mock=true;
+  try{ S.audit = JSON.parse(localStorage.getItem("ra_audit")||"[]") }catch(e){ S.audit=[] }
+})();
+
+/* ============================ UTIL ============================ */
+const $ = (s,r)=> (r||document).querySelector(s);
+const el = (tag, attrs, kids)=>{
+  const n = document.createElement(tag);
+  if(attrs) for(const k in attrs){
+    const v = attrs[k];
+    if(v===null||v===undefined||v===false) continue;
+    if(k==="class") n.className=v;
+    else if(k==="text") n.textContent=String(v);
+    else if(k==="html") throw new Error("html forbidden");
+    else if(k.slice(0,2)==="on" && typeof v==="function") n.addEventListener(k.slice(2),v);
+    else if(k==="style" && typeof v==="object") Object.assign(n.style,v);
+    else n.setAttribute(k, v===true?"":String(v));
+  }
+  if(kids!==undefined){
+    (Array.isArray(kids)?kids:[kids]).forEach(k=>{
+      if(k===null||k===undefined||k===false) return;
+      n.appendChild(typeof k==="object"&&k.nodeType ? k : document.createTextNode(String(k)));
+    });
+  }
+  return n;
+};
+const clear = n=>{ while(n.firstChild) n.removeChild(n.firstChild); return n; };
+function escapeHTML(s){
+  return String(s===null||s===undefined?"":s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function safeUrl(u){
+  try{ const x=new URL(String(u)); return (x.protocol==="http:"||x.protocol==="https:")? x.href : null }catch(e){ return null }
+}
+function linkNode(u, label){
+  const h = safeUrl(u);
+  if(!h) return el("span",{class:"muted small",text:String(u||"—")});
+  return el("a",{href:h, target:"_blank", rel:"noopener noreferrer", text:label||h});
+}
+function redact(s){
+  let x = String(s||"");
+  if(S.apiToken) x = x.split(S.apiToken).join("***REDACTED***");
+  if(S.ghToken) x = x.split(S.ghToken).join("***REDACTED***");
+  return x.replace(/(Bearer|token|ghp_|github_pat_)[A-Za-z0-9_\-\.]{6,}/gi,"***REDACTED***");
+}
+const FA_D = ["۰","۱","۲","۳","۴","۵","۶","۷","۸","۹"];
+function nf(n){
+  if(n===null||n===undefined||n==="") return "—";
+  let s = String(n);
+  if(typeof n==="number") s = n.toLocaleString("en-US");
+  return S.persianDigits ? s.replace(/\d/g,d=>FA_D[+d]) : s;
+}
+function tehranParts(d){
+  try{
+    const f = new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Tehran",hour12:false,
+      year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"});
+    const o={}; f.formatToParts(d).forEach(p=>o[p.type]=p.value);
+    return {y:+o.year,m:+o.month,d:+o.day,H:+(o.hour==="24"?"0":o.hour),M:+o.minute,S:+o.second};
+  }catch(e){
+    const t = new Date(d.getTime()+ (3.5*3600*1000));
+    return {y:t.getUTCFullYear(),m:t.getUTCMonth()+1,d:t.getUTCDate(),H:t.getUTCHours(),M:t.getUTCMinutes(),S:t.getUTCSeconds()};
+  }
+}
+function fmtDate(v, withRel){
+  if(!v) return "—";
+  let d = v instanceof Date? v : new Date(typeof v==="number"? v : String(v).replace(" ","T")+( /z|[+\-]\d\d:?\d\d$/i.test(String(v))?"":"Z"));
+  if(isNaN(d.getTime())) return String(v);
+  let out;
+  if(S.jalali){
+    try{
+      out = new Intl.DateTimeFormat("fa-IR-u-ca-persian",{timeZone:"Asia/Tehran",dateStyle:"short",timeStyle:"short"}).format(d);
+    }catch(e){ out=null }
+  }
+  if(!out){
+    const p = tehranParts(d);
+    out = nf(p.y)+"/"+nf(String(p.m).padStart(2,"0"))+"/"+nf(String(p.d).padStart(2,"0"))+" "+nf(String(p.H).padStart(2,"0"))+":"+nf(String(p.M).padStart(2,"0"));
+  }
+  if(!S.persianDigits) out = out.replace(/[۰-۹]/g,ch=>String(FA_D.indexOf(ch)));
+  return withRel===false? out : out+" ("+relTime(d)+")";
+}
+function relTime(d){
+  const s = Math.round((Date.now()-d.getTime())/1000);
+  const a = Math.abs(s), fut = s<0;
+  const pick = a<60? [a,"ثانیه"] : a<3600? [Math.round(a/60),"دقیقه"] : a<86400? [Math.round(a/3600),"ساعت"] : [Math.round(a/86400),"روز"];
+  return fut ? ("تا "+nf(pick[0])+" "+pick[1]+" دیگر") : (nf(pick[0])+" "+pick[1]+" پیش");
+}
+function uid(){ return Math.random().toString(36).slice(2,10) }
+function debounce(fn,ms){ let t; return function(){ const a=arguments,c=this; clearTimeout(t); t=setTimeout(()=>fn.apply(c,a),ms||300) } }
+function b64encodeUtf8(str){
+  const bytes = new TextEncoder().encode(str); let bin="";
+  for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function b64decodeUtf8(b64){
+  const bin = atob(String(b64).replace(/\s/g,"")); const arr = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  return new TextDecoder("utf-8").decode(arr);
+}
+async function sha256hex(s){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+function copyText(t){
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(()=>toast("کپی شد","ok"),()=>fallbackCopy(t));
+  else fallbackCopy(t);
+}
+function fallbackCopy(t){
+  const ta=el("textarea",{}); ta.value=t; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand("copy"); toast("کپی شد","ok") }catch(e){ toast("کپی ناموفق","err") }
+  document.body.removeChild(ta);
+}
+function download(name, content, type){
+  const blob = new Blob([content],{type:type||"application/json;charset=utf-8"});
+  const u = URL.createObjectURL(blob); const a=el("a",{href:u,download:name});
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(()=>URL.revokeObjectURL(u),2000);
+}
+function toCSV(cols, rows){
+  const esc = v => '"'+String(v===null||v===undefined?"":v).replace(/"/g,'""')+'"';
+  return cols.map(esc).join(",")+"\n"+rows.map(r=>cols.map(c=>esc(typeof r==="object"&&!Array.isArray(r)? r[c] : r[cols.indexOf(c)])).join(",")).join("\n");
+}
+function audit(action, detail){
+  S.audit.unshift({t:Date.now(), action:String(action), detail:redact(detail||"")});
+  S.audit = S.audit.slice(0,200);
+  try{ localStorage.setItem("ra_audit", JSON.stringify(S.audit)) }catch(e){}
+}
+/* SQL guard: only SELECT */
+function isSelectOnly(sql){
+  const s = String(sql||"").replace(/--[^\n]*/g,"").replace(/\/\*[\s\S]*?\*\//g,"").trim().replace(/;+\s*$/,"");
+  if(!s) return false;
+  if(s.indexOf(";")>=0) return false;
+  if(!/^(select|with)\b/i.test(s)) return false;
+  if(/\b(insert|update|delete|drop|alter|create|replace|attach|detach|pragma|vacuum|reindex|truncate|grant|begin|commit)\b/i.test(s)) return false;
+  return true;
+}
+function withLimit(sql, lim){
+  const s = String(sql).trim().replace(/;+\s*$/,"");
+  return /\blimit\s+\d+/i.test(s)? s : (s+" LIMIT "+(lim||200));
+}
+/* ===== CRON parser ===== */
+function parseCronField(f, min, max){
+  const out = new Set();
+  String(f).split(",").forEach(part=>{
+    let step=1, rng=part;
+    const sl = part.split("/");
+    if(sl.length===2){ rng=sl[0]; step=parseInt(sl[1],10); if(!(step>0)) throw new Error("bad step") }
+    let a,b;
+    if(rng==="*"||rng===""){ a=min;b=max }
+    else if(rng.indexOf("-")>0){ const p=rng.split("-"); a=parseInt(p[0],10); b=parseInt(p[1],10) }
+    else { a=parseInt(rng,10); b= (sl.length===2? max : a) }
+    if(isNaN(a)||isNaN(b)||a<min||b>max||a>b) throw new Error("bad range: "+part);
+    for(let i=a;i<=b;i+=step) out.add(i);
+  });
+  return Array.from(out).sort((x,y)=>x-y);
+}
+function parseCron(expr){
+  const f = String(expr||"").trim().split(/\s+/);
+  if(f.length!==5) throw new Error("cron باید ۵ فیلد داشته باشد");
+  return {
+    minute: parseCronField(f[0],0,59),
+    hour: parseCronField(f[1],0,23),
+    dom: parseCronField(f[2],1,31), domStar: f[2]==="*",
+    month: parseCronField(f[3],1,12),
+    dow: parseCronField(f[4],0,6).map(d=>d===7?0:d), dowStar: f[4]==="*",
+    raw: f.join(" ")
+  };
+}
+function cronNext(expr, count, from){
+  const c = parseCron(expr); const out=[];
+  let t = new Date((from||new Date()).getTime()); t.setUTCSeconds(0,0); t = new Date(t.getTime()+60000);
+  const limit = 366*24*60;
+  for(let i=0;i<limit && out.length<(count||5); i++){
+    const mo=t.getUTCMonth()+1, dom=t.getUTCDate(), dow=t.getUTCDay(), h=t.getUTCHours(), mi=t.getUTCMinutes();
+    const dayOk = (c.domStar&&c.dowStar) ? true : (c.domStar? c.dow.indexOf(dow)>=0 : (c.dowStar? c.dom.indexOf(dom)>=0 : (c.dom.indexOf(dom)>=0||c.dow.indexOf(dow)>=0)));
+    if(c.month.indexOf(mo)>=0 && dayOk && c.hour.indexOf(h)>=0 && c.minute.indexOf(mi)>=0) out.push(new Date(t.getTime()));
+    t = new Date(t.getTime()+60000);
+  }
+  return out;
+}
+const DOW_FA=["یکشنبه","دوشنبه","سه‌شنبه","چهارشنبه","پنجشنبه","جمعه","شنبه"];
+function cronToFa(expr){
+  let c; try{ c=parseCron(expr) }catch(e){ return "عبارت cron نامعتبر: "+e.message }
+  const everyMin = c.minute.length===60, everyHour = c.hour.length===24;
+  let s = "";
+  if(everyMin && everyHour) s="هر دقیقه";
+  else if(everyHour) s = "هر ساعت، در دقیقهٔ "+c.minute.map(nf).join("، ");
+  else if(everyMin) s = "هر دقیقه در ساعت‌های "+c.hour.map(nf).join("، ")+" (UTC)";
+  else s = "ساعت "+c.hour.map(h=>nf(h)).join("، ")+" UTC در دقیقهٔ "+c.minute.map(nf).join("، ");
+  if(!c.domStar) s += "، روزهای ماه: "+c.dom.map(nf).join("، ");
+  if(!c.dowStar) s += "، روزهای هفته: "+c.dow.map(d=>DOW_FA[d]).join("، ");
+  if(c.month.length!==12) s += "، ماه‌های "+c.month.map(nf).join("، ");
+  if(!everyMin && !everyHour){
+    const teh = c.hour.map(h=>{ let x=h*60+210; x=((x%1440)+1440)%1440; return nf(String(Math.floor(x/60)).padStart(2,"0"))+":"+nf(String(x%60).padStart(2,"0")) });
+    s += " — به وقت تهران حدود "+teh.join("، ");
+  }
+  return s;
+}
+/* ===== JSON tree (safe, DOM only) ===== */
+function jsonTree(value, key, depth){
+  depth = depth||0;
+  const wrap = el("div",{class:"jt"});
+  const t = value===null? "null" : Array.isArray(value)? "array" : typeof value;
+  if(t==="object"||t==="array"){
+    const entries = t==="array"? value.map((v,i)=>[i,v]) : Object.keys(value).map(k=>[k,value[k]]);
+    const d = el("details", depth<1?{open:true}:{});
+    d.appendChild(el("summary",{},[ (key!==undefined? String(key)+": ":"") + (t==="array"?"[":"{") + entries.length + (t==="array"?"]":"}") ]));
+    entries.forEach(([k,v])=> d.appendChild(jsonTree(v,k,depth+1)));
+    wrap.appendChild(d);
+  } else {
+    const line = el("div",{});
+    if(key!==undefined) line.appendChild(el("span",{class:"k",text:String(key)+": "}));
+    line.appendChild(el("span",{class: t==="number"?"n":"s", text: t==="string"? JSON.stringify(value) : String(value)}));
+    wrap.appendChild(line);
+  }
+  return wrap;
+}
+/* ===== toasts / modals ===== */
+function toast(msg, kind, ms){
+  const n = el("div",{class:"toast "+(kind||""), role:"status"}, [redact(msg)]);
+  $("#toasts").appendChild(n);
+  setTimeout(()=>{ n.style.opacity="0"; setTimeout(()=>n.remove(),300) }, ms||3500);
+}
+function modal(opts){
+  return new Promise(resolve=>{
+    const bg = el("div",{class:"modalbg", role:"dialog","aria-modal":"true"});
+    const box = el("div",{class:"modal"});
+    box.appendChild(el("h3",{text:opts.title||"تأیید"}));
+    (Array.isArray(opts.body)?opts.body:[opts.body]).forEach(b=>{
+      if(!b) return; box.appendChild(typeof b==="object"&&b.nodeType? b : el("p",{text:String(b)}));
+    });
+    let inp=null;
+    if(opts.typeConfirm){
+      box.appendChild(el("p",{class:"small",style:{color:"var(--err)"},text:'برای ادامه کلمهٔ «تایید» را تایپ کنید:'}));
+      inp = el("input",{type:"text","aria-label":"تایپ تایید"}); box.appendChild(inp);
+    }
+    const okBtn = el("button",{class:"btn "+(opts.danger?"danger":"primary"), text:opts.okText||"تأیید"});
+    const cancel = el("button",{class:"btn ghost", text:opts.cancelText||"انصراف"});
+    box.appendChild(el("div",{class:"row end",style:{marginTop:"12px"}},[cancel, okBtn]));
+    bg.appendChild(box); $("#modalRoot").appendChild(bg);
+    const close = v=>{ document.removeEventListener("keydown",onKey); bg.remove(); resolve(v) };
+    const onKey = e=>{
+      if(e.key==="Escape"){ e.preventDefault(); close(false) }
+      if(e.key==="Tab"){
+        const f = box.querySelectorAll("button,input,textarea,select,a[href]");
+        if(!f.length) return; const first=f[0], last=f[f.length-1];
+        if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus() }
+        else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus() }
+      }
+    };
+    document.addEventListener("keydown",onKey);
+    bg.addEventListener("click", e=>{ if(e.target===bg) close(false) });
+    cancel.addEventListener("click",()=>close(false));
+    okBtn.addEventListener("click",()=>{
+      if(opts.typeConfirm && (!inp || inp.value.trim()!=="تایید")){ toast("کلمهٔ «تایید» را دقیق تایپ کنید","err"); return }
+      close(true);
+    });
+    (inp||okBtn).focus();
+  });
+}
+const confirmDanger = (title, text, typeConfirm) => modal({title, body:text, danger:true, typeConfirm:!!typeConfirm, okText:"انجام بده"});
+function promptModal(title, label, initial, isPassword){
+  return new Promise(resolve=>{
+    const inp = el("input",{type:isPassword?"password":"text", value:initial||"", "aria-label":label});
+    const f = el("label",{class:"field"},[el("span",{text:label}), inp]);
+    modal({title, body:[f], okText:"تأیید"}).then(ok=> resolve(ok? inp.value : null));
+  });
+}
+
+/* ============================ API ============================ */
+function apiErrorFa(kind, status, raw){
+  if(kind==="timeout") return "زمان پاسخ تمام شد (timeout). شبکه کند است یا Worker پاسخ نمی‌دهد.";
+  if(kind==="abort") return "درخواست لغو شد.";
+  if(kind==="network") return "خطای شبکه یا CORS. اگر CORS خطا داد، باید Worker هدرهای CORS بدهد (Access-Control-Allow-Origin).";
+  if(status===401||status===403) return "توکن اشتباه یا بدون دسترسی است (۴۰۱/۴۰۳). AGENT_API_TOKEN را بررسی کنید.";
+  if(status===404) return "این مسیر در Worker موجود نیست (۴۰۴).";
+  if(status===409) return "تداخل نسخه (۴۰۹) — نسخهٔ جدیدتری ذخیره شده است.";
+  if(status===429) return "تعداد درخواست بیش از حد (۴۲۹). کمی صبر کنید.";
+  if(status>=500) return "خطای سرور ("+status+"). Worker خطا داد.";
+  return raw? ("خطا: "+raw) : ("خطای ناشناخته ("+status+")");
+}
+function logReq(rec){
+  S.reqLog.unshift(rec); S.reqLog = S.reqLog.slice(0,300);
+}
+async function api(method, path, opts){
+  opts = opts||{};
+  if(S.mock) return MOCK.handle(method, path, opts);
+  const base = (S.apiBase||"").replace(/\/+$/,"");
+  if(!base) throw Object.assign(new Error("آدرس API تنظیم نشده است."),{fa:"آدرس API تنظیم نشده است."});
+  let url = base + path;
+  if(opts.query){
+    const q = Object.keys(opts.query).filter(k=>opts.query[k]!==undefined&&opts.query[k]!==null&&opts.query[k]!=="")
+      .map(k=>encodeURIComponent(k)+"="+encodeURIComponent(opts.query[k])).join("&");
+    if(q) url += (url.indexOf("?")>=0?"&":"?")+q;
+  }
+  const retries = method==="GET"? 2 : 0;
+  let lastErr=null;
+  for(let attempt=0; attempt<=retries; attempt++){
+    const ctrl = new AbortController();
+    const to = setTimeout(()=>ctrl.abort("timeout"), opts.timeoutMs||15000);
+    if(opts.signal) opts.signal.addEventListener("abort",()=>ctrl.abort("outer"));
+    const t0 = performance.now();
+    let status=0, kind=null;
+    try{
+      const headers = {"Accept":"application/json"};
+      if(S.apiToken) headers["Authorization"] = "Bearer "+S.apiToken;
+      if(opts.body!==undefined) headers["Content-Type"]="application/json";
+      const res = await fetch(url, {method, headers, signal:ctrl.signal,
+        body: opts.body!==undefined? JSON.stringify(opts.body) : undefined});
+      clearTimeout(to); status = res.status;
+      const text = await res.text();
+      let data=null; try{ data = text? JSON.parse(text):null }catch(e){ data={ok:false,error:text.slice(0,200)} }
+      logReq({t:Date.now(), m:method, p:path, s:status, ms:Math.round(performance.now()-t0), ok:res.ok});
+      if(!res.ok){
+        const e = new Error("http "+status);
+        e.status=status; e.fa = apiErrorFa("http",status, data&&data.error);
+        e.notFound = status===404 || (data&&data.error==="not_found");
+        e.data=data;
+        if(status>=500 && attempt<retries){ lastErr=e; await new Promise(r=>setTimeout(r, 400*Math.pow(2,attempt))); continue }
+        throw e;
+      }
+      if(data && data.ok===false){
+        const e=new Error(String(data.error||"error")); e.status=200; e.fa=apiErrorFa("http",200,data.error);
+        e.notFound = data.error==="not_found"; e.data=data; throw e;
+      }
+      return data;
+    }catch(err){
+      clearTimeout(to);
+      if(err.status) { lastErr=err; if(attempt>=retries) throw err; continue }
+      kind = (err.name==="AbortError")? (String(ctrl.signal.reason)==="timeout"?"timeout":"abort") : "network";
+      logReq({t:Date.now(), m:method, p:path, s:0, ms:Math.round(performance.now()-t0), ok:false, note:kind});
+      const e = new Error(kind); e.kind=kind; e.fa=apiErrorFa(kind,0,null); e.network=true;
+      if(kind==="abort") throw e;
+      lastErr=e;
+      if(attempt<retries){ await new Promise(r=>setTimeout(r,400*Math.pow(2,attempt))); continue }
+      throw e;
+    }
+  }
+  throw lastErr||new Error("unknown");
+}
+/* stale-while-revalidate cache for GET */
+async function cachedGet(key, fn, ttl){
+  ttl = ttl||15000;
+  const hit = S.cache.get(key);
+  if(hit && Date.now()-hit.t < ttl) return hit.v;
+  const v = await fn();
+  S.cache.set(key,{t:Date.now(), v});
+  return v;
+}
+function invalidate(prefix){
+  Array.from(S.cache.keys()).forEach(k=>{ if(k.indexOf(prefix)===0) S.cache.delete(k) });
+}
+
+/* ============================ GITHUB ============================ */
+const GH = {
+  base:"https://api.github.com",
+  get repoPath(){ return "/repos/"+S.ghOwner+"/"+S.ghRepo },
+  async req(method, path, body){
+    if(S.mock) return MOCK.github(method, path, body);
+    if(!S.ghToken) { const e=new Error("no-token"); e.fa="توکن GitHub تنظیم نشده است. در «تنظیمات اتصال» آن را وارد کنید."; throw e }
+    const t0=performance.now();
+    let res;
+    try{
+      res = await fetch(this.base+path,{method, headers:{
+        "Authorization":"Bearer "+S.ghToken, "Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28",
+        ...(body?{"Content-Type":"application/json"}:{})}, body: body? JSON.stringify(body):undefined});
+    }catch(e){
+      logReq({t:Date.now(),m:method,p:"[gh]"+path,s:0,ms:Math.round(performance.now()-t0),ok:false,note:"network"});
+      const er=new Error("network"); er.fa="خطای شبکه در اتصال به GitHub."; throw er;
+    }
+    const txt = await res.text(); let data=null; try{ data=txt?JSON.parse(txt):null }catch(e){ data={message:txt.slice(0,200)} }
+    logReq({t:Date.now(),m:method,p:"[gh]"+path,s:res.status,ms:Math.round(performance.now()-t0),ok:res.ok});
+    if(!res.ok){
+      const e=new Error("gh "+res.status); e.status=res.status;
+      e.fa = res.status===401? "توکن GitHub نامعتبر است (۴۰۱)." : res.status===404? "یافت نشد (۴۰۴) — مسیر یا دسترسی توکن را بررسی کنید."
+        : res.status===403? "دسترسی ممنوع یا محدودیت نرخ (۴۰۳)." : ("خطای GitHub: "+(data&&data.message||res.status));
+      throw e;
+    }
+    return data;
+  },
+  user(){ return this.req("GET","/user") },
+  repo(){ return this.req("GET", this.repoPath) },
+  tree(branch){ return this.req("GET", this.repoPath+"/git/trees/"+encodeURIComponent(branch)+"?recursive=1") },
+  content(path, ref){ return this.req("GET", this.repoPath+"/contents/"+path.split("/").map(encodeURIComponent).join("/")+(ref?"?ref="+encodeURIComponent(ref):"")) },
+  putContent(path, text, message, branch, sha){
+    return this.req("PUT", this.repoPath+"/contents/"+path.split("/").map(encodeURIComponent).join("/"),
+      {message, content:b64encodeUtf8(text), branch, sha:sha||undefined});
+  },
+  ref(branch){ return this.req("GET", this.repoPath+"/git/ref/heads/"+encodeURIComponent(branch)) },
+  branches(){ return this.req("GET", this.repoPath+"/branches?per_page=100") },
+  createBranch(name, fromSha){ return this.req("POST", this.repoPath+"/git/refs",{ref:"refs/heads/"+name, sha:fromSha}) },
+  pulls(){ return this.req("GET", this.repoPath+"/pulls?state=open&per_page=50") },
+  createPR(title, head, base, body){ return this.req("POST", this.repoPath+"/pulls",{title,head,base:base||"main",body:body||""}) },
+  mergePR(n){ return this.req("PUT", this.repoPath+"/pulls/"+n+"/merge",{merge_method:"squash"}) },
+  commits(branch){ return this.req("GET", this.repoPath+"/commits?sha="+encodeURIComponent(branch||"main")+"&per_page=20") },
+  compare(b,h){ return this.req("GET", this.repoPath+"/compare/"+encodeURIComponent(b)+"..."+encodeURIComponent(h)) },
+  runs(){ return this.req("GET", this.repoPath+"/actions/runs?per_page=30") },
+  workflows(){ return this.req("GET", this.repoPath+"/actions/workflows") },
+  dispatch(id, ref){ return this.req("POST", this.repoPath+"/actions/workflows/"+encodeURIComponent(id)+"/dispatches",{ref:ref||"main"}) },
+  createIssue(title, body){ return this.req("POST", this.repoPath+"/issues",{title, body}) }
+};
+const SENSITIVE_FILE = p => /(^|\/)\.env|\.key$|\.pem$|secrets?\.(json|ya?ml|txt)$|wrangler\.toml\.secret/i.test(p);
+
+/* ============================ MOCK ============================ */
+const MOCK = (function(){
+  const PLAT=["x","tiktok","youtube"], ST=["queued","processing","sent","failed","uncertain","skipped"];
+  function rnd(a){ return a[Math.floor(Math.random()*a.length)] }
+  const seedQueue = (function(){
+    const out=[];
+    for(let i=1;i<=62;i++){
+      const p=PLAT[i%3], st=ST[i%6];
+      out.push({id:i, platform:p, external_id:"ext_"+(10000+i), canonical_url:"https://example.com/"+p+"/"+i,
+        source_key:p==="x"?"@news_source"+(i%4):"channel_"+(i%5), title:"عنوان نمونه شمارهٔ "+i+" — "+p,
+        caption:"کپشن آزمایشی برای آیتم "+i+" که می‌تواند طولانی باشد و شامل <script> هم باشد.",
+        published_at:new Date(Date.now()-i*3600e3).toISOString(), media_type: i%4===0?"image":"video",
+        freshness_verified: i%3?1:0, method:"auto",
+        metadata_json: JSON.stringify({duration:12+i, width:1080, height:1920, tags:["edit","news"], author:{name:"user"+i, verified:i%2===0}}),
+        status:st, attempt_count:i%4, last_error_code: st==="failed"?"RUBIKA_429":null,
+        created_at:new Date(Date.now()-i*3700e3).toISOString(), updated_at:new Date(Date.now()-i*1800e3).toISOString(),
+        sent_at: st==="sent"? new Date(Date.now()-i*1000e3).toISOString():null,
+        validation_json: JSON.stringify({ok:i%5!==0, checks:{size:true,duration:i%5!==0}}),
+        moderation_json: JSON.stringify({safe:true, score:0.02}),
+        review_state: i%3===0?"approved":"pending", original_caption:"original caption "+i,
+        persian_translation:"ترجمهٔ فارسی نمونه "+i, media_bytes: 1200000+i*5000, media_mime:"video/mp4",
+        rubika_message_id: st==="sent"? "msg_"+i:null, source_tier: i%2?1:2, discovered_at:new Date(Date.now()-i*3800e3).toISOString(),
+        media_sha256:"a".repeat(8)+i, storage_key:"mega/videos/"+i+".mp4", last_error_at:null
+      });
+    }
+    return out;
+  })();
+  let rules = {version:3, updated_at:new Date().toISOString(), rules:{
+    publishing_enabled:false, test_channel_only:true, daily_success_cap:4, daily_edit_count:6,
+    mob_posts_per_run:1, mob_since_cutoff:"2026-01-01T00:00:00Z", freshness_hours:24,
+    ai_provider_order:["groq","openrouter"], ai_daily_limit_groq:200, ai_daily_limit_openrouter:50,
+    translate_enabled:true, quiet_hours:{start:"00:30", end:"07:00"}, caption_max_chars:900, digest_window_utc:"07:05"}};
+  let sources = [
+    {id:1,platform:"x",source_key:"@BBCPersian",display_name:"بی‌بی‌سی فارسی",enabled:1,created_at:"2025-11-01T10:00:00Z",last_checked_at:new Date(Date.now()-600e3).toISOString(),last_seen_published_at:new Date(Date.now()-3600e3).toISOString()},
+    {id:2,platform:"tiktok",source_key:"editsdaily",display_name:"Edits Daily",enabled:1,created_at:"2025-12-10T10:00:00Z",last_checked_at:new Date(Date.now()-900e3).toISOString(),last_seen_published_at:null},
+    {id:3,platform:"youtube",source_key:"UCxyz123",display_name:"Shorts Hub",enabled:0,created_at:"2025-12-20T10:00:00Z",last_checked_at:null,last_seen_published_at:null}];
+  let channels = [{id:1,label:"کانال آزمایشی",rubika_channel_id:"@test_channel",role:"test",enabled:1},
+    {id:2,label:"کانال اصلی",rubika_channel_id:"@main_channel",role:"production",enabled:0}];
+  let owners = [{id:1,chat_id:"b0Abc...",label:"مالک اصلی",role:"owner",claimed_at:"2025-10-01T08:00:00Z",enabled:1,last_seen_at:new Date(Date.now()-7200e3).toISOString()},
+    {id:2,chat_id:"c1Xyz...",label:"ناظر",role:"viewer",claimed_at:"2025-12-01T08:00:00Z",enabled:1,last_seen_at:null}];
+  let links = [{id:1,url:"https://x.com/someone/status/1234567890",status:"pending",created_at:new Date(Date.now()-3600e3).toISOString()}];
+  let jobs = [];
+  const events = (function(){
+    const cats=["info","success","error","ai_success","ai_error"], out=[];
+    for(let i=1;i<=48;i++) out.push({id:i, occurred_at:new Date(Date.now()-i*1800e3).toISOString(), category:cats[i%5],
+      source:["worker","actions","ai","rubika"][i%4], title:"رخداد نمونه "+i, detail:"جزئیات رخداد شمارهٔ "+i+" برای تست نمایش امن متن."});
+    return out;
+  })();
+  const runs = (function(){ const out=[];
+    for(let i=1;i<=24;i++) out.push({id:200-i, trigger_type:i%3?"schedule":"manual", status:i%7===0?"failed":"success",
+      started_at:new Date(Date.now()-i*8600e3).toISOString(), finished_at:new Date(Date.now()-i*8600e3+240e3).toISOString(),
+      found_count:10+i, eligible_count:5+(i%6), sent_count:(i%5), skipped_count:(i%3), failed_count:(i%7===0?2:0),
+      summary:"اجرای خودکار شمارهٔ "+(200-i)});
+    return out })();
+  const aiCalls = (function(){ const out=[];
+    for(let i=1;i<=40;i++) out.push({call_id:"c"+i, usage_day:"2026-02-0"+((i%9)+1), provider:i%3?"groq":"openrouter",
+      role:i%2?"translate_official":"caption_rewrite", status:i%9===0?"error":"ok", error_code:i%9===0?"rate_limit":null,
+      prompt_tokens:200+i, output_tokens:80+i, total_tokens:280+2*i, cooldown_until:null,
+      started_at:new Date(Date.now()-i*900e3).toISOString(), finished_at:new Date(Date.now()-i*900e3+2300).toISOString()});
+    return out })();
+  function counts(){ const c={}; seedQueue.forEach(r=>c[r.status]=(c[r.status]||0)+1); return c }
+  async function delay(){ await new Promise(r=>setTimeout(r, 120+Math.random()*420)) }
+  function page(arr, q){ const lim=+(q&&q.limit||20), off=+(q&&q.offset||0); return {slice:arr.slice(off,off+lim), page:{limit:lim,offset:off,returned:Math.min(lim,Math.max(0,arr.length-off))}, total:arr.length} }
+  return {
+    async handle(method, path, opts){
+      await delay();
+      const q = opts.query||{}, body=opts.body||{};
+      const t0=performance.now();
+      const fin = d=>{ logReq({t:Date.now(),m:method,p:path+" [mock]",s:200,ms:Math.round(performance.now()-t0)+Math.round(120+Math.random()*300),ok:true}); return d };
+      if(Math.random()<0.03 && method==="GET"){
+        logReq({t:Date.now(),m:method,p:path+" [mock]",s:503,ms:300,ok:false});
+        const e=new Error("mock"); e.status=503; e.fa="خطای شبیه‌سازی‌شده (۵۰۳) — دوباره تلاش کنید."; throw e;
+      }
+      if(path==="/api/status") return fin({ok:true, service:"rubika-agent", agent:{enabled:1, started_at:"2026-01-05T06:00:00Z", updated_at:new Date().toISOString()},
+        item_counts:Object.keys(counts()).map(k=>({status:k,total:counts()[k]})),
+        recent_runs: runs.slice(0,5), capabilities:{database:true,discovery:true,metadata_api:true,download:true,publishing:true}, publishing:true});
+      if(path==="/api/brain/owner-console/queue-summary") return fin({ok:true, queue_counts:counts(), sent_today:3, item_counts:counts(), usage_day:"2026-02-09", publishing:true});
+      if(path==="/api/brain/ai-provider/status"){
+        const p=q.provider||"groq", used=p==="groq"?84:12, lim=p==="groq"?200:50;
+        return fin({ok:true, provider:p, usage_day:"2026-02-09", calls_used:used, daily_limit:lim, remaining:lim-used,
+          total_calls_used:96, total_daily_limit:250, total_remaining:154,
+          cooldown_until: p==="openrouter"? new Date(Date.now()+90e3).toISOString():null, cooldown_active:p==="openrouter",
+          last_error_code: p==="openrouter"?"rate_limit":null, ready: p==="groq", status: p==="groq"?"ready":"cooldown"});
+      }
+      if(path==="/api/brain/automation-queue"){
+        if(q.summary) return fin({ok:true, counts:counts(), sent_today:3, usage_day:"2026-02-09"});
+        let arr = seedQueue.slice(); if(q.status) arr = arr.filter(r=>r.status===q.status);
+        const p = page(arr,q); return fin({ok:true, items:p.slice, page:p.page, counts:counts()});
+      }
+      let m = path.match(/^\/api\/brain\/automation-queue\/(\d+)\/state$/);
+      if(m){ const row=seedQueue.find(r=>r.id===+m[1]); if(row) row.status=body.status; return fin({ok:true,id:+m[1],status:body.status}) }
+      if(path==="/api/brain/items/seen"){ const p=page(seedQueue,q);
+        return fin({ok:true, items:p.slice.map(r=>({id:r.id,platform:r.platform,external_id:r.external_id,media_sha256:r.media_sha256,status:r.status,sent_at:r.sent_at,review_state:r.review_state})), page:p.page}) }
+      if(path==="/api/console/events"){ let arr=events.slice(); if(q.category) arr=arr.filter(e=>e.category===q.category);
+        const p=page(arr,q); return fin({ok:true, items:p.slice, total:p.total}) }
+      if(path==="/api/console/runs"){ const p=page(runs,q); return fin({ok:true, items:p.slice, total:p.total}) }
+      if(path==="/api/console/delivery-attempts"){
+        const id=+(q.item_id||1); return fin({ok:true, items:[1,2].map(n=>({id:id*10+n,item_id:id,attempt_number:n,status:n===2?"sent":"failed",
+          started_at:new Date(Date.now()-n*600e3).toISOString(), finished_at:new Date(Date.now()-n*600e3+9000).toISOString(),
+          rubika_message_id:n===2?"msg_"+id:null, error_code:n===1?"TIMEOUT":null}))}) }
+      if(path==="/api/console/brain-events"){ const arr=events.map((e,i)=>({id:e.id,run_id:180+(i%10),item_id:(i%30)+1,
+          level:["info","warn","error"][i%3], code:"CODE_"+(i%7), details_json:JSON.stringify({note:e.title}), created_at:e.occurred_at}));
+        const p=page(arr,q); return fin({ok:true, items:p.slice}) }
+      if(path==="/api/console/items"){ let arr=seedQueue.slice();
+        if(q.status) arr=arr.filter(r=>r.status===q.status); if(q.platform) arr=arr.filter(r=>r.platform===q.platform);
+        if(q.q) arr=arr.filter(r=>(r.title||"").indexOf(q.q)>=0);
+        const p=page(arr,q); return fin({ok:true, items:p.slice, page:p.page, total:p.total}) }
+      m = path.match(/^\/api\/console\/items\/(\d+)$/);
+      if(m && method==="PATCH"){ const row=seedQueue.find(r=>r.id===+m[1]); Object.assign(row||{}, body); return fin({ok:true,item:row}) }
+      m = path.match(/^\/api\/console\/queue\/(\d+)\/action$/);
+      if(m){ const i=seedQueue.findIndex(r=>r.id===+m[1]);
+        if(i>=0){ if(body.action==="delete") seedQueue.splice(i,1); else if(body.action==="skip") seedQueue[i].status="skipped";
+          else seedQueue[i].status="queued" } return fin({ok:true}) }
+      if(path==="/api/console/sources"){ if(method==="GET") return fin({ok:true, items:sources});
+        if(method==="POST"){ const s=Object.assign({id:Date.now()%100000, created_at:new Date().toISOString(), last_checked_at:null,last_seen_published_at:null, enabled:1}, body); sources.push(s); return fin({ok:true,item:s}) } }
+      m = path.match(/^\/api\/console\/sources\/(\d+)$/);
+      if(m){ const i=sources.findIndex(s=>s.id===+m[1]);
+        if(method==="DELETE"){ if(i>=0) sources.splice(i,1); return fin({ok:true}) }
+        if(method==="PATCH"){ Object.assign(sources[i],body); return fin({ok:true,item:sources[i]}) } }
+      if(path==="/api/console/channels"){ if(method==="GET") return fin({ok:true, items:channels});
+        if(method==="POST"){ const c=Object.assign({id:Date.now()%100000, enabled:1, role:"test"}, body); channels.push(c); return fin({ok:true,item:c}) } }
+      m = path.match(/^\/api\/console\/channels\/(\d+)$/); if(m&&method==="DELETE"){ channels=channels.filter(c=>c.id!==+m[1]); return fin({ok:true}) }
+      if(path==="/api/console/owners"){ if(method==="GET") return fin({ok:true, items:owners});
+        if(method==="POST"){ const o=Object.assign({id:Date.now()%100000, claimed_at:null, enabled:1, role:"viewer"}, body); owners.push(o); return fin({ok:true,item:o}) } }
+      if(path==="/api/console/owners/invite") return fin({ok:true, invite_code:"INV-"+uid().toUpperCase(), expires_at:new Date(Date.now()+3600e3).toISOString()});
+      m = path.match(/^\/api\/console\/owners\/(\d+)$/); if(m&&method==="DELETE"){ owners=owners.filter(o=>o.id!==+m[1]); return fin({ok:true}) }
+      if(path==="/api/console/rules"){
+        if(method==="GET") return fin({ok:true, version:rules.version, rules:rules.rules, updated_at:rules.updated_at});
+        if(method==="PUT"){ if(body.base_version!==rules.version){ const e=new Error("conflict"); e.status=409; e.fa=apiErrorFa("http",409); e.data={ok:false,server:rules}; throw e }
+          rules={version:rules.version+1, rules:body.rules, updated_at:new Date().toISOString()};
+          return fin({ok:true, version:rules.version, rules:rules.rules, updated_at:rules.updated_at}) } }
+      if(path==="/api/console/links"){ if(method==="GET") return fin({ok:true, items:links});
+        if(method==="POST"){ const l={id:Date.now()%100000,url:body.url,status:"pending",created_at:new Date().toISOString()}; links.push(l); return fin({ok:true,item:l}) } }
+      if(path==="/api/console/links/clear"){ links=[]; return fin({ok:true}) }
+      if(path==="/api/console/mob/preview"){
+        const jid="job_"+uid();
+        jobs.unshift({id:jid, type:"mob_x_link", status:"done", progress:100, created_at:new Date().toISOString(), updated_at:new Date().toISOString(),
+          result:{title:"خبر نمونه از X", original_caption:"Breaking: sample news text from X", persian_translation:"فوری: متن خبر نمونه از ایکس برای آزمایش ترجمه.",
+            media_url:"https://example.com/media/sample.mp4", media_type:"video", url:body.url}, error:null});
+        return fin({ok:true, job_id:jid});
+      }
+      if(path==="/api/console/mob/publish-test") return fin({ok:true, published:true, channel:"@test_channel", message_id:"msg_"+uid()});
+      if(path==="/api/console/jobs"){
+        if(method==="GET") return fin({ok:true, items:jobs.slice(0,+(q.limit||20))});
+        if(method==="POST"){ const j={id:"job_"+uid(), type:body.type, status:"queued", progress:0, result:null, error:null,
+            created_at:new Date().toISOString(), updated_at:new Date().toISOString(), _born:Date.now()}; jobs.unshift(j); return fin({ok:true, job_id:j.id}) } }
+      m = path.match(/^\/api\/console\/jobs\/(.+)$/);
+      if(m){ const j=jobs.find(x=>x.id===m[1]); if(!j){ const e=new Error("nf"); e.status=404; e.notFound=true; e.fa=apiErrorFa("http",404); throw e }
+        if(j._born){ const age=(Date.now()-j._born)/1000; j.progress=Math.min(100, Math.round(age*25));
+          j.status = j.progress>=100? "done": (j.progress>0?"running":"queued");
+          if(j.status==="done" && !j.result) j.result = j.type==="log_zip"? {download_url:"https://example.com/logs/"+j.id+".zip"} : {message:"انجام شد", items:5};
+          j.updated_at=new Date().toISOString(); }
+        return fin({ok:true, job:j}) }
+      if(path==="/api/console/ai/calls"){ let arr=aiCalls.slice(); if(q.provider) arr=arr.filter(c=>c.provider===q.provider);
+        if(q.role) arr=arr.filter(c=>c.role===q.role); return fin({ok:true, items:arr.slice(0,+(q.limit||50))}) }
+      if(path==="/api/console/d1/tables") return fin({ok:true, items:D1_TABLES.map((n,i)=>({name:n,row_count:(i+1)*37,
+        columns:[{name:"id",type:"INTEGER",nullable:false},{name:"created_at",type:"TEXT",nullable:true},{name:"status",type:"TEXT",nullable:true}]}))});
+      if(path==="/api/console/d1/query"){
+        const cols=["id","platform","status","created_at"];
+        return fin({ok:true, columns:cols, rows:seedQueue.slice(0,20).map(r=>[r.id,r.platform,r.status,r.created_at]), duration_ms:17});
+      }
+      if(path==="/api/console/mega/inventory") return fin({ok:true, updated_at:new Date().toISOString(),
+        folders:[{name:"videos",files:214,bytes:8_400_000_000},{name:"thumbs",files:214,bytes:120_000_000},{name:"logs",files:58,bytes:32_000_000}]});
+      if(path==="/api/console/audit") return fin({ok:true, items:[{id:1,at:new Date().toISOString(),actor:"owner",action:"rules.update",detail:"daily_success_cap 3→4"}]});
+      if(path==="/api/brain/owner-digest/claim") return fin({ok:true, items:events.slice(0,5)});
+      const e=new Error("nf"); e.status=404; e.notFound=true; e.fa=apiErrorFa("http",404); throw e;
+    },
+    async github(method, path, body){
+      await delay();
+      logReq({t:Date.now(),m:method,p:"[gh]"+path,s:200,ms:200,ok:true});
+      if(path==="/user") return {login:"mock-owner", id:1};
+      if(/\/repos\/[^/]+\/[^/]+$/.test(path)) return {full_name:S.ghOwner+"/"+S.ghRepo, default_branch:"main", private:false};
+      if(path.indexOf("/git/trees/")>=0) return {tree:[
+        {path:"README.md",type:"blob",size:1200},{path:"src/index.js",type:"blob",size:48000},
+        {path:"src/brain.js",type:"blob",size:22000},{path:"wrangler.toml",type:"blob",size:900},
+        {path:".env.example",type:"blob",size:120},
+        ...KNOWN_WORKFLOWS.map(w=>({path:".github/workflows/"+w.file,type:"blob",size:2000}))]};
+      if(path.indexOf("/contents/")>=0 && method==="GET"){
+        const p = decodeURIComponent(path.split("/contents/")[1].split("?")[0]);
+        const wf = KNOWN_WORKFLOWS.find(w=>p.indexOf(w.file)>=0);
+        const text = wf ? ("name: "+wf.fa+"\non:\n"+(wf.cron?("  schedule:\n    - cron: '"+wf.cron+"'\n"):"")+"  workflow_dispatch:\njobs:\n  run:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n")
+          : ("// "+p+"\nexport default { async fetch(req, env){ return new Response('ok') } };\n");
+        return {path:p, sha:"sha_"+uid(), content:b64encodeUtf8(text), encoding:"base64"};
+      }
+      if(path.indexOf("/contents/")>=0) return {commit:{sha:"c_"+uid(), html_url:"https://github.com/"+S.ghOwner+"/"+S.ghRepo+"/commit/x"}};
+      if(path.indexOf("/git/ref/")>=0) return {object:{sha:"base_"+uid()}};
+      if(path.indexOf("/branches")>=0) return [{name:"main"},{name:"backup/stable-panel-pr63-20261024"},{name:"feature/demo"}];
+      if(path.indexOf("/git/refs")>=0) return {ref:body&&body.ref, object:{sha:"new_"+uid()}};
+      if(path.indexOf("/pulls")>=0 && method==="GET") return [{number:71,title:"feat: console",head:{ref:"feature/demo"},base:{ref:"main"},html_url:"https://github.com/x/y/pull/71",draft:false}];
+      if(path.indexOf("/pulls")>=0 && method==="POST") return {number:72, html_url:"https://github.com/x/y/pull/72"};
+      if(path.indexOf("/merge")>=0) return {merged:true, sha:"m_"+uid()};
+      if(path.indexOf("/commits")>=0) return [1,2,3,4,5].map(i=>({sha:"sha"+i+uid(), commit:{message:"commit نمونه "+i, author:{name:"dev", date:new Date(Date.now()-i*86400e3).toISOString()}}, html_url:"https://github.com/x/y/commit/"+i}));
+      if(path.indexOf("/actions/workflows")>=0 && path.indexOf("dispatches")<0) return {workflows:KNOWN_WORKFLOWS.map((w,i)=>({id:1000+i, name:w.fa, path:".github/workflows/"+w.file, state:"active"}))};
+      if(path.indexOf("dispatches")>=0) return {};
+      if(path.indexOf("/actions/runs")>=0) return {workflow_runs:KNOWN_WORKFLOWS.map((w,i)=>({id:5000+i, name:w.fa, path:".github/workflows/"+w.file,
+        status:"completed", conclusion:i%5===0?"failure":"success", created_at:new Date(Date.now()-i*3600e3).toISOString(),
+        html_url:"https://github.com/"+S.ghOwner+"/"+S.ghRepo+"/actions/runs/"+(5000+i)}))};
+      if(path.indexOf("/compare/")>=0) return {files:[{filename:"src/index.js",additions:12,deletions:3,status:"modified"}], ahead_by:1, behind_by:0};
+      if(path.indexOf("/issues")>=0) return {number:33, html_url:"https://github.com/x/y/issues/33"};
+      return {};
+    }
+  };
+})();
+
+/* ============================ COMPONENTS ============================ */
+function card(title, kids, actions){
+  const c = el("div",{class:"card"});
+  if(title||actions){
+    const h = el("div",{class:"row",style:{justifyContent:"space-between",marginBottom:"6px"}});
+    h.appendChild(el("h3",{text:title||"",style:{margin:"0"}}));
+    if(actions) h.appendChild(el("div",{class:"row"}, actions));
+    c.appendChild(h);
+  }
+  (Array.isArray(kids)?kids:[kids]).forEach(k=>{ if(k) c.appendChild(typeof k==="object"&&k.nodeType?k:el("div",{text:String(k)})) });
+  return c;
+}
+function statBox(label, value, sub){
+  return el("div",{class:"stat"},[el("div",{class:"v",text:value}), el("div",{class:"l",text:label}), sub?el("div",{class:"l",text:sub}):null]);
+}
+function skeleton(rows){
+  const w = el("div",{}); for(let i=0;i<(rows||4);i++) w.appendChild(el("div",{class:"skel",style:{width:(60+Math.random()*40)+"%"}}));
+  return w;
+}
+function emptyBox(text, actionLabel, onAction){
+  const w = el("div",{class:"empty"},[el("div",{text:text})]);
+  if(actionLabel) w.appendChild(el("button",{class:"btn sm",onclick:onAction,text:actionLabel}));
+  return w;
+}
+function errorBox(err, retry){
+  const fa = (err&&err.fa) || (err&&err.message) || "خطای ناشناخته";
+  const w = el("div",{class:"card",style:{borderColor:"var(--err)"}},[
+    el("div",{style:{color:"var(--err)",fontWeight:"700"},text:"خطا"}),
+    el("div",{text:redact(fa)}),
+  ]);
+  if(retry) w.appendChild(el("div",{class:"row",style:{marginTop:"8px"}},[el("button",{class:"btn sm primary",text:"تلاش دوباره",onclick:retry})]));
+  return w;
+}
+function plannedBox(contractKey, retry){
+  const c = API_CONTRACT[contractKey]||{};
+  const sampleKey = contractKey.indexOf("event")>=0?"events":contractKey.indexOf("run")>=0?"runs":contractKey.indexOf("job")>=0?"jobs":"rules";
+  return el("div",{class:"card",style:{borderColor:"var(--warn)"}},[
+    el("div",{style:{color:"var(--warn)",fontWeight:"700"},text:"این قابلیت هنوز در Worker فعال نشده است"}),
+    el("div",{class:"small muted",text:"مسیر مورد انتظار: "+(c.m||"")+" "+(c.p||"")}),
+    el("div",{class:"small",style:{marginTop:"6px"},text:"نمونهٔ پاسخ مورد انتظار:"}),
+    el("pre",{text:JSON.stringify(PLANNED_SAMPLE[sampleKey],null,2)}),
+    el("div",{class:"row"},[retry?el("button",{class:"btn sm",text:"تلاش دوباره",onclick:retry}):null,
+      el("button",{class:"btn sm ghost",text:"کپی قرارداد",onclick:()=>copyText((c.m||"")+" "+(c.p||"")+"\n"+JSON.stringify(PLANNED_SAMPLE[sampleKey],null,2))})])
+  ]);
+}
+function tableFrom(cols, rows, rowClick){
+  const t = el("table",{class:"resp"});
+  const thead = el("thead",{},[el("tr",{}, cols.map(c=>el("th",{text:c.label})))]);
+  const tb = el("tbody",{});
+  rows.forEach(r=>{
+    const tr = el("tr",{});
+    if(rowClick) { tr.style.cursor="pointer"; tr.addEventListener("click",()=>rowClick(r)) }
+    cols.forEach(c=>{
+      const td = el("td",{"data-l":c.label});
+      const v = c.render? c.render(r) : r[c.key];
+      if(v && v.nodeType) td.appendChild(v); else td.appendChild(el("span",{text: v===null||v===undefined||v===""? "—" : String(v)}));
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  t.appendChild(thead); t.appendChild(tb);
+  return el("div",{class:"tblwrap"},[t]);
+}
+function pager(state, total, onChange){
+  const row = el("div",{class:"row",style:{marginTop:"10px",justifyContent:"space-between"}});
+  const info = el("span",{class:"small muted", text:"صفحه "+nf(Math.floor(state.offset/state.limit)+1)+(total?(" از "+nf(Math.max(1,Math.ceil(total/state.limit)))):"")});
+  const prev = el("button",{class:"btn sm", text:"قبلی", disabled: state.offset<=0, onclick:()=>{ state.offset=Math.max(0,state.offset-state.limit); onChange() }});
+  const next = el("button",{class:"btn sm", text:"بعدی", disabled: total? (state.offset+state.limit>=total):false, onclick:()=>{ state.offset+=state.limit; onChange() }});
+  const sel = el("select",{style:{width:"auto"}, onchange:e=>{ state.limit=+e.target.value; state.offset=0; onChange() }});
+  [20,50].forEach(n=> sel.appendChild(el("option",{value:n, selected:state.limit===n, text:nf(n)+" ردیف"})));
+  row.appendChild(el("div",{class:"row"},[prev,next]));
+  row.appendChild(el("div",{class:"row"},[info, sel]));
+  return row;
+}
+function statusChip(s){
+  const map = {queued:"info",processing:"warn",sent:"ok",failed:"err",uncertain:"warn",skipped:"",
+    success:"ok",error:"err",info:"info",ai_success:"ok",ai_error:"err",running:"warn",done:"ok",approved:"ok",pending:"warn"};
+  const fa = {queued:"در صف",processing:"در حال پردازش",sent:"ارسال‌شده",failed:"ناموفق",uncertain:"نامطمئن",skipped:"رد شده",
+    success:"موفق",error:"خطا",info:"اطلاع",ai_success:"AI موفق",ai_error:"AI خطا",queued_job:"در صف",running:"در حال اجرا",done:"تمام",
+    approved:"تأییدشده",pending:"در انتظار"};
+  return el("span",{class:"chip "+(map[s]||""), text: fa[s]||String(s||"—")});
+}
+function sectionNote(text){ return el("div",{class:"small muted",style:{marginTop:"6px"},text}) }
+async function loadInto(container, loader, render, contractKey){
+  clear(container); container.appendChild(skeleton(4));
+  try{
+    const data = await loader();
+    clear(container); const n = render(data); if(n) container.appendChild(n);
+  }catch(err){
+    clear(container);
+    if(err.notFound && contractKey) container.appendChild(plannedBox(contractKey, ()=>loadInto(container,loader,render,contractKey)));
+    else container.appendChild(errorBox(err, ()=>loadInto(container,loader,render,contractKey)));
+  }
+}
+function simpleLineChart(points, w, h, label){
+  const W=w||320, H=h||90;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+  svg.setAttribute("viewBox","0 0 "+W+" "+H); svg.setAttribute("width","100%"); svg.setAttribute("height",H);
+  svg.setAttribute("role","img"); svg.setAttribute("aria-label", label||"نمودار");
+  const max = Math.max(1, ...points);
+  const step = points.length>1? W/(points.length-1):W;
+  let d="";
+  points.forEach((p,i)=>{ const x=i*step, y=H-6-(p/max)*(H-14); d += (i?" L ":"M ")+x.toFixed(1)+" "+y.toFixed(1) });
+  const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+  path.setAttribute("d",d); path.setAttribute("fill","none"); path.setAttribute("stroke","var(--brand)"); path.setAttribute("stroke-width","2");
+  svg.appendChild(path);
+  points.forEach((p,i)=>{ const c=document.createElementNS("http://www.w3.org/2000/svg","circle");
+    c.setAttribute("cx",(i*step).toFixed(1)); c.setAttribute("cy",(H-6-(p/max)*(H-14)).toFixed(1)); c.setAttribute("r","2.5");
+    c.setAttribute("fill","var(--brand)"); svg.appendChild(c) });
+  return svg;
+}
+function barChart(pairs, label){
+  const wrap = el("div",{role:"img","aria-label":label||"نمودار ستونی"});
+  const max = Math.max(1, ...pairs.map(p=>p[1]));
+  pairs.forEach(([k,v])=>{
+    wrap.appendChild(el("div",{style:{margin:"6px 0"}},[
+      el("div",{class:"row small",style:{justifyContent:"space-between"}},[el("span",{text:k}),el("b",{text:nf(v)})]),
+      el("div",{class:"bar"},[el("i",{style:{width:Math.round(v/max*100)+"%"}})])
+    ]));
+  });
+  return wrap;
+}
+
+/* ============================ PAGES registry ============================ */
+const NAV = [
+  {id:"home", t:"داشبورد", ic:"🏠", main:true},
+  {id:"queue", t:"صف", ic:"📥", main:true},
+  {id:"events", t:"رخدادها", ic:"🔔", main:true},
+  {id:"mob", t:"خبر X", ic:"📰", main:true},
+  {id:"items", t:"آیتم‌ها/ادیت‌ها", ic:"🎬"},
+  {id:"runs", t:"اجراها و جاب‌ها", ic:"⚙️"},
+  {id:"ai", t:"هوش مصنوعی", ic:"🤖"},
+  {id:"sources", t:"منابع و کانال‌ها", ic:"📡"},
+  {id:"owners", t:"مالک‌ها", ic:"👤"},
+  {id:"rules", t:"قوانین", ic:"📏"},
+  {id:"schedules", t:"زمان‌بندی‌ها", ic:"⏰"},
+  {id:"repo", t:"ریپو و ساخت قابلیت", ic:"🛠"},
+  {id:"data", t:"D1 و Mega", ic:"🗄"},
+  {id:"debug", t:"عیب‌یابی", ic:"🩺"},
+  {id:"help", t:"راهنما و Secrets", ic:"📚"},
+  {id:"settings", t:"تنظیمات اتصال", ic:"🔌"},
+  {id:"selftest", t:"خودآزمون", ic:"🧪"}
+];
+const PAGES = {};
+function ps(id, def){ if(!S.pageState[id]) S.pageState[id]=Object.assign({},def); return S.pageState[id] }
+
+/* ---------- PAGE: Home ---------- */
+PAGES.home = function(root){
+  const wrap = el("div",{});
+  const controls = el("div",{class:"row",style:{marginBottom:"10px"}});
+  const sel = el("select",{style:{width:"auto"},"aria-label":"بازخوانی خودکار",onchange:e=>{ S.autoRefresh=+e.target.value; Store.saveCfg(); setupAutoRefresh() }});
+  [[0,"خاموش"],[15,"۱۵ ثانیه"],[30,"۳۰ ثانیه"],[60,"۶۰ ثانیه"]].forEach(([v,l])=> sel.appendChild(el("option",{value:v,selected:S.autoRefresh===v,text:l})));
+  controls.appendChild(el("span",{class:"small muted",text:"بازخوانی خودکار:"})); controls.appendChild(sel);
+  controls.appendChild(el("button",{class:"btn sm",text:"بازخوانی",onclick:()=>{ invalidate(""); render() }}));
+  wrap.appendChild(controls);
+  const body = el("div",{}); wrap.appendChild(body); root.appendChild(wrap);
+  async function render(){
+    clear(body); body.appendChild(skeleton(5));
+    let status=null, qs=null, groq=null, orr=null, errs=[];
+    const t0=performance.now();
+    try{ status = await cachedGet("status", ()=>api("GET","/api/status")) }catch(e){ errs.push(e) }
+    const latency = Math.round(performance.now()-t0);
+    try{ qs = await cachedGet("qsum", ()=>api("GET",API_CONTRACT.queueSummary.p)) }catch(e){ if(!e.notFound) errs.push(e) }
+    try{ groq = await cachedGet("ai_groq",()=>api("GET",API_CONTRACT.aiProviderStatus.p,{query:{provider:"groq"}})) }catch(e){}
+    try{ orr = await cachedGet("ai_or",()=>api("GET",API_CONTRACT.aiProviderStatus.p,{query:{provider:"openrouter"}})) }catch(e){}
+    clear(body);
+    if(!status && errs.length){ body.appendChild(errorBox(errs[0], render)); }
+    const caps = (status&&status.capabilities)||{};
+    const g = el("div",{class:"grid g4"});
+    g.appendChild(statBox("وضعیت Worker", status? "آنلاین":"نامعلوم", status? ("سرویس: "+String(status.service||"—")):""));
+    g.appendChild(statBox("D1", caps.database? "فعال":"غیرفعال/نامعلوم"));
+    g.appendChild(statBox("انتشار (capabilities)", caps.publishing? "مجاز":"بسته", caps.publishing? "فقط کانال آزمایشی از پنل":"پنل نمی‌تواند منتشر کند"));
+    g.appendChild(statBox("تأخیر API", nf(latency)+" ms"));
+    g.appendChild(statBox("ارسال امروز", qs? nf(qs.sent_today):"—"));
+    g.appendChild(statBox("Agent", status&&status.agent? (status.agent.enabled? "روشن":"خاموش"):"—", status&&status.agent? fmtDate(status.agent.updated_at):""));
+    body.appendChild(card("وضعیت کلی",[g, sectionNote("هیچ مقدار secret هرگز در این صفحه یا لاگ نمایش داده نمی‌شود.")]));
+
+    const capRow = el("div",{});
+    ["database","discovery","metadata_api","download","publishing"].forEach(k=>{
+      capRow.appendChild(el("span",{class:"chip "+(caps[k]?"ok":"err"), text:k+": "+(caps[k]?"بله":"خیر")}));
+    });
+    body.appendChild(card("قابلیت‌ها", capRow));
+
+    const aiW = el("div",{class:"grid g2"});
+    [["Groq",groq],["OpenRouter",orr]].forEach(([name,p])=>{
+      const c = el("div",{class:"stat"});
+      c.appendChild(el("div",{class:"row",style:{justifyContent:"space-between"}},[el("b",{text:name}), p? statusChip(p.ready?"success":"error"):el("span",{class:"chip",text:"نامعلوم"})]));
+      if(p){
+        c.appendChild(el("div",{class:"small",text:"مصرف: "+nf(p.calls_used)+" از "+nf(p.daily_limit)+" — باقی‌مانده "+nf(p.remaining)}));
+        c.appendChild(el("div",{class:"bar",style:{marginTop:"6px"}},[el("i",{style:{width:Math.min(100,Math.round((p.calls_used/(p.daily_limit||1))*100))+"%"}})]));
+        if(p.cooldown_active && p.cooldown_until){
+          const cd = el("div",{class:"small",style:{color:"var(--warn)"}});
+          c.appendChild(cd);
+          const tick=()=>{ const left = Math.max(0, Math.round((new Date(p.cooldown_until).getTime()-Date.now())/1000));
+            cd.textContent = left? ("cooldown: "+nf(left)+" ثانیه"):"cooldown پایان یافت" };
+          tick(); const iv=setInterval(tick,1000); S.timers.push(iv);
+        }
+        if(p.last_error_code) c.appendChild(el("div",{class:"small",style:{color:"var(--err)"},text:"آخرین خطا: "+String(p.last_error_code)}));
+      } else c.appendChild(el("div",{class:"small muted",text:"در دسترس نیست"}));
+      aiW.appendChild(c);
+    });
+    body.appendChild(card("هوش مصنوعی", aiW));
+
+    const counts = qs? (qs.queue_counts||{}) : (status&&status.item_counts? status.item_counts.reduce((a,r)=>(a[r.status]=r.total,a),{}) : {});
+    const pairs = Object.keys(counts).map(k=>[k, counts[k]]);
+    body.appendChild(card("توزیع وضعیت صف", pairs.length? barChart(pairs,"توزیع وضعیت صف") : emptyBox("داده‌ای موجود نیست")));
+
+    const rr = (status&&status.recent_runs)||[];
+    body.appendChild(card("آخرین اجراها", rr.length? el("div",{},[
+      simpleLineChart(rr.slice().reverse().map(r=>r.sent_count||0),320,90,"روند ارسال"),
+      tableFrom([
+        {label:"#",key:"id"},
+        {label:"وضعیت",render:r=>statusChip(r.status)},
+        {label:"شروع",render:r=>el("span",{text:fmtDate(r.started_at)})},
+        {label:"یافت/واجد/ارسال",render:r=>el("span",{text:nf(r.found_count)+" / "+nf(r.eligible_count)+" / "+nf(r.sent_count)})}
+      ], rr)
+    ]) : emptyBox("اجرایی ثبت نشده است")));
+
+    const lastErrs = S.reqLog.filter(r=>!r.ok).slice(0,5);
+    body.appendChild(card("آخرین خطاها", lastErrs.length? el("div",{}, lastErrs.map(r=>
+      el("div",{class:"kv"},[el("b",{text:r.m+" "+r.p}), el("span",{text:(r.s||r.note||"خطا")+" — "+fmtDate(r.t,false)})]))) : emptyBox("خطایی ثبت نشده")));
+  }
+  render();
+  root._refresh = render;
+};
+
+/* ---------- PAGE: Events ---------- */
+PAGES.events = function(root){
+  const st = ps("events",{cat:"", q:"", limit:20, offset:0});
+  const tabs = el("div",{class:"tabs"});
+  [["","همه"],["info","اطلاع"],["success","موفق"],["error","خطا"],["ai_success","AI موفق"],["ai_error","AI خطا"]].forEach(([v,l])=>{
+    tabs.appendChild(el("button",{class: st.cat===v?"active":"", text:l, onclick:()=>{ st.cat=v; st.offset=0; sync(); load() }}));
+  });
+  const search = el("input",{type:"text",placeholder:"جست‌وجو در عنوان/جزئیات",value:st.q,"aria-label":"جست‌وجو"});
+  search.addEventListener("input", debounce(e=>{ st.q=e.target.value; st.offset=0; load() },350));
+  const body = el("div",{});
+  root.appendChild(card("رخدادهای ۲۴ ساعت گذشته",[tabs, search, sectionNote("جایگزین دایجست روبیکا — تمام متن‌ها امن نمایش داده می‌شوند.")]));
+  root.appendChild(body);
+  function sync(){ Array.from(tabs.children).forEach((b,i)=>{ const v=["","info","success","error","ai_success","ai_error"][i]; b.className = st.cat===v?"active":"" }) }
+  function load(){
+    loadInto(body, ()=>api("GET",API_CONTRACT.events.p,{query:{limit:st.limit,offset:st.offset,category:st.cat||undefined}}), data=>{
+      let items = data.items||[];
+      if(st.q) items = items.filter(i=>String(i.title||"").indexOf(st.q)>=0 || String(i.detail||"").indexOf(st.q)>=0);
+      const summary = el("div",{style:{marginBottom:"8px"}});
+      const cnt={}; (data.items||[]).forEach(i=>cnt[i.category]=(cnt[i.category]||0)+1);
+      Object.keys(cnt).forEach(k=> summary.appendChild(el("span",{class:"chip",text:k+": "+nf(cnt[k])})));
+      const w = el("div",{},[summary]);
+      if(!items.length) w.appendChild(emptyBox("رخدادی یافت نشد"));
+      else items.forEach(i=>{
+        const d = el("div",{class:"listitem"});
+        d.appendChild(el("div",{class:"row",style:{justifyContent:"space-between"}},[
+          el("b",{text:String(i.title||"—")}), statusChip(i.category)]));
+        d.appendChild(el("div",{class:"small muted",text:fmtDate(i.occurred_at)+" • منبع: "+String(i.source||"—")}));
+        const det = el("div",{class:"small hidden",text:String(i.detail||"")});
+        d.appendChild(det);
+        d.addEventListener("click",()=> det.classList.toggle("hidden"));
+        w.appendChild(d);
+      });
+      w.appendChild(pager(st, data.total, load));
+      return w;
+    }, "events");
+  }
+  load(); root._refresh=load;
+};
+
+/* ---------- PAGE: Queue ---------- */
+PAGES.queue = function(root){
+  const st = ps("queue",{status:"queued", q:"", platform:"", sort:"updated_desc", limit:20, offset:0, sel:{}});
+  const tabs = el("div",{class:"tabs"});
+  const STATUSES = [["queued","در صف"],["processing","در حال پردازش"],["sent","ارسال‌شده"],["failed","ناموفق"],["uncertain","نامطمئن"],["skipped","رد شده"]];
+  STATUSES.forEach(([v,l])=> tabs.appendChild(el("button",{class:st.status===v?"active":"",text:l,onclick:()=>{ st.status=v; st.offset=0; st.sel={}; redrawTabs(); load() }})));
+  function redrawTabs(){ Array.from(tabs.children).forEach((b,i)=> b.className = st.status===STATUSES[i][0]?"active":"") }
+  const search = el("input",{type:"text",placeholder:"جست‌وجو در عنوان/کپشن/لینک",value:st.q,"aria-label":"جست‌وجوی صف"});
+  search.addEventListener("input", debounce(e=>{ st.q=e.target.value; st.offset=0; load() },350));
+  const plat = el("select",{"aria-label":"پلتفرم",onchange:e=>{ st.platform=e.target.value; st.offset=0; load() }});
+  [["","همهٔ پلتفرم‌ها"],["x","X"],["tiktok","تیک‌تاک"],["youtube","یوتیوب"]].forEach(([v,l])=>plat.appendChild(el("option",{value:v,selected:st.platform===v,text:l})));
+  const sort = el("select",{"aria-label":"مرتب‌سازی",onchange:e=>{ st.sort=e.target.value; load() }});
+  [["updated_desc","جدیدترین بروزرسانی"],["created_desc","جدیدترین ساخت"],["attempts_desc","بیشترین تلاش"],["id_asc","شناسه صعودی"]]
+    .forEach(([v,l])=>sort.appendChild(el("option",{value:v,selected:st.sort===v,text:l})));
+  const bulk = el("div",{class:"row",style:{marginTop:"8px"}});
+  const body = el("div",{});
+  root.appendChild(card("صف خودکار",[tabs, el("div",{class:"row"},[search]), el("div",{class:"row"},[plat,sort]), bulk,
+    sectionNote("یادداشت: فراخوانی این GET رکوردهای processing قدیمی‌تر از ۱۲ ساعت را به uncertain تبدیل می‌کند.")]));
+  root.appendChild(body);
+
+  function selectedIds(){ return Object.keys(st.sel).filter(k=>st.sel[k]).map(Number) }
+  function renderBulk(){
+    clear(bulk);
+    const ids = selectedIds();
+    bulk.appendChild(el("span",{class:"small muted",text:"انتخاب‌شده: "+nf(ids.length)}));
+    bulk.appendChild(el("button",{class:"btn sm",disabled:!ids.length,text:"بازگرداندن به صف",onclick:()=>bulkAct(ids,"queued")}));
+    bulk.appendChild(el("button",{class:"btn sm",disabled:!ids.length,text:"رد کردن (skip)",onclick:()=>bulkAct(ids,"skipped")}));
+    bulk.appendChild(el("button",{class:"btn sm ghost",text:"پاک‌کردن انتخاب",onclick:()=>{ st.sel={}; load() }}));
+  }
+  async function bulkAct(ids, status){
+    const ok = await confirmDanger("تغییر وضعیت گروهی",
+      "وضعیت "+nf(ids.length)+" ردیف به «"+status+"» تغییر می‌کند. این عمل روی دیتابیس D1 اثر می‌گذارد و برگشت‌پذیر نیست مگر دستی.");
+    if(!ok) return;
+    let done=0, fail=0;
+    for(const id of ids){
+      try{ await api("POST","/api/brain/automation-queue/"+id+"/state",{body:{status}}); done++ }catch(e){ fail++ }
+    }
+    audit("queue.bulk_state","ids="+ids.length+" → "+status);
+    toast("انجام شد: "+nf(done)+" موفق، "+nf(fail)+" ناموفق", fail?"warn":"ok");
+    st.sel={}; invalidate("queue"); load();
+  }
+  function load(){
+    renderBulk();
+    loadInto(body, ()=>cachedGet("queue:"+st.status+":"+st.limit+":"+st.offset,
+      ()=>api("GET","/api/brain/automation-queue",{query:{status:st.status, limit:st.limit, offset:st.offset}}), 10000), data=>{
+      let items = (data.items||[]).slice();
+      if(st.platform) items = items.filter(i=>i.platform===st.platform);
+      if(st.q){ const q=st.q; items = items.filter(i=>[i.title,i.caption,i.canonical_url,i.source_key].some(v=>String(v||"").indexOf(q)>=0)) }
+      items.sort((a,b)=>{
+        if(st.sort==="id_asc") return a.id-b.id;
+        if(st.sort==="attempts_desc") return (b.attempt_count||0)-(a.attempt_count||0);
+        const k = st.sort==="created_desc"?"created_at":"updated_at";
+        return String(b[k]||"").localeCompare(String(a[k]||""));
+      });
+      const w = el("div",{});
+      const counts = data.counts||{};
+      const cr = el("div",{style:{marginBottom:"8px"}});
+      Object.keys(counts).forEach(k=> cr.appendChild(el("span",{class:"chip",text:k+": "+nf(counts[k])})));
+      w.appendChild(cr);
+      if(!items.length){ w.appendChild(emptyBox("ردیفی با این فیلتر وجود ندارد")); w.appendChild(pager(st,null,load)); return w }
+      w.appendChild(tableFrom([
+        {label:"انتخاب", render:r=>{ const cb=el("input",{type:"checkbox","aria-label":"انتخاب "+r.id}); cb.checked=!!st.sel[r.id];
+          cb.style.width="22px"; cb.style.minHeight="22px";
+          cb.addEventListener("click",e=>{ e.stopPropagation(); st.sel[r.id]=cb.checked; renderBulk() }); return cb }},
+        {label:"#", key:"id"},
+        {label:"پلتفرم", key:"platform"},
+        {label:"عنوان", render:r=>el("span",{text:String(r.title||r.external_id||"—").slice(0,70)})},
+        {label:"وضعیت", render:r=>statusChip(r.status)},
+        {label:"تلاش", render:r=>el("span",{text:nf(r.attempt_count||0)})},
+        {label:"بروزرسانی", render:r=>el("span",{text:fmtDate(r.updated_at)})},
+        {label:"جزئیات", render:r=>el("button",{class:"btn sm",text:"باز کردن",onclick:e=>{ e.stopPropagation(); location.hash="#/queue/item/"+r.id }})}
+      ], items, r=>{ location.hash="#/queue/item/"+r.id }));
+      w.appendChild(pager(st, null, load));
+      return w;
+    });
+  }
+  load(); root._refresh=load;
+};
+
+/* ---------- PAGE: Queue item detail ---------- */
+PAGES.queueItem = function(root, params){
+  const id = params[0];
+  const body = el("div",{});
+  root.appendChild(body);
+  async function fetchItem(){
+    try{
+      const d = await api("GET",API_CONTRACT.consoleItems.p,{query:{limit:1, offset:0, q:"", id}});
+      const found = (d.items||[]).find(x=>String(x.id)===String(id));
+      if(found) return found;
+    }catch(e){ if(!e.notFound) throw e }
+    const q = await api("GET","/api/brain/automation-queue",{query:{limit:100, offset:0}});
+    const r = (q.items||[]).find(x=>String(x.id)===String(id));
+    if(!r){ const e=new Error("nf"); e.fa="آیتم یافت نشد."; throw e }
+    return r;
+  }
+  loadInto(body, fetchItem, item=>{
+    const w = el("div",{});
+    const head = card("آیتم #"+nf(item.id), [
+      el("div",{class:"row"},[statusChip(item.status), el("span",{class:"chip",text:String(item.platform||"")}),
+        item.review_state? statusChip(item.review_state):null,
+        el("span",{class:"chip",text:"تلاش: "+nf(item.attempt_count||0)})]),
+      el("div",{class:"kv"},[el("b",{text:"عنوان"}),el("span",{text:String(item.title||"—")})]),
+      el("div",{class:"kv"},[el("b",{text:"منبع"}),el("span",{text:String(item.source_key||"—")})]),
+      el("div",{class:"kv"},[el("b",{text:"لینک"}), linkNode(item.canonical_url)]),
+      el("div",{class:"kv"},[el("b",{text:"انتشار"}),el("span",{text:fmtDate(item.published_at)})]),
+      el("div",{class:"kv"},[el("b",{text:"ساخت"}),el("span",{text:fmtDate(item.created_at)})]),
+      el("div",{class:"kv"},[el("b",{text:"آخرین خطا"}),el("span",{text:String(item.last_error_code||"—")})]),
+      el("div",{class:"kv"},[el("b",{text:"رسانه"}),el("span",{text:String(item.media_type||"—")+" • "+String(item.media_mime||"")+" • "+nf(item.media_bytes||0)+" بایت"})])
+    ]);
+    w.appendChild(head);
+
+    // media preview
+    const mu = safeUrl(item.media_url||item.canonical_url);
+    const mediaCard = el("div",{});
+    if(mu && /\.(mp4|webm)(\?|$)/i.test(mu)){
+      const v = el("video",{controls:true, preload:"none", style:{width:"100%",maxHeight:"320px",borderRadius:"10px"}});
+      v.src = mu; mediaCard.appendChild(v);
+    } else if(mu && /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(mu)){
+      mediaCard.appendChild(el("img",{src:mu, alt:"پیش‌نمایش رسانه", style:{width:"100%",borderRadius:"10px"}}));
+    } else {
+      mediaCard.appendChild(el("div",{class:"small muted",text:"پیش‌نمایش امن ممکن نیست؛ فقط لینک:"}));
+      mediaCard.appendChild(linkNode(item.canonical_url));
+    }
+    w.appendChild(card("رسانه", mediaCard));
+
+    // edit form
+    const dirtyFlag = {v:false};
+    const mk = (label, key, max)=>{
+      const ta = el("textarea",{"aria-label":label}); ta.value = String(item[key]||"");
+      const cnt = el("div",{class:"small muted",text:"طول: "+nf(ta.value.length)+(max?(" / "+nf(max)):"")});
+      ta.addEventListener("input",()=>{ cnt.textContent="طول: "+nf(ta.value.length)+(max?(" / "+nf(max)):""); dirtyFlag.v=true; S.dirty="ویرایش آیتم #"+item.id });
+      return {node: el("label",{class:"field"},[el("span",{text:label}), ta, cnt]), get:()=>ta.value};
+    };
+    const fTitle = mk("عنوان","title");
+    const fCap = mk("کپشن","caption",900);
+    const fTr = mk("ترجمهٔ فارسی","persian_translation",900);
+    const rsSel = el("select",{"aria-label":"وضعیت بازبینی"});
+    ["pending","approved","rejected"].forEach(v=>rsSel.appendChild(el("option",{value:v,selected:item.review_state===v,text:v})));
+    rsSel.addEventListener("change",()=>{dirtyFlag.v=true});
+    const saveBtn = el("button",{class:"btn primary",text:"ذخیرهٔ تغییرات",onclick:async()=>{
+      const ok = await modal({title:"ذخیرهٔ ویرایش", body:"عنوان/کپشن/ترجمه/وضعیت بازبینی آیتم #"+item.id+" در دیتابیس بروزرسانی می‌شود. انتشاری انجام نمی‌شود."});
+      if(!ok) return;
+      const payload = {title:fTitle.get(), caption:fCap.get(), persian_translation:fTr.get(), review_state:rsSel.value};
+      try{
+        await api("PATCH","/api/console/items/"+item.id,{body:payload});
+        audit("item.patch","#"+item.id); dirtyFlag.v=false; S.dirty=null; toast("ذخیره شد","ok"); invalidate("queue");
+      }catch(e){ toast(e.notFound? "این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
+    }});
+    w.appendChild(card("ویرایش محتوا",[fTitle.node,fCap.node,fTr.node,
+      el("label",{class:"field"},[el("span",{text:"وضعیت بازبینی"}), rsSel]), el("div",{class:"row end"},[saveBtn]),
+      sectionNote("ذخیره فقط دیتابیس را تغییر می‌دهد؛ پنل هرگز منتشر نمی‌کند.")]));
+
+    // metadata tree
+    let meta=null; try{ meta = item.metadata_json? JSON.parse(item.metadata_json):null }catch(e){ meta={parse_error:String(item.metadata_json||"").slice(0,200)} }
+    w.appendChild(card("metadata_json", meta? jsonTree(meta,"metadata",0) : emptyBox("متادیتا ندارد")));
+    let val=null,mod=null;
+    try{ val = item.validation_json? JSON.parse(item.validation_json):null }catch(e){}
+    try{ mod = item.moderation_json? JSON.parse(item.moderation_json):null }catch(e){}
+    w.appendChild(card("اعتبارسنجی / مودریشن", el("div",{class:"grid g2"},[
+      el("div",{},[el("b",{text:"validation"}), val? jsonTree(val,"validation",0):el("div",{class:"small muted",text:"—"})]),
+      el("div",{},[el("b",{text:"moderation"}), mod? jsonTree(mod,"moderation",0):el("div",{class:"small muted",text:"—"})])
+    ])));
+
+    // delivery attempts
+    const att = el("div",{});
+    w.appendChild(card("تلاش‌های ارسال", att));
+    loadInto(att, ()=>api("GET",API_CONTRACT.deliveryAttempts.p,{query:{item_id:item.id, limit:20}}), d=>
+      (d.items||[]).length? tableFrom([
+        {label:"#",key:"attempt_number"},{label:"وضعیت",render:r=>statusChip(r.status)},
+        {label:"شروع",render:r=>el("span",{text:fmtDate(r.started_at)})},
+        {label:"پیام روبیکا",key:"rubika_message_id"},{label:"کد خطا",key:"error_code"}
+      ], d.items) : emptyBox("تلاشی ثبت نشده"), "deliveryAttempts");
+
+    // actions
+    const acts = el("div",{class:"row"});
+    const stAct = async (status)=>{
+      const ok = await confirmDanger("تغییر وضعیت","وضعیت آیتم #"+item.id+" به «"+status+"» تغییر می‌کند.");
+      if(!ok) return;
+      try{ await api("POST","/api/brain/automation-queue/"+item.id+"/state",{body:{status}}); audit("queue.state","#"+item.id+"→"+status);
+        toast("انجام شد","ok"); invalidate("queue") }catch(e){ toast(e.fa||"خطا","err") }
+    };
+    acts.appendChild(el("button",{class:"btn",text:"بازگرداندن به صف",onclick:()=>stAct("queued")}));
+    acts.appendChild(el("button",{class:"btn",text:"رد کردن",onclick:()=>stAct("skipped")}));
+    acts.appendChild(el("button",{class:"btn",text:"علامت نامطمئن",onclick:()=>stAct("uncertain")}));
+    acts.appendChild(el("button",{class:"btn",text:"تلاش فوری (job)",onclick:async()=>{
+      const ok = await confirmDanger("تلاش مجدد","یک اقدام retry_now برای آیتم #"+item.id+" ثبت می‌شود.");
+      if(!ok) return;
+      try{ await api("POST","/api/console/queue/"+item.id+"/action",{body:{action:"retry_now"}}); toast("ثبت شد","ok") }
+      catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
+    }}));
+    acts.appendChild(el("button",{class:"btn danger",text:"حذف از صف",onclick:async()=>{
+      const ok = await confirmDanger("حذف ردیف D1","ردیف #"+item.id+" از جدول automation_queue حذف می‌شود. این عمل برگشت‌ناپذیر است.", true);
+      if(!ok) return;
+      try{ await api("POST","/api/console/queue/"+item.id+"/action",{body:{action:"delete"}}); audit("queue.delete","#"+item.id);
+        toast("حذف شد","ok"); invalidate("queue"); location.hash="#/queue" }
+      catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
+    }}));
+    w.appendChild(card("اقدام‌ها",[acts, sectionNote("هیچ اقدامی در این صفحه چیزی را در کانال production منتشر نمی‌کند.")]));
+    return w;
+  });
+};
+
+/* ---------- PAGE: Items ---------- */
+PAGES.items = function(root){
+  const st = ps("items",{status:"",platform:"",q:"",limit:20,offset:0});
+  const f = el("div",{class:"row"});
+  const q = el("input",{type:"text",placeholder:"جست‌وجو",value:st.q,"aria-label":"جست‌وجوی آیتم"});
+  q.addEventListener("input",debounce(e=>{st.q=e.target.value;st.offset=0;load()},350));
+  const ss = el("select",{"aria-label":"وضعیت",onchange:e=>{st.status=e.target.value;st.offset=0;load()}});
+  [["","همه"],["queued","در صف"],["sent","ارسال‌شده"],["failed","ناموفق"],["skipped","رد شده"]].forEach(([v,l])=>ss.appendChild(el("option",{value:v,selected:st.status===v,text:l})));
+  const pp = el("select",{"aria-label":"پلتفرم",onchange:e=>{st.platform=e.target.value;st.offset=0;load()}});
+  [["","همه"],["x","X"],["tiktok","تیک‌تاک"],["youtube","یوتیوب"]].forEach(([v,l])=>pp.appendChild(el("option",{value:v,selected:st.platform===v,text:l})));
+  f.appendChild(q); f.appendChild(ss); f.appendChild(pp);
+  const editCard = el("div",{});
+  const body = el("div",{});
+  root.appendChild(card("آیتم‌ها و ادیت‌ها",[f]));
+  root.appendChild(editCard);
+  root.appendChild(body);
+  // daily edit count control
+  (async function(){
+    try{
+      const r = await api("GET","/api/console/rules");
+      const cur = (r.rules&&r.rules.daily_edit_count)||0;
+      const inp = el("input",{type:"number",value:cur,min:0,max:50,"aria-label":"تعداد ادیت روزانه"});
+      clear(editCard).appendChild(card("تعداد ادیت روزانه",[
+        el("label",{class:"field"},[el("span",{text:"daily_edit_count"}), inp]),
+        el("button",{class:"btn primary",text:"ذخیره",onclick:async()=>{
+          const ok = await confirmDanger("تغییر قانون","daily_edit_count از "+nf(cur)+" به "+nf(+inp.value)+" تغییر می‌کند و رفتار ربات را تغییر می‌دهد.");
+          if(!ok) return;
+          const rules = Object.assign({}, r.rules, {daily_edit_count:+inp.value});
+          try{ await api("PUT","/api/console/rules",{body:{rules, base_version:r.version}}); toast("ذخیره شد","ok"); audit("rules.daily_edit_count",String(inp.value)) }
+          catch(e){ toast(e.fa||"خطا","err") }
+        }})
+      ]));
+    }catch(e){ clear(editCard).appendChild(plannedBox("rulesGet")) }
+  })();
+  function load(){
+    loadInto(body, ()=>api("GET",API_CONTRACT.consoleItems.p,{query:{status:st.status||undefined, platform:st.platform||undefined, q:st.q||undefined, limit:st.limit, offset:st.offset}}), d=>{
+      const items = d.items||[];
+      const w = el("div",{});
+      const byDay = {};
+      items.forEach(i=>{ const k=String(i.discovered_at||i.created_at||"").slice(0,10); byDay[k]=(byDay[k]||0)+1 });
+      const days = Object.keys(byDay).sort().slice(-10);
+      if(days.length) w.appendChild(card("روند آیتم‌ها", simpleLineChart(days.map(d=>byDay[d]),320,90,"روند آیتم‌ها")));
+      if(!items.length) w.appendChild(emptyBox("آیتمی نیست"));
+      else w.appendChild(tableFrom([
+        {label:"#",key:"id"},{label:"پلتفرم",key:"platform"},
+        {label:"عنوان",render:r=>el("span",{text:String(r.title||"—").slice(0,60)})},
+        {label:"بازبینی",render:r=>statusChip(r.review_state||"pending")},
+        {label:"وضعیت",render:r=>statusChip(r.status)},
+        {label:"کشف",render:r=>el("span",{text:fmtDate(r.discovered_at||r.created_at)})},
+        {label:"باز",render:r=>el("button",{class:"btn sm",text:"جزئیات",onclick:e=>{e.stopPropagation(); location.hash="#/queue/item/"+r.id}})}
+      ], items));
+      w.appendChild(pager(st, d.total, load));
+      return w;
+    }, "consoleItems");
+  }
+  load(); root._refresh=load;
+};
+
+/* ---------- PAGE: Runs & Jobs ---------- */
+PAGES.runs = function(root){
+  const st = ps("runs",{tab:"runs", limit:20, offset:0});
+  const tabs = el("div",{class:"tabs"});
+  const T=[["runs","اجراها"],["attempts","تلاش‌های ارسال"],["brain","رخدادهای مغز"],["jobs","جاب‌ها"]];
+  T.forEach(([v,l])=>tabs.appendChild(el("button",{class:st.tab===v?"active":"",text:l,onclick:()=>{st.tab=v;st.offset=0;draw()}})));
+  const body = el("div",{});
+  root.appendChild(card("اجراها و جاب‌ها",[tabs]));
+  root.appendChild(body);
+  function draw(){
+    Array.from(tabs.children).forEach((b,i)=>b.className = st.tab===T[i][0]?"active":"");
+    clear(body);
+    if(st.tab==="runs") return loadInto(body, ()=>api("GET",API_CONTRACT.runs.p,{query:{limit:st.limit,offset:st.offset}}), d=>{
+      const w=el("div",{});
+      if(!(d.items||[]).length) w.appendChild(emptyBox("اجرایی نیست"));
+      else w.appendChild(tableFrom([
+        {label:"#",key:"id"},{label:"نوع",key:"trigger_type"},{label:"وضعیت",render:r=>statusChip(r.status)},
+        {label:"شروع",render:r=>el("span",{text:fmtDate(r.started_at)})},
+        {label:"یافت",render:r=>el("span",{text:nf(r.found_count)})},
+        {label:"ارسال",render:r=>el("span",{text:nf(r.sent_count)})},
+        {label:"ناموفق",render:r=>el("span",{text:nf(r.failed_count)})},
+        {label:"خلاصه",render:r=>el("span",{text:String(r.summary||"—").slice(0,60)})}
+      ], d.items));
+      w.appendChild(pager(st,d.total,draw)); return w;
+    },"runs");
+    if(st.tab==="attempts"){
+      const inp = el("input",{type:"number",placeholder:"شناسهٔ آیتم","aria-label":"شناسه آیتم"});
+      const out = el("div",{});
+      body.appendChild(card("تلاش‌های ارسال",[el("div",{class:"row"},[inp,
+        el("button",{class:"btn",text:"نمایش",onclick:()=>loadInto(out,()=>api("GET",API_CONTRACT.deliveryAttempts.p,{query:{item_id:inp.value,limit:50}}),
+          d=>(d.items||[]).length? tableFrom([{label:"#",key:"attempt_number"},{label:"وضعیت",render:r=>statusChip(r.status)},
+            {label:"شروع",render:r=>el("span",{text:fmtDate(r.started_at)})},{label:"کد خطا",key:"error_code"}], d.items):emptyBox("چیزی نیست"),"deliveryAttempts")})]), out]));
+      return;
+    }
+    if(st.tab==="brain") return loadInto(body, ()=>api("GET",API_CONTRACT.brainEvents.p,{query:{limit:st.limit,offset:st.offset}}), d=>{
+      const w=el("div",{});
+      (d.items||[]).forEach(i=>{
+        const row = el("div",{class:"listitem"});
+        row.appendChild(el("div",{class:"row",style:{justifyContent:"space-between"}},[el("b",{text:String(i.code||"—")}), statusChip(i.level==="error"?"error":i.level==="warn"?"processing":"info")]));
+        row.appendChild(el("div",{class:"small muted",text:fmtDate(i.created_at)+" • run "+nf(i.run_id)+" • item "+nf(i.item_id)}));
+        let det=null; try{ det = i.details_json? JSON.parse(i.details_json):null }catch(e){ det={raw:String(i.details_json||"")} }
+        if(det) row.appendChild(jsonTree(det,"details",1));
+        w.appendChild(row);
+      });
+      if(!(d.items||[]).length) w.appendChild(emptyBox("رخدادی نیست"));
+      w.appendChild(pager(st,null,draw)); return w;
+    },"brainEvents");
+    // jobs
+    const newJob = el("div",{class:"row"});
+    const typeSel = el("select",{"aria-label":"نوع جاب",style:{width:"auto"}});
+    ["queue_intake_dry_run","ai_health_check","log_zip","d1_backup","mob_x_link","requeue_stuck"].forEach(t=>typeSel.appendChild(el("option",{value:t,text:t})));
+    const paramInp = el("input",{type:"text",placeholder:'پارامتر JSON اختیاری مثل {"url":"https://..."}',"aria-label":"پارامترها"});
+    newJob.appendChild(typeSel); newJob.appendChild(paramInp);
+    newJob.appendChild(el("button",{class:"btn primary",text:"ساخت جاب",onclick:async()=>{
+      let params={}; if(paramInp.value.trim()){ try{ params=JSON.parse(paramInp.value) }catch(e){ return toast("JSON پارامتر نامعتبر است","err") } }
+      const ok = await confirmDanger("ساخت جاب","جاب «"+typeSel.value+"» روی سرور اجرا می‌شود. هیچ انتشاری در کانال production انجام نمی‌شود.");
+      if(!ok) return;
+      try{ const r = await api("POST","/api/console/jobs",{body:{type:typeSel.value, params}}); audit("job.create",typeSel.value);
+        toast("جاب ساخته شد: "+String(r.job_id),"ok"); draw() }catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
+    }}));
+    const list = el("div",{});
+    body.appendChild(card("جاب جدید",[newJob, sectionNote("نتیجهٔ log_zip شامل download_url است.")]));
+    body.appendChild(card("جاب‌ها",[list]));
+    loadInto(list, ()=>api("GET","/api/console/jobs",{query:{limit:20}}), d=>{
+      const w=el("div",{});
+      if(!(d.items||[]).length) return emptyBox("جابی نیست");
+      (d.items||[]).forEach(j=>{
+        const row = el("div",{class:"listitem"});
+        const head = el("div",{class:"row",style:{justifyContent:"space-between"}},[el("b",{text:String(j.type)}), statusChip(j.status)]);
+        row.appendChild(head);
+        row.appendChild(el("div",{class:"small muted",text:"شناسه: "+String(j.id)+" • "+fmtDate(j.created_at)}));
+        const bar = el("div",{class:"bar"},[el("i",{style:{width:(j.progress||0)+"%"}})]); row.appendChild(bar);
+        const res = el("div",{class:"small"}); row.appendChild(res);
+        const paint = jj=>{
+          clear(head); head.appendChild(el("b",{text:String(jj.type)})); head.appendChild(statusChip(jj.status));
+          bar.firstChild.style.width=(jj.progress||0)+"%";
+          clear(res);
+          if(jj.error) res.appendChild(el("span",{style:{color:"var(--err)"},text:"خطا: "+String(jj.error)}));
+          if(jj.result && jj.result.download_url){ const l=safeUrl(jj.result.download_url); if(l) res.appendChild(linkNode(l,"دانلود نتیجه")) }
+          else if(jj.result) res.appendChild(jsonTree(jj.result,"result",1));
+        };
+        paint(j);
+        if(j.status==="queued"||j.status==="running"){
+          const iv = setInterval(async()=>{
+            try{ const r = await api("GET","/api/console/jobs/"+encodeURIComponent(j.id)); paint(r.job);
+              if(r.job.status==="done"||r.job.status==="failed") clearInterval(iv) }catch(e){ clearInterval(iv) }
+          }, 2500); S.timers.push(iv);
+        }
+        w.appendChild(row);
+      });
+      return w;
+    },"jobsList");
+  }
+  draw(); root._refresh=draw;
+};
+
+/* ---------- PAGE: Mob (X news) ---------- */
+PAGES.mob = function(root){
+  const st = ps("mob",{step:0, url:"", job:null, caption:""});
+  const steps = ["تأیید لینک","ترجمهٔ فارسی","دانلود رسانه","پیش‌نمایش","انتشار آزمایشی"];
+  const stepper = el("div",{class:"row",style:{marginBottom:"8px"}});
+  const body = el("div",{});
+  const linksBox = el("div",{});
+  root.appendChild(card("جریان خبر X (Mob)",[stepper, body]));
+  root.appendChild(card("لینک‌های ذخیره‌شده (panel_links)",[linksBox]));
+  function drawStepper(){
+    clear(stepper);
+    steps.forEach((s,i)=> stepper.appendChild(el("span",{class:"chip "+(i<st.step?"ok":i===st.step?"info":""), text:nf(i+1)+". "+s})));
+  }
+  function draw(){
+    drawStepper(); clear(body);
+    if(st.step===0){
+      const inp = el("input",{type:"text",placeholder:"https://x.com/.../status/...",value:st.url,"aria-label":"لینک خبر"});
+      body.appendChild(el("label",{class:"field"},[el("span",{text:"لینک پست X"}), inp]));
+      body.appendChild(el("div",{class:"row"},[
+        el("button",{class:"btn primary",text:"تأیید و شروع",onclick:async()=>{
+          const u = safeUrl(inp.value.trim());
+          if(!u) return toast("لینک باید http/https معتبر باشد","err");
+          st.url=u; 
+          try{ await api("POST","/api/console/links",{body:{url:u}}); loadLinks() }catch(e){}
+          try{
+            const r = await api("POST","/api/console/mob/preview",{body:{url:u}});
+            st.job = r.job_id; st.step=1; draw(); pollJob();
+          }catch(e){ clear(body); body.appendChild(e.notFound? plannedBox("mobPreview",draw) : errorBox(e,draw)) }
+        }}),
+        el("button",{class:"btn ghost",text:"پاک کردن",onclick:()=>{ st.url=""; st.job=null; st.step=0; draw() }})
+      ]));
+      body.appendChild(sectionNote("این جریان هرگز در کانال production منتشر نمی‌کند."));
+      return;
+    }
+    body.appendChild(el("div",{class:"small muted",text:"لینک: "+st.url}));
+    const prog = el("div",{}); body.appendChild(prog);
+    if(st.step<4){ prog.appendChild(el("div",{class:"skel"})); prog.appendChild(el("div",{class:"small muted",text:"در حال پردازش روی سرور… (job: "+String(st.job)+")"})) }
+    if(st.step===4 && st.result){
+      const r = st.result;
+      body.appendChild(el("div",{class:"kv"},[el("b",{text:"عنوان"}),el("span",{text:String(r.title||"—")})]));
+      body.appendChild(el("div",{class:"kv"},[el("b",{text:"متن اصلی"}),el("span",{text:String(r.original_caption||"—")})]));
+      const ta = el("textarea",{"aria-label":"کپشن فارسی"}); ta.value = st.caption || String(r.persian_translation||"");
+      const cnt = el("div",{class:"small muted",text:"طول: "+nf(ta.value.length)});
+      ta.addEventListener("input",()=>{ st.caption=ta.value; cnt.textContent="طول: "+nf(ta.value.length) });
+      body.appendChild(el("label",{class:"field"},[el("span",{text:"کپشن فارسی (قابل ویرایش)"}), ta, cnt]));
+      const mu = safeUrl(r.media_url);
+      body.appendChild(el("div",{class:"kv"},[el("b",{text:"رسانه"}), mu? linkNode(mu,"لینک رسانه"):el("span",{text:"—"})]));
+      const pubBtn = el("button",{class:"btn primary",text:"انتشار در کانال آزمایشی",disabled:true});
+      const note = el("div",{class:"small muted",text:"در حال بررسی مجوز انتشار…"});
+      body.appendChild(el("div",{class:"row"},[pubBtn, el("button",{class:"btn ghost",text:"شروع دوباره",onclick:()=>{st.step=0;st.job=null;st.result=null;st.caption="";draw()}})]));
+      body.appendChild(note);
+      (async()=>{
+        let caps={}, rules={};
+        try{ const s = await cachedGet("status",()=>api("GET","/api/status")); caps = s.capabilities||{} }catch(e){}
+        try{ const rr = await api("GET","/api/console/rules"); rules = rr.rules||{} }catch(e){ rules={test_channel_only:true} }
+        const allowed = caps.publishing===true && rules.test_channel_only!==false;
+        pubBtn.disabled = !allowed;
+        note.textContent = allowed? "فقط کانال آزمایشی. هیچ مسیری برای کانال production وجود ندارد."
+          : "انتشار غیرفعال است: capabilities.publishing یا قانون test_channel_only اجازه نمی‌دهد.";
+        pubBtn.addEventListener("click", async()=>{
+          const ok = await confirmDanger("انتشار در کانال آزمایشی","این محتوا فقط در «کانال آزمایشی» روبیکا منتشر می‌شود. کانال production هرگز هدف نیست.");
+          if(!ok) return;
+          try{ const res = await api("POST","/api/console/mob/publish-test",{body:{job_id:st.job, caption: st.caption||String(r.persian_translation||"")}});
+            audit("mob.publish_test","job="+st.job); toast("در کانال آزمایشی منتشر شد"+(res.message_id?(" ("+res.message_id+")"):""),"ok") }
+          catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
+        });
+      })();
+    }
+  }
+  function pollJob(){
+    const iv = setInterval(async()=>{
+      try{
+        const r = await api("GET","/api/console/jobs/"+encodeURIComponent(st.job));
+        const j = r.job;
+        st.step = j.status==="done"? 4 : (j.progress>60?3: j.progress>30?2:1);
+        if(j.status==="done"){ st.result = j.result||{}; clearInterval(iv) }
+        if(j.status==="failed"){ clearInterval(iv); clear(body); body.appendChild(errorBox({fa:"جاب ناموفق: "+String(j.error||"")},()=>{st.step=0;draw()})); return }
+        draw();
+      }catch(e){ clearInterval(iv); clear(body); body.appendChild(e.notFound? plannedBox("jobGet"):errorBox(e,()=>{st.step=0;draw()})) }
+    }, 2200); S.timers.push(iv);
+  }
+  function loadLinks(){
+    loadInto(linksBox, ()=>api("GET","/api/console/links"), d=>{
+      const w = el("div",{});
+      w.appendChild(el("div",{class:"row"},[el("button",{class:"btn sm danger",text:"پاک‌سازی همهٔ لینک‌ها",onclick:async()=>{
+        const a = await confirmDanger("پاک‌سازی لینک‌ها","همهٔ ردیف‌های جدول panel_links حذف می‌شوند.");
+        if(!a) return;
+        const b = await confirmDanger("تأیید نهایی","این عمل برگشت‌ناپذیر است. برای ادامه کلمهٔ «تایید» را تایپ کنید.", true);
+        if(!b) return;
+        try{ await api("POST","/api/console/links/clear"); audit("links.clear",""); toast("پاک شد","ok"); loadLinks() }catch(e){ toast(e.fa||"خطا","err") }
+      }})]));
+      const items = d.items||[];
+      if(!items.length) w.appendChild(emptyBox("لینکی ذخیره نشده"));
+      else w.appendChild(tableFrom([{label:"#",key:"id"},{label:"لینک",render:r=>linkNode(r.url)},
+        {label:"وضعیت",render:r=>statusChip(r.status)},{label:"ساخت",render:r=>el("span",{text:fmtDate(r.created_at)})}], items));
+      return w;
+    },"linksGet");
+  }
+  draw(); loadLinks(); root._refresh=()=>{draw();loadLinks()};
+};
+
+/* ---------- PAGE: AI ---------- */
+PAGES.ai = function(root){
+  const box = el("div",{class:"grid g2"});
+  const callsBox = el("div",{});
+  root.appendChild(card("وضعیت ارائه‌دهنده‌ها",[box]));
+  const ctrl = el("div",{class:"row"});
+  ctrl.appendChild(el("button",{class:"btn primary",text:"AI health check (جاب)",onclick:async()=>{
+    const ok = await confirmDanger("اجرای بررسی سلامت","یک جاب ai_health_check روی سرور ساخته می‌شود.");
+    if(!ok) return;
+    try{ const r = await api("POST","/api/console/jobs",{body:{type:"ai_health_check",params:{}}}); toast("جاب ساخته شد: "+r.job_id,"ok"); audit("job.ai_health_check","") }
+    catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
+  }}));
+  ctrl.appendChild(el("button",{class:"btn",text:"ویرایش ترتیب provider در قوانین",onclick:()=>{location.hash="#/rules"}}));
+  root.appendChild(card("اقدام‌ها",[ctrl]));
+  const filt = el("div",{class:"row"});
+  const pSel = el("select",{"aria-label":"provider",onchange:()=>loadCalls()});
+  [["","همه"],["groq","groq"],["openrouter","openrouter"]].forEach(([v,l])=>pSel.appendChild(el("option",{value:v,text:l})));
+  const rSel = el("select",{"aria-label":"role",onchange:()=>loadCalls()});
+  [["","همهٔ نقش‌ها"],["translate_official","translate_official"],["caption_rewrite","caption_rewrite"]].forEach(([v,l])=>rSel.appendChild(el("option",{value:v,text:l})));
+  filt.appendChild(pSel); filt.appendChild(rSel);
+  root.appendChild(card("لاگ تماس‌های هوش مصنوعی",[filt, callsBox]));
+  function loadProv(){
+    clear(box);
+    ["groq","openrouter"].forEach(p=>{
+      const c = el("div",{class:"stat"}); box.appendChild(c); c.appendChild(el("b",{text:p}));
+      const inner = el("div",{}); c.appendChild(inner); inner.appendChild(el("div",{class:"skel"}));
+      api("GET","/api/brain/ai-provider/status",{query:{provider:p}}).then(d=>{
+        clear(inner);
+        inner.appendChild(el("div",{class:"row"},[statusChip(d.ready?"success":"error"), el("span",{class:"chip",text:"status: "+String(d.status||"")})]));
+        [["روز مصرف",d.usage_day],["مصرف‌شده",nf(d.calls_used)],["سقف روزانه",nf(d.daily_limit)],["باقی‌مانده",nf(d.remaining)],
+         ["کل مصرف",nf(d.total_calls_used)],["کل سقف",nf(d.total_daily_limit)],["کل باقی",nf(d.total_remaining)],
+         ["آخرین کد خطا",String(d.last_error_code||"—")]].forEach(([k,v])=>
+          inner.appendChild(el("div",{class:"kv"},[el("b",{text:k}),el("span",{text:String(v)})])));
+        if(d.cooldown_until){
+          const cd = el("div",{class:"small",style:{color:"var(--warn)"}}); inner.appendChild(cd);
+          const tick=()=>{ const left=Math.max(0,Math.round((new Date(d.cooldown_until).getTime()-Date.now())/1000));
+            cd.textContent = left? ("cooldown باقی‌مانده: "+nf(left)+" ثانیه") : "cooldown تمام شد" };
+          tick(); const iv=setInterval(tick,1000); S.timers.push(iv);
+        }
+      }).catch(e=>{ clear(inner); inner.appendChild(errorBox(e,loadProv)) });
+    });
+  }
+  function loadCalls(){
+    loadInto(callsBox, ()=>api("GET",API_CONTRACT.aiCalls.p,{query:{provider:pSel.value||undefined, role:rSel.value||undefined, limit:50}}), d=>
+      (d.items||[]).length? tableFrom([
+        {label:"شناسه",key:"call_id"},{label:"روز",key:"usage_day"},{label:"provider",key:"provider"},{label:"نقش",key:"role"},
+        {label:"وضعیت",render:r=>statusChip(r.status==="ok"?"success":"error")},{label:"کد خطا",key:"error_code"},
+        {label:"توکن کل",render:r=>el("span",{text:nf(r.total_tokens)})},
+        {label:"شروع",render:r=>el("span",{text:fmtDate(r.started_at)})}
+      ], d.items) : emptyBox("تماسی ثبت نشده"), "aiCalls");
+  }
+  loadProv(); loadCalls(); root._refresh=()=>{loadProv();loadCalls()};
+};
+
+/* ---------- PAGE: Sources & Channels ---------- */
+PAGES.sources = function(root){
+  const sBox = el("div",{}), cBox = el("div",{});
+  root.appendChild(card("منابع (X / تیک‌تاک / یوتیوب)",[sBox]));
+  root.appendChild(card("کانال‌های مقصد روبیکا",[cBox]));
+  function validSource(platform, key){
+    if(!key) return "شناسهٔ منبع خالی است";
+    if(platform==="x" && !/^@?[A-Za-z0-9_]{2,20}$/.test(key)) return "هندل X نامعتبر است (مثل @BBCPersian)";
+    if(platform==="tiktok" && !/^@?[A-Za-z0-9._]{2,30}$/.test(key)) return "نام کاربری تیک‌تاک نامعتبر است";
+    if(platform==="youtube" && !/^(UC[A-Za-z0-9_\-]{20,}|@[A-Za-z0-9._\-]{2,40})$/.test(key)) return "شناسهٔ یوتیوب نامعتبر است (UC... یا @handle)";
+    return null;
+  }
+  function loadSources(){
+    loadInto(sBox, ()=>api("GET","/api/console/sources"), d=>{
+      const w = el("div",{});
+      const pf = el("select",{"aria-label":"پلتفرم جدید",style:{width:"auto"}});
+      [["x","X"],["tiktok","تیک‌تاک"],["youtube","یوتیوب"]].forEach(([v,l])=>pf.appendChild(el("option",{value:v,text:l})));
+      const kf = el("input",{type:"text",placeholder:"شناسه (@handle یا UC...)","aria-label":"شناسهٔ منبع"});
+      const nf2 = el("input",{type:"text",placeholder:"نام نمایشی","aria-label":"نام نمایشی"});
+      w.appendChild(el("div",{class:"row"},[pf,kf,nf2, el("button",{class:"btn primary",text:"افزودن منبع",onclick:async()=>{
+        const err = validSource(pf.value, kf.value.trim()); if(err) return toast(err,"err");
+        const ok = await confirmDanger("افزودن منبع","منبع «"+kf.value.trim()+"» ("+pf.value+") به جدول sources اضافه می‌شود و در کشف خودکار استفاده خواهد شد.");
+        if(!ok) return;
+        try{ await api("POST","/api/console/sources",{body:{platform:pf.value, source_key:kf.value.trim(), display_name:nf2.value.trim()||kf.value.trim(), enabled:1}});
+          audit("source.create",pf.value+":"+kf.value); toast("افزوده شد","ok"); loadSources() }catch(e){ toast(e.fa||"خطا","err") }
+      }})]));
+      const items = d.items||d||[];
+      if(!items.length) w.appendChild(emptyBox("منبعی ثبت نشده"));
+      else w.appendChild(tableFrom([
+        {label:"#",key:"id"},{label:"پلتفرم",key:"platform"},{label:"شناسه",key:"source_key"},{label:"نام",key:"display_name"},
+        {label:"فعال",render:r=>statusChip(r.enabled?"success":"skipped")},
+        {label:"آخرین بررسی",render:r=>el("span",{text:fmtDate(r.last_checked_at)})},
+        {label:"عمل",render:r=>el("div",{class:"row"},[
+          el("button",{class:"btn sm",text:r.enabled?"غیرفعال":"فعال",onclick:async e=>{ e.stopPropagation();
+            const ok = await confirmDanger("تغییر وضعیت منبع","منبع «"+String(r.source_key)+"» "+(r.enabled?"غیرفعال":"فعال")+" می‌شود.");
+            if(!ok) return;
+            try{ await api("PATCH","/api/console/sources/"+r.id,{body:{enabled:r.enabled?0:1}}); toast("انجام شد","ok"); loadSources() }catch(er){ toast(er.fa||"خطا","err") } }}),
+          el("button",{class:"btn sm danger",text:"حذف",onclick:async e=>{ e.stopPropagation();
+            const ok = await confirmDanger("حذف منبع","منبع «"+String(r.source_key)+"» از جدول sources حذف می‌شود.",true);
+            if(!ok) return;
+            try{ await api("DELETE","/api/console/sources/"+r.id); audit("source.delete",String(r.id)); toast("حذف شد","ok"); loadSources() }catch(er){ toast(er.fa||"خطا","err") } }})
+        ])}
+      ], items));
+      return w;
+    },"sourcesList");
+  }
+  function loadChannels(){
+    loadInto(cBox, ()=>api("GET","/api/console/channels"), d=>{
+      const w = el("div",{});
+      w.appendChild(sectionNote("سیاست: پیش‌فرض فقط کانال test. پنل هرگز در کانال production منتشر نمی‌کند."));
+      const lf = el("input",{type:"text",placeholder:"برچسب","aria-label":"برچسب کانال"});
+      const cf = el("input",{type:"text",placeholder:"@channel_id","aria-label":"شناسهٔ کانال روبیکا"});
+      const rf = el("select",{"aria-label":"نقش کانال",style:{width:"auto"}});
+      [["test","آزمایشی"],["production","اصلی"]].forEach(([v,l])=>rf.appendChild(el("option",{value:v,text:l})));
+      w.appendChild(el("div",{class:"row"},[lf,cf,rf, el("button",{class:"btn primary",text:"افزودن کانال",onclick:async()=>{
+        if(!/^@?[A-Za-z0-9_]{3,40}$/.test(cf.value.trim())) return toast("شناسهٔ کانال نامعتبر است","err");
+        const ok = await confirmDanger("افزودن کانال","کانال «"+cf.value.trim()+"» با نقش «"+rf.value+"» ثبت می‌شود."+(rf.value==="production"?" توجه: پنل هرگز در کانال اصلی منتشر نمی‌کند.":""));
+        if(!ok) return;
+        try{ await api("POST","/api/console/channels",{body:{label:lf.value.trim()||cf.value.trim(), rubika_channel_id:cf.value.trim(), role:rf.value, enabled:rf.value==="test"?1:0}});
+          audit("channel.create",cf.value); toast("افزوده شد","ok"); loadChannels() }catch(e){ toast(e.fa||"خطا","err") }
+      }})]));
+      const items = d.items||d||[];
+      if(!items.length) w.appendChild(emptyBox("کانالی ثبت نشده"));
+      else w.appendChild(tableFrom([
+        {label:"#",key:"id"},{label:"برچسب",key:"label"},{label:"شناسه",key:"rubika_channel_id"},
+        {label:"نقش",render:r=>el("span",{class:"chip "+(r.role==="test"?"ok":"warn"),text:r.role})},
+        {label:"فعال",render:r=>statusChip(r.enabled?"success":"skipped")},
+        {label:"عمل",render:r=>el("button",{class:"btn sm danger",text:"حذف",onclick:async e=>{ e.stopPropagation();
+          const ok = await confirmDanger("حذف کانال","کانال «"+String(r.label)+"» حذف می‌شود.",true); if(!ok) return;
+          try{ await api("DELETE","/api/console/channels/"+r.id); audit("channel.delete",String(r.id)); toast("حذف شد","ok"); loadChannels() }catch(er){ toast(er.fa||"خطا","err") } }})}
+      ], items));
+      return w;
+    },"channelsList");
+  }
+  loadSources(); loadChannels(); root._refresh=()=>{loadSources();loadChannels()};
+};
+
+/* ---------- PAGE: Owners ---------- */
+PAGES.owners = function(root){
+  const box = el("div",{});
+  root.appendChild(card("مالک‌ها و دسترسی‌ها",[box]));
+  root.appendChild(card("امنیت و دستورالعمل claim",[
+    el("p",{text:"امنیت این سیستم بر دو پایه است: کد OWNER_SETUP_CODE (فقط روی Worker) و اینکه ثبت مالک تنها از طریق چت خصوصی ربات انجام می‌شود."}),
+    el("p",{text:"برای افزودن مالک جدید: دکمهٔ «ساخت کد دعوت» را بزنید، کد را به شخص بدهید، او در چت خصوصی ربات روبیکا دستور /claim <کد> را ارسال کند."}),
+    el("p",{class:"small muted",text:"مقدار هیچ secret (از جمله OWNER_SETUP_CODE) هرگز در چت/لاگ یا این پنل نمایش داده نمی‌شود."})
+  ]));
+  function load(){
+    loadInto(box, ()=>api("GET","/api/console/owners"), d=>{
+      const w = el("div",{});
+      w.appendChild(el("div",{class:"row"},[el("button",{class:"btn primary",text:"ساخت کد دعوت یک‌بارمصرف",onclick:async()=>{
+        const ok = await confirmDanger("ساخت کد دعوت","یک کد یک‌بارمصرف ساخته می‌شود که با آن می‌توان مالک جدید ثبت کرد.");
+        if(!ok) return;
+        try{
+          const r = await api("POST","/api/console/owners/invite",{body:{}});
+          const codeEl = el("div",{style:{fontWeight:"800",fontSize:"1.2rem",direction:"ltr",textAlign:"center",padding:"8px",background:"var(--panel2)",borderRadius:"10px"},text:String(r.invite_code)});
+          await modal({title:"کد دعوت (فقط یک بار نمایش داده می‌شود)", okText:"بستم", body:[
+            codeEl, el("div",{class:"small muted",text:"انقضا: "+fmtDate(r.expires_at)}),
+            el("button",{class:"btn sm",text:"کپی کد",onclick:()=>copyText(String(r.invite_code))}),
+            el("div",{class:"small",text:"این کد را فقط از کانال امن به شخص بدهید. پس از بستن این پنجره دوباره نمایش داده نمی‌شود."})]});
+          audit("owner.invite","created");
+        }catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
+      }})]));
+      const items = d.items||d||[];
+      if(!items.length) w.appendChild(emptyBox("مالکی ثبت نشده"));
+      else w.appendChild(tableFrom([
+        {label:"#",key:"id"},{label:"برچسب",key:"label"},
+        {label:"chat_id",render:r=>el("span",{text:String(r.chat_id||"").slice(0,6)+"…"})},
+        {label:"نقش",render:r=>el("span",{class:"chip "+(r.role==="owner"?"warn":"info"),text:r.role})},
+        {label:"ثبت",render:r=>el("span",{text:fmtDate(r.claimed_at)})},
+        {label:"آخرین فعالیت",render:r=>el("span",{text:r.last_seen_at? fmtDate(r.last_seen_at):"—"})},
+        {label:"فعال",render:r=>statusChip(r.enabled?"success":"skipped")},
+        {label:"عمل",render:r=>el("div",{class:"row"},[
+          el("button",{class:"btn sm",text:r.enabled?"غیرفعال":"فعال",onclick:async e=>{ e.stopPropagation();
+            const ok = await confirmDanger("تغییر دسترسی","دسترسی «"+String(r.label)+"» "+(r.enabled?"غیرفعال":"فعال")+" می‌شود.");
+            if(!ok) return;
+            try{ await api("POST","/api/console/owners",{body:{id:r.id, enabled:r.enabled?0:1}}); toast("انجام شد","ok"); load() }catch(er){ toast(er.fa||"خطا","err") } }}),
+          el("button",{class:"btn sm danger",text:"حذف",onclick:async e=>{ e.stopPropagation();
+            const ok = await confirmDanger("حذف مالک","مالک «"+String(r.label)+"» حذف می‌شود و دسترسی او قطع خواهد شد. این عمل برگشت‌ناپذیر است.",true);
+            if(!ok) return;
+            try{ await api("DELETE","/api/console/owners/"+r.id); audit("owner.delete",String(r.id)); toast("حذف شد","ok"); load() }catch(er){ toast(er.fa||"خطا","err") } }})
+        ])}
+      ], items));
+      return w;
+    },"ownersList");
+  }
+  load(); root._refresh=load;
+};
+
+/* ---------- PAGE: Rules ---------- */
+const RULE_DEFS = [
+  {k:"publishing_enabled", t:"bool", d:false, fa:"اجازهٔ کلی انتشار (پیش‌فرض: خاموش)"},
+  {k:"test_channel_only", t:"bool", d:true, fa:"فقط کانال آزمایشی"},
+  {k:"daily_success_cap", t:"int", d:4, min:0, max:50, fa:"سقف ارسال موفق روزانه"},
+  {k:"daily_edit_count", t:"int", d:6, min:0, max:50, fa:"تعداد ادیت روزانه"},
+  {k:"mob_posts_per_run", t:"int", d:1, min:0, max:10, fa:"تعداد پست خبر X در هر اجرا"},
+  {k:"mob_since_cutoff", t:"iso", d:"", fa:"تاریخ مرز برای اخبار X (ISO)"},
+  {k:"freshness_hours", t:"int", d:24, min:1, max:168, fa:"حداکثر کهنگی محتوا (ساعت)"},
+  {k:"ai_provider_order", t:"list", d:["groq","openrouter"], fa:"ترتیب provider هوش مصنوعی (جدا با کاما)"},
+  {k:"ai_daily_limit_groq", t:"int", d:200, min:0, max:5000, fa:"سقف روزانهٔ Groq"},
+  {k:"ai_daily_limit_openrouter", t:"int", d:50, min:0, max:5000, fa:"سقف روزانهٔ OpenRouter"},
+  {k:"translate_enabled", t:"bool", d:true, fa:"ترجمهٔ خودکار فارسی"},
+  {k:"quiet_hours", t:"obj", d:{start:"00:30",end:"07:00"}, fa:"ساعات سکوت (وقت تهران)"},
+  {k:"caption_max_chars", t:"int", d:900, min:50, max:4000, fa:"حداکثر طول کپشن"},
+  {k:"digest_window_utc", t:"text", d:"07:05", fa:"زمان دایجست روزانه (UTC)"}
+];
+PAGES.rules = function(root){
+  const box = el("div",{});
+  root.appendChild(card("قوانین اجرایی",[box]));
+  function load(){
+    loadInto(box, ()=>api("GET","/api/console/rules"), data=>{
+      const rules = JSON.parse(JSON.stringify(data.rules||{}));
+      const original = JSON.parse(JSON.stringify(rules));
+      const w = el("div",{});
+      w.appendChild(el("div",{class:"row"},[el("span",{class:"chip info",text:"نسخه: "+nf(data.version)}), el("span",{class:"small muted",text:"بروزرسانی: "+fmtDate(data.updated_at)})]));
+      const form = el("div",{}); w.appendChild(form);
+      RULE_DEFS.forEach(def=>{
+        const cur = rules[def.k]!==undefined? rules[def.k] : def.d;
+        if(def.t==="bool"){
+          const cb = el("input",{type:"checkbox","aria-label":def.fa}); cb.checked = !!cur;
+          cb.addEventListener("change",()=>{ rules[def.k]=cb.checked; });
+          form.appendChild(el("label",{class:"switch"},[cb, el("span",{text:def.fa+"  ("+def.k+")"})]));
+          form.appendChild(el("div",{class:"sep"}));
+        } else if(def.t==="int"){
+          const i = el("input",{type:"number",value:cur,min:def.min,max:def.max,"aria-label":def.fa});
+          i.addEventListener("input",()=>{ const v=+i.value; rules[def.k] = isNaN(v)? def.d : Math.min(def.max===undefined?1e9:def.max, Math.max(def.min||0, v)) });
+          form.appendChild(el("label",{class:"field"},[el("span",{text:def.fa+" ("+def.k+") — بین "+nf(def.min||0)+" و "+nf(def.max||"∞")}), i]));
+        } else if(def.t==="list"){
+          const i = el("input",{type:"text",value:(Array.isArray(cur)?cur.join(","):String(cur||"")),"aria-label":def.fa});
+          i.addEventListener("input",()=>{ rules[def.k] = i.value.split(",").map(s=>s.trim()).filter(Boolean) });
+          form.appendChild(el("label",{class:"field"},[el("span",{text:def.fa+" ("+def.k+")"}), i]));
+        } else if(def.t==="obj"){
+          const a = el("input",{type:"text",value:(cur&&cur.start)||"","aria-label":"شروع"});
+          const b = el("input",{type:"text",value:(cur&&cur.end)||"","aria-label":"پایان"});
+          const upd=()=>{ rules[def.k]={start:a.value,end:b.value} };
+          a.addEventListener("input",upd); b.addEventListener("input",upd);
+          form.appendChild(el("label",{class:"field"},[el("span",{text:def.fa+" ("+def.k+")"}), el("div",{class:"row"},[a,b])]));
+        } else {
+          const i = el("input",{type:"text",value:String(cur||""),"aria-label":def.fa});
+          i.addEventListener("input",()=>{ rules[def.k]=i.value });
+          form.appendChild(el("label",{class:"field"},[el("span",{text:def.fa+" ("+def.k+")"}), i]));
+        }
+      });
+      // advanced JSON
+      const adv = el("textarea",{"aria-label":"JSON پیشرفته"}); adv.value = JSON.stringify(rules,null,2);
+      const advWrap = el("details",{},[el("summary",{text:"JSON پیشرفته (افزودن کلید دلخواه)"}), adv,
+        el("button",{class:"btn sm",text:"اعمال JSON روی فرم",onclick:()=>{
+          try{ const o=JSON.parse(adv.value); Object.keys(o).forEach(k=>rules[k]=o[k]); toast("اعمال شد — برای ذخیره دکمهٔ ذخیره را بزنید","ok") }
+          catch(e){ toast("JSON نامعتبر","err") }
+        }})]);
+      w.appendChild(advWrap);
+      const diffBox = el("div",{class:"diff"});
+      w.appendChild(card("تفاوت قبل/بعد",[diffBox]));
+      const refreshDiff=()=>{
+        clear(diffBox);
+        const keys = Array.from(new Set(Object.keys(original).concat(Object.keys(rules))));
+        let any=false;
+        keys.forEach(k=>{
+          const a = JSON.stringify(original[k]), b = JSON.stringify(rules[k]);
+          if(a!==b){ any=true;
+            diffBox.appendChild(el("div",{class:"del",text:"- "+k+": "+(a===undefined?"(ندارد)":a)}));
+            diffBox.appendChild(el("div",{class:"add",text:"+ "+k+": "+(b===undefined?"(حذف)":b)}));
+          }
+        });
+        if(!any) diffBox.appendChild(el("div",{class:"small muted",text:"تغییری نیست"}));
+      };
+      refreshDiff();
+      w.appendChild(el("div",{class:"row"},[
+        el("button",{class:"btn",text:"نمایش تفاوت",onclick:refreshDiff}),
+        el("button",{class:"btn primary",text:"ذخیرهٔ قوانین",onclick:async()=>{
+          refreshDiff();
+          const ok = await confirmDanger("ذخیرهٔ قوانین","قوانین اجرایی ربات تغییر می‌کند و بلافاصله روی رفتار خودکار اثر می‌گذارد. نسخهٔ پایه: "+nf(data.version));
+          if(!ok) return;
+          try{
+            const r = await api("PUT","/api/console/rules",{body:{rules, base_version:data.version}});
+            audit("rules.update","v"+data.version+"→v"+r.version); toast("ذخیره شد (نسخه "+nf(r.version)+")","ok"); load();
+          }catch(e){
+            if(e.status===409){
+              await modal({title:"تداخل نسخه (۴۰۹)", body:[el("p",{text:"نسخهٔ جدیدتری روی سرور ذخیره شده است. مقادیر سرور:"}),
+                el("pre",{text:JSON.stringify((e.data&&e.data.server)||{},null,2)})], okText:"باشه"});
+              load();
+            } else toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err");
+          }
+        }}),
+        el("button",{class:"btn ghost",text:"خروجی JSON",onclick:()=>download("rules.json", JSON.stringify(rules,null,2))}),
+        el("button",{class:"btn ghost",text:"وارد کردن JSON",onclick:async()=>{
+          const v = await promptModal("وارد کردن قوانین","متن JSON","");
+          if(!v) return; try{ const o=JSON.parse(v); Object.keys(o).forEach(k=>rules[k]=o[k]); adv.value=JSON.stringify(rules,null,2); refreshDiff(); toast("بارگذاری شد","ok") }catch(e){ toast("JSON نامعتبر","err") }
+        }}),
+        el("button",{class:"btn ghost",text:"برگرداندن فرم به مقدار سرور",onclick:load})
+      ]));
+      return w;
+    },"rulesGet");
+  }
+  load(); root._refresh=load;
+};
+
+/* ---------- PAGE: Schedules ---------- */
+PAGES.schedules = function(root){
+  const box = el("div",{});
+  root.appendChild(card("زمان‌بندی‌ها (از .github/workflows)",[
+    el("div",{class:"small muted",text:"cronهای GitHub Actions بر مبنای UTC هستند؛ در اینجا به وقت تهران ترجمه شده‌اند."}), box]));
+  async function load(){
+    clear(box); box.appendChild(skeleton(6));
+    let files = KNOWN_WORKFLOWS.map(w=>({path:".github/workflows/"+w.file, cron:w.cron, fa:w.fa}));
+    let runs = [];
+    if(S.ghToken || S.mock){
+      try{
+        const tree = await GH.tree("main");
+        const found = (tree.tree||[]).filter(t=>/^\.github\/workflows\/.+\.ya?ml$/.test(t.path));
+        if(found.length){
+          files = [];
+          for(const f of found){
+            let cron="", name="";
+            try{
+              const c = await GH.content(f.path,"main");
+              const text = b64decodeUtf8(c.content);
+              const mName = text.match(/^name:\s*(.+)$/m); if(mName) name = mName[1].trim().replace(/^['"]|['"]$/g,"");
+              const mCron = text.match(/cron:\s*['"]?([^'"\n]+)['"]?/);
+              if(mCron) cron = mCron[1].trim();
+            }catch(e){}
+            files.push({path:f.path, cron, fa:name||f.path.split("/").pop()});
+          }
+        }
+      }catch(e){}
+      try{ const r = await GH.runs(); runs = r.workflow_runs||[] }catch(e){}
+    }
+    clear(box);
+    if(!S.ghToken && !S.mock) box.appendChild(el("div",{class:"small",style:{color:"var(--warn)"},text:"توکن GitHub تنظیم نشده — فهرست پیش‌فرض نمایش داده می‌شود."}));
+    files.forEach(f=>{
+      const c = el("div",{class:"card"});
+      c.appendChild(el("div",{class:"row",style:{justifyContent:"space-between"}},[el("b",{text:f.fa}),
+        el("span",{class:"chip",style:{direction:"ltr"},text:f.cron||"دستی (workflow_dispatch)"})]));
+      c.appendChild(el("div",{class:"small muted",style:{direction:"ltr",textAlign:"left"},text:f.path}));
+      if(f.cron){
+        c.appendChild(el("div",{text:cronToFa(f.cron)}));
+        try{
+          const nexts = cronNext(f.cron,5);
+          const ul = el("div",{class:"small"});
+          nexts.forEach(d=> ul.appendChild(el("div",{text:"• "+fmtDate(d)})));
+          c.appendChild(el("details",{},[el("summary",{text:"۵ اجرای بعدی (وقت تهران)"}), ul]));
+        }catch(e){ c.appendChild(el("div",{class:"small",style:{color:"var(--err)"},text:"خطا در پارس cron: "+e.message})) }
+      }
+      const last = runs.find(r=> String(r.path||"")===f.path);
+      if(last){
+        c.appendChild(el("div",{class:"row"},[el("span",{class:"small muted",text:"آخرین اجرا: "+fmtDate(last.created_at)}),
+          statusChip(last.conclusion==="success"?"success":"error"), linkNode(last.html_url,"باز کردن در GitHub")]));
+      }
+      const acts = el("div",{class:"row"});
+      acts.appendChild(linkNode("https://github.com/"+S.ghOwner+"/"+S.ghRepo+"/blob/main/"+f.path,"مشاهدهٔ فایل"));
+      acts.appendChild(el("button",{class:"btn sm",text:"اجرای دستی (dispatch)",onclick:async()=>{
+        const ok = await confirmDanger("اجرای workflow","workflow «"+f.fa+"» روی شاخهٔ main اجرا می‌شود. این کار می‌تواند منجر به عملیات واقعی ربات شود.");
+        if(!ok) return;
+        try{
+          const id = f.path.split("/").pop();
+          await GH.dispatch(id,"main"); audit("gh.dispatch",f.path);
+          toast("ارسال شد — صفحهٔ اجراها را ببینید","ok");
+          const u = "https://github.com/"+S.ghOwner+"/"+S.ghRepo+"/actions/workflows/"+id;
+          await modal({title:"اجرا ثبت شد", body:[el("p",{text:"برای دیدن وضعیت:"}), linkNode(u,"صفحهٔ workflow در GitHub")], okText:"باشه"});
+        }catch(e){ toast(e.fa||"خطا","err") }
+      }}));
+      acts.appendChild(el("button",{class:"btn sm ghost",text:"ویرایش cron (شاخه + PR)",onclick:()=>{ location.hash="#/repo"; toast("فایل را در «ریپو» باز کنید؛ ویرایش فقط با شاخهٔ جدید و PR انجام می‌شود.","info",5000) }}));
+      c.appendChild(acts);
+      box.appendChild(c);
+    });
+  }
+  load(); root._refresh=load;
+};
+
+/* ---------- PAGE: Repo ---------- */
+PAGES.repo = function(root){
+  const st = ps("repo",{branch:"main", path:"", filter:"", content:"", sha:"", original:""});
+  const tabs = el("div",{class:"tabs"});
+  const T = [["files","فایل‌ها"],["branches","شاخه‌ها و PR"],["ci","وضعیت CI"],["request","درخواست قابلیت جدید"]];
+  let tab = st.tab||"files";
+  T.forEach(([v,l])=>tabs.appendChild(el("button",{class:tab===v?"active":"",text:l,onclick:()=>{ tab=v; st.tab=v; draw() }})));
+  const body = el("div",{});
+  root.appendChild(card("ریپو: "+S.ghOwner+"/"+S.ghRepo,[tabs,
+    el("div",{class:"row"},[
+      el("button",{class:"btn sm",text:"ساخت بکاپ از main",onclick:makeBackup}),
+      el("button",{class:"btn sm",text:"ساخت شاخهٔ feature",onclick:()=>makeBranch("feature")}),
+      el("button",{class:"btn sm ghost",text:"باز کردن در GitHub",onclick:()=>{ const u=safeUrl("https://github.com/"+S.ghOwner+"/"+S.ghRepo); if(u) window.open(u,"_blank","noopener") }})
+    ]),
+    sectionNote("پیش‌فرض ویرایش همیشه روی شاخهٔ feature جدید است، نه main. فایل‌های حساس مسدودند.")]));
+  root.appendChild(body);
+
+  async function makeBackup(){
+    const d = new Date(); const p = tehranParts(d);
+    const stamp = String(p.y)+String(p.m).padStart(2,"0")+String(p.d).padStart(2,"0");
+    const name = "backup/pre-console-"+stamp;
+    const ok = await confirmDanger("ساخت بکاپ","شاخهٔ «"+name+"» از آخرین commit شاخهٔ main ساخته می‌شود (نقطهٔ بازگشت).");
+    if(!ok) return;
+    try{ const r = await GH.ref("main"); await GH.createBranch(name, r.object.sha); audit("gh.backup",name); toast("بکاپ ساخته شد: "+name,"ok") }
+    catch(e){ toast(e.fa||"خطا","err") }
+  }
+  async function makeBranch(prefix){
+    const n = await promptModal("شاخهٔ جدید","نام شاخه (بدون فاصله)", prefix+"/change-"+uid());
+    if(!n) return;
+    const name = n.trim().replace(/\s+/g,"-");
+    try{ const r = await GH.ref("main"); await GH.createBranch(name, r.object.sha); st.branch=name; audit("gh.branch",name); toast("شاخه ساخته شد: "+name,"ok"); draw() }
+    catch(e){ toast(e.fa||"خطا","err") }
+  }
+  function draw(){
+    Array.from(tabs.children).forEach((b,i)=>b.className = tab===T[i][0]?"active":"");
+    clear(body);
+    if(!S.ghToken && !S.mock){ body.appendChild(el("div",{class:"card",style:{borderColor:"var(--warn)"}},[
+      el("b",{text:"توکن GitHub تنظیم نشده است"}), el("p",{text:"برای کار با ریپو، توکن fine-grained را در «تنظیمات اتصال» وارد کنید."}),
+      el("button",{class:"btn primary",text:"رفتن به تنظیمات",onclick:()=>location.hash="#/settings"})])); return }
+    if(tab==="files") return drawFiles();
+    if(tab==="branches") return drawBranches();
+    if(tab==="ci") return drawCI();
+    return drawRequest();
+  }
+  function drawFiles(){
+    const bsel = el("input",{type:"text",value:st.branch,"aria-label":"شاخه"});
+    bsel.addEventListener("change",()=>{ st.branch=bsel.value.trim()||"main"; listFiles() });
+    const filter = el("input",{type:"text",placeholder:"جست‌وجوی فایل",value:st.filter,"aria-label":"جست‌وجوی فایل"});
+    const list = el("div",{style:{maxHeight:"260px",overflow:"auto"}});
+    filter.addEventListener("input",debounce(e=>{ st.filter=e.target.value; renderList() },250));
+    const editorBox = el("div",{});
+    body.appendChild(card("درخت فایل",[el("div",{class:"row"},[el("span",{class:"small muted",text:"شاخه:"}),bsel,filter]), list]));
+    body.appendChild(editorBox);
+    let tree=[];
+    function renderList(){
+      clear(list);
+      const f = st.filter.trim().toLowerCase();
+      const items = tree.filter(t=>t.type==="blob" && (!f || t.path.toLowerCase().indexOf(f)>=0)).slice(0,400);
+      if(!items.length){ list.appendChild(emptyBox("فایلی یافت نشد")); return }
+      items.forEach(t=>{
+        const sens = SENSITIVE_FILE(t.path);
+        const b = el("button",{class:"navlink",style:{direction:"ltr",textAlign:"left"},onclick:()=> sens? toast("این فایل حساس است و باز نمی‌شود.","err") : openFile(t.path)});
+        b.appendChild(el("span",{class:"ic",text: sens?"🔒":"📄"}));
+        b.appendChild(el("span",{text:t.path}));
+        list.appendChild(b);
+      });
+    }
+    async function listFiles(){
+      clear(list); list.appendChild(skeleton(5));
+      try{ const r = await GH.tree(st.branch); tree=r.tree||[]; renderList() }
+      catch(e){ clear(list); list.appendChild(errorBox(e,listFiles)) }
+    }
+    async function openFile(path){
+      clear(editorBox); editorBox.appendChild(skeleton(3));
+      try{
+        const c = await GH.content(path, st.branch);
+        const text = b64decodeUtf8(c.content||"");
+        st.path=path; st.sha=c.sha; st.original=text; st.content=text;
+        clear(editorBox); editorBox.appendChild(buildEditor(path, text, c.sha));
+      }catch(e){ clear(editorBox); editorBox.appendChild(errorBox(e,()=>openFile(path))) }
+    }
+    function buildEditor(path, text, sha){
+      const ta = el("textarea",{"aria-label":"ویرایشگر "+path, spellcheck:"false"});
+      ta.value = text;
+      const gut = el("div",{class:"gut"});
+      const syncGut=()=>{ const n=ta.value.split("\n").length; clear(gut);
+        let s=""; for(let i=1;i<=n;i++) s+=i+"\n"; gut.textContent=s; gut.style.height=ta.clientHeight+"px"; gut.scrollTop=ta.scrollTop };
+      ta.addEventListener("input",()=>{ st.content=ta.value; syncGut(); S.dirty = (ta.value!==st.original)? ("ویرایش "+path):null; dirtyLbl.textContent = ta.value!==st.original? "تغییرات ذخیره‌نشده":"ذخیره‌شده" });
+      ta.addEventListener("scroll",()=>{ gut.scrollTop=ta.scrollTop });
+      ta.addEventListener("keydown",e=>{
+        if(e.key==="Tab"){ e.preventDefault(); const s=ta.selectionStart,en=ta.selectionEnd;
+          ta.value = ta.value.slice(0,s)+"  "+ta.value.slice(en); ta.selectionStart=ta.selectionEnd=s+2; st.content=ta.value }
+      });
+      const edWrap = el("div",{class:"editor"},[gut,ta]);
+      setTimeout(syncGut,30);
+      const findI = el("input",{type:"text",placeholder:"یافتن","aria-label":"یافتن"});
+      const repI = el("input",{type:"text",placeholder:"جایگزینی","aria-label":"جایگزینی"});
+      const dirtyLbl = el("span",{class:"small muted",text:"ذخیره‌شده"});
+      const diffBox = el("div",{class:"diff"});
+      const showDiff=()=>{
+        clear(diffBox);
+        const a = st.original.split("\n"), b = ta.value.split("\n");
+        const max = Math.max(a.length,b.length); let shown=0;
+        for(let i=0;i<max;i++){
+          if(a[i]!==b[i]){
+            if(a[i]!==undefined) diffBox.appendChild(el("div",{class:"del",text:"- "+(i+1)+": "+a[i]}));
+            if(b[i]!==undefined) diffBox.appendChild(el("div",{class:"add",text:"+ "+(i+1)+": "+b[i]}));
+            shown++; if(shown>200){ diffBox.appendChild(el("div",{class:"small muted",text:"… تفاوت‌های بیشتر"})); break }
+          }
+        }
+        if(!shown) diffBox.appendChild(el("div",{class:"small muted",text:"تفاوتی نیست"}));
+      };
+      async function commit(targetBranch, direct){
+        const msg = await promptModal("پیام commit","توضیح تغییر","chore: update "+path);
+        if(!msg) return;
+        let ok;
+        if(direct) ok = await confirmDanger("commit مستقیم روی main","این تغییر مستقیماً روی شاخهٔ main اعمال می‌شود و workflow «Deploy Worker» اجرا خواهد شد (استقرار واقعی).", true);
+        else ok = await confirmDanger("commit روی شاخه","فایل «"+path+"» روی شاخهٔ «"+targetBranch+"» ذخیره می‌شود.");
+        if(!ok) return;
+        try{
+          let sha2 = sha;
+          if(targetBranch!==st.branch){
+            try{ const c2 = await GH.content(path, targetBranch); sha2=c2.sha }catch(e){ sha2=undefined }
+          }
+          const r = await GH.putContent(path, ta.value, msg, targetBranch, sha2);
+          audit("gh.commit", path+" @ "+targetBranch);
+          st.original = ta.value; dirtyLbl.textContent="ذخیره‌شده"; S.dirty=null;
+          toast("ذخیره شد روی "+targetBranch,"ok");
+          if(r && r.commit && r.commit.html_url){ const u=safeUrl(r.commit.html_url); if(u) toast("commit ثبت شد","ok") }
+        }catch(e){ toast(e.fa||"خطا","err") }
+      }
+      return card("ویرایش: "+path, [
+        el("div",{class:"row"},[dirtyLbl, el("span",{class:"chip",text:"شاخه: "+st.branch})]),
+        el("div",{class:"row"},[findI, repI, el("button",{class:"btn sm",text:"جایگزینی همه",onclick:()=>{
+          if(!findI.value) return; const c=ta.value.split(findI.value).length-1;
+          ta.value = ta.value.split(findI.value).join(repI.value); st.content=ta.value; syncGut();
+          toast("جایگزین شد: "+nf(c)+" مورد","ok"); }})]),
+        edWrap,
+        el("div",{class:"row"},[
+          el("button",{class:"btn",text:"نمایش diff",onclick:showDiff}),
+          el("button",{class:"btn primary",text:"commit روی شاخهٔ جاری",onclick:()=>commit(st.branch, st.branch==="main")}),
+          el("button",{class:"btn",text:"ساخت شاخه و commit",onclick:async()=>{
+            const n = await promptModal("شاخهٔ جدید","نام شاخه","feature/edit-"+uid());
+            if(!n) return;
+            try{ const r = await GH.ref("main"); await GH.createBranch(n.trim(), r.object.sha); st.branch=n.trim(); await commit(n.trim(), false) }
+            catch(e){ toast(e.fa||"خطا","err") }
+          }}),
+          el("button",{class:"btn ghost",text:"بازگردانی متن",onclick:()=>{ ta.value=st.original; st.content=st.original; syncGut(); dirtyLbl.textContent="ذخیره‌شده"; S.dirty=null }})
+        ]),
+        diffBox
+      ]);
+    }
+    listFiles();
+  }
+  function drawBranches(){
+    const brBox = el("div",{}), prBox = el("div",{}), cmBox = el("div",{});
+    body.appendChild(card("شاخه‌ها و نقاط بازگشت",[brBox]));
+    body.appendChild(card("Pull Requestها",[prBox]));
+    body.appendChild(card("آخرین commitها",[cmBox]));
+    loadInto(brBox, ()=>GH.branches(), list=>{
+      const w = el("div",{});
+      const backups = list.filter(b=>/^backup\//.test(b.name));
+      w.appendChild(el("div",{class:"small muted",text:"بکاپ‌ها / نقاط بازگشت:"}));
+      (backups.length? backups:[]).forEach(b=> w.appendChild(el("div",{class:"chip ok",text:b.name})));
+      if(!backups.length) w.appendChild(el("div",{class:"small muted",text:"بکاپی نیست"}));
+      w.appendChild(el("div",{class:"sep"}));
+      list.forEach(b=> w.appendChild(el("div",{class:"kv"},[el("b",{text:b.name}),
+        el("span",{},[el("button",{class:"btn sm",text:"انتخاب برای ویرایش",onclick:()=>{ st.branch=b.name; tab="files"; st.tab="files"; draw() }})])])));
+      return w;
+    });
+    loadInto(prBox, ()=>GH.pulls(), list=>{
+      const w = el("div",{});
+      w.appendChild(el("div",{class:"row"},[el("button",{class:"btn sm primary",text:"ساخت PR از شاخهٔ جاری",onclick:async()=>{
+        if(st.branch==="main") return toast("شاخهٔ جاری main است؛ ابتدا شاخهٔ feature بسازید","err");
+        const t = await promptModal("ساخت PR","عنوان PR","feat: تغییر از کنسول مالک");
+        if(!t) return;
+        try{ const r = await GH.createPR(t, st.branch, "main", "ساخته‌شده از کنسول مالک"); audit("gh.pr",String(r.number));
+          toast("PR #"+r.number+" ساخته شد","ok"); drawBranches() }catch(e){ toast(e.fa||"خطا","err") }
+      }})]));
+      if(!list.length) w.appendChild(emptyBox("PR بازی نیست"));
+      list.forEach(p=>{
+        const row = el("div",{class:"listitem"});
+        row.appendChild(el("div",{class:"row",style:{justifyContent:"space-between"}},[el("b",{text:"#"+p.number+" "+String(p.title)}),
+          linkNode(p.html_url,"GitHub")]));
+        row.appendChild(el("div",{class:"small muted",text:String(p.head&&p.head.ref)+" → "+String(p.base&&p.base.ref)}));
+        row.appendChild(el("button",{class:"btn sm danger",text:"merge (squash)",onclick:async()=>{
+          const ok = await confirmDanger("merge به main","PR #"+p.number+" در شاخهٔ main ادغام می‌شود و workflow «Deploy Worker» اجرا شده و Worker واقعی به‌روزرسانی می‌شود.", true);
+          if(!ok) return;
+          try{ await GH.mergePR(p.number); audit("gh.merge","#"+p.number); toast("ادغام شد","ok"); drawBranches() }catch(e){ toast(e.fa||"خطا","err") }
+        }}));
+        w.appendChild(row);
+      });
+      return w;
+    });
+    loadInto(cmBox, ()=>GH.commits("main"), list=> list.length? el("div",{}, list.map(c=>
+      el("div",{class:"kv"},[el("b",{text:String(c.commit&&c.commit.message||"").slice(0,60)}),
+        el("span",{},[el("span",{class:"small",text:fmtDate(c.commit&&c.commit.author&&c.commit.author.date)+" "}), linkNode(c.html_url,"مشاهده")])]))) : emptyBox("commit نیست"));
+  }
+  function drawCI(){
+    const box = el("div",{});
+    body.appendChild(card("اجراهای GitHub Actions",[box]));
+    loadInto(box, ()=>GH.runs(), d=>{
+      const list = d.workflow_runs||[];
+      if(!list.length) return emptyBox("اجرایی نیست");
+      return tableFrom([
+        {label:"نام",key:"name"},
+        {label:"وضعیت",render:r=>statusChip(r.conclusion==="success"?"success":r.status==="completed"?"error":"processing")},
+        {label:"زمان",render:r=>el("span",{text:fmtDate(r.created_at)})},
+        {label:"لینک",render:r=>linkNode(r.html_url,"باز کردن")}
+      ], list);
+    });
+  }
+  function drawRequest(){
+    const t = el("input",{type:"text",placeholder:"عنوان قابلیت","aria-label":"عنوان"});
+    const d = el("textarea",{placeholder:"توضیح کامل آنچه می‌خواهید","aria-label":"توضیح"});
+    const f = el("input",{type:"text",placeholder:"فایل‌های مرتبط (با کاما)","aria-label":"فایل‌ها"});
+    const a = el("textarea",{placeholder:"معیار پذیرش (هر خط یک مورد)","aria-label":"معیار پذیرش"});
+    const out = el("pre",{text:""});
+    const build=()=>{
+      const p = "## درخواست قابلیت برای ریپو "+S.ghOwner+"/"+S.ghRepo+"\n\n"+
+      "### عنوان\n"+t.value+"\n\n### توضیح\n"+d.value+"\n\n### فایل‌های مرتبط\n"+
+      f.value.split(",").map(s=>s.trim()).filter(Boolean).map(s=>"- "+s).join("\n")+
+      "\n\n### معیار پذیرش\n"+a.value.split("\n").filter(Boolean).map(s=>"- [ ] "+s).join("\n")+
+      "\n\n### محدودیت‌ها\n- هیچ secret در کد/لاگ نیاید.\n- تغییر در شاخهٔ feature و از طریق PR.\n- سازگاری با Cloudflare Worker + D1 + GitHub Actions.\n";
+      out.textContent = p; return p;
+    };
+    body.appendChild(card("درخواست قابلیت جدید",[
+      el("label",{class:"field"},[el("span",{text:"عنوان"}),t]),
+      el("label",{class:"field"},[el("span",{text:"توضیح"}),d]),
+      el("label",{class:"field"},[el("span",{text:"فایل‌های مرتبط"}),f]),
+      el("label",{class:"field"},[el("span",{text:"معیار پذیرش"}),a]),
+      el("div",{class:"row"},[
+        el("button",{class:"btn",text:"ساخت پرامپت",onclick:build}),
+        el("button",{class:"btn primary",text:"کپی پرامپت",onclick:()=>copyText(build())}),
+        el("button",{class:"btn",text:"ساخت GitHub Issue",onclick:async()=>{
+          if(!t.value.trim()) return toast("عنوان لازم است","err");
+          const ok = await confirmDanger("ساخت Issue","یک Issue عمومی در ریپو ساخته می‌شود.");
+          if(!ok) return;
+          try{ const r = await GH.createIssue(t.value.trim(), build()); audit("gh.issue",String(r.number)); toast("Issue #"+r.number+" ساخته شد","ok") }catch(e){ toast(e.fa||"خطا","err") }
+        }}),
+        el("button",{class:"btn",text:"ساخت فایل docs/requests در شاخهٔ جدید",onclick:async()=>{
+          if(!t.value.trim()) return toast("عنوان لازم است","err");
+          const slug = t.value.trim().toLowerCase().replace(/[^\w\u0600-\u06FF]+/g,"-").slice(0,40);
+          const branch = "feature/request-"+slug+"-"+uid().slice(0,4);
+          const ok = await confirmDanger("ساخت شاخه و فایل","شاخهٔ «"+branch+"» از main ساخته و فایل docs/requests/"+slug+".md در آن ایجاد می‌شود.");
+          if(!ok) return;
+          try{
+            const r = await GH.ref("main"); await GH.createBranch(branch, r.object.sha);
+            await GH.putContent("docs/requests/"+slug+".md", build(), "docs: request "+slug, branch);
+            audit("gh.request_file", slug); toast("ساخته شد روی "+branch,"ok");
+          }catch(e){ toast(e.fa||"خطا","err") }
+        }})
+      ]), out]));
+  }
+  draw(); root._refresh=draw;
+};
+
+/* ---------- PAGE: D1 & Mega ---------- */
+PAGES.data = function(root){
+  const tBox = el("div",{}), qBox = el("div",{}), mBox = el("div",{});
+  root.appendChild(card("جدول‌های D1",[tBox]));
+  root.appendChild(card("کوئری فقط‌خواندنی (SELECT)",[qBox]));
+  root.appendChild(card("موجودی Mega (فقط‌خواندنی)",[mBox]));
+  function loadTables(){
+    loadInto(tBox, ()=>api("GET","/api/console/d1/tables"), d=>{
+      const items = d.items||d||[];
+      const w = el("div",{});
+      (items.length? items : D1_TABLES.map(n=>({name:n,row_count:null,columns:[]}))).forEach(t=>{
+        const det = el("details",{});
+        det.appendChild(el("summary",{text:t.name+(t.row_count!==null&&t.row_count!==undefined?(" — "+nf(t.row_count)+" ردیف"):"")}));
+        if((t.columns||[]).length) det.appendChild(tableFrom([{label:"ستون",key:"name"},{label:"نوع",key:"type"},
+          {label:"nullable",render:c=>el("span",{text:c.nullable?"بله":"خیر"})}], t.columns));
+        det.appendChild(el("div",{class:"row"},[
+          el("button",{class:"btn sm",text:"SELECT * (۱۰۰)",onclick:()=>{ sqlArea.value="SELECT * FROM "+t.name+" LIMIT 100"; runQuery() }}),
+          el("button",{class:"btn sm ghost",text:"خروجی JSON ستون‌ها",onclick:()=>download(t.name+"-schema.json", JSON.stringify(t,null,2))})
+        ]));
+        w.appendChild(det);
+      });
+      w.appendChild(el("div",{class:"row",style:{marginTop:"8px"}},[el("button",{class:"btn",text:"بکاپ D1 (جاب)",onclick:async()=>{
+        const ok = await confirmDanger("بکاپ D1","یک جاب d1_backup روی سرور اجرا می‌شود.");
+        if(!ok) return;
+        try{ const r = await api("POST","/api/console/jobs",{body:{type:"d1_backup",params:{}}}); toast("جاب ساخته شد: "+r.job_id,"ok"); audit("job.d1_backup","") }
+        catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
+      }})]));
+      return w;
+    },"d1Tables");
+  }
+  const sqlArea = el("textarea",{placeholder:"SELECT * FROM items LIMIT 50","aria-label":"SQL"});
+  const res = el("div",{});
+  qBox.appendChild(sqlArea);
+  qBox.appendChild(el("div",{class:"row"},[
+    el("button",{class:"btn primary",text:"اجرا",onclick:runQuery}),
+    el("span",{class:"small muted",text:"فقط SELECT/WITH مجاز است؛ LIMIT خودکار اضافه می‌شود."})]));
+  qBox.appendChild(res);
+  async function runQuery(){
+    const sql = sqlArea.value.trim();
+    if(!isSelectOnly(sql)){ toast("فقط دستور SELECT (یا WITH) بدون سمی‌کالن مجاز است","err"); return }
+    const finalSql = withLimit(sql,200);
+    clear(res); res.appendChild(skeleton(3));
+    try{
+      const d = await api("POST","/api/console/d1/query",{body:{sql:finalSql}});
+      clear(res);
+      res.appendChild(el("div",{class:"small muted",text:"زمان: "+nf(d.duration_ms)+" ms • ردیف: "+nf((d.rows||[]).length)}));
+      const cols = (d.columns||[]).map(c=>({label:String(c), render:r=>el("span",{text:String(r[(d.columns||[]).indexOf(c)]===null?"":r[(d.columns||[]).indexOf(c)])})}));
+      res.appendChild(tableFrom(cols, d.rows||[]));
+      res.appendChild(el("div",{class:"row"},[
+        el("button",{class:"btn sm ghost",text:"CSV",onclick:()=>download("query.csv", toCSV(d.columns||[], d.rows||[]), "text/csv;charset=utf-8")}),
+        el("button",{class:"btn sm ghost",text:"JSON",onclick:()=>download("query.json", JSON.stringify(d,null,2))})]));
+      audit("d1.query", finalSql.slice(0,120));
+    }catch(e){ clear(res); res.appendChild(e.notFound? plannedBox("d1Query",runQuery):errorBox(e,runQuery)) }
+  }
+  function loadMega(){
+    loadInto(mBox, ()=>api("GET","/api/console/mega/inventory"), d=>{
+      const f = d.folders||[];
+      if(!f.length) return emptyBox("موجودی ثبت نشده");
+      const w = el("div",{},[el("div",{class:"small muted",text:"بروزرسانی: "+fmtDate(d.updated_at)})]);
+      w.appendChild(tableFrom([{label:"پوشه",key:"name"},{label:"فایل",render:r=>el("span",{text:nf(r.files)})},
+        {label:"حجم",render:r=>el("span",{text:nf(Math.round((r.bytes||0)/1048576))+" مگابایت"})}], f));
+      return w;
+    },"megaInventory");
+  }
+  loadTables(); loadMega(); root._refresh=()=>{loadTables();loadMega()};
+};
+
+/* ---------- PAGE: Debug ---------- */
+PAGES.debug = function(root){
+  const box = el("div",{});
+  root.appendChild(card("عیب‌یابی و تأخیر",[box]));
+  function draw(){
+    clear(box);
+    const lat = S.reqLog.filter(r=>r.ms).map(r=>r.ms).sort((a,b)=>a-b);
+    const avg = lat.length? Math.round(lat.reduce((a,b)=>a+b,0)/lat.length):0;
+    const p95 = lat.length? lat[Math.min(lat.length-1, Math.floor(lat.length*0.95))]:0;
+    const g = el("div",{class:"grid g4"});
+    g.appendChild(statBox("تعداد درخواست", nf(S.reqLog.length)));
+    g.appendChild(statBox("میانگین تأخیر", nf(avg)+" ms"));
+    g.appendChild(statBox("p95", nf(p95)+" ms"));
+    g.appendChild(statBox("خطاها", nf(S.reqLog.filter(r=>!r.ok).length)));
+    box.appendChild(g);
+    if(lat.length>1) box.appendChild(simpleLineChart(S.reqLog.slice(0,40).reverse().map(r=>r.ms||0),320,90,"تأخیر درخواست‌ها"));
+    box.appendChild(el("div",{class:"row",style:{marginTop:"8px"}},[
+      el("button",{class:"btn sm",text:"تست CORS/اتصال",onclick:async()=>{
+        try{ const t0=performance.now(); await api("GET","/api/status"); toast("اتصال سالم ("+nf(Math.round(performance.now()-t0))+" ms)","ok") }
+        catch(e){ toast(e.fa||"خطا","err",6000) } draw();
+      }}),
+      el("button",{class:"btn sm",text:"نمایش رخدادهای digest (claim)",onclick:async()=>{
+        const ok = await confirmDanger("فراخوانی claim","این فراخوانی رخدادهای دایجست را claim می‌کند و ممکن است آن‌ها را مصرف‌شده علامت بزند.");
+        if(!ok) return;
+        try{ const d = await api("POST","/api/brain/owner-digest/claim",{body:{}});
+          await modal({title:"owner-digest/claim", body:[jsonTree(d,"response",0)], okText:"بستن"}) }
+        catch(e){ toast(e.fa||"خطا","err") }
+      }}),
+      el("button",{class:"btn sm ghost",text:"پاک‌کردن لاگ",onclick:()=>{ S.reqLog=[]; draw() }}),
+      el("button",{class:"btn sm ghost",text:"خروجی گزارش عیب‌یابی",onclick:()=>{
+        const rep = {version:VERSION, when:new Date().toISOString(), mock:S.mock, apiBaseHost:(function(){try{return new URL(S.apiBase).host}catch(e){return "?"}})(),
+          hasApiToken: !!S.apiToken, hasGhToken: !!S.ghToken, repo:S.ghOwner+"/"+S.ghRepo,
+          latency:{avg,p95,count:lat.length}, log:S.reqLog.slice(0,100).map(r=>({m:r.m,p:redact(r.p),s:r.s,ms:r.ms,note:r.note})),
+          note:"هیچ مقدار secret در این گزارش نیست."};
+        download("rubika-console-debug.json", JSON.stringify(rep,null,2));
+      }})
+    ]));
+    box.appendChild(el("div",{class:"small muted",style:{marginTop:"8px"},text:"اگر خطای CORS دیدید: Worker باید هدرهای Access-Control-Allow-Origin و Access-Control-Allow-Headers: Authorization بدهد."}));
+    box.appendChild(tableFrom([
+      {label:"زمان",render:r=>el("span",{text:fmtDate(r.t,false)})},
+      {label:"متد",key:"m"},
+      {label:"مسیر",render:r=>el("span",{style:{direction:"ltr"},text:redact(r.p)})},
+      {label:"کد",render:r=>el("span",{class:"chip "+(r.ok?"ok":"err"),text:String(r.s||r.note||"—")})},
+      {label:"ms",render:r=>el("span",{text:nf(r.ms)})}
+    ], S.reqLog.slice(0,80)));
+    box.appendChild(card("لاگ ممیزی محلی (۲۰۰ مورد آخر)",
+      S.audit.length? tableFrom([{label:"زمان",render:r=>el("span",{text:fmtDate(r.t,false)})},{label:"عمل",key:"action"},{label:"جزئیات",key:"detail"}], S.audit.slice(0,50))
+      : emptyBox("عملی ثبت نشده")));
+    const srv = el("div",{});
+    box.appendChild(card("لاگ ممیزی سرور",[srv]));
+    loadInto(srv, ()=>api("GET","/api/console/audit",{query:{limit:50}}), d=>
+      (d.items||[]).length? tableFrom([{label:"زمان",render:r=>el("span",{text:fmtDate(r.at)})},{label:"کاربر",key:"actor"},
+        {label:"عمل",key:"action"},{label:"جزئیات",key:"detail"}], d.items) : emptyBox("چیزی نیست"), "audit");
+    box.appendChild(el("div",{class:"small muted",text:"نسخهٔ کنسول: "+VERSION}));
+  }
+  draw(); root._refresh=draw;
+};
+
+/* ---------- PAGE: Help ---------- */
+PAGES.help = function(root){
+  const sec = el("div",{});
+  SECRET_NAMES.forEach(s=>{
+    sec.appendChild(el("div",{class:"card",style:{marginBottom:"8px"}},[
+      el("div",{class:"row",style:{justifyContent:"space-between"}},[el("b",{style:{direction:"ltr"},text:s.n}), el("span",{class:"chip",text:"فقط نام"})]),
+      el("div",{class:"small muted",text:"محل: "+s.w}),
+      el("div",{class:"small",text:s.d})
+    ]));
+  });
+  root.appendChild(card("چک‌لیست Secrets (بدون مقدار)",[sec,
+    el("div",{class:"small",style:{color:"var(--warn)"},text:"هیچ مقداری از این متغیرها در پنل، چت یا لاگ نمایش داده نمی‌شود و نباید داده شود."})]));
+  root.appendChild(card("معماری سیستم",[
+    el("p",{text:"۱) Cloudflare Worker: وب‌هوک روبیکا، API، صف، دیتابیس D1. توکن ربات فقط اینجاست."}),
+    el("p",{text:"۲) GitHub Actions: کارهای سنگین (دانلود، ادیت، آپلود) و زمان‌بندی‌های cron."}),
+    el("p",{text:"۳) این کنسول: فقط یک کلاینت مرورگری. ناوبری کاملاً سمت کلاینت است و دکمهٔ برگشت هرگز به شبکه وابسته نیست."}),
+    el("p",{text:"۴) Deploy: با هر merge در main، workflow «Deploy Worker» اجرا می‌شود."}),
+    el("p",{text:"۵) پنل هرگز منتشر نمی‌کند؛ تنها استثنا «انتشار در کانال آزمایشی» با تأیید صریح است."})
+  ]));
+  const rb = el("div",{});
+  ROLLBACK_POINTS.forEach(b=> rb.appendChild(el("div",{class:"kv"},[el("b",{style:{direction:"ltr"},text:b}),
+    el("span",{},[linkNode("https://github.com/"+S.ghOwner+"/"+S.ghRepo+"/tree/"+b,"مشاهده در GitHub")])])));
+  root.appendChild(card("بازگشت اضطراری",[
+    el("p",{text:"اگر استقرار خراب شد: Cloudflare → Workers & Pages → پروژه → Deployments → Rollback به آخرین نسخهٔ سالم."}),
+    el("div",{class:"row"},[el("button",{class:"btn primary",text:"باز کردن داشبورد Cloudflare",onclick:()=>window.open("https://dash.cloudflare.com/","_blank","noopener")}),
+      el("button",{class:"btn",text:"باز کردن Actions",onclick:()=>window.open("https://github.com/"+S.ghOwner+"/"+S.ghRepo+"/actions","_blank","noopener")})]),
+    el("div",{class:"small muted",style:{marginTop:"8px"},text:"نقاط بازگشت کد:"}), rb
+  ]));
+  const ep = el("div",{});
+  Object.keys(API_CONTRACT).forEach(k=>{
+    const c = API_CONTRACT[k];
+    ep.appendChild(el("div",{class:"kv"},[el("b",{style:{direction:"ltr"},text:c.m+" "+c.p}),
+      el("span",{class:"chip "+(c.planned?"warn":"ok"),text:c.planned?"برنامه‌ریزی‌شده":"موجود"})]));
+  });
+  root.appendChild(card("فهرست endpointها (API_CONTRACT)",[ep,
+    el("button",{class:"btn sm ghost",text:"خروجی JSON قرارداد",onclick:()=>download("api-contract.json",JSON.stringify(API_CONTRACT,null,2))})]));
+};
+
+/* ---------- PAGE: Settings ---------- */
+PAGES.settings = function(root){
+  const base = el("input",{type:"text",value:S.apiBase,"aria-label":"آدرس API"});
+  const tok = el("input",{type:"password",value:S.apiToken,placeholder:"AGENT_API_TOKEN","aria-label":"توکن API"});
+  const gtok = el("input",{type:"password",value:S.ghToken,placeholder:"github_pat_...","aria-label":"توکن GitHub"});
+  const own = el("input",{type:"text",value:S.ghOwner,"aria-label":"owner"});
+  const rep = el("input",{type:"text",value:S.ghRepo,"aria-label":"repo"});
+  const remSel = el("select",{"aria-label":"محل ذخیره"});
+  [["session","فقط همین نشست (امن‌تر)"],["local","به خاطر بسپار (localStorage)"]].forEach(([v,l])=>remSel.appendChild(el("option",{value:v,selected:(v==="local")===S.remember,text:l})));
+  const mockSw = el("input",{type:"checkbox"}); mockSw.checked=S.mock;
+  const pdSw = el("input",{type:"checkbox"}); pdSw.checked=S.persianDigits;
+  const jalSw = el("input",{type:"checkbox"}); jalSw.checked=S.jalali;
+  const lockMin = el("input",{type:"number",value:S.lockMinutes,min:0,max:120,"aria-label":"دقیقهٔ قفل خودکار"});
+  const themeSel = el("select",{"aria-label":"تم"});
+  [["auto","خودکار (سیستم)"],["light","روشن"],["dark","تاریک"]].forEach(([v,l])=>themeSel.appendChild(el("option",{value:v,selected:S.theme===v,text:l})));
+
+  root.appendChild(card("اتصال به Worker",[
+    el("label",{class:"field"},[el("span",{text:"API Base URL"}), base]),
+    el("label",{class:"field"},[el("span",{text:"AGENT_API_TOKEN (برای /api/brain/* و /api/console/*)"}), tok]),
+    el("div",{class:"small muted",text:"این توکن فقط در مرورگر شما ذخیره می‌شود و هرگز نمایش داده یا لاگ نمی‌شود."})
+  ]));
+  root.appendChild(card("GitHub (اختیاری)",[
+    el("label",{class:"field"},[el("span",{text:"Fine-grained token"}), gtok]),
+    el("div",{class:"row"},[el("label",{class:"field",style:{flex:"1"}},[el("span",{text:"owner"}), own]),
+      el("label",{class:"field",style:{flex:"1"}},[el("span",{text:"repo"}), rep])])
+  ]));
+  root.appendChild(card("ذخیره‌سازی و امنیت",[
+    el("label",{class:"field"},[el("span",{text:"محل ذخیرهٔ توکن‌ها"}), remSel]),
+    el("div",{class:"small",style:{color:"var(--warn)"},text:"هشدار: ذخیرهٔ توکن در localStorage یعنی توکن روی این دستگاه باقی می‌ماند؛ اگر دستگاه مشترک است از «فقط همین نشست» استفاده کنید."}),
+    el("label",{class:"field"},[el("span",{text:"قفل خودکار پس از (دقیقه) — ۰ یعنی خاموش"}), lockMin]),
+    el("div",{class:"row"},[
+      el("button",{class:"btn sm",text:"تنظیم/تغییر PIN",onclick:async()=>{
+        const p = await promptModal("PIN محلی","یک PIN عددی ۴ تا ۸ رقمی","",true);
+        if(p===null) return;
+        if(!/^\d{4,8}$/.test(p)) return toast("PIN باید ۴ تا ۸ رقم باشد","err");
+        const salt = uid()+uid();
+        const h = await sha256hex(salt+":"+p);
+        localStorage.setItem("ra_pin", JSON.stringify({salt,h})); toast("PIN ذخیره شد","ok");
+      }}),
+      el("button",{class:"btn sm ghost",text:"حذف PIN",onclick:()=>{ localStorage.removeItem("ra_pin"); toast("PIN حذف شد","ok") }}),
+      el("button",{class:"btn sm",text:"قفل کردن الان",onclick:lockScreen})
+    ])
+  ]));
+  root.appendChild(card("نمایش",[
+    el("label",{class:"switch"},[pdSw, el("span",{text:"اعداد فارسی"})]),
+    el("label",{class:"switch"},[jalSw, el("span",{text:"تقویم شمسی (وقت تهران)"})]),
+    el("label",{class:"field"},[el("span",{text:"تم"}), themeSel]),
+    el("label",{class:"switch"},[mockSw, el("span",{text:"حالت داده‌ی نمایشی (Mock) — بدون نیاز به Worker"})])
+  ]));
+  const testOut = el("div",{});
+  root.appendChild(card("تست اتصال",[
+    el("button",{class:"btn primary",text:"اجرای تست‌ها",onclick:runTests}), testOut]));
+  root.appendChild(card("نگهداری",[
+    el("div",{class:"row"},[
+      el("button",{class:"btn",text:"خروجی تنظیمات (بدون توکن)",onclick:()=>download("console-settings.json",
+        JSON.stringify({apiBase:S.apiBase,ghOwner:S.ghOwner,ghRepo:S.ghRepo,persianDigits:S.persianDigits,jalali:S.jalali,
+          autoRefresh:S.autoRefresh,pageSize:S.pageSize,lockMinutes:S.lockMinutes,theme:S.theme},null,2))}),
+      el("button",{class:"btn",text:"وارد کردن تنظیمات",onclick:async()=>{
+        const v = await promptModal("وارد کردن تنظیمات","متن JSON","");
+        if(!v) return;
+        try{ const o=JSON.parse(v);
+          ["apiBase","ghOwner","ghRepo","persianDigits","jalali","autoRefresh","pageSize","lockMinutes","theme"].forEach(k=>{ if(o[k]!==undefined) S[k]=o[k] });
+          Store.saveCfg(); applyTheme(); toast("اعمال شد","ok"); route();
+        }catch(e){ toast("JSON نامعتبر","err") }
+      }}),
+      el("button",{class:"btn danger",text:"خروج و پاک‌کردن همهٔ داده‌های محلی",onclick:async()=>{
+        const ok = await confirmDanger("پاک‌کردن داده‌های محلی","تمام تنظیمات، توکن‌ها، PIN و لاگ ممیزی محلی از این مرورگر حذف می‌شود.",true);
+        if(!ok) return; Store.wipe(); location.href = location.pathname;
+      }})
+    ])
+  ]));
+  const saveRow = el("div",{class:"row end",style:{position:"sticky",bottom:"0"}},[
+    el("button",{class:"btn primary",text:"ذخیرهٔ تنظیمات",onclick:()=>{
+      S.apiBase = base.value.trim(); S.ghOwner = own.value.trim()||DEFAULTS.ghOwner; S.ghRepo = rep.value.trim()||DEFAULTS.ghRepo;
+      S.remember = remSel.value==="local"; S.apiToken = tok.value; S.ghToken = gtok.value;
+      S.mock = mockSw.checked; S.persianDigits = pdSw.checked; S.jalali = jalSw.checked;
+      S.lockMinutes = Math.max(0, Math.min(120, +lockMin.value||0)); S.theme = themeSel.value;
+      Store.saveCfg(); Store.saveTok(); applyTheme(); invalidate(""); updateMockBadge();
+      audit("settings.save","apiBase/host="+(function(){try{return new URL(S.apiBase).host}catch(e){return "?"}})());
+      toast("ذخیره شد","ok");
+    }})
+  ]);
+  root.appendChild(saveRow);
+
+  async function runTests(){
+    clear(testOut);
+    const rows = [
+      {n:"GET /api/status (بدون نیاز به توکن)", f:async()=>{ const d = await api("GET","/api/status"); return "service: "+String(d.service||"ok") }},
+      {n:"endpoint با Bearer (queue-summary)", f:async()=>{ if(!S.apiToken && !S.mock) throw Object.assign(new Error("x"),{fa:"توکن وارد نشده است."});
+        const d = await api("GET","/api/brain/owner-console/queue-summary"); return "sent_today: "+nf(d.sent_today) }},
+      {n:"تست CORS", f:async()=>{ await api("GET","/api/status"); return "CORS سالم است" }},
+      {n:"GitHub", f:async()=>{ if(!S.ghToken && !S.mock) throw Object.assign(new Error("x"),{fa:"توکن GitHub وارد نشده است."});
+        const u = await GH.repo(); return "repo: "+String(u.full_name||"ok") }}
+    ];
+    for(const r of rows){
+      const line = el("div",{class:"kv"},[el("b",{text:r.n}), el("span",{text:"در حال تست…"})]);
+      testOut.appendChild(line);
+      const t0 = performance.now();
+      try{ const msg = await r.f(); clear(line.lastChild);
+        line.lastChild.textContent = "✅ "+msg+" — "+nf(Math.round(performance.now()-t0))+" ms";
+        line.lastChild.style.color="var(--ok)";
+      }catch(e){
+        line.lastChild.textContent = "❌ "+redact(e.fa||e.message||"خطا")+" — "+nf(Math.round(performance.now()-t0))+" ms";
+        line.lastChild.style.color="var(--err)";
+      }
+    }
+    testOut.appendChild(el("div",{class:"small muted",text:"اگر CORS خطا داد، باید Worker هدرهای CORS بدهد (Access-Control-Allow-Origin و Allow-Headers: Authorization)."}));
+  }
+};
+
+/* ---------- PAGE: Selftest ---------- */
+PAGES.selftest = function(root){
+  const box = el("div",{});
+  root.appendChild(card("خودآزمون کنسول",[el("button",{class:"btn primary",text:"اجرای تست‌ها",onclick:run}), box]));
+  function T(name, fn){ return {name, fn} }
+  const tests = [
+    T("پارسر cron: '0 7 * * *'", ()=>{ const c=parseCron("0 7 * * *"); return c.minute.length===1&&c.minute[0]===0&&c.hour[0]===7 }),
+    T("پارسر cron: لیست '7,22,37,52 * * * *'", ()=>{ const c=parseCron("7,22,37,52 * * * *"); return c.minute.join(",")==="7,22,37,52" && c.hour.length===24 }),
+    T("پارسر cron: گام '7 */5 * * *'", ()=>{ const c=parseCron("7 */5 * * *"); return c.hour.join(",")==="0,5,10,15,20" }),
+    T("پارسر cron: بازه '1-3 * * * *'", ()=>parseCron("1-3 * * * *").minute.join(",")==="1,2,3"),
+    T("پارسر cron: عبارت نامعتبر رد شود", ()=>{ try{ parseCron("99 * * *"); return false }catch(e){ return true } }),
+    T("۵ اجرای بعدی برای '*/5 * * * *'", ()=>{ const n=cronNext("*/5 * * * *",5); return n.length===5 && (n[1]-n[0])===300000 }),
+    T("تبدیل زمان تهران (UTC+3:30 حداقل)", ()=>{ const p=tehranParts(new Date(Date.UTC(2026,0,1,0,0,0))); return p.H===3 && p.M===30 }),
+    T("fmtDate خروجی رشته می‌دهد", ()=>typeof fmtDate(new Date())==="string" && fmtDate(null)==="—"),
+    T("escapeHTML اسکریپت را خنثی می‌کند", ()=>escapeHTML("<script>alert(1)<\/script>").indexOf("<")<0),
+    T("el با متن، innerHTML نمی‌سازد", ()=>{ const n=el("div",{text:"<b>x</b>"}); return n.children.length===0 && n.textContent==="<b>x</b>" }),
+    T("safeUrl جاوااسکریپت را رد می‌کند", ()=>safeUrl("javascript:alert(1)")===null && !!safeUrl("https://a.b/c")),
+    T("linkNode برای لینک بد، لینک نمی‌سازد", ()=>linkNode("javascript:x").tagName!=="A"),
+    T("redaction توکن", ()=>{ const old=S.apiToken; S.apiToken="SECRET123"; const r=redact("Authorization: Bearer SECRET123"); S.apiToken=old; return r.indexOf("SECRET123")<0 }),
+    T("redaction الگوی ghp_", ()=>redact("ghp_abcdefghijklmn").indexOf("ghp_abcdefghijklmn")<0),
+    T("JSON tree ساخت DOM", ()=>{ const n=jsonTree({a:1,b:[1,2],c:"x"},"root",0); return n.querySelectorAll("details").length>=1 }),
+    T("SQL فقط SELECT: SELECT مجاز", ()=>isSelectOnly("SELECT * FROM items")),
+    T("SQL: DELETE رد شود", ()=>!isSelectOnly("DELETE FROM items")),
+    T("SQL: چند دستور رد شود", ()=>!isSelectOnly("SELECT 1; DROP TABLE items")),
+    T("SQL: کامنت + drop رد شود", ()=>!isSelectOnly("SELECT 1 -- x\n; drop table t")),
+    T("SQL: LIMIT خودکار", ()=>withLimit("SELECT * FROM items").indexOf("LIMIT")>0),
+    T("مسیریاب: parseHash ساده", ()=>parseHash("#/queue")[0]==="queue"),
+    T("مسیریاب: پارامتر آیتم", ()=>{ const r=parseHash("#/queue/item/42"); return r[0]==="queue" && r[3]==="42" }),
+    T("مسیریاب: مسیر ناشناخته به home", ()=>resolveRoute(["nope"]).page==="home"),
+    T("اعداد فارسی", ()=>{ const old=S.persianDigits; S.persianDigits=true; const v=nf(1234); S.persianDigits=old; return /[۰-۹]/.test(v) }),
+    T("API_CONTRACT کامل است", ()=>Object.keys(API_CONTRACT).length>=30),
+    T("هیچ endpoint انتشار production وجود ندارد", ()=>!Object.keys(API_CONTRACT).some(k=>/publish/i.test(API_CONTRACT[k].p) && API_CONTRACT[k].p.indexOf("test")<0)),
+    T("base64 UTF-8 فارسی رفت و برگشت", ()=>b64decodeUtf8(b64encodeUtf8("سلام دنیا ۱۲۳"))==="سلام دنیا ۱۲۳"),
+    T("cronToFa رشتهٔ فارسی می‌دهد", ()=>cronToFa("0 7 * * *").length>5),
+    T("toCSV ساختار درست", ()=>toCSV(["a","b"],[[1,2]]).split("\n").length===2)
+  ];
+  async function run(){
+    clear(box);
+    let pass=0, fail=0;
+    for(const t of tests){
+      let ok=false, err="";
+      try{ ok = !!(await t.fn()) }catch(e){ ok=false; err=String(e&&e.message||e) }
+      ok? pass++ : fail++;
+      box.appendChild(el("div",{class:"kv"},[el("b",{text:t.name}),
+        el("span",{style:{color: ok?"var(--ok)":"var(--err)"}, text: ok? "✅ قبول" : ("❌ رد "+err)})]));
+    }
+    box.insertBefore(el("div",{class:"row"},[el("span",{class:"chip ok",text:"قبول: "+nf(pass)}), el("span",{class:"chip "+(fail?"err":""),text:"رد: "+nf(fail)})]), box.firstChild);
+  }
+  run();
+};
+
+/* ============================ ROUTER ============================ */
+function parseHash(h){
+  return String(h||location.hash||"#/home").replace(/^#\/?/,"").split("/").filter(x=>x!=="").map(decodeURIComponent);
+}
+function resolveRoute(parts){
+  const p = parts[0]||"home";
+  if(p==="queue" && parts[1]==="item" && parts[2]) return {page:"queueItem", params:[parts[2]], title:"آیتم صف #"+parts[2], nav:"queue"};
+  const nav = NAV.find(n=>n.id===p);
+  if(!nav) return {page:"home", params:[], title:"داشبورد", nav:"home"};
+  return {page:p, params:parts.slice(1), title:nav.t, nav:p};
+}
+let currentRoute = null;
+function clearTimers(){ S.timers.forEach(t=>clearInterval(t)); S.timers=[]; }
+function route(){
+  if(S.dirty){
+    const leave = confirm("تغییرات ذخیره‌نشده دارید ("+S.dirty+"). خروج از این صفحه؟");
+    if(!leave){ if(currentRoute) history.replaceState(null,"", "#/"+currentRoute.pathRaw); return }
+    S.dirty=null;
+  }
+  clearTimers();
+  if(S.abort){ try{ S.abort.abort() }catch(e){} }
+  S.abort = new AbortController();
+  const parts = parseHash();
+  const r = resolveRoute(parts);
+  r.pathRaw = parts.join("/")||"home";
+  currentRoute = r;
+  $("#pageTitle").textContent = r.title;
+  highlightNav(r.nav);
+  const page = clear($("#page"));
+  const fn = PAGES[r.page] || PAGES.home;
+  try{ fn(page, r.params) }catch(e){ page.appendChild(errorBox({fa:"خطای داخلی در رندر صفحه: "+String(e&&e.message)},route)) }
+  window.scrollTo(0,0);
+  setupAutoRefresh();
+}
+function highlightNav(id){
+  Array.from(document.querySelectorAll("#navlist .navlink")).forEach(b=> b.className = "navlink"+(b.dataset.id===id?" active":""));
+  Array.from(document.querySelectorAll("#bottomnav button")).forEach(b=> b.className = (b.dataset.id===id?"active":""));
+}
+function buildNav(){
+  const nl = clear($("#navlist"));
+  NAV.forEach(n=>{
+    const b = el("button",{class:"navlink", onclick:()=>{ location.hash="#/"+n.id }});
+    b.dataset.id = n.id;
+    b.appendChild(el("span",{class:"ic",text:n.ic})); b.appendChild(el("span",{text:n.t}));
+    nl.appendChild(b);
+  });
+  const bn = clear($("#bottomnav"));
+  NAV.filter(n=>n.main).forEach(n=>{
+    const b = el("button",{onclick:()=>{ location.hash="#/"+n.id }, "aria-label":n.t});
+    b.dataset.id = n.id;
+    b.appendChild(el("span",{class:"ic",text:n.ic})); b.appendChild(el("span",{text:n.t}));
+    bn.appendChild(b);
+  });
+  const more = el("button",{onclick:openMore,"aria-label":"بیشتر"});
+  more.appendChild(el("span",{class:"ic",text:"☰"})); more.appendChild(el("span",{text:"بیشتر"}));
+  bn.appendChild(more);
+}
+function openMore(){
+  const list = el("div",{});
+  NAV.filter(n=>!n.main).forEach(n=>{
+    list.appendChild(el("button",{class:"navlink", onclick:()=>{ location.hash="#/"+n.id; const bg=$(".modalbg"); if(bg) bg.remove() }},
+      [el("span",{class:"ic",text:n.ic}), el("span",{text:n.t})]));
+  });
+  modal({title:"بخش‌های بیشتر", body:[list], okText:"بستن", cancelText:"انصراف"});
+}
+let refreshTimer=null;
+function setupAutoRefresh(){
+  if(refreshTimer) clearInterval(refreshTimer);
+  if(!S.autoRefresh) return;
+  refreshTimer = setInterval(()=>{
+    if(document.hidden || S.locked) return;
+    const pg = $("#page");
+    if(pg && pg._refresh){ invalidate(""); try{ pg._refresh() }catch(e){} }
+  }, S.autoRefresh*1000);
+}
+/* ============================ THEME / LOCK / BOOT ============================ */
+function applyTheme(){
+  const t = S.theme==="auto" ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches? "dark":"light") : S.theme;
+  document.documentElement.setAttribute("data-theme", t);
+}
+function updateMockBadge(){ $("#mockBadge").classList.toggle("hidden", !S.mock) }
+function lockScreen(){
+  const stored = localStorage.getItem("ra_pin");
+  if(!stored){ toast("ابتدا در تنظیمات یک PIN بسازید","warn"); return }
+  S.locked = true;
+  const inp = el("input",{type:"password","aria-label":"PIN",style:{maxWidth:"220px",textAlign:"center"}});
+  const msg = el("div",{class:"small muted",text:"برای ادامه PIN را وارد کنید"});
+  const box = el("div",{class:"card",style:{maxWidth:"340px",textAlign:"center"}},[
+    el("h3",{text:"صفحه قفل است"}), msg, inp,
+    el("button",{class:"btn primary",style:{marginTop:"10px"},text:"باز کردن",onclick:async()=>{
+      try{
+        const o = JSON.parse(stored);
+        const h = await sha256hex(o.salt+":"+inp.value);
+        if(h===o.h){ S.locked=false; clear($("#lockRoot")); S.lastActivity=Date.now() }
+        else { msg.textContent="PIN نادرست است"; msg.style.color="var(--err)" }
+      }catch(e){ msg.textContent="خطا در بررسی PIN" }
+    }})
+  ]);
+  clear($("#lockRoot")).appendChild(el("div",{class:"lock"},[box]));
+  inp.focus();
+}
+function initIdleLock(){
+  ["click","keydown","touchstart","mousemove"].forEach(ev=>document.addEventListener(ev,()=>{S.lastActivity=Date.now()},{passive:true}));
+  setInterval(()=>{
+    if(S.lockMinutes>0 && !S.locked && localStorage.getItem("ra_pin") && (Date.now()-S.lastActivity)>S.lockMinutes*60000) lockScreen();
+  },10000);
+}
+function boot(){
+  applyTheme(); updateMockBadge(); buildNav();
+  if(window.matchMedia) try{ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{ if(S.theme==="auto") applyTheme() }) }catch(e){}
+  $("#btnTheme").addEventListener("click",()=>{ S.theme = S.theme==="dark"?"light":S.theme==="light"?"auto":"dark"; Store.saveCfg(); applyTheme(); toast("تم: "+({auto:"خودکار",light:"روشن",dark:"تاریک"})[S.theme],"ok",1500) });
+  $("#btnRefresh").addEventListener("click",()=>{ invalidate(""); const pg=$("#page"); if(pg&&pg._refresh) pg._refresh(); else route() });
+  $("#btnBack").addEventListener("click",()=>{
+    const parts = parseHash();
+    if(parts[0]==="queue" && parts[1]==="item"){ location.hash="#/queue"; return }
+    if(parts[0] && parts[0]!=="home"){ location.hash="#/home"; return }
+    if(history.length>1) history.back(); else location.hash="#/home";
+  });
+  window.addEventListener("hashchange", route);
+  window.addEventListener("beforeunload", e=>{ if(S.dirty){ e.preventDefault(); e.returnValue="" } });
+  initIdleLock();
+  const firstRun = !(localStorage.getItem("ra_cfg")||sessionStorage.getItem("ra_cfg"));
+  if(!location.hash || location.hash==="#"||location.hash==="#/") location.hash = firstRun? "#/settings":"#/home";
+  else route();
+  if(firstRun) setTimeout(()=>toast("اولین اجرا: تنظیمات اتصال را کامل کنید یا «داده‌ی نمایشی» را روشن کنید.","info",6000),500);
+  route();
+}
+document.addEventListener("DOMContentLoaded", boot);
+if(document.readyState!=="loading") boot();
+
+/* ============================================================
+CHANGELOG / KNOWN LIMITS
+------------------------------------------------------------
+v1.0.0 — نسخهٔ اول کامل کنسول مالک (تک‌فایل، بدون CDN/فونت خارجی/فریم‌ورک).
+شامل ۱۷ مسیر: home, queue, queue/item/<id>, events, items, runs, mob, ai, sources,
+owners, rules, schedules, repo, data, debug, help, settings, selftest.
+
+KNOWN LIMITS:
+- diff فایل‌ها «خط‌به‌خط ساده» است (نه الگوریتم Myers)؛ برای فایل‌های بازچینش‌شده نویزی است.
+- cronNext بر مبنای UTC پیمایش دقیقه‌ای است (تا ۱ سال آینده)؛ برای cronهای بسیار نادر ممکن است چیزی پیدا نکند.
+- «تاریخچهٔ نسخهٔ قوانین/rollback» فقط در صورتی کار می‌کند که Worker endpoint تاریخچه بدهد؛ فعلاً فقط دیف قبل/بعد و واردکردن JSON موجود است.
+- GET /api/brain/automation-queue رکوردهای processing قدیمی‌تر از ۱۲ ساعت را uncertain می‌کند (یادداشت در UI).
+- جست‌وجو/مرتب‌سازی صف روی «صفحهٔ جاری» انجام می‌شود (سرور فیلتر متنی ندارد).
+- حالت Mock داده را در حافظه نگه می‌دارد؛ با رفرش صفحه ریست می‌شود.
+- هیچ مسیر کدی برای انتشار در کانال production وجود ندارد؛ تنها POST /api/console/mob/publish-test (کانال آزمایشی) با دو شرط و تأیید.
+
+ENDPOINTهای فرض‌شده (از API_CONTRACT):
+موجود:
+  GET  /api/status
+  GET  /api/brain/owner-console/queue-summary
+  GET  /api/brain/ai-provider/status?provider=
+  GET  /api/brain/automation-queue (+?summary=1)
+  POST /api/brain/automation-queue/{id}/state
+  GET  /api/brain/items/seen
+  POST /api/brain/owner-digest/claim   (فقط در عیب‌یابی، دستی)
+برنامه‌ریزی‌شده (graceful degradation در 404 / {ok:false,error:"not_found"}):
+  GET    /api/console/events
+  GET    /api/console/runs
+  GET    /api/console/delivery-attempts
+  GET    /api/console/brain-events
+  GET    /api/console/items
+  PATCH  /api/console/items/{id}
+  POST   /api/console/queue/{id}/action
+  GET/POST/PATCH/DELETE /api/console/sources[/{id}]
+  GET/POST/DELETE /api/console/channels[/{id}]
+  GET/POST/DELETE /api/console/owners[/{id}]
+  POST   /api/console/owners/invite
+  GET/PUT /api/console/rules
+  GET/POST /api/console/links , POST /api/console/links/clear
+  POST   /api/console/mob/preview , POST /api/console/mob/publish-test
+  POST/GET /api/console/jobs , GET /api/console/jobs/{id}
+  GET    /api/console/ai/calls
+  GET    /api/console/d1/tables , POST /api/console/d1/query
+  GET    /api/console/mega/inventory
+  GET    /api/console/audit
+GitHub (api.github.com): /user, /repos/{o}/{r}, git/trees, contents, git/ref, git/refs,
+  branches, pulls (+merge), commits, compare, actions/runs, actions/workflows(+dispatches), issues.
+============================================================ */
+</script>
+</body>
+</html>
