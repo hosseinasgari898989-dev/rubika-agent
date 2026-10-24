@@ -487,7 +487,7 @@ const COMMANDS = {
 };
 
 async function tryClaim(env, ev) {
-  const m = /^\\/claim\\s+(\\S{1,128})\\s*$/.exec(ev.text);
+  const m = /^\/claim\s+(\S{1,128})\s*$/.exec(ev.text);
   if (!m) return;
   if (Number(await getState(env, "claim_fails", "0")) >= 5) return;
   const supplied = m[1];
@@ -555,7 +555,7 @@ async function processEvent(env, selfFetch, origin, ev) {
   const receivedAt = Date.now();
   const timedEnv = withPanelTiming(env, timing);
   const owner = await getOwner(timedEnv);
-  if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev) && /^\\/claim\\s+\\S{1,128}\\s*$/.test(ev.text)) {
+  if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev) && /^\/claim\s+\S{1,128}\s*$/.test(ev.text)) {
     await tryClaim(timedEnv, ev);
     return;
   }
