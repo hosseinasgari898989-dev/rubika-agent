@@ -47,7 +47,7 @@ The workflow `.github/workflows/multi-ai-live-smoke.yml` remains available by ma
 
 Use GitHub Actions → **Manual AI provider health check** → **Run workflow**. The workflow is `.github/workflows/ai-health-check.yml` and has only a `workflow_dispatch` trigger—no push or schedule trigger.
 
-It sends one short request each to Groq and OpenRouter through the existing `provider_config` and `invoke_provider` clients, with `max_output_tokens=10`. The providers are checked independently. The job summary reports only `ok`, `auth error`, `rate limit`, or `other error`, plus latency in milliseconds. It never prints credentials or response text.
+It sends one short request each to Groq and OpenRouter through the existing `provider_config` and `invoke_provider` clients, initially with `max_output_tokens=10`. Providers are checked independently. The same compact table is printed to the job log and Job Summary: result category, latency, HTTP status, exception class, sanitized provider error type/code, whether assistant content was non-empty, and `finish_reason`. Categories are `ok`, `auth error`, `rate limit`, `empty response`, or `other error`. Only an HTTP-200 empty response triggers one bounded follow-up request with `max_output_tokens=64`. Credentials, request bodies, provider response text, and error message text are never printed.
 
 This check deliberately bypasses `call_provider_with_ledger`: it performs no D1 ledger reads/writes and does not invoke Rubika, create repair PRs, or deploy anything. It does consume one request against each provider's own API quota; run it manually when you need a fresh check. A successful result proves only that the small request worked at that time.
 
