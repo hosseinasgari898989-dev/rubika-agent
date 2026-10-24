@@ -240,7 +240,7 @@ async function debugText(env) {
     "message_id_tail: " + String(event && event.message_id_tail || "none").slice(-4),
     "button: " + (clean(event && event.button, 60) || "none"),
     "botAuthored: " + (event && event.botAuthored === true ? "true" : "false"),
-  ].join("\\n");
+  ].join("\n");
 }
 
 
