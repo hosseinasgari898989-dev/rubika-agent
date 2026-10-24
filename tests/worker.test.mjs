@@ -12,10 +12,16 @@ const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8
 const panelModuleUrl = "data:text/javascript;base64," + Buffer.from(panelSource).toString("base64");
 const importedPanel = await import(panelModuleUrl);
 const screens = await import(screensModuleUrl);
+const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), "utf8");
+const consoleApiModuleUrl = "data:text/javascript;base64," + Buffer.from(consoleApiSource).toString("base64");
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
 const workerImport = 'import { handleOwnerPanel } from "./owner_panel.js";';
+const consoleApiImport = 'import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";';
 assert.ok(originalSource.includes(workerImport), "Worker must import owner panel handler");
-const source = originalSource.replace(workerImport, `const { handleOwnerPanel } = await import("${panelModuleUrl}");`);
+assert.ok(originalSource.includes(consoleApiImport), "Worker must import console API handler");
+const source = originalSource
+  .replace(workerImport, `const { handleOwnerPanel } = await import("${panelModuleUrl}");`)
+  .replace(consoleApiImport, `const { handleConsoleApi, corsPreflight, withCors } = await import("${consoleApiModuleUrl}");`);
 const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString("base64");
 const imported = await import(moduleUrl);
 const worker = imported.default;
@@ -339,6 +345,72 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.status, 200);
   assert.equal(response.body.service, "rubika-agent");
   assert.equal(response.body.publishing, false);
+}
+
+// Console API is auth-gated, CORS-enabled, and leaves existing status/brain routes intact.
+{
+  const state = env();
+  let response = await read(await worker.fetch(
+    request("/api/console/events", { token: null }), state
+  ));
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error, "unauthorized");
+
+  const preflight = await worker.fetch(request("/api/console/events", { method: "OPTIONS", token: null }), state);
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
+
+  response = await read(await worker.fetch(request("/api/status"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.publishing, false);
+
+  response = await read(await worker.fetch(request("/api/brain/owner-console/state"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+
+  response = await read(await worker.fetch(request("/api/console/not-a-route"), state));
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, "not_found");
+}
+
+// Console API rejects destructive SQL, unauthorized review approval, uncertain requeue without confirmation,
+// and link clearing without explicit confirmation using the fake D1 database.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/d1/query", {
+    method: "POST", body: { sql: "DELETE FROM panel_links" },
+  }), state));
+  assert.equal(response.status, 400);
+
+  response = await read(await worker.fetch(request("/api/console/d1/query", {
+    method: "POST", body: { sql: "SELECT 1; SELECT 2" },
+  }), state));
+  assert.equal(response.status, 400);
+
+  response = await read(await worker.fetch(request("/api/console/items/tiktok:fake-item", {
+    method: "PATCH", body: { review_state: "approved" },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "review_state_not_allowed_from_console");
+
+  const uncertainId = "mob_official:12345678901234567";
+  state.DB.automationQueue.set(uncertainId, { id: uncertainId, status: "uncertain" });
+  response = await read(await worker.fetch(request("/api/console/queue/" + uncertainId + "/action", {
+    method: "POST", body: { action: "requeue" },
+  }), state));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "uncertain_requires_confirm_uncertain_true");
+  assert.equal(state.DB.automationQueue.get(uncertainId).status, "uncertain");
+
+  const prepared = [];
+  const originalPrepare = state.DB.prepare.bind(state.DB);
+  state.DB.prepare = sql => { prepared.push(sql); return originalPrepare(sql); };
+  response = await read(await worker.fetch(request("/api/console/links/clear", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "confirm_true_required");
+  assert.equal(prepared.some(sql => sql.startsWith("DELETE FROM panel_links")), false);
 }
 
 {
