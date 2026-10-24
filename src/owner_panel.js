@@ -499,8 +499,12 @@ async function tryClaim(env, ev) {
     const r = await env.DB.prepare("INSERT OR IGNORE INTO panel_owner(id,chat_id) VALUES(1,?)").bind(ev.chat).run();
     if (r.meta?.changes !== 1) return;
     try {
-      await env.DB.prepare("INSERT OR IGNORE INTO console_owners (chat_id, label, role, enabled, claimed_at, last_seen_at) VALUES (?, 'مالک اصلی', 'owner', 1, datetime('now'), datetime('now'))")
-        .bind(ev.chat).run();
+      await env.DB.batch([
+        env.DB.prepare("INSERT OR IGNORE INTO console_owners (chat_id, label, role, enabled, claimed_at, last_seen_at) VALUES (?, 'مالک اصلی', 'owner', 1, datetime('now'), datetime('now'))")
+          .bind(ev.chat),
+        env.DB.prepare("INSERT INTO brain_events (item_id, level, code, details_json) SELECT NULL, 'info', 'console_owner_claim_bootstrap', ? WHERE changes() > 0")
+          .bind(JSON.stringify({ method: "setup", role: "owner" })),
+      ]);
     } catch { /* migration 0010 may not be applied yet; panel_owner remains the compatibility fallback */ }
     try { await rubika(env, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch { /* best effort */ }
     await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا چت تأییدشده به پنل دسترسی دارد.\\n\\n" + HOME_TEXT, HOME_KB);
