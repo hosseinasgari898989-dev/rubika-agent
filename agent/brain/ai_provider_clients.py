@@ -63,6 +63,10 @@ class ProviderClientError(RuntimeError):
             value = (diagnostics or {}).get(key)
             if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value):
                 safe[key] = value
+        for key in ("finish_reason", "provider_error_type", "provider_error_code"):
+            value = (diagnostics or {}).get(key)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", value):
+                safe[key] = value
         value = (diagnostics or {}).get("provider_message")
         if isinstance(value, str):
             safe["provider_message"] = _safe_diagnostic_text(value)
@@ -90,6 +94,8 @@ class ProviderResult:
     model: str
     text: str
     usage: Mapping[str, int]
+    http_status: int | None = 200
+    finish_reason: str | None = None
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -134,7 +140,7 @@ def _safe_diagnostic_text(value: str) -> str:
 
 
 def _provider_http_diagnostics(exc: urllib.error.HTTPError, provider: str) -> dict[str, Any]:
-    """Extract a tiny, sanitized diagnostic summary; never return the raw body."""
+    """Extract only safe HTTP and provider error type/code fields; never expose message text."""
     status = int(exc.code)
     result: dict[str, Any] = {"http_status": status}
     headers = getattr(exc, "headers", None)
@@ -144,7 +150,26 @@ def _provider_http_diagnostics(exc: urllib.error.HTTPError, provider: str) -> di
         if 0 <= seconds <= 86400:
             result["retry_after_seconds"] = seconds
 
-    # Provider response bodies are deliberately excluded from diagnostics.
+    try:
+        body = exc.read(8192)
+        payload = json.loads(body.decode("utf-8")) if body else None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            for source_key, target_key in (("type", "provider_error_type"), ("code", "provider_error_code")):
+                value = error.get(source_key)
+                if isinstance(value, str):
+                    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "", value)[:60]
+                    if cleaned:
+                        result[target_key] = cleaned
+        for source_key, target_key in (("type", "provider_error_type"), ("code", "provider_error_code")):
+            value = payload.get(source_key)
+            if target_key not in result and isinstance(value, str):
+                cleaned = re.sub(r"[^A-Za-z0-9_.-]", "", value)[:60]
+                if cleaned:
+                    result[target_key] = cleaned
     return result
 
 
@@ -159,20 +184,29 @@ def _normalize_usage(*, prompt: Any = None, output: Any = None, total: Any = Non
 
 
 def _read_response(response: Any) -> dict[str, Any]:
+    status = getattr(response, "status", 200)
+    diagnostics = {"http_status": status} if type(status) is int else {}
     try:
-        status = getattr(response, "status", 200)
         if status != 200:
-            raise ProviderClientError("provider_http_" + str(status), outcome="unknown")
+            raise ProviderClientError(
+                "provider_http_" + str(status), outcome="unknown", diagnostics=diagnostics
+            )
         raw = response.read(MAX_RESPONSE_BYTES + 1)
         if len(raw) > MAX_RESPONSE_BYTES:
-            raise ProviderClientError("provider_response_too_large", outcome="unknown")
+            raise ProviderClientError(
+                "provider_response_too_large", outcome="unknown", diagnostics=diagnostics
+            )
         value = json.loads(raw.decode("utf-8"))
     except ProviderClientError:
         raise
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        raise ProviderClientError("provider_response_invalid", outcome="unknown") from None
+        raise ProviderClientError(
+            "provider_response_invalid", outcome="unknown", diagnostics=diagnostics
+        ) from None
     if not isinstance(value, dict):
-        raise ProviderClientError("provider_response_invalid", outcome="unknown")
+        raise ProviderClientError(
+            "provider_response_invalid", outcome="unknown", diagnostics=diagnostics
+        )
     return value
 
 
@@ -258,6 +292,11 @@ def invoke_provider(
         raise ProviderClientError("provider_response_invalid", outcome="unknown")
     message = choices[0].get("message")
     content = message.get("content") if isinstance(message, dict) else None
+    finish_reason_raw = choices[0].get("finish_reason")
+    finish_reason = (
+        re.sub(r"[^A-Za-z0-9_.-]", "", finish_reason_raw)[:60]
+        if isinstance(finish_reason_raw, str) else None
+    )
     if isinstance(content, str):
         answer = content.strip()
     elif isinstance(content, list):
@@ -274,12 +313,19 @@ def invoke_provider(
         )
 
     if not answer:
-        raise ProviderClientError("provider_text_missing", outcome="unknown")
+        diagnostics: dict[str, Any] = {"http_status": 200}
+        if finish_reason:
+            diagnostics["finish_reason"] = finish_reason
+        raise ProviderClientError(
+            "provider_text_missing", outcome="unknown", diagnostics=diagnostics
+        )
     return ProviderResult(
         provider=config.provider,
         model=config.model,
         text=answer[:MAX_RESPONSE_BYTES],
         usage=usage,
+        http_status=200,
+        finish_reason=finish_reason,
     )
 
 
