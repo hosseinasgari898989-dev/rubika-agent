@@ -410,6 +410,7 @@ def _discover_ids_from_public_mirror(
                 "http_status": status,
                 "host_used": host,
                 "hosts_tried": [row["host"] for row in outcomes],
+                "outcomes": outcomes,
                 "result": "post_ids_found",
                 "post_urls_found": len(ids),
                 "note": "Only post IDs come from the mirror; author, caption, date, and media must pass X syndication validation.",
