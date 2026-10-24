@@ -435,6 +435,39 @@ def _log_update_diagnostic(update: Any) -> None:
     print(json.dumps({"update_type": update_type, "button_id": button_id}, separators=(",", ":")))
 
 
+def _log_owner_gate_diagnostic(
+    update: Mapping[str, Any], owner_chat_id: str, owner_user_id: str | None
+) -> None:
+    """Log only boolean gate results; never log IDs or message contents."""
+    update_type = update.get("type")
+    if update_type == "NewMessage":
+        message = update.get("new_message")
+    elif update_type == "ReceiveQuery":
+        message = update.get("inline_message")
+    else:
+        return
+    if not isinstance(message, Mapping):
+        message = {}
+    chat_id = update.get("chat_id") or message.get("chat_id")
+    sender_id = message.get("sender_id")
+    message_id = message.get("message_id")
+    text_value = message.get("text")
+    print(json.dumps({
+        "owner_gate": {
+            "update_type": re.sub(r"[^A-Za-z0-9_-]", "", str(update_type or "unknown"))[:40],
+            "message_payload_present": bool(message),
+            "chat_id_present": isinstance(chat_id, str) and bool(chat_id),
+            "chat_matches_owner": bool(owner_chat_id) and str(chat_id or "") == owner_chat_id,
+            "sender_id_present": isinstance(sender_id, str) and bool(sender_id),
+            "sender_matches_owner": bool(owner_user_id) and str(sender_id or "") == owner_user_id,
+            "message_id_is_string": isinstance(message_id, str) and bool(message_id),
+            "identity_valid": _message_identity(update) is not None,
+            "text_present": isinstance(text_value, str) and bool(text_value.strip()),
+            "group_or_channel": _is_group_or_channel(update, message),
+        }
+    }, separators=(",", ":")))
+
+
 def menu_inline_keypad() -> dict[str, Any]:
     return {"rows": [{"buttons": [{
         "id": BUTTON_MOB_POST_FROM_X,
@@ -810,6 +843,8 @@ class OperationsConsole:
         resolved_owner_user_id: str | None = None,
     ) -> str:
         _log_update_diagnostic(update)
+        if isinstance(update, Mapping):
+            _log_owner_gate_diagnostic(update, self.owner_chat_id, self.owner_user_id)
         if not self.owner_chat_id or not self.owner_user_id:
             return "ignored"
         event = _owner_private_event(update, self.owner_chat_id, self.owner_user_id)

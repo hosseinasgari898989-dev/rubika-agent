@@ -530,6 +530,17 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertIsNone(console.parse_x_status_url("https://notx.com/MobFan/status/12345678901234567"))
         self.assertIsNone(console.parse_x_status_url("https://x.com/MobFan/status/1234"))
 
+    def test_owner_gate_diagnostics_report_only_boolean_match_flags(self):
+        incoming = update(text="/start")
+        with patch("builtins.print") as printed:
+            console._log_owner_gate_diagnostic(incoming, "owner-chat-123", "owner-chat-123")
+        rendered = " ".join(str(arg) for call in printed.call_args_list for arg in call.args)
+        self.assertIn('"chat_matches_owner":true', rendered)
+        self.assertIn('"sender_matches_owner":false', rendered)
+        self.assertIn('"identity_valid":true', rendered)
+        self.assertNotIn("owner-chat-123", rendered)
+        self.assertNotIn("/start", rendered)
+
     def test_unknown_update_shape_is_ignored_without_body_diagnostics(self):
         instance, bot, control = self.make_console()
         incoming = {"type": "UnexpectedUpdate", "text": "PRIVATE BODY MUST NOT LOG"}
