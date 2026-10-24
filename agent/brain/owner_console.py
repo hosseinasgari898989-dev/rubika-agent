@@ -21,14 +21,25 @@ RUBIKA_API_BASE = "https://botapi.rubika.ir/v3"
 DEFAULT_CONTROL_URL = "https://rubika-agent.h98609294.workers.dev"
 EXPECTED_CONTROL_HOST = "rubika-agent.h98609294.workers.dev"
 GITHUB_RUNS_URL = "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/runs?per_page=10"
-ALLOWED_RUBIKA_METHODS = {"getMe", "getUpdates", "sendMessage"}
+ALLOWED_RUBIKA_METHODS = {"getMe", "getUpdates", "sendMessage", "editMessageText", "editMessageKeypad"}
 PROVIDERS = ("groq", "openrouter")
 MAX_REPLY_CHARS = 3400
 MAX_UPDATES_PER_POLL = 20
 MAX_UPDATE_ID_CHARS = 200
+CONSOLE_STATE_VERSION = 1
+CONSOLE_IDLE = "idle"
+CONSOLE_WAITING_FOR_LINK = "waiting_for_link"
+CONSOLE_MODES = {CONSOLE_IDLE, CONSOLE_WAITING_FOR_LINK}
+BUTTON_MOB_POST_FROM_X = "mob_post_from_x"
+BUTTON_CANCEL = "owner_console_cancel"
 SAFE_CODE = re.compile(r"[a-z0-9_-]{1,80}")
 HASH_RE = re.compile(r"[a-f0-9]{64}")
 SAFE_PROVIDER = set(PROVIDERS)
+X_STATUS_URL_RE = re.compile(
+    r"https?://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/"
+    r"([A-Za-z0-9_]{1,15})/status/([0-9]{15,22})(?:/)?(?:[?#][^\s<>]*)?",
+    re.IGNORECASE,
+)
 
 
 class OwnerConsoleError(RuntimeError):
@@ -116,11 +127,47 @@ class RubikaBotAPI:
             payload["offset_id"] = offset_id
         return self.call("getUpdates", payload)
 
-    def send_message(self, chat_id: str, text: str) -> dict[str, Any]:
+    def send_message(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        inline_keypad: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         clean = str(text or "").strip()[:MAX_REPLY_CHARS]
         if not clean:
             raise OwnerConsoleError("rubika_reply_empty")
-        return self.call("sendMessage", {"chat_id": chat_id, "text": clean})
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": clean}
+        if inline_keypad is not None:
+            payload["inline_keypad"] = dict(inline_keypad)
+        return self.call("sendMessage", payload)
+
+    def edit_message_text(self, chat_id: str, message_id: str, text: str) -> dict[str, Any]:
+        clean = str(text or "").strip()[:MAX_REPLY_CHARS]
+        if not chat_id or not message_id or not clean:
+            raise OwnerConsoleError("rubika_edit_message_invalid")
+        return self.call("editMessageText", {
+            "chat_id": chat_id, "message_id": message_id, "text": clean,
+        })
+
+    def edit_inline_keypad(
+        self,
+        chat_id: str,
+        message_id: str,
+        inline_keypad: Mapping[str, Any],
+        *,
+        text: str | None = None,
+    ) -> dict[str, Any]:
+        # Rubka 8.1.7 maps edit_inline_keypad() to Bot API v3 editMessageKeypad.
+        if text is not None:
+            self.edit_message_text(chat_id, message_id, text)
+        if not chat_id or not message_id or not isinstance(inline_keypad, Mapping):
+            raise OwnerConsoleError("rubika_edit_keypad_invalid")
+        return self.call("editMessageKeypad", {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "inline_keypad": dict(inline_keypad),
+        })
 
 
 class ControlWorker:
@@ -283,6 +330,8 @@ def parse_command(message: str) -> ParsedCommand:
     if not parts or not parts[0].startswith("/"):
         return ParsedCommand("unknown", None, "unknown")
     name = parts[0].split("@", 1)[0].lower()
+    if name in {"/start", "/menu"} and len(parts) == 1:
+        return ParsedCommand("menu", None, "help")
     if name == "/help" and len(parts) == 1:
         return ParsedCommand("help", None, "help")
     if name == "/status" and len(parts) == 1:
@@ -300,14 +349,34 @@ def parse_command(message: str) -> ParsedCommand:
 
 
 def _message_identity(update: Mapping[str, Any]) -> str | None:
-    message = update.get("new_message")
-    if not isinstance(message, dict):
-        return None
-    message_id = message.get("message_id")
-    chat_id = update.get("chat_id") or message.get("chat_id")
-    if not isinstance(message_id, str) or not message_id or not isinstance(chat_id, str) or not chat_id:
-        return None
-    return hashlib.sha256((chat_id + "|" + message_id).encode("utf-8")).hexdigest()
+    update_type = update.get("type")
+    if update_type == "NewMessage":
+        message = update.get("new_message")
+        if not isinstance(message, dict):
+            return None
+        message_id = message.get("message_id")
+        chat_id = update.get("chat_id") or message.get("chat_id")
+        if not isinstance(message_id, str) or not message_id or not isinstance(chat_id, str) or not chat_id:
+            return None
+        return hashlib.sha256((chat_id + "|" + message_id).encode("utf-8")).hexdigest()
+
+    if update_type == "ReceiveQuery":
+        message = update.get("inline_message")
+        if not isinstance(message, dict):
+            return None
+        chat_id = update.get("chat_id") or message.get("chat_id")
+        message_id = message.get("message_id")
+        aux_data = message.get("aux_data")
+        if not isinstance(aux_data, dict):
+            return None
+        button_id = _safe_button_id(aux_data.get("button_id"))
+        start_id = aux_data.get("start_id")
+        if not isinstance(chat_id, str) or not chat_id or not isinstance(message_id, str) or not message_id or not button_id:
+            return None
+        safe_start_id = re.sub(r"[^A-Za-z0-9_.:-]", "", str(start_id or ""))[:100]
+        identity = "|".join(("ReceiveQuery", chat_id, message_id, button_id, safe_start_id))
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return None
 
 
 def _is_group_or_channel(update: Mapping[str, Any], message: Mapping[str, Any]) -> bool:
@@ -343,6 +412,140 @@ def _owner_private_text(
         return None
     return clean
 
+
+
+def _safe_button_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    clean = re.sub(r"[^A-Za-z0-9_-]", "", value)[:60]
+    return clean or None
+
+
+def _log_update_diagnostic(update: Any) -> None:
+    """Log only update type and sanitized button ID; never text, chat, or message IDs."""
+    if not isinstance(update, Mapping):
+        update_type = "unknown"
+        button_id = None
+    else:
+        raw_type = update.get("type")
+        update_type = re.sub(r"[^A-Za-z0-9_-]", "", str(raw_type or "unknown"))[:40] or "unknown"
+        message = update.get("inline_message")
+        aux = message.get("aux_data") if isinstance(message, Mapping) else None
+        button_id = _safe_button_id(aux.get("button_id")) if isinstance(aux, Mapping) else None
+    print(json.dumps({"update_type": update_type, "button_id": button_id}, separators=(",", ":")))
+
+
+def menu_inline_keypad() -> dict[str, Any]:
+    return {"rows": [{"buttons": [{
+        "id": BUTTON_MOB_POST_FROM_X,
+        "type": "Simple",
+        "button_text": "📰 خبر Mob از لینک X",
+    }]}]}
+
+
+def waiting_inline_keypad() -> dict[str, Any]:
+    return {"rows": [{"buttons": [{
+        "id": BUTTON_CANCEL,
+        "type": "Simple",
+        "button_text": "لغو",
+    }]}]}
+
+
+def encode_console_state(offset_id: str, mode: str) -> str:
+    """Persist mode beside the Rubika cursor using the existing opaque offset field."""
+    if not isinstance(offset_id, str) or not 1 <= len(offset_id) <= MAX_UPDATE_ID_CHARS:
+        raise OwnerConsoleError("owner_console_stored_offset_invalid")
+    if mode not in CONSOLE_MODES:
+        raise OwnerConsoleError("owner_console_mode_invalid")
+    value = json.dumps(
+        {"v": CONSOLE_STATE_VERSION, "offset_id": offset_id, "mode": mode},
+        separators=(",", ":"),
+    )
+    if len(value) > MAX_UPDATE_ID_CHARS:
+        raise OwnerConsoleError("owner_console_state_too_large")
+    return value
+
+
+def decode_console_state(value: Any) -> tuple[str | None, str]:
+    """Read the new envelope; accept an old raw offset for backward compatibility."""
+    if value is None:
+        return None, CONSOLE_IDLE
+    if not isinstance(value, str) or not 1 <= len(value) <= MAX_UPDATE_ID_CHARS:
+        raise OwnerConsoleError("owner_console_stored_offset_invalid")
+    try:
+        decoded = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        decoded = None
+    if isinstance(decoded, dict) and decoded.get("v") == CONSOLE_STATE_VERSION:
+        offset_id = decoded.get("offset_id")
+        mode = decoded.get("mode")
+        if (
+            isinstance(offset_id, str)
+            and 1 <= len(offset_id) <= MAX_UPDATE_ID_CHARS
+            and mode in CONSOLE_MODES
+        ):
+            return offset_id, mode
+        raise OwnerConsoleError("owner_console_stored_state_invalid")
+    return value, CONSOLE_IDLE
+
+
+def parse_x_status_url(text: str) -> str | None:
+    """Return a canonical URL for the first valid X/Twitter status link in text."""
+    for match in X_STATUS_URL_RE.finditer(str(text or "")[:MAX_REPLY_CHARS]):
+        raw = match.group(0).rstrip(".,!?;:)]}")
+        try:
+            parsed = urllib.parse.urlsplit(raw)
+        except ValueError:
+            continue
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if host not in {"x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}:
+            continue
+        try:
+            port = parsed.port
+        except ValueError:
+            continue
+        if parsed.scheme != "https" or parsed.username or parsed.password or port not in {None, 443}:
+            continue
+        path = re.fullmatch(r"/([A-Za-z0-9_]{1,15})/status/([0-9]{15,22})/?", parsed.path, re.IGNORECASE)
+        if not path:
+            continue
+        handle, post_id = path.groups()
+        return f"https://x.com/{handle}/status/{post_id}"
+    return None
+
+
+def _owner_private_event(
+    update: Mapping[str, Any],
+    owner_chat_id: str,
+    owner_user_id: str,
+) -> tuple[str, str | None, str | None, Mapping[str, Any]] | None:
+    """Return (kind, text, button_id, nested payload) only for the exact configured owner."""
+    update_type = update.get("type")
+    if update_type == "NewMessage":
+        message = update.get("new_message")
+        kind = "message"
+        text = message.get("text") if isinstance(message, Mapping) else None
+    elif update_type == "ReceiveQuery":
+        message = update.get("inline_message")
+        kind = "callback"
+        text = None
+    else:
+        return None
+    if not isinstance(message, Mapping) or _is_group_or_channel(update, message):
+        return None
+    chat_id = update.get("chat_id") or message.get("chat_id")
+    sender_id = message.get("sender_id")
+    if str(chat_id or "") != owner_chat_id or str(sender_id or "") != owner_user_id:
+        return None
+    if kind == "message":
+        if not isinstance(text, str) or not text.strip() or len(text) > MAX_REPLY_CHARS:
+            return None
+        return kind, text.strip(), None, message
+    aux_data = message.get("aux_data")
+    button_id = _safe_button_id(aux_data.get("button_id")) if isinstance(aux_data, Mapping) else None
+    if not button_id:
+        return None
+    return kind, None, button_id, message
 
 def _nonnegative_count(value: Any) -> int:
     return value if type(value) is int and value >= 0 else 0
@@ -508,6 +711,8 @@ class OperationsConsole:
         self.owner_chat_id = owner_chat_id
         self.owner_user_id = owner_user_id
         self.github_runs = github_runs or fetch_recent_github_runs
+        self.conversation_state = CONSOLE_IDLE
+        self._rubika_offset: str | None = None
 
     def _reply(self, command: ParsedCommand) -> str:
         if command.name == "help":
@@ -565,55 +770,118 @@ class OperationsConsole:
             return "\n\n".join(pieces)[:MAX_REPLY_CHARS]
         return "این فرمان پشتیبانی نمی‌شود. برای فهرست فرمان‌های مجاز /help را بفرست."
 
+    def _persist_conversation_state(self) -> None:
+        # There is no cursor before the first poll bootstrap. Once bootstrapped, reuse
+        # the existing opaque offset field; no new D1 schema or endpoint is introduced.
+        if self._rubika_offset is None:
+            return
+        self.control.set_offset(encode_console_state(self._rubika_offset, self.conversation_state))
+
+    def _send_once(self, text: str, keypad: Mapping[str, Any] | None = None) -> None:
+        if keypad is None:
+            response = self.bot.send_message(self.owner_chat_id, text)
+        else:
+            response = self.bot.send_message(self.owner_chat_id, text, inline_keypad=keypad)
+        if isinstance(response, Mapping) and response.get("status") not in {None, "OK"}:
+            raise OwnerConsoleError("rubika_send_rejected")
+
+    def _disable_source_keypad(self, message: Mapping[str, Any]) -> None:
+        message_id = message.get("message_id")
+        if not isinstance(message_id, str) or not message_id:
+            return
+        edit = getattr(self.bot, "edit_inline_keypad", None)
+        if not callable(edit):
+            return
+        try:
+            edit(self.owner_chat_id, message_id, {"rows": []})
+        except OwnerConsoleError:
+            return
+
+    def _finish_update(self, update_id: str, status: str, code: str) -> None:
+        try:
+            self.control.finish(update_id, status, code)
+        except OwnerConsoleError:
+            return
+
     def process_update(
         self,
         update: Mapping[str, Any],
         *,
         resolved_owner_user_id: str | None = None,
     ) -> str:
+        _log_update_diagnostic(update)
+        if not self.owner_chat_id or not self.owner_user_id:
+            return "ignored"
+        event = _owner_private_event(update, self.owner_chat_id, self.owner_user_id)
         update_id = _message_identity(update)
-        effective_user_id = self.owner_user_id or resolved_owner_user_id
-        if not effective_user_id:
+        if event is None or update_id is None:
             return "ignored"
-        message_text = _owner_private_text(update, self.owner_chat_id, effective_user_id)
-        if update_id is None or message_text is None:
-            return "ignored"
-        command = parse_command(message_text)
-        chat_id = str(update.get("chat_id") or update.get("new_message", {}).get("chat_id") or "")
-        chat_hash = hashlib.sha256(chat_id.encode("utf-8")).hexdigest()
+        kind, message_text, button_id, nested_message = event
+        command = parse_command(message_text or "") if kind == "message" else ParsedCommand("unknown", None, "unknown")
+        chat_hash = hashlib.sha256(self.owner_chat_id.encode("utf-8")).hexdigest()
         try:
             claim = self.control.claim(update_id, chat_hash, command.audit_name)
         except OwnerConsoleError:
-            # Do not reply or advance an operation without a confirmed idempotency claim.
             raise
         if claim.get("claimed") is not True:
             return "duplicate" if claim.get("duplicate") is True else "not_claimed"
 
-        reply = self._reply(command)
+        response_status = "answered"
+        result_code = "reply_sent"
         try:
-            self.bot.send_message(self.owner_chat_id, reply)
+            if kind == "callback":
+                self._disable_source_keypad(nested_message)
+                if button_id == BUTTON_MOB_POST_FROM_X:
+                    self.conversation_state = CONSOLE_WAITING_FOR_LINK
+                    self._persist_conversation_state()
+                    self._send_once(
+                        "لینک پست X را بفرست. فعلاً فقط لینک دریافت می‌شود؛ پردازش در به‌روزرسانی بعدی اضافه خواهد شد.",
+                        waiting_inline_keypad(),
+                    )
+                elif button_id == BUTTON_CANCEL:
+                    self.conversation_state = CONSOLE_IDLE
+                    self._persist_conversation_state()
+                    self._send_once("به منوی اصلی برگشتی.", menu_inline_keypad())
+                else:
+                    response_status = "ignored"
+                    result_code = "unsupported_button"
+                    self._finish_update(update_id, response_status, result_code)
+                    return "ignored"
+            elif command.name == "menu":
+                self.conversation_state = CONSOLE_IDLE
+                self._persist_conversation_state()
+                self._send_once("🤖 منوی مدیریت Rubika-Agent", menu_inline_keypad())
+            elif command.name == "help":
+                self._send_once(self._reply(command), menu_inline_keypad())
+            elif self.conversation_state == CONSOLE_WAITING_FOR_LINK and command.name == "unknown":
+                canonical = parse_x_status_url(message_text or "")
+                if canonical:
+                    self.conversation_state = CONSOLE_IDLE
+                    self._persist_conversation_state()
+                    self._send_once(
+                        "✅ لینک دریافت شد: " + canonical
+                        + "\\nپردازش لینک در به‌روزرسانی بعدی پیاده‌سازی می‌شود. فعلاً دانلود، ترجمه یا انتشار انجام نشده.",
+                        menu_inline_keypad(),
+                    )
+                else:
+                    self._send_once(
+                        "یک لینک معتبر از فرم x.com/نام‌کاربری/status/شناسه بفرست، یا «لغو» را بزن.",
+                        waiting_inline_keypad(),
+                    )
+            else:
+                self._send_once(self._reply(command))
         except OwnerConsoleError as exc:
-            # Delivery may be ambiguous. Record uncertainty and never retry this update.
-            try:
-                self.control.finish(update_id, "uncertain", exc.code)
-            except OwnerConsoleError:
-                pass
+            self._finish_update(update_id, "uncertain", exc.code)
             return "uncertain"
 
-        try:
-            self.control.finish(update_id, "answered", "reply_sent")
-        except OwnerConsoleError:
-            # Claim remains durable; the next poll still won't send another reply.
-            return "answered_unconfirmed"
-        return "answered"
+        self._finish_update(update_id, response_status, result_code)
+        return "answered" if response_status == "answered" else response_status
 
     def poll_once(self) -> dict[str, Any]:
         state = self.control.get_state()
-        offset_id = state.get("offset_id")
-        if offset_id is not None and (
-            not isinstance(offset_id, str) or not 1 <= len(offset_id) <= MAX_UPDATE_ID_CHARS
-        ):
-            raise OwnerConsoleError("owner_console_stored_offset_invalid")
+        offset_id, mode = decode_console_state(state.get("offset_id"))
+        self._rubika_offset = offset_id
+        self.conversation_state = mode
         response = self.bot.get_updates(offset_id)
         data = response.get("data")
         if not isinstance(data, dict):
@@ -628,7 +896,7 @@ class OperationsConsole:
             "duplicates": 0,
             "uncertain": 0,
             "bootstrapped": False,
-            "owner_identity_ambiguous": False,
+            "offset_advanced": False,
         }
         next_offset = data.get("next_offset_id")
         valid_next_offset = (
@@ -636,53 +904,31 @@ class OperationsConsole:
             and 1 <= len(next_offset) <= MAX_UPDATE_ID_CHARS
         )
 
-        # The first poll must establish a baseline without replying to old backlog.
-        # This avoids sending surprise replies to historical chat messages.
+        # Baseline an existing bot cursor before handling messages from an old backlog.
         if offset_id is None:
             if valid_next_offset:
-                self.control.set_offset(next_offset)
+                self._rubika_offset = next_offset
+                self.control.set_offset(encode_console_state(next_offset, self.conversation_state))
                 stats["offset_advanced"] = True
-            else:
-                stats["offset_advanced"] = False
             stats["bootstrapped"] = True
             stats["ignored"] = len(updates[:MAX_UPDATES_PER_POLL])
             return stats
 
-        resolved_owner_user_id = self.owner_user_id or None
-        if resolved_owner_user_id is None:
-            # RUBIKA_OWNER_USER_ID is an optional extra restriction. When it is not
-            # configured, infer the sender only if every message for the configured
-            # private owner chat in this batch has the same sender ID. Group/channel
-            # updates are rejected; multiple senders fail closed.
-            observed_senders: set[str] = set()
-            for candidate in updates[:MAX_UPDATES_PER_POLL]:
-                if not isinstance(candidate, dict):
-                    continue
-                message = candidate.get("new_message")
-                if not isinstance(message, dict) or _is_group_or_channel(candidate, message):
-                    continue
-                chat_id = candidate.get("chat_id") or message.get("chat_id")
-                sender_id = message.get("sender_id")
-                if (
-                    candidate.get("type") == "NewMessage"
-                    and str(chat_id or "") == self.owner_chat_id
-                    and isinstance(sender_id, (str, int))
-                    and str(sender_id).strip()
-                ):
-                    observed_senders.add(str(sender_id).strip())
-            if len(observed_senders) == 1:
-                resolved_owner_user_id = next(iter(observed_senders))
-            elif len(observed_senders) > 1:
-                stats["owner_identity_ambiguous"] = True
+        # The workflow requires the configured owner user ID; no sender inference.
+        if not self.owner_user_id:
+            stats["ignored"] = len(updates[:MAX_UPDATES_PER_POLL])
+            if valid_next_offset:
+                self._rubika_offset = next_offset
+                self.control.set_offset(encode_console_state(next_offset, self.conversation_state))
+                stats["offset_advanced"] = True
+            return stats
 
         for update in updates[:MAX_UPDATES_PER_POLL]:
-            if not isinstance(update, dict):
+            if not isinstance(update, Mapping):
+                _log_update_diagnostic(update)
                 stats["ignored"] += 1
                 continue
-            result = self.process_update(
-                update,
-                resolved_owner_user_id=resolved_owner_user_id,
-            )
+            result = self.process_update(update)
             if result in {"answered", "answered_unconfirmed"}:
                 stats["answered"] += 1
             elif result == "uncertain":
@@ -693,10 +939,9 @@ class OperationsConsole:
                 stats["ignored"] += 1
 
         if valid_next_offset:
-            self.control.set_offset(next_offset)
+            self._rubika_offset = next_offset
+            self.control.set_offset(encode_console_state(next_offset, self.conversation_state))
             stats["offset_advanced"] = True
-        else:
-            stats["offset_advanced"] = False
         return stats
 
 
@@ -743,8 +988,8 @@ def _required_env() -> tuple[str, str, str, str, str]:
         raise OwnerConsoleError("rubika_token_missing_or_short")
     if len(owner_chat_id) < 3:
         raise OwnerConsoleError("rubika_owner_chat_id_missing")
-    # The owner user ID is an optional additional restriction. If absent, polling
-    # resolves a single sender only from updates in the fixed private owner chat.
+    if len(owner_user_id) < 3:
+        raise OwnerConsoleError("rubika_owner_user_id_missing")
     if len(api_token) < 32:
         raise OwnerConsoleError("control_api_token_missing_or_short")
     return token, owner_chat_id, owner_user_id, api_token, control_url
