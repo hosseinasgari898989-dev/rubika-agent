@@ -133,33 +133,58 @@ async function rubika(env, method, payload) {
   }
   return data;
 }
-async function send(env, chat, src, keypad) {
-  const f = md(src);
-  const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
-    keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
-  return rubika(env, "sendMessage", {
-    chat_id: chat, text: f.text, ...(f.metadata ? { metadata: f.metadata } : {}),
-    ...(hasKeypad ? { inline_keypad: keypad } : {}),
-  });
-}
 const responseMessageId = (response) => {
   const mid = response && response.data && response.data.message_id;
   if (typeof mid !== "string" || !mid) throw new PanelError("rubika_sendmessage_no_message_id");
   return mid;
 };
+async function send(env, chat, src, keypad) {
+  const f = md(src);
+  const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
+    keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
+  const response = await rubika(env, "sendMessage", {
+    chat_id: chat, text: f.text, ...(f.metadata ? { metadata: f.metadata } : {}),
+    ...(hasKeypad ? { inline_keypad: keypad } : {}),
+  });
+  const mid = response && response.data && response.data.message_id;
+  if (typeof mid === "string" && mid) {
+    try { await setState(env, "panel_mid", mid); } catch { /* keep delivery successful if state storage is temporarily unavailable */ }
+  }
+  return response;
+}
+async function deletePreviousPanel(env, chat, oldMid, newMid) {
+  if (!oldMid || !newMid || oldMid === newMid) return;
+  try { await rubika(env, "deleteMessage", { chat_id: chat, message_id: oldMid }); } catch { /* best effort: keep navigation available */ }
+}
+async function sendFreshPanel(ui, src, keypad, oldMid) {
+  const response = await send(ui.env, ui.chat, src, keypad);
+  deletePreviousPanel(ui.env, ui.chat, oldMid, responseMessageId(response)).catch(() => {});
+  return response;
+}
+async function bumpCounter(env, key) {
+  const raw = await getState(env, key, "0");
+  const current = Number(raw);
+  const next = (Number.isSafeInteger(current) && current >= 0 ? current : 0) + 1;
+  await setState(env, key, next);
+  return next;
+}
 async function edit(env, chat, mid, src, keypad) {
   const f = md(src);
-  const base = { chat_id: chat, message_id: mid, text: f.text };
+  const storedMid = await getState(env, "panel_mid", "");
+  const targetMid = storedMid || mid;
+  const base = { chat_id: chat, message_id: targetMid, text: f.text };
   const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
     keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
   try {
     await rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base);
-    if (hasKeypad) await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: mid, inline_keypad: keypad });
-    return mid;
+    if (hasKeypad) await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad });
+    try { await bumpCounter(env, "panel_edit_ok"); } catch { /* diagnostics must not block panel rendering */ }
+    return targetMid;
   } catch (e) {
     const code = e && typeof e.code === "string" && /^[a-z0-9_-]{1,80}$/i.test(e.code)
       ? e.code.toLowerCase() : "panel_edit_failed";
     try { await setState(env, "last_error", code); } catch { /* keep the response fallback available */ }
+    try { await bumpCounter(env, "panel_edit_fail"); } catch { /* diagnostics must not block panel rendering */ }
     return responseMessageId(await send(env, chat, src, hasKeypad ? keypad : undefined));
   }
 }
@@ -224,6 +249,12 @@ const aiBlock = async (ui) => (await Promise.all(["groq", "openrouter"].map(asyn
 
 async function debugText(env) {
   const lastError = clean(await getState(env, "last_error", "none"), 80) || "none";
+  const readCounter = async (key) => {
+    const value = Number(await getState(env, key, "0"));
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  };
+  const editOk = await readCounter("panel_edit_ok");
+  const editFail = await readCounter("panel_edit_fail");
   let event = null;
   try { event = JSON.parse(await getState(env, "last_event", "null")); } catch { /* invalid older state */ }
   const types = Array.isArray(event && event.types)
@@ -233,6 +264,8 @@ async function debugText(env) {
     "🛠️ **Debug پنل**",
     "",
     "last_error: " + lastError,
+    "panel_edit_ok: " + editOk,
+    "panel_edit_fail: " + editFail,
     "last_event:",
     "kind: " + (clean(event && event.kind, 16) || "none"),
     "types: " + types,
@@ -243,29 +276,39 @@ async function debugText(env) {
   ].join("\n");
 }
 
-
-async function renderData(ui, id) {
+async function renderData(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const env = ui.env;
   const chat = ui.chat;
-  let mid = responseMessageId(await send(env, chat, "⏳ در حال دریافت…"));
+  const previousMid = await getState(env, "panel_mid", "");
+  let mid;
+  if (fresh || !previousMid) {
+    const response = fresh
+      ? await sendFreshPanel(ui, "⏳ در حال دریافت…", refreshKb(id), previousMid)
+      : await send(env, chat, "⏳ در حال دریافت…", refreshKb(id));
+    mid = responseMessageId(response);
+  } else {
+    const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
+    mid = await edit(env, chat, targetMid, "⏳ در حال دریافت…", refreshKb(id));
+  }
+
   let out;
   if (id === "p_status") out = fmtStatus(await api(ui, "/api/status"));
   else if (id === "p_queue") out = fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary"));
   else if (id === "p_ai") out = "🤖 **دفتر سهمیهٔ هوش مصنوعی**\n\n" + await aiBlock(ui);
   else {
     const parts = ["🧾 **گزارش Rubika-Agent**"];
-    mid = await edit(env, chat, mid, "⏳ ۱ از ۳ — وضعیت Worker…");
+    mid = await edit(env, chat, mid, "⏳ ۱ از ۳ — وضعیت Worker…", refreshKb(id));
     parts.push(fmtStatus(await api(ui, "/api/status")));
-    mid = await edit(env, chat, mid, "⏳ ۲ از ۳ — صف انتشار…");
+    mid = await edit(env, chat, mid, "⏳ ۲ از ۳ — صف انتشار…", refreshKb(id));
     parts.push(fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary")));
-    mid = await edit(env, chat, mid, "⏳ ۳ از ۳ — هوش مصنوعی…");
+    mid = await edit(env, chat, mid, "⏳ ۳ از ۳ — هوش مصنوعی…", refreshKb(id));
     parts.push(await aiBlock(ui));
     out = parts.join("\n\n");
   }
   await edit(env, chat, mid, out, refreshKb(id));
 }
 
-async function render(ui, id) {
+async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const env = ui.env;
   const chat = ui.chat;
   if (id !== "p_mob") await setState(env, "mode", "idle");
@@ -274,11 +317,22 @@ async function render(ui, id) {
     p_mob: ["📰 **خبر Mob از لینک X**\n\nلینک پست X را بفرست (x.com/نام/status/شناسه).", CANCEL_KB],
   };
   if (id === "p_mob") await setState(env, "mode", "waiting_link");
+  const previousMid = await getState(env, "panel_mid", "");
+  const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
   const s = statics[id];
-  if (s) return send(env, chat, s[0], s[1]);
-  if (id === "p_debug") return send(env, chat, await debugText(env), BACK_KB);
-  if (["p_status", "p_queue", "p_ai", "p_report"].includes(id)) return renderData(ui, id);
-  return render(ui, "p_home");
+  if (s) {
+    if (fresh) return sendFreshPanel(ui, s[0], s[1], previousMid);
+    if (targetMid) return edit(env, chat, targetMid, s[0], s[1]);
+    return send(env, chat, s[0], s[1]);
+  }
+  if (id === "p_debug") {
+    const text = await debugText(env);
+    if (fresh) return sendFreshPanel(ui, text, BACK_KB, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, text, BACK_KB);
+    return send(env, chat, text, BACK_KB);
+  }
+  if (["p_status", "p_queue", "p_ai", "p_report"].includes(id)) return renderData(ui, id, { fresh, clickedMid });
+  return render(ui, "p_home", { fresh, clickedMid });
 }
 
 const COMMANDS = {
@@ -328,10 +382,10 @@ async function processEvent(env, selfFetch, origin, ev) {
   if (!(await firstSeen(env, key))) return;
   const ui = { env, chat: ev.chat, selfFetch, origin };
   try {
-    if (ev.kind === "click") { await render(ui, ev.button); return; }
+    if (ev.kind === "click") { await render(ui, ev.button, { clickedMid: ev.mid }); return; }
     const word = ev.text.split(/\s+/)[0].split("@")[0].toLowerCase();
     if (word === "/register") { await registerWebhook(env, origin); await send(env, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
-    if (COMMANDS[word]) { await render(ui, COMMANDS[word]); return; }
+    if (COMMANDS[word]) { await render(ui, COMMANDS[word], { fresh: true }); return; }
     if ((await getState(env, "mode", "idle")) === "waiting_link") {
       const link = parseXLink(ev.text);
       if (!link) { await send(env, ev.chat, "لینک معتبر نیست. شکل درست: x.com/نام/status/شناسه", CANCEL_KB); return; }
