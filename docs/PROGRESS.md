@@ -48,3 +48,15 @@
 - No publishing workflow was dispatched; no provider API request, media download, Rubika post, D1 write/migration, secret change or Worker deployment was performed during Phase 2c.
 
 Provider-cleanup implementation commit (PR #49): `087a880317a8140afd790c2742e6cea696123439`; final documentation checkpoint PR #50 merged as `01167e6837af9098ccde11fa450d259b66058227`.
+
+
+## 2026-10-24 - Post-Phase 2 follow-ups (PRs #51–#57)
+
+- PR #51 merged as `e622ea41aa6dd73ca705be403b54d8935b10ad40`: clarified implementation/checkpoint SHAs in current handoff documentation.
+- PR #52 merged as `d4dd76ad1611ea04f97649b63d1ccdc5ba08ffab`: added a manual-only, read-only Groq/OpenRouter health check. PR #53 merged as `37f2eb0bfc536fad16c5b452f82569fd5877edeb`: fixed dependency installation and timeout. PR #54 merged as `a9c2fd2d713d8a9849ef316dafafddcfe26e2230`: corrected Mob X `since_utc` backlog handling and added a manual-only, read-only discovery probe.
+- PR #55 merged as `064f1c292d35996f561460be14b3b049c90ec535`: added the owner-console keypad and X-link waiting state. PR #56 merged as `a8548576dcd164cc1140c5bc2bddc15437849e79`: removed the separate owner sender-ID setting and assumed chat ID equals sender ID. The owner reports that real polling received events but answered none; that assumption must not be treated as a verified Rubika identity contract.
+- PR #57 merged as `1144146c9f1f65a4fc335e34acd2fed1a1eb88e2`: added privacy-safe boolean receive-gate diagnostics without logging IDs or message bodies. This is instrumentation, not a completed identity fix.
+- Next isolated code PR: validate the owner private chat against `RUBIKA_OWNER_CHAT_ID` and independently validate the real sender using a dedicated secret/config value; reject groups/channels, bot-authored messages, malformed updates, and non-owner senders. Add positive and negative regression tests and keep all IDs out of logs. Create a fresh `backup/pre-<task>-20261024` before that PR. Do not dispatch the console workflow merely as part of documentation work.
+- AI follow-up remains pending: the owner reported the last Groq/OpenRouter manual health check returned “other error”; successful translation is not confirmed. Re-run only the manual health-check after the console fix, report its real result, and do not dispatch a publishing workflow.
+- Later work, in a separate PR after the health check: gated X-link confirmation, translation, media download, preview, and publication restricted to the test channel. Do not send anything to the main channel.
+- The preparation/checkpoint documentation package is on branch `docs/checkpoint-resume-package-20261024`, protected by backup branch `backup/pre-checkpoint-package-20261024`. It adds `docs/CHECKPOINTS.md` and `docs/RESUME_PROMPT.md` and updates this file; the documentation PR should not be described as merged until GitHub confirms that state. No publishing workflow dispatch, Worker deploy, D1 write/migration, or secret change was performed for this documentation package.
