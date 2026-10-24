@@ -110,8 +110,7 @@ jobs:
               --publish \
               --limit 1 \
               --source-platform x \
-              --published-within-hours 5 \
-              --report "$report" \
+                --report "$report" \
               --output-dir "$media_dir"
             run_status=$?
             set -e
