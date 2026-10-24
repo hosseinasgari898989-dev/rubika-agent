@@ -1,3 +1,4 @@
+import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";
 import { handleOwnerPanel } from "./owner_panel.js";
 const SERVICE = "rubika-agent";
 const PUBLISHING_ENABLED = false;
@@ -1350,8 +1351,7 @@ async function approvedQueue(env, url) {
   }
 }
 
-const worker = {
-  async fetch(request, env, ctx) {
+async function route(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/panel/")) {
       return handleOwnerPanel(request, env, ctx, (r) => worker.fetch(r, env, ctx));
@@ -1365,6 +1365,11 @@ const worker = {
     if (path === "/api/status") {
       if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
       return status(env);
+    }
+
+    if (path.startsWith("/api/console/")) {
+      if (!authorized(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+      return handleConsoleApi(request, env, { json, readJson, text, validIdentifier });
     }
 
     if (!path.startsWith("/api/brain/")) {
@@ -1466,6 +1471,17 @@ const worker = {
     if (path === "/api/brain/owner-digest/claim") return ownerDigestClaim(env);
     if (path === "/api/brain/owner-digest/commit") return ownerDigestCommit(env, body);
     return json({ ok: false, error: "not_found" }, 404);
+}
+
+const worker = {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") {
+      return corsPreflight();
+    }
+    const response = await route(request, env, ctx);
+    if (url.pathname.startsWith("/api/")) return withCors(response);
+    return response;
   }
 };
 
