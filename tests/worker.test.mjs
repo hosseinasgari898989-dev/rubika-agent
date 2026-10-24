@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -1138,6 +1139,17 @@ class PanelFakeStatement {
     if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) {
       return { c: this.db.links.length };
     }
+    if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
+      const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
+      if (!row || (this.sql.includes("AND enabled = 1") && Number(row.enabled) !== 1)) return null;
+      return { ...row };
+    }
+    if (this.sql.includes("FROM console_owner_invites WHERE code_hash = ?")) {
+      const row = [...this.db.consoleInvites.values()].find(item =>
+        item.code_hash === this.values[0] && item.used_at == null && item.expires_at > (this.values[1] || "")
+      );
+      return row ? { ...row } : null;
+    }
     return null;
   }
   async all() {
@@ -1172,6 +1184,33 @@ class PanelFakeStatement {
       this.db.events.clear();
       return { meta: { changes: 1 } };
     }
+    if (this.sql.startsWith("INSERT OR IGNORE INTO console_owners")) {
+      if ([...this.db.consoleOwners.values()].some(row => row.chat_id === this.values[0])) return { meta: { changes: 0 } };
+      const id = this.db.nextConsoleOwnerId++;
+      this.db.consoleOwners.set(id, { id, chat_id: this.values[0], label: "مالک اصلی", role: "owner", enabled: 1, claimed_at: new Date().toISOString(), last_seen_at: new Date().toISOString() });
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (this.sql.startsWith("UPDATE console_owner_invites SET used_at")) {
+      const row = this.db.consoleInvites.get(Number(this.values[2]));
+      if (!row || row.used_at || row.expires_at <= this.values[3]) return { meta: { changes: 0 } };
+      Object.assign(row, { used_at: this.values[0], used_by: this.values[1] });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT INTO console_owners") && this.sql.includes("SELECT ?")) {
+      if (Number(this.db.lastChanges || 0) <= 0 || [...this.db.consoleOwners.values()].some(row => row.chat_id === this.values[0])) {
+        return { meta: { changes: 0 } };
+      }
+      const id = this.db.nextConsoleOwnerId++;
+      const row = { id, chat_id: this.values[0], label: this.values[1], role: "viewer", enabled: 1, claimed_at: this.values[2], last_seen_at: this.values[3] };
+      this.db.consoleOwners.set(id, row);
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (this.sql.startsWith("INSERT INTO brain_events") && this.sql.includes("SELECT NULL")) {
+      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
+      const code = this.sql.includes("'console_owner_claim_bootstrap'") ? "console_owner_claim_bootstrap" : "console_owner_claim";
+      this.db.brainEvents.push({ code, level: "info", details_json: this.values[0] });
+      return { meta: { changes: 1 } };
+    }
     return { meta: { changes: 1 } };
   }
 }
@@ -1182,8 +1221,22 @@ class PanelFakeDB {
     this.events = new Set();
     this.links = [];
     this.linkDeleteCalls = 0;
+    this.consoleOwners = new Map();
+    this.nextConsoleOwnerId = 1;
+    this.consoleInvites = new Map();
+    this.brainEvents = [];
+    this.lastChanges = 0;
   }
   prepare(sql) { return new PanelFakeStatement(this, sql); }
+  async batch(statements) {
+    const results = [];
+    for (const statement of statements) {
+      const result = await statement.run();
+      this.lastChanges = Number(result?.meta?.changes || 0);
+      results.push(result);
+    }
+    return results;
+  }
 }
 const panelEnv = () => ({
   DB: new PanelFakeDB(),
