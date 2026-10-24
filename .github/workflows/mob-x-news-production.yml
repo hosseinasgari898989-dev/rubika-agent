@@ -94,44 +94,42 @@ jobs:
           fi
           ffprobe -version | head -n 1
 
-      - name: Publish every verified unposted Mob X post within the last five hours
+      - name: Publish at most one oldest eligible Mob X post
         id: publish_official_x
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts/mob-x-production-media
-          published=0
-          final_report="$RUNNER_TEMP/mob-x-production-report.json"
-          for attempt in $(seq 1 12); do
-            report="$RUNNER_TEMP/mob-x-production-report-$attempt.json"
-            media_dir="artifacts/mob-x-production-media/attempt-$attempt"
-            set +e
-            python -m agent.brain.mob_official_trial \
-              --publish \
-              --limit 1 \
-              --source-platform x \
-                --report "$report" \
-              --output-dir "$media_dir"
-            run_status=$?
-            set -e
-            if [[ ! -s "$report" ]]; then
-              echo "::error::Mob publisher returned without a report; stopping to avoid unsafe retries."
-              exit 1
-            fi
-            cp "$report" "$final_report"
-            status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("status", "unknown"))' "$report")"
-            if [[ "$status" == "published" ]]; then
-              published=$((published + 1))
-              continue
-            fi
-            if [[ "$status" == "nothing_new" ]]; then
-              break
-            fi
-            echo "::error::Mob publisher stopped on status $status; no further posts will be attempted in this sweep."
+          report="$RUNNER_TEMP/mob-x-production-report.json"
+          media_dir="artifacts/mob-x-production-media/attempt-1"
+          set +e
+          python -m agent.brain.mob_official_trial \
+            --publish \
+            --limit 1 \
+            --source-platform x \
+            --report "$report" \
+            --output-dir "$media_dir"
+          run_status=$?
+          set -e
+          if [[ ! -s "$report" ]]; then
+            echo "::error::Mob publisher returned without a report; stopping safely."
             exit 1
-          done
-          if [[ -s "$final_report" ]]; then cp "$final_report" artifacts/mob-x-production-report.json; fi
-          echo "Verified posts published in this five-hour sweep: $published"
+          fi
+          cp "$report" artifacts/mob-x-production-report.json
+          status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("status", "unknown"))' "$report")"
+          if [[ "$status" == "published" ]]; then
+            published=1
+          elif [[ "$status" == "nothing_new" ]]; then
+            published=0
+          else
+            echo "::error::Mob publisher stopped on status $status; no post retry will be attempted in this run."
+            exit 1
+          fi
+          if [[ "$run_status" -ne 0 && "$status" != "published" && "$status" != "nothing_new" ]]; then
+            echo "::error::Mob publisher command failed; no retry will be attempted in this run."
+            exit 1
+          fi
+          echo "Verified posts published in this run: $published"
           echo "published_count=$published" >> "$GITHUB_OUTPUT"
 
       - name: Get safe AI diagnosis for gated official-news failure
