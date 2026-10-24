@@ -1141,7 +1141,7 @@ async function postPanelUpdate(state, update, secret) {
   });
 }
 
-// Button presses always create a separate page; staged report edits only the message created by send().
+// A click with no existing panel creates one tracked message; every report stage edits that same message.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -1154,6 +1154,9 @@ async function postPanelUpdate(state, update, secret) {
       } },
     }, secret);
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(state.DB.state.get("panel_edit_ok"), "4");
+    assert.equal(state.DB.state.get("panel_edit_fail") || "0", "0");
     assert.equal(calls.some(call => call.payload.message_id === "clicked-event-original-9876"), false);
     assert.equal(calls.filter(call => call.method === "editMessageText").length >= 4, true);
     assert.equal(calls.every(call => !("message_id" in call.payload) || call.payload.message_id === "mock-reply-1"), true);
@@ -1180,6 +1183,9 @@ async function postPanelUpdate(state, update, secret) {
       } },
     }, secret);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_edit_failed");
+    assert.equal(state.DB.state.get("panel_edit_fail"), "1");
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-2");
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "mock-reply-1"), true);
     const failedEdit = calls.find(call => call.method === "editMessageText");
     const fallbackSend = calls.filter(call => call.method === "sendMessage").at(-1);
     assert.equal(fallbackSend.payload.text, failedEdit.payload.text);
@@ -1205,6 +1211,8 @@ async function postPanelUpdate(state, update, secret) {
       } },
     }, secret);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_http_503");
+    assert.equal(state.DB.state.get("panel_edit_fail"), "1");
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-2");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 2);
   }, ({ method }) => method === "editMessageText"
     ? new Response(JSON.stringify({ status: "UNAVAILABLE" }), { status: 503 })
@@ -1217,6 +1225,8 @@ async function postPanelUpdate(state, update, secret) {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
     state.DB.state.set("last_error", "rubika_editmessagetext_http_503");
+    state.DB.state.set("panel_edit_ok", "9");
+    state.DB.state.set("panel_edit_fail", "2");
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
@@ -1231,6 +1241,8 @@ async function postPanelUpdate(state, update, secret) {
     assert.equal(stored.includes("1234"), true);
     const debugSend = calls.find(call => call.method === "sendMessage");
     assert.equal(debugSend.payload.text.includes("rubika_editmessagetext_http_503"), true);
+    assert.equal(debugSend.payload.text.includes("panel_edit_ok: 9"), true);
+    assert.equal(debugSend.payload.text.includes("panel_edit_fail: 2"), true);
     assert.equal(debugSend.payload.text.includes("chat_tail: wner"), true);
     assert.equal(debugSend.payload.text.includes("message_id_tail: 1234"), true);
     assert.equal(debugSend.payload.text.includes("b0actualowner"), false);
@@ -1238,5 +1250,49 @@ async function postPanelUpdate(state, update, secret) {
   });
 }
 
-console.log("Worker tests passed: existing APIs plus owner-panel metadata, safe event diagnostics, click-safe page rendering, edit fallback, method-specific errors, debug output and owner isolation.");
+
+// Stale button clicks must edit the saved panel message, never the message that carried the click.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "latest-live-panel-9876");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "stale-click-message-1234", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_home" },
+      } },
+    }, secret);
+    const editCalls = calls.filter(call => call.method === "editMessageText" || call.method === "editMessageKeypad");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(editCalls.length, 2);
+    assert.equal(editCalls.every(call => call.payload.message_id === "latest-live-panel-9876"), true);
+    assert.equal(editCalls.some(call => call.payload.message_id === "stale-click-message-1234"), false);
+    assert.equal(state.DB.state.get("panel_mid"), "latest-live-panel-9876");
+    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+  });
+}
+
+// A typed page command creates a replacement, updates panel_mid, then best-effort deletes the previous panel.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "old-panel-to-delete-5678");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "menu-command-1", chat_id: "b0actualowner", text: "/menu",
+      } },
+    }, secret);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "old-panel-to-delete-5678"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+  }, ({ method }) => method === "deleteMessage"
+    ? new Response(JSON.stringify({ status: "DELETE_FAILED" }), { status: 200 })
+    : null);
+}
+
+console.log("Worker tests passed: existing APIs plus live panel tracking, best-effort replacement/deletion, edit counters, safe diagnostics, and owner isolation.");
 
