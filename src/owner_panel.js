@@ -1,5 +1,7 @@
 // Owner panel on Cloudflare (stage 1): instant Rubika webhook, owner claim, menu, live screens.
 // Heavy work (video, edits, YouTube) stays on GitHub Actions; this module never runs shell or publishes.
+import { HOME_ROWS, isScreenId, buildScreen } from "./panel_screens.js";
+
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
 const MAX_BODY = 64 * 1024;
@@ -66,17 +68,12 @@ const esc = (s) => String(s ?? "").replace(/\*\*|__|--|~~|\|\||`|\[|\]/g, "");
 
 // ---------- keypads
 const kb = (rows) => ({ rows: rows.map((r) => ({ buttons: r.map(([t, id]) => ({ id, type: "Simple", button_text: t })) })) });
-const HOME_KB = kb([
-  [["📊 وضعیت", "p_status"], ["📦 صف", "p_queue"]],
-  [["🤖 هوش مصنوعی", "p_ai"], ["🧾 گزارش کامل", "p_report"]],
-  [["📰 خبر Mob از لینک X", "p_mob"]],
-  [["❓ راهنما", "p_help"]],
-]);
+const HOME_KB = kb(HOME_ROWS);
 const BACK_KB = kb([[["🏠 منوی اصلی", "p_home"]]]);
 const CANCEL_KB = kb([[["✖️ لغو", "p_home"]]]);
 const refreshKb = (id) => kb([[["🔄 تازه‌سازی", id], ["🏠 منوی اصلی", "p_home"]]]);
 const HOME_TEXT = "🤖 **پنل مدیریت Rubika-Agent**\n\nیکی از بخش‌ها را انتخاب کن:";
-const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /debug: خطای آخر و مشخصات امن رویداد آخر\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه فقط گزارش می‌دهد و لینک X را ذخیره می‌کند. بخش‌های بعدی مرحله‌به‌مرحله اضافه می‌شوند.";
+const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /digest خلاصهٔ ۲۴ ساعت، /errors خطاها، /runs اجراها\n• /links لینک‌های X، /ailog تاریخچهٔ AI\n• /debug: خطای آخر و مشخصات امن رویداد آخر\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه گزارش می‌دهد و لینک X را ذخیره می‌کند؛ انتشار خودکار از این پنل انجام نمی‌شود."; 
 
 // ---------- event normalisation (webhook shapes: {update}, {inline_message}, or a bare update)
 const bad = (o, k) => o && typeof o === "object" && o[k] === true;
@@ -315,7 +312,6 @@ export function fmtStatus(s) {
   const run = Array.isArray(s.recent_runs) && s.recent_runs[0] && typeof s.recent_runs[0] === "object" ? s.recent_runs[0] : null;
   return [
     "📊 **وضعیت Rubika-Agent**",
-    `• پایگاه داده: ${s.database === "connected" ? "متصل" : "نامشخص"}`,
     `• عامل: ${agent.enabled === 1 ? "روشن" : "خاموش"}`,
     `• انتشار از این API: ${pub ? "فعال" : "غیرفعال"}`,
     `• آیتم‌ها: ${counts.length ? counts.join(" | ") : "داده‌ای ثبت نشده"}`,
@@ -426,6 +422,9 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const env = ui.env;
   const chat = ui.chat;
   if (id !== "p_mob") await setState(env, "mode", "idle");
+  if (id !== "p_links_clear" && id !== "p_links_clear_yes") {
+    await setState(env, "panel_links_clear_pending", "no");
+  }
   const statics = {
     p_home: [HOME_TEXT, HOME_KB], p_help: [HELP_TEXT, BACK_KB],
     p_mob: ["📰 **خبر Mob از لینک X**\n\nلینک پست X را بفرست (x.com/نام/status/شناسه).", CANCEL_KB],
@@ -433,6 +432,21 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   if (id === "p_mob") await setState(env, "mode", "waiting_link");
   const previousMid = await getState(env, "panel_mid", "");
   const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
+  if (isScreenId(id)) {
+    let screenId = id;
+    if (id === "p_links_clear_yes") {
+      const pending = await getState(env, "panel_links_clear_pending", "no");
+      await setState(env, "panel_links_clear_pending", "no");
+      if (pending !== "yes") screenId = "p_links";
+    }
+    const s = await buildScreen(env, screenId);
+    if (id === "p_links_clear" && !s.text.includes("d1_error")) {
+      await setState(env, "panel_links_clear_pending", "yes");
+    }
+    const keypad = kb(s.rows);
+    if (targetMid) return edit(env, chat, targetMid, s.text, keypad);
+    return send(env, chat, s.text, keypad);
+  }
   const s = statics[id];
   if (s) {
     if (fresh) return sendFreshPanel(ui, s[0], s[1], previousMid);
@@ -451,7 +465,9 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
 
 const COMMANDS = {
   "/start": "p_home", "/menu": "p_home", "منو": "p_home", "/help": "p_help", "/status": "p_status",
-  "/queue": "p_queue", "/ai": "p_ai", "/ai-status": "p_ai", "/report": "p_report", "/debug": "p_debug",
+  "/queue": "p_qs", "/ai": "p_ai", "/ai-status": "p_ai", "/report": "p_report", "/debug": "p_debug",
+  "/digest": "p_digest", "/errors": "p_errors", "/runs": "p_runs",
+  "/links": "p_links", "/ailog": "p_ailog",
 };
 
 async function tryClaim(env, ev) {
