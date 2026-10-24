@@ -5,6 +5,9 @@
   "account_id": "8322f2e2570a82e99ca35e935a21c099",
   "compatibility_date": "2026-10-12",
   "workers_dev": true,
+  "placement": {
+    "mode": "smart"
+  },
   "observability": {
     "enabled": true
   },
