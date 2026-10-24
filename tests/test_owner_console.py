@@ -455,6 +455,11 @@ class OperationsConsoleTests(unittest.TestCase):
         })
         self.assertEqual(control.claims[-1][2], "help")
 
+    def test_menu_alias_sends_the_same_keypad(self):
+        instance, bot, _ = self.make_console()
+        self.assertEqual(instance.process_update(update(text="/menu")), "answered")
+        self.assertEqual(bot.sent_keypads[-1], console.menu_inline_keypad())
+
     def test_receive_query_callback_enters_persistent_waiting_state(self):
         api = FakeBot(updates={
             "status": "OK",
@@ -482,7 +487,7 @@ class OperationsConsoleTests(unittest.TestCase):
         self.assertEqual(instance.conversation_state, console.CONSOLE_IDLE)
         self.assertIn("https://x.com/MobFan/status/12345678901234567", bot.sent[-1][1])
         self.assertIn("پردازش لینک در به‌روزرسانی بعدی", bot.sent[-1][1])
-        self.assertIn("هیچ‌چیز", bot.sent[-1][1]) if "هیچ‌چیز" in bot.sent[-1][1] else None
+        self.assertIn("دانلود، ترجمه یا انتشار انجام نشده", bot.sent[-1][1])
         self.assertEqual(bot.sent_keypads[-1], console.menu_inline_keypad())
 
     def test_waiting_state_keeps_cancel_for_non_status_text(self):
