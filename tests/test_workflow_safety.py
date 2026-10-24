@@ -24,10 +24,24 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("git push origin HEAD:refs/heads/main", workflow)
         self.assertNotIn("agent-brain-mega-v1", workflow)
 
-    def test_unused_private_command_poller_is_removed_only(self):
+    def test_owner_console_poller_is_five_minute_serial_and_read_only(self):
         workflows = ROOT / ".github" / "workflows"
-        self.assertFalse((workflows / "owner-console-poll.yml").exists())
-        # Keep the independent automations untouched.
+        workflow = (workflows / "owner-console-poll.yml").read_text(encoding="utf-8")
+        self.assertIn("schedule:", workflow)
+        self.assertIn('cron: "*/5 * * * *"', workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("timeout-minutes: 4", workflow)
+        self.assertIn("permissions:", workflow)
+        self.assertIn("contents: read", workflow)
+        self.assertIn("python -m agent.brain.owner_console --once", workflow)
+        for secret in ("RUBIKA_TOKEN", "RUBIKA_OWNER_CHAT_ID", "RUBIKA_OWNER_USER_ID", "AGENT_API_TOKEN"):
+            with self.subTest(secret=secret):
+                self.assertIn(f"secrets.{secret}", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertNotIn("RUBIKA_CHANNEL_GUID", workflow)
+        self.assertNotIn("send_media", workflow)
+        # Keep independent automations intact.
         for preserved in (
             "owner-daily-digest.yml",
             "owner-digest-refresh.yml",

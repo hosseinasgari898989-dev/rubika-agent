@@ -1,0 +1,40 @@
+name: Rubika owner console poll
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owner-console-poll-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  poll-owner-console:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    env:
+      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+      RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+      RUBIKA_OWNER_USER_ID: ${{ secrets.RUBIKA_OWNER_USER_ID }}
+      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+      AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+    steps:
+      - name: Check out code without persisting credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Poll owner PV once (owner-only, no publishing)
+        run: python -m agent.brain.owner_console --once
