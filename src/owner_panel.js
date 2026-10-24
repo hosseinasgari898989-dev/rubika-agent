@@ -158,7 +158,7 @@ async function deletePreviousPanel(env, chat, oldMid, newMid) {
 }
 async function sendFreshPanel(ui, src, keypad, oldMid) {
   const response = await send(ui.env, ui.chat, src, keypad);
-  deletePreviousPanel(ui.env, ui.chat, oldMid, responseMessageId(response)).catch(() => {});
+  await deletePreviousPanel(ui.env, ui.chat, oldMid, responseMessageId(response));
   return response;
 }
 async function bumpCounter(env, key) {
@@ -185,7 +185,10 @@ async function edit(env, chat, mid, src, keypad) {
       ? e.code.toLowerCase() : "panel_edit_failed";
     try { await setState(env, "last_error", code); } catch { /* keep the response fallback available */ }
     try { await bumpCounter(env, "panel_edit_fail"); } catch { /* diagnostics must not block panel rendering */ }
-    return responseMessageId(await send(env, chat, src, hasKeypad ? keypad : undefined));
+    const replacement = await send(env, chat, src, hasKeypad ? keypad : undefined);
+    const replacementMid = responseMessageId(replacement);
+    await deletePreviousPanel(env, chat, targetMid, replacementMid);
+    return replacementMid;
   }
 }
 async function registerWebhook(env, origin) {
