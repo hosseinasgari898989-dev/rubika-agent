@@ -92,12 +92,14 @@ class ProviderClientTests(unittest.TestCase):
             "https://api.groq.com/openai/v1/chat/completions",
         )
         opener = FakeOpener(FakeResponse({
-            "choices": [{"message": {"content": "diagnosis result"}}],
+            "choices": [{"message": {"content": "diagnosis result"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 21, "completion_tokens": 8, "total_tokens": 29},
         }))
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
             result = clients.invoke_provider(config, "safe prompt")
         self.assertEqual(result.text, "diagnosis result")
+        self.assertEqual(result.http_status, 200)
+        self.assertEqual(result.finish_reason, "stop")
         self.assertEqual(result.usage["promptTokenCount"], 21)
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + config.api_key)
         self.assertNotIn(config.api_key, opener.request.full_url)
@@ -141,7 +143,7 @@ class ProviderClientTests(unittest.TestCase):
         error = HTTPError(
             config.url, 503, "unavailable",
             {"Retry-After": "13"},
-            io.BytesIO(b'{"error":{"message":"must not be logged"}}'),
+            io.BytesIO(b'{"error":{"type":"server_error","code":"temporary_failure","message":"must not be logged"}}'),
         )
         opener = FakeOpener(error=error)
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
@@ -151,7 +153,25 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.outcome, "unknown")
         self.assertEqual(caught.exception.diagnostics["http_status"], 503)
         self.assertEqual(caught.exception.diagnostics["retry_after_seconds"], 13)
+        self.assertEqual(caught.exception.diagnostics["provider_error_type"], "server_error")
+        self.assertEqual(caught.exception.diagnostics["provider_error_code"], "temporary_failure")
         self.assertNotIn("must not be logged", json.dumps(caught.exception.diagnostics))
+    def test_empty_http_200_response_preserves_status_and_finish_reason_without_content(self):
+        config = clients.ProviderConfig(
+            "groq", "g" * 32, "model",
+            "https://api.groq.com/openai/v1/chat/completions",
+        )
+        opener = FakeOpener(FakeResponse({
+            "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+        }))
+        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.invoke_provider(config, "safe prompt", max_output_tokens=10)
+        self.assertEqual(caught.exception.code, "provider_text_missing")
+        self.assertEqual(caught.exception.diagnostics["http_status"], 200)
+        self.assertEqual(caught.exception.diagnostics["finish_reason"], "length")
+        self.assertNotIn("response text", json.dumps(caught.exception.diagnostics))
+
     def test_ledger_reservation_happens_before_provider_request_and_result_is_finished(self):
         ledger = FakeLedger()
         result = clients.ProviderResult("groq", "model", "answer", {"totalTokenCount": 4})
