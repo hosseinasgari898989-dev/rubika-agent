@@ -60,3 +60,13 @@ Provider-cleanup implementation commit (PR #49): `087a880317a8140afd790c2742e6ce
 - AI follow-up remains pending: the owner reported the last Groq/OpenRouter manual health check returned “other error”; successful translation is not confirmed. Re-run only the manual health-check after the console fix, report its real result, and do not dispatch a publishing workflow.
 - Later work, in a separate PR after the health check: gated X-link confirmation, translation, media download, preview, and publication restricted to the test channel. Do not send anything to the main channel.
 - The preparation/checkpoint documentation package is on branch `docs/checkpoint-resume-package-20261024`, protected by backup branch `backup/pre-checkpoint-package-20261024`. It adds `docs/CHECKPOINTS.md` and `docs/RESUME_PROMPT.md` and updates this file; the documentation PR should not be described as merged until GitHub confirms that state. No publishing workflow dispatch, Worker deploy, D1 write/migration, or secret change was performed for this documentation package.
+
+
+## 2026-10-24 - Owner console private-chat authorization PR #59 opened
+
+- Backup created before the code change from the then-current main: `backup/pre-owner-auth-20261024`.
+- PR #59: https://github.com/hosseinasgari898989-dev/rubika-agent/pull/59; branch `fix/owner-auth-private-chat-20261024`; latest head SHA `a12a12ee3b04f2e2e85a632620e68f29d9740b9a`. It remains open/unmerged.
+- Change scope: use existing `RUBIKA_OWNER_CHAT_ID` only; require the matching private chat; do not compare `sender_id`; reject group/channel and Bot-authored messages plus malformed/edited events. Event logs expose only the last four characters of update type and chat ID.
+- Regression tests cover different sender IDs in the configured private chat, explicit/private-GUID recognition, group/channel rejection, Bot-authored message rejection, callback gate and log redaction.
+- Final-head CI passes: Cloud bootstrap run `40062519824`; Agent brain run `40062519794`. Initial CI attempts exposed a signature error and an obsolete test expectation; both were fixed before the successful runs. No workflow was manually dispatched by this change; no publishing, media download, AI health request, Worker deploy, D1 write/migration or Secret modification occurred.
+- Next: owner reviews/decides on PR #59. Do not merge automatically. After that decision, run only the separate manual Groq/OpenRouter health check when authorized; translation remains unverified, and the next X-link → translation → media download → preview → test-channel publication sequence must remain in a separate gated PR.
