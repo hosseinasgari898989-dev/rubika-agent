@@ -186,8 +186,13 @@ async function edit(env, chat, mid, src, keypad) {
   const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
     keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
   try {
-    await rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base);
-    if (hasKeypad) await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad });
+    const operations = [
+      rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base),
+    ];
+    if (hasKeypad) operations.push(
+      rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad }),
+    );
+    await Promise.all(operations);
     try { await bumpCounter(env, "panel_edit_ok"); } catch { /* diagnostics must not block panel rendering */ }
     return targetMid;
   } catch (e) {
@@ -343,6 +348,17 @@ async function debugText(env) {
   };
   const editOk = await readCounter("panel_edit_ok");
   const editFail = await readCounter("panel_edit_fail");
+  let timings = [];
+  try {
+    const parsed = JSON.parse(await getState(env, "last_timings", "[]"));
+    if (Array.isArray(parsed)) timings = parsed.slice(-5).map((item) => ({
+      msg_age_s: typeof item?.msg_age_s === "number" && Number.isFinite(item.msg_age_s) ? item.msg_age_s : null,
+      total_ms: Number.isFinite(item?.total_ms) && item.total_ms >= 0 ? item.total_ms : 0,
+      rubika_calls: Number.isSafeInteger(item?.rubika_calls) && item.rubika_calls >= 0 ? item.rubika_calls : 0,
+      rubika_ms: Number.isFinite(item?.rubika_ms) && item.rubika_ms >= 0 ? item.rubika_ms : 0,
+      d1_ms: Number.isFinite(item?.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
+    }));
+  } catch { /* invalid or old timing state */ }
   let event = null;
   try { event = JSON.parse(await getState(env, "last_event", "null")); } catch { /* invalid older state */ }
   const types = Array.isArray(event && event.types)
@@ -354,6 +370,7 @@ async function debugText(env) {
     "last_error: " + lastError,
     "panel_edit_ok: " + editOk,
     "panel_edit_fail: " + editFail,
+    "last_timings: " + JSON.stringify(timings),
     "last_event:",
     "kind: " + (clean(event && event.kind, 16) || "none"),
     "types: " + types,
@@ -368,6 +385,19 @@ async function renderData(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const env = ui.env;
   const chat = ui.chat;
   const previousMid = await getState(env, "panel_mid", "");
+  const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
+
+  if (id !== "p_report") {
+    let out;
+    if (id === "p_status") out = fmtStatus(await api(ui, "/api/status"));
+    else if (id === "p_queue") out = fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary"));
+    else out = "🤖 **دفتر سهمیهٔ هوش مصنوعی**\n\n" + await aiBlock(ui);
+
+    if (fresh) return sendFreshPanel(ui, out, refreshKb(id), previousMid);
+    if (targetMid) return edit(env, chat, targetMid, out, refreshKb(id));
+    return send(env, chat, out, refreshKb(id));
+  }
+
   let mid;
   if (fresh || !previousMid) {
     const response = fresh
@@ -375,25 +405,17 @@ async function renderData(ui, id, { fresh = false, clickedMid = "" } = {}) {
       : await send(env, chat, "⏳ در حال دریافت…", refreshKb(id));
     mid = responseMessageId(response);
   } else {
-    const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
     mid = await edit(env, chat, targetMid, "⏳ در حال دریافت…", refreshKb(id));
   }
 
-  let out;
-  if (id === "p_status") out = fmtStatus(await api(ui, "/api/status"));
-  else if (id === "p_queue") out = fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary"));
-  else if (id === "p_ai") out = "🤖 **دفتر سهمیهٔ هوش مصنوعی**\n\n" + await aiBlock(ui);
-  else {
-    const parts = ["🧾 **گزارش Rubika-Agent**"];
-    mid = await edit(env, chat, mid, "⏳ ۱ از ۳ — وضعیت Worker…", refreshKb(id));
-    parts.push(fmtStatus(await api(ui, "/api/status")));
-    mid = await edit(env, chat, mid, "⏳ ۲ از ۳ — صف انتشار…", refreshKb(id));
-    parts.push(fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary")));
-    mid = await edit(env, chat, mid, "⏳ ۳ از ۳ — هوش مصنوعی…", refreshKb(id));
-    parts.push(await aiBlock(ui));
-    out = parts.join("\n\n");
-  }
-  await edit(env, chat, mid, out, refreshKb(id));
+  const parts = ["🧾 **گزارش Rubika-Agent**"];
+  mid = await edit(env, chat, mid, "⏳ ۱ از ۳ — وضعیت Worker…", refreshKb(id));
+  parts.push(fmtStatus(await api(ui, "/api/status")));
+  mid = await edit(env, chat, mid, "⏳ ۲ از ۳ — صف انتشار…", refreshKb(id));
+  parts.push(fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary")));
+  mid = await edit(env, chat, mid, "⏳ ۳ از ۳ — هوش مصنوعی…", refreshKb(id));
+  parts.push(await aiBlock(ui));
+  await edit(env, chat, mid, parts.join("\n\n"), refreshKb(id));
 }
 
 async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
@@ -448,43 +470,49 @@ async function tryClaim(env, ev) {
 const idTail = (value) => String(value ?? "").slice(-4);
 async function processEvent(env, selfFetch, origin, ev) {
   if (!ev) return;
-  const owner = await getOwner(env);
+  const timing = { startedAt: performance.now(), rubika_calls: 0, rubika_ms: 0, d1_ms: 0 };
+  const receivedAt = Date.now();
+  const timedEnv = withPanelTiming(env, timing);
+  const owner = await getOwner(timedEnv);
   if (!owner) {
-    if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev)) await tryClaim(env, ev);
+    if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev)) await tryClaim(timedEnv, ev);
     return;
   }
   if (!safeEqual(owner, ev.chat)) return;
-  const lastEvent = {
-    kind: clean(ev.kind, 16) || "unknown",
-    types: Array.isArray(ev.types) ? ev.types.slice(0, 4).map((value) => clean(value, 24)).filter(Boolean) : [],
-    chat_tail: idTail(ev.chat),
-    message_id_tail: idTail(ev.mid),
-    button: clean(ev.button, 60),
-    botAuthored: ev.botAuthored === true,
-  };
-  try { await setState(env, "last_event", JSON.stringify(lastEvent)); } catch { /* diagnostics must not block owner commands */ }
-  if (ev.botAuthored || !isPrivateChat(ev)) return;
-  const key = ev.kind === "click"
-    ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
-    : "t|" + ev.chat + "|" + ev.mid;
-  if (!(await firstSeen(env, key))) return;
-  const ui = { env, chat: ev.chat, selfFetch, origin };
+  const msgAge = messageAgeSeconds(ev.time, receivedAt);
   try {
+    const lastEvent = {
+      kind: clean(ev.kind, 16) || "unknown",
+      types: Array.isArray(ev.types) ? ev.types.slice(0, 4).map((value) => clean(value, 24)).filter(Boolean) : [],
+      chat_tail: idTail(ev.chat),
+      message_id_tail: idTail(ev.mid),
+      button: clean(ev.button, 60),
+      botAuthored: ev.botAuthored === true,
+    };
+    try { await setState(timedEnv, "last_event", JSON.stringify(lastEvent)); } catch { /* diagnostics must not block owner commands */ }
+    if (ev.botAuthored || !isPrivateChat(ev)) return;
+    const key = ev.kind === "click"
+      ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
+      : "t|" + ev.chat + "|" + ev.mid;
+    if (!(await firstSeen(timedEnv, key))) return;
+    const ui = { env: timedEnv, chat: ev.chat, selfFetch, origin };
     if (ev.kind === "click") { await render(ui, ev.button, { clickedMid: ev.mid }); return; }
     const word = ev.text.split(/\s+/)[0].split("@")[0].toLowerCase();
-    if (word === "/register") { await registerWebhook(env, origin); await send(env, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
+    if (word === "/register") { await registerWebhook(timedEnv, origin); await send(timedEnv, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
     if (COMMANDS[word]) { await render(ui, COMMANDS[word], { fresh: true }); return; }
-    if ((await getState(env, "mode", "idle")) === "waiting_link") {
+    if ((await getState(timedEnv, "mode", "idle")) === "waiting_link") {
       const link = parseXLink(ev.text);
-      if (!link) { await send(env, ev.chat, "لینک معتبر نیست. شکل درست: x.com/نام/status/شناسه", CANCEL_KB); return; }
-      await env.DB.prepare("INSERT OR IGNORE INTO panel_links(url) VALUES(?)").bind(link).run();
-      await setState(env, "mode", "idle");
-      await send(env, ev.chat, "✅ لینک ذخیره شد:\n" + String.fromCharCode(96) + link + String.fromCharCode(96) + "\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.", HOME_KB);
+      if (!link) { await send(timedEnv, ev.chat, "لینک معتبر نیست. شکل درست: x.com/نام/status/شناسه", CANCEL_KB); return; }
+      await timedEnv.DB.prepare("INSERT OR IGNORE INTO panel_links(url) VALUES(?)").bind(link).run();
+      await setState(timedEnv, "mode", "idle");
+      await send(timedEnv, ev.chat, "✅ لینک ذخیره شد:\n" + String.fromCharCode(96) + link + String.fromCharCode(96) + "\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.", HOME_KB);
       return;
     }
-    await send(env, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
+    await send(timedEnv, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
   } catch (e) {
-    try { await send(env, ev.chat, "❌ خطا: " + esc(e && e.code || "unknown"), BACK_KB); } catch { /* ignore */ }
+    try { await send(timedEnv, ev.chat, "❌ خطا: " + esc(e && e.code || "unknown"), BACK_KB); } catch { /* ignore */ }
+  } finally {
+    await recordPanelTiming(timedEnv, timing, msgAge);
   }
 }
 
