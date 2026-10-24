@@ -218,9 +218,12 @@ const getOwner = async (env) => (await env.DB.prepare("SELECT chat_id FROM panel
 const hasOwnerAccess = async (env, chatId, primaryOwner) => {
   try {
     const row = await env.DB.prepare("SELECT id FROM console_owners WHERE chat_id = ? AND enabled = 1").bind(chatId).first();
-    return Boolean(row);
+    if (row) return true;
+    const known = await env.DB.prepare("SELECT id, enabled FROM console_owners WHERE chat_id = ?").bind(chatId).first();
+    if (known) return false;
+    // Keep the legacy singleton owner usable until migration 0010 has populated console_owners.
+    return safeEqual(primaryOwner || "", chatId);
   } catch {
-    // Keep the existing singleton owner usable until migration 0010 is applied.
     return safeEqual(primaryOwner || "", chatId);
   }
 };
