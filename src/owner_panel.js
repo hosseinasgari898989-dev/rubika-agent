@@ -6,6 +6,8 @@ const MAX_BODY = 64 * 1024;
 const PRIVATE_TYPES = new Set(["private", "privatechat", "user", "userchat", "personal"]);
 const X_LINK = /https?:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/([A-Za-z0-9_]{1,15})\/status\/([0-9]{15,22})/i;
 const te = new TextEncoder();
+const PANEL_TIMING = Symbol("panel_timing");
+const elapsedMs = (startedAt) => Math.max(0, Math.round(performance.now() - startedAt));
 
 export class PanelError extends Error {
   constructor(code) {
@@ -97,6 +99,7 @@ export function normalize(body) {
   return {
     kind, chat: typeof chat === "string" ? chat : "", mid: typeof m.message_id === "string" ? m.message_id : "",
     text: typeof m.text === "string" ? m.text.trim().slice(0, 3400) : "", button, types,
+    time: typeof m.time === "number" && Number.isFinite(m.time) ? m.time : null,
     isGroupish: [u, m, u.chat].some((o) => bad(o, "is_group") || bad(o, "is_channel")),
     botAuthored: String(m.sender_type || u.sender_type || "").toLowerCase() === "bot"
       || [u, m].some((o) => bad(o, "is_bot") || bad(o, "is_self") || bad(o, "is_me")),
@@ -117,21 +120,28 @@ export function parseXLink(text) {
 // ---------- Rubika Bot API (token never appears in errors/logs)
 async function rubika(env, method, payload) {
   const methodName = String(method || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "unknown";
-  let res;
+  const timing = env && env[PANEL_TIMING];
+  if (timing) timing.rubika_calls += 1;
+  const startedAt = performance.now();
   try {
-    res = await fetch(RUBIKA_API + "/" + env.RUBIKA_TOKEN + "/" + method, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-    });
-  } catch { throw new PanelError("rubika_" + methodName + "_network"); }
-  let data = null;
-  try { data = await res.json(); } catch { /* ignore */ }
-  if (!res.ok || !data || data.status !== "OK") {
-    const statusCode = res.ok
-      ? String(data && data.status || "bad").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30)
-      : "http_" + res.status;
-    throw new PanelError("rubika_" + methodName + "_" + statusCode);
+    let res;
+    try {
+      res = await fetch(RUBIKA_API + "/" + env.RUBIKA_TOKEN + "/" + method, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
+    } catch { throw new PanelError("rubika_" + methodName + "_network"); }
+    let data = null;
+    try { data = await res.json(); } catch { /* ignore */ }
+    if (!res.ok || !data || data.status !== "OK") {
+      const statusCode = res.ok
+        ? String(data && data.status || "bad").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30)
+        : "http_" + res.status;
+      throw new PanelError("rubika_" + methodName + "_" + statusCode);
+    }
+    return data;
+  } finally {
+    if (timing) timing.rubika_ms += elapsedMs(startedAt);
   }
-  return data;
 }
 const responseMessageId = (response) => {
   const mid = response && response.data && response.data.message_id;
@@ -203,6 +213,81 @@ const getState = async (env, k, d) => (await env.DB.prepare("SELECT value FROM p
 const setState = (env, k, v) => env.DB.prepare(
   "INSERT INTO panel_state(key,value,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
 ).bind(k, String(v)).run();
+
+function timedStatement(statement, timing) {
+  return new Proxy(statement, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target);
+      if (property === "bind" && typeof value === "function") {
+        return (...args) => timedStatement(value.apply(target, args), timing);
+      }
+      if (["first", "run", "all", "raw", "exec"].includes(String(property)) && typeof value === "function") {
+        return async (...args) => {
+          const startedAt = performance.now();
+          try { return await value.apply(target, args); }
+          finally { timing.d1_ms += elapsedMs(startedAt); }
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+function withPanelTiming(env, timing) {
+  const scoped = Object.create(env);
+  Object.defineProperty(scoped, PANEL_TIMING, { value: timing });
+  if (env.DB) {
+    const db = env.DB;
+    Object.defineProperty(scoped, "DB", {
+      value: new Proxy(db, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target);
+          if (property === "prepare" && typeof value === "function") {
+            return (...args) => timedStatement(value.apply(target, args), timing);
+          }
+          if (["batch", "exec"].includes(String(property)) && typeof value === "function") {
+            return async (...args) => {
+              const startedAt = performance.now();
+              try { return await value.apply(target, args); }
+              finally { timing.d1_ms += elapsedMs(startedAt); }
+            };
+          }
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }),
+    });
+  }
+  return scoped;
+}
+function messageAgeSeconds(messageTime, receivedAt) {
+  if (typeof messageTime !== "number" || !Number.isFinite(messageTime)) return null;
+  const messageMs = Math.abs(messageTime) >= 1e12 ? messageTime : messageTime * 1000;
+  const age = (receivedAt - messageMs) / 1000;
+  return Number.isFinite(age) ? Math.round(age * 1000) / 1000 : null;
+}
+async function recordPanelTiming(env, timing, msgAge) {
+  try {
+    const raw = await getState(env, "last_timings", "[]");
+    let history = [];
+    try { history = JSON.parse(raw); } catch { /* discard malformed prior diagnostics */ }
+    if (!Array.isArray(history)) history = [];
+    history = history.filter((item) => item && typeof item === "object" && !Array.isArray(item))
+      .map((item) => ({
+        msg_age_s: typeof item.msg_age_s === "number" && Number.isFinite(item.msg_age_s) ? item.msg_age_s : null,
+        total_ms: Number.isFinite(item.total_ms) && item.total_ms >= 0 ? item.total_ms : 0,
+        rubika_calls: Number.isSafeInteger(item.rubika_calls) && item.rubika_calls >= 0 ? item.rubika_calls : 0,
+        rubika_ms: Number.isFinite(item.rubika_ms) && item.rubika_ms >= 0 ? item.rubika_ms : 0,
+        d1_ms: Number.isFinite(item.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
+      })).slice(-4);
+    const row = {
+      msg_age_s: msgAge,
+      total_ms: elapsedMs(timing.startedAt),
+      rubika_calls: timing.rubika_calls,
+      rubika_ms: timing.rubika_ms,
+      d1_ms: timing.d1_ms,
+    };
+    await setState(env, "last_timings", JSON.stringify([...history, row].slice(-5)));
+  } catch { /* diagnostics must never break owner commands */ }
+}
 async function firstSeen(env, key) {
   const r = await env.DB.prepare("INSERT OR IGNORE INTO panel_events(event_key) VALUES(?)").bind(key).run();
   if (Math.random() < 0.05) await env.DB.prepare("DELETE FROM panel_events WHERE created_at < datetime('now','-2 days')").run();
