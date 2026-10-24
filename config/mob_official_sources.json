@@ -99,6 +99,7 @@
     "never_claim_first_source_without_comparable_timestamps": true
   },
   "publishing": {
+    "since_utc": "2026-10-20T00:00:00Z",
     "enabled": true,
     "mode": "production",
     "target_channel_guid": "c0EFohK0f3174377fb6fa422d3ccb230",
