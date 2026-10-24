@@ -104,6 +104,37 @@ class FakeStatement {
     if (this.sql.includes("FROM automation_queue WHERE id = ?")) {
       return this.db.automationQueue.get(this.values[0]) || null;
     }
+    if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
+      const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
+      if (!row || (this.sql.includes("AND enabled = 1") && Number(row.enabled) !== 1)) return null;
+      return { ...row };
+    }
+    if (this.sql.includes("FROM console_owners WHERE id = ?")) {
+      const row = this.db.consoleOwners.get(Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS total FROM console_owners WHERE role = 'owner' AND enabled = 1")) {
+      return { total: [...this.db.consoleOwners.values()].filter(row => row.role === "owner" && Number(row.enabled) === 1).length };
+    }
+    if (this.sql.includes("FROM console_rules WHERE id = 1")) {
+      return this.db.consoleRules ? { ...this.db.consoleRules } : null;
+    }
+    if (this.sql.includes("FROM console_channels WHERE rubika_channel_id = ?")) {
+      const row = [...this.db.consoleChannels.values()].find(item => item.rubika_channel_id === this.values[0]);
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_channels WHERE id = ?")) {
+      const row = this.db.consoleChannels.get(Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_owner_invites WHERE code_hash = ?")) {
+      const row = [...this.db.consoleInvites.values()].find(item => item.code_hash === this.values[0] && item.used_at == null && item.expires_at > (this.values[1] || ""));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE id = ?")) {
+      const row = this.db.consoleJobs.get(this.values[0]);
+      return row ? { ...row } : null;
+    }
     return null;
   }
   async all() {
@@ -156,11 +187,90 @@ class FakeStatement {
       const offset = this.sql.includes("WHERE platform = ?") ? this.values[2] : this.values[1];
       return { results: filtered.slice(offset, offset + limit) };
     }
+    if (this.sql.includes("FROM console_owners ORDER BY id")) {
+      return { results: [...this.db.consoleOwners.values()].sort((a, b) => a.id - b.id).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM console_channels ORDER BY id")) {
+      return { results: [...this.db.consoleChannels.values()].sort((a, b) => a.id - b.id).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM console_jobs ORDER BY created_at DESC LIMIT ?")) {
+      return { results: [...this.db.consoleJobs.values()].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, this.values[0]).map(row => ({ ...row })) };
+    }
     return { results: [] };
   }
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("INSERT INTO console_owners (chat_id, label, role, enabled, claimed_at, last_seen_at) VALUES")) {
+      if ([...this.db.consoleOwners.values()].some(row => row.chat_id === v[0])) return { meta: { changes: 0 } };
+      const id = this.db.nextConsoleOwnerId++;
+      const row = { id, chat_id: v[0], label: v[1], role: v[2], enabled: Number(v[3]), claimed_at: v[4] || new Date().toISOString(), last_seen_at: v[5] || null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      this.db.consoleOwners.set(id, row);
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("INSERT OR IGNORE INTO console_owners")) {
+      if ([...this.db.consoleOwners.values()].some(row => row.chat_id === v[0])) return { meta: { changes: 0 } };
+      const id = this.db.nextConsoleOwnerId++;
+      this.db.consoleOwners.set(id, { id, chat_id: v[0], label: "مالک اصلی", role: "owner", enabled: 1, claimed_at: new Date().toISOString(), last_seen_at: new Date().toISOString(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("UPDATE console_owners SET")) {
+      const id = Number(v[v.length - 1]);
+      const row = this.db.consoleOwners.get(id);
+      if (!row) return { meta: { changes: 0 } };
+      const setPart = sql.slice(sql.indexOf(" SET ") + 5, sql.indexOf(" WHERE id = ?"));
+      let vi = 0;
+      for (const assignment of setPart.split(",")) {
+        const key = assignment.split("=")[0].trim();
+        if (assignment.includes("?")) row[key] = v[vi++];
+        else if (key === "updated_at") row.updated_at = new Date().toISOString();
+      }
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("DELETE FROM console_owners WHERE id = ?")) {
+      return { meta: { changes: this.db.consoleOwners.delete(Number(v[0])) ? 1 : 0 } };
+    }
+    if (sql.startsWith("INSERT INTO console_owner_invites")) {
+      const id = this.db.nextConsoleInviteId++;
+      const row = { id, code_hash: v[0], expires_at: v[1], created_at: new Date().toISOString(), used_at: null, used_by: null };
+      this.db.consoleInvites.set(id, row);
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("UPDATE console_owner_invites SET used_at")) {
+      const row = this.db.consoleInvites.get(Number(v[2]));
+      if (!row || row.used_at || row.expires_at <= v[3]) return { meta: { changes: 0 } };
+      Object.assign(row, { used_at: v[0], used_by: v[1] });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE console_rules SET version = version + 1")) {
+      const [rulesJson, updatedAt, baseVersion] = v;
+      if (!this.db.consoleRules || Number(this.db.consoleRules.version) !== Number(baseVersion)) return { meta: { changes: 0 } };
+      Object.assign(this.db.consoleRules, { version: Number(baseVersion) + 1, rules_json: rulesJson, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO console_channels")) {
+      if ([...this.db.consoleChannels.values()].some(row => row.rubika_channel_id === v[1])) return { meta: { changes: 0 } };
+      const id = this.db.nextConsoleChannelId++;
+      const row = { id, label: v[0], rubika_channel_id: v[1], role: v[2], enabled: Number(v[3]), created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      this.db.consoleChannels.set(id, row);
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("DELETE FROM console_channels WHERE id = ?")) {
+      return { meta: { changes: this.db.consoleChannels.delete(Number(v[0])) ? 1 : 0 } };
+    }
+    if (sql.startsWith("INSERT INTO console_jobs")) {
+      const row = { id: v[0], type: v[1], status: "queued", progress: 0, params_json: v[2], result_json: null, error: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      this.db.consoleJobs.set(row.id, row);
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO brain_events") && sql.includes("SELECT NULL")) {
+      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
+      let code = null, details = null;
+      if (sql.includes("'console_owner_claim'")) { code = "console_owner_claim"; details = v[0]; }
+      else { code = v[0]; details = v[1]; }
+      this.db.events.push({ item_id: null, level: "info", code, details_json: details, created_at: new Date().toISOString(), sql });
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("UPDATE owner_console_state SET offset_id")) {
       if (!this.db.ownerConsoleState) return { meta: { changes: 0 } };
       Object.assign(this.db.ownerConsoleState, { offset_id: v[0], updated_at: v[1] });
@@ -317,12 +427,31 @@ class FakeDB {
     this.ownerConsoleState = { id: 1, offset_id: null, updated_at: null };
     this.ownerConsoleUpdates = new Map();
     this.queueStateRepairCalls = 0;
+    this.consoleOwners = new Map();
+    this.nextConsoleOwnerId = 1;
+    this.consoleInvites = new Map();
+    this.nextConsoleInviteId = 1;
+    this.consoleRules = {
+      id: 1, version: 1,
+      rules_json: JSON.stringify({ publishing_enabled: false, test_channel_only: true, daily_success_cap: 4, daily_edit_count: 6, mob_posts_per_run: 1, mob_since_cutoff: "", freshness_hours: 24, ai_provider_order: ["groq", "openrouter"], ai_daily_limit_groq: 200, ai_daily_limit_openrouter: 50, translate_enabled: true, quiet_hours: { start: "00:30", end: "07:00" }, caption_max_chars: 900, digest_window_utc: "07:05" }),
+      updated_at: new Date().toISOString(),
+    };
+    this.consoleChannels = new Map();
+    this.nextConsoleChannelId = 1;
+    this.consoleJobs = new Map();
+    this.lastChanges = 0;
   }
   prepare(sql) {
     return new FakeStatement(this, sql);
   }
   async batch(statements) {
-    return Promise.all(statements.map(statement => statement.run()));
+    const results = [];
+    for (const statement of statements) {
+      const result = await statement.run();
+      this.lastChanges = Number(result?.meta?.changes || 0);
+      results.push(result);
+    }
+    return results;
   }
 }
 
