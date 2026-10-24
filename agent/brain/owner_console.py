@@ -862,7 +862,6 @@ class OperationsConsole:
     def process_update(
         self,
         update: Mapping[str, Any],
-        *,
     ) -> str:
         _log_update_diagnostic(update)
         if not self.owner_chat_id:
