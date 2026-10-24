@@ -74,7 +74,7 @@ const BACK_KB = kb([[["🏠 منوی اصلی", "p_home"]]]);
 const CANCEL_KB = kb([[["✖️ لغو", "p_home"]]]);
 const refreshKb = (id) => kb([[["🔄 تازه‌سازی", id], ["🏠 منوی اصلی", "p_home"]]]);
 const HOME_TEXT = "🤖 **پنل مدیریت Rubika-Agent**\n\nیکی از بخش‌ها را انتخاب کن:";
-const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه فقط گزارش می‌دهد و لینک X را ذخیره می‌کند. بخش‌های بعدی مرحله‌به‌مرحله اضافه می‌شوند.";
+const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /debug: خطای آخر و مشخصات امن رویداد آخر\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه فقط گزارش می‌دهد و لینک X را ذخیره می‌کند. بخش‌های بعدی مرحله‌به‌مرحله اضافه می‌شوند.";
 
 // ---------- event normalisation (webhook shapes: {update}, {inline_message}, or a bare update)
 const bad = (o, k) => o && typeof o === "object" && o[k] === true;
@@ -116,35 +116,52 @@ export function parseXLink(text) {
 
 // ---------- Rubika Bot API (token never appears in errors/logs)
 async function rubika(env, method, payload) {
+  const methodName = String(method || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "unknown";
   let res;
   try {
-    res = await fetch(`${RUBIKA_API}/${env.RUBIKA_TOKEN}/${method}`, {
+    res = await fetch(RUBIKA_API + "/" + env.RUBIKA_TOKEN + "/" + method, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
     });
-  } catch { throw new PanelError("rubika_network"); }
+  } catch { throw new PanelError("rubika_" + methodName + "_network"); }
   let data = null;
   try { data = await res.json(); } catch { /* ignore */ }
   if (!res.ok || !data || data.status !== "OK") {
-    throw new PanelError(res.ok ? `rubika_${String(data && data.status || "bad").toLowerCase()}` : `rubika_http_${res.status}`);
+    const statusCode = res.ok
+      ? String(data && data.status || "bad").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30)
+      : "http_" + res.status;
+    throw new PanelError("rubika_" + methodName + "_" + statusCode);
   }
   return data;
 }
 async function send(env, chat, src, keypad) {
   const f = md(src);
+  const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
+    keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
   return rubika(env, "sendMessage", {
-    chat_id: chat, text: f.text, ...(f.metadata ? { metadata: f.metadata } : {}), ...(keypad ? { inline_keypad: keypad } : {}),
+    chat_id: chat, text: f.text, ...(f.metadata ? { metadata: f.metadata } : {}),
+    ...(hasKeypad ? { inline_keypad: keypad } : {}),
   });
 }
+const responseMessageId = (response) => {
+  const mid = response && response.data && response.data.message_id;
+  if (typeof mid !== "string" || !mid) throw new PanelError("rubika_sendmessage_no_message_id");
+  return mid;
+};
 async function edit(env, chat, mid, src, keypad) {
   const f = md(src);
   const base = { chat_id: chat, message_id: mid, text: f.text };
+  const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
+    keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
   try {
     await rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base);
+    if (hasKeypad) await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: mid, inline_keypad: keypad });
+    return mid;
   } catch (e) {
-    if (!f.metadata) throw e;
-    await rubika(env, "editMessageText", base);
+    const code = e && typeof e.code === "string" && /^[a-z0-9_-]{1,80}$/i.test(e.code)
+      ? e.code.toLowerCase() : "panel_edit_failed";
+    try { await setState(env, "last_error", code); } catch { /* keep the response fallback available */ }
+    return responseMessageId(await send(env, chat, src, hasKeypad ? keypad : undefined));
   }
-  if (keypad) await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: mid, inline_keypad: keypad });
 }
 async function registerWebhook(env, origin) {
   const s = await hookSecret(env);
@@ -205,32 +222,52 @@ async function api(ui, path) {
 }
 const aiBlock = async (ui) => (await Promise.all(["groq", "openrouter"].map(async (p) => fmtAi(p, await api(ui, `/api/brain/ai-provider/status?provider=${p}`))))).join("\n\n");
 
-async function renderData(ui, id, mid) {
-  const { env, chat } = ui;
-  if (!mid) {
-    const r = await send(env, chat, "⏳ در حال دریافت…");
-    mid = r.data && r.data.message_id;
-    if (!mid) throw new PanelError("rubika_no_message_id");
-  } else await edit(env, chat, mid, "⏳ در حال دریافت…", { rows: [] });
+async function debugText(env) {
+  const lastError = clean(await getState(env, "last_error", "none"), 80) || "none";
+  let event = null;
+  try { event = JSON.parse(await getState(env, "last_event", "null")); } catch { /* invalid older state */ }
+  const types = Array.isArray(event && event.types)
+    ? event.types.map((value) => clean(value, 24)).filter(Boolean).slice(0, 4).join(", ") || "none"
+    : "none";
+  return [
+    "🛠️ **Debug پنل**",
+    "",
+    "last_error: " + lastError,
+    "last_event:",
+    "kind: " + (clean(event && event.kind, 16) || "none"),
+    "types: " + types,
+    "chat_tail: " + String(event && event.chat_tail || "none").slice(-4),
+    "message_id_tail: " + String(event && event.message_id_tail || "none").slice(-4),
+    "button: " + (clean(event && event.button, 60) || "none"),
+    "botAuthored: " + (event && event.botAuthored === true ? "true" : "false"),
+  ].join("\n");
+}
+
+
+async function renderData(ui, id) {
+  const env = ui.env;
+  const chat = ui.chat;
+  let mid = responseMessageId(await send(env, chat, "⏳ در حال دریافت…"));
   let out;
   if (id === "p_status") out = fmtStatus(await api(ui, "/api/status"));
   else if (id === "p_queue") out = fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary"));
   else if (id === "p_ai") out = "🤖 **دفتر سهمیهٔ هوش مصنوعی**\n\n" + await aiBlock(ui);
   else {
     const parts = ["🧾 **گزارش Rubika-Agent**"];
-    await edit(env, chat, mid, "⏳ ۱ از ۳ — وضعیت Worker…");
+    mid = await edit(env, chat, mid, "⏳ ۱ از ۳ — وضعیت Worker…");
     parts.push(fmtStatus(await api(ui, "/api/status")));
-    await edit(env, chat, mid, "⏳ ۲ از ۳ — صف انتشار…");
+    mid = await edit(env, chat, mid, "⏳ ۲ از ۳ — صف انتشار…");
     parts.push(fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary")));
-    await edit(env, chat, mid, "⏳ ۳ از ۳ — هوش مصنوعی…");
+    mid = await edit(env, chat, mid, "⏳ ۳ از ۳ — هوش مصنوعی…");
     parts.push(await aiBlock(ui));
     out = parts.join("\n\n");
   }
   await edit(env, chat, mid, out, refreshKb(id));
 }
 
-async function render(ui, id, mid) {
-  const { env, chat } = ui;
+async function render(ui, id) {
+  const env = ui.env;
+  const chat = ui.chat;
   if (id !== "p_mob") await setState(env, "mode", "idle");
   const statics = {
     p_home: [HOME_TEXT, HOME_KB], p_help: [HELP_TEXT, BACK_KB],
@@ -238,14 +275,15 @@ async function render(ui, id, mid) {
   };
   if (id === "p_mob") await setState(env, "mode", "waiting_link");
   const s = statics[id];
-  if (s) return mid ? edit(env, chat, mid, s[0], s[1]) : send(env, chat, s[0], s[1]);
-  if (["p_status", "p_queue", "p_ai", "p_report"].includes(id)) return renderData(ui, id, mid);
-  return render(ui, "p_home", mid);
+  if (s) return send(env, chat, s[0], s[1]);
+  if (id === "p_debug") return send(env, chat, await debugText(env), BACK_KB);
+  if (["p_status", "p_queue", "p_ai", "p_report"].includes(id)) return renderData(ui, id);
+  return render(ui, "p_home");
 }
 
 const COMMANDS = {
   "/start": "p_home", "/menu": "p_home", "منو": "p_home", "/help": "p_help", "/status": "p_status",
-  "/queue": "p_queue", "/ai": "p_ai", "/ai-status": "p_ai", "/report": "p_report",
+  "/queue": "p_queue", "/ai": "p_ai", "/ai-status": "p_ai", "/report": "p_report", "/debug": "p_debug",
 };
 
 async function tryClaim(env, ev) {
@@ -265,30 +303,46 @@ async function tryClaim(env, ev) {
   await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا فقط همین چت به پنل دسترسی دارد.\n\n" + HOME_TEXT, HOME_KB);
 }
 
+const idTail = (value) => String(value ?? "").slice(-4);
 async function processEvent(env, selfFetch, origin, ev) {
-  if (!ev || ev.botAuthored || !isPrivateChat(ev)) return;
+  if (!ev) return;
   const owner = await getOwner(env);
-  if (!owner) { if (ev.kind === "text") await tryClaim(env, ev); return; }
+  if (!owner) {
+    if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev)) await tryClaim(env, ev);
+    return;
+  }
   if (!safeEqual(owner, ev.chat)) return;
-  const key = ev.kind === "click" ? `c|${ev.chat}|${ev.mid}|${ev.button}|${Math.floor(Date.now() / 4000)}` : `t|${ev.chat}|${ev.mid}`;
+  const lastEvent = {
+    kind: clean(ev.kind, 16) || "unknown",
+    types: Array.isArray(ev.types) ? ev.types.slice(0, 4).map((value) => clean(value, 24)).filter(Boolean) : [],
+    chat_tail: idTail(ev.chat),
+    message_id_tail: idTail(ev.mid),
+    button: clean(ev.button, 60),
+    botAuthored: ev.botAuthored === true,
+  };
+  try { await setState(env, "last_event", JSON.stringify(lastEvent)); } catch { /* diagnostics must not block owner commands */ }
+  if (ev.botAuthored || !isPrivateChat(ev)) return;
+  const key = ev.kind === "click"
+    ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
+    : "t|" + ev.chat + "|" + ev.mid;
   if (!(await firstSeen(env, key))) return;
   const ui = { env, chat: ev.chat, selfFetch, origin };
   try {
-    if (ev.kind === "click") { await render(ui, ev.button, ev.mid || null); return; }
+    if (ev.kind === "click") { await render(ui, ev.button); return; }
     const word = ev.text.split(/\s+/)[0].split("@")[0].toLowerCase();
     if (word === "/register") { await registerWebhook(env, origin); await send(env, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
-    if (COMMANDS[word]) { await render(ui, COMMANDS[word], null); return; }
+    if (COMMANDS[word]) { await render(ui, COMMANDS[word]); return; }
     if ((await getState(env, "mode", "idle")) === "waiting_link") {
       const link = parseXLink(ev.text);
       if (!link) { await send(env, ev.chat, "لینک معتبر نیست. شکل درست: x.com/نام/status/شناسه", CANCEL_KB); return; }
       await env.DB.prepare("INSERT OR IGNORE INTO panel_links(url) VALUES(?)").bind(link).run();
       await setState(env, "mode", "idle");
-      await send(env, ev.chat, `✅ لینک ذخیره شد:\n\`${link}\`\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.`, HOME_KB);
+      await send(env, ev.chat, "✅ لینک ذخیره شد:\n" + String.fromCharCode(96) + link + String.fromCharCode(96) + "\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.", HOME_KB);
       return;
     }
     await send(env, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
   } catch (e) {
-    try { await send(env, ev.chat, `❌ خطا: ${esc(e && e.code || "unknown")}`, BACK_KB); } catch { /* ignore */ }
+    try { await send(env, ev.chat, "❌ خطا: " + esc(e && e.code || "unknown"), BACK_KB); } catch { /* ignore */ }
   }
 }
 

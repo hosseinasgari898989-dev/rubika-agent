@@ -968,7 +968,7 @@ const panelEnv = () => ({
   OWNER_SETUP_CODE: "correct-setup-code",
   AGENT_API_TOKEN: TOKEN,
 });
-async function withMockRubikaFetch(fn) {
+async function withMockRubikaFetch(fn, responder = null) {
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
@@ -976,7 +976,10 @@ async function withMockRubikaFetch(fn) {
     let payload = {};
     try { payload = JSON.parse(init.body || "{}"); } catch {}
     calls.push({ method, payload });
-    return new Response(JSON.stringify({ status: "OK", data: { message_id: "mock-reply" } }), {
+    const custom = responder ? await responder({ url, init, method, payload, calls }) : null;
+    if (custom instanceof Response) return custom;
+    const messageCount = calls.filter(call => call.method === "sendMessage").length;
+    return new Response(JSON.stringify({ status: "OK", data: { message_id: "mock-reply-" + messageCount } }), {
       status: 200, headers: { "content-type": "application/json" },
     });
   };
@@ -1138,5 +1141,102 @@ async function postPanelUpdate(state, update, secret) {
   });
 }
 
-console.log("Worker tests passed: existing APIs plus owner panel UTF-16 metadata, normalization, private-owner guard, X links, constant-time equality, hidden bad-secret hook, claim/lockout, keypad and non-owner isolation.");
+// Button presses always create a separate page; staged report edits only the message created by send().
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "clicked-event-original-9876", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_report" },
+      } },
+    }, secret);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(calls.some(call => call.payload.message_id === "clicked-event-original-9876"), false);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length >= 4, true);
+    assert.equal(calls.every(call => !("message_id" in call.payload) || call.payload.message_id === "mock-reply-1"), true);
+    for (const call of calls.filter(call => call.method === "editMessageKeypad")) {
+      assert.equal(Array.isArray(call.payload.inline_keypad.rows), true);
+      assert.equal(call.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0), true);
+    }
+    const stored = state.DB.state.get("last_event");
+    assert.equal(stored.includes("b0actualowner"), false);
+    assert.equal(stored.includes("clicked-event-original-9876"), false);
+    assert.equal(stored.includes("9876"), true);
+  });
+}
+
+// Failed edits save only a safe error code and fall back to sending the exact same text and keypad.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "status-command-4321", chat_id: "b0actualowner", text: "/status",
+      } },
+    }, secret);
+    assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_edit_failed");
+    const failedEdit = calls.find(call => call.method === "editMessageText");
+    const fallbackSend = calls.filter(call => call.method === "sendMessage").at(-1);
+    assert.equal(fallbackSend.payload.text, failedEdit.payload.text);
+    assert.equal(Array.isArray(fallbackSend.payload.inline_keypad.rows), true);
+    assert.equal(fallbackSend.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0), true);
+    assert.equal(calls.some(call => call.method === "editMessageKeypad" &&
+      (!call.payload.inline_keypad.rows.length ||
+       !call.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0))), false);
+  }, ({ method }) => method === "editMessageText"
+    ? new Response(JSON.stringify({ status: "EDIT_FAILED" }), { status: 200 })
+    : null);
+}
+
+// HTTP failures from the edit API include both the method and HTTP status in last_error.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "status-command-3322", chat_id: "b0actualowner", text: "/status",
+      } },
+    }, secret);
+    assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_http_503");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 2);
+  }, ({ method }) => method === "editMessageText"
+    ? new Response(JSON.stringify({ status: "UNAVAILABLE" }), { status: 503 })
+    : null);
+}
+
+// /debug is owner-only and prints only error codes and last-four-character identifier tails.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("last_error", "rubika_editmessagetext_http_503");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "private-debug-message-1234", chat_id: "b0actualowner", text: "/debug",
+      } },
+    }, secret);
+    const stored = state.DB.state.get("last_event");
+    assert.equal(stored.includes("b0actualowner"), false);
+    assert.equal(stored.includes("private-debug-message-1234"), false);
+    assert.equal(stored.includes("/debug"), false);
+    assert.equal(stored.includes("wner"), true);
+    assert.equal(stored.includes("1234"), true);
+    const debugSend = calls.find(call => call.method === "sendMessage");
+    assert.equal(debugSend.payload.text.includes("rubika_editmessagetext_http_503"), true);
+    assert.equal(debugSend.payload.text.includes("chat_tail: wner"), true);
+    assert.equal(debugSend.payload.text.includes("message_id_tail: 1234"), true);
+    assert.equal(debugSend.payload.text.includes("b0actualowner"), false);
+    assert.equal(debugSend.payload.text.includes("private-debug-message-1234"), false);
+  });
+}
+
+console.log("Worker tests passed: existing APIs plus owner-panel metadata, safe event diagnostics, click-safe page rendering, edit fallback, method-specific errors, debug output and owner isolation.");
 
