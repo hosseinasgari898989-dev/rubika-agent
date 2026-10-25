@@ -1,0 +1,143 @@
+name: Mob X owner-link processor
+
+on:
+  push:
+    branches:
+      - feature/mob-x-link-processor-20261025
+    paths:
+      - ".github/workflows/mob-x-link-processor.yml"
+      - "agent/brain/mob_x_link_processor.py"
+  pull_request:
+    paths:
+      - ".github/workflows/mob-x-link-processor.yml"
+      - "agent/brain/mob_x_link_processor.py"
+      - "tests/test_mob_x_link_processor.py"
+      - "src/console_api.js"
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mob-x-link-processor
+  cancel-in-progress: false
+
+jobs:
+  public-api-probe:
+    name: Read-only free X API probe
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install probe dependency
+        run: python -m pip install --disable-pip-version-check "requests>=2.31,<3"
+      - name: Test free keyless metadata endpoints
+        run: python -m agent.brain.mob_x_link_processor --probe --external-id 2107878755079213476
+
+  process-one-confirmed-link:
+    name: Claim and stage one confirmed link
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout main safely
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Check required existing secret names without printing values
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in AGENT_API_TOKEN MEGA_EMAIL MEGA_PASSWORD; do
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::Missing repository Actions secret name(s): %s. Values were not read or printed by this check.\n' "${missing[*]}"
+            exit 2
+          fi
+      - name: Install ffmpeg and official MEGAcmd package
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/megacmd-xUbuntu_24.04_amd64.deb"
+          curl --fail --silent --show-error --location \
+            "https://mega.nz/linux/repo/xUbuntu_24.04/amd64/megacmd-xUbuntu_24.04_amd64.deb" \
+            --output "$package"
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg "$package"
+          command -v mega-login
+          command -v mega-put
+      - name: Log in to existing MEGA storage
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          mega-whoami >/dev/null
+          echo "MEGA login verified; account details are not printed."
+      - name: Claim and process at most one owner link
+        id: process
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          python -m agent.brain.mob_x_link_processor --process-one --report "$RUNNER_TEMP/mob-x-link-report.json"
+      - name: Notify owner once when a claimed job fails
+        if: ${{ failure() }}
+        continue-on-error: true
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+          RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          reason="required_secret_missing"
+          if [ -s "$RUNNER_TEMP/mob-x-link-report.json" ]; then
+            reason="$(python - "$RUNNER_TEMP/mob-x-link-report.json" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          try:
+              value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              candidate = str(value.get("error_code") or "mob_x_processing_failed")
+              print(candidate if re.fullmatch(r"[a-z0-9_-]{1,80}", candidate) else "mob_x_processing_failed")
+          except Exception:
+              print("mob_x_processing_failed")
+          PY
+          )"
+          fi
+          python -m agent.brain.owner_notify --event workflow_failed --workflow "Mob X link processor" --reason "$reason" || {
+            echo "Owner notification unavailable; safe error code: $reason"
+          }
+      - name: Log out of MEGA
+        if: always()
+        run: |
+          mega-logout >/dev/null 2>&1 || true
+          mega-quit >/dev/null 2>&1 || true
