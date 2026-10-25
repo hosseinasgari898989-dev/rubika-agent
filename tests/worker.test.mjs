@@ -345,6 +345,40 @@ class FakeStatement {
       Object.assign(link, { status, updated_at: updatedAt });
       return { meta: { changes: 1 } };
     }
+    if (sql.startsWith("UPDATE console_jobs SET status = 'processing'")) {
+      const [updatedAt, jobId, panelLinkId, existsLinkId] = v;
+      const job = this.db.consoleJobs.get(jobId);
+      const link = this.db.panelLinks.get(Number(panelLinkId));
+      if (!job || job.type !== "mob_x_link" || Number(job.panel_link_id) !== Number(panelLinkId) ||
+          !["confirmed", "queued"].includes(job.status) || Number(existsLinkId) !== Number(panelLinkId) ||
+          !link || !["confirmed", "queued"].includes(link.status)) return { meta: { changes: 0 } };
+      Object.assign(job, { status: "processing", progress: 10, error: null, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE panel_links SET status = 'processing'")) {
+      const [updatedAt, linkId] = v;
+      const link = this.db.panelLinks.get(Number(linkId));
+      if (Number(this.db.lastChanges || 0) <= 0 || !link || !["confirmed", "queued"].includes(link.status)) return { meta: { changes: 0 } };
+      Object.assign(link, { status: "processing", updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE console_jobs SET status = ?, progress = ?, result_json = COALESCE")) {
+      const [status, progress, resultJson, error, updatedAt, jobId] = v;
+      const job = this.db.consoleJobs.get(jobId);
+      if (!job || job.type !== "mob_x_link" || job.status !== "processing") return { meta: { changes: 0 } };
+      Object.assign(job, { status, progress, result_json: resultJson == null ? job.result_json : resultJson, error, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE panel_links SET status = ?, updated_at = ? WHERE id = (SELECT panel_link_id")) {
+      const [status, updatedAt, jobId, requiredStatus] = v;
+      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
+      const job = this.db.consoleJobs.get(jobId);
+      if (!job || job.status !== requiredStatus || job.panel_link_id == null) return { meta: { changes: 0 } };
+      const link = this.db.panelLinks.get(Number(job.panel_link_id));
+      if (!link) return { meta: { changes: 0 } };
+      Object.assign(link, { status, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("UPDATE panel_links SET status = 'confirmed'")) {
       const row = this.db.panelLinks.get(Number(v[0]));
       if (!row || !["pending", "confirmed"].includes(row.status)) return { meta: { changes: 0 } };
@@ -2449,6 +2483,55 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     method: "POST", body: { status: "sent" },
   }), state));
   assert.equal(response.status, 400, "stage two must never transition a job directly to sent");
+}
+
+// The scheduled processor claims one Mob X job and can only transition it to pending review or failure.
+{
+  const state = env();
+  const externalId = "2107878755079213476";
+  const linkId = 1;
+  state.DB.panelLinks.set(linkId, {
+    id: linkId, url: "https://x.com/mobgamesstudios/status/" + externalId,
+    external_id: externalId, status: "confirmed", created_at: new Date().toISOString(),
+  });
+  state.DB.consoleJobs.set("job_abcdef1234567890", {
+    id: "job_abcdef1234567890", type: "mob_x_link", status: "confirmed",
+    progress: 0, params_json: JSON.stringify({ url: "https://x.com/mobgamesstudios/status/" + externalId, panel_link_id: linkId }),
+    result_json: null, error: null, panel_link_id: linkId, created_at: new Date().toISOString(),
+  });
+
+  let response = await read(await worker.fetch(request("/api/console/mob-x/claim", { method: "POST", body: {} }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.claimed, true);
+  assert.equal(response.body.job.status, "processing");
+  assert.equal(response.body.job.external_id, externalId);
+  assert.equal(response.body.job.params.panel_link_id, linkId);
+  assert.equal(state.DB.panelLinks.get(linkId).status, "processing");
+  assert.equal(state.DB.consoleJobs.get("job_abcdef1234567890").status, "processing");
+
+  response = await read(await worker.fetch(request("/api/console/mob-x/claim", { method: "POST", body: {} }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.claimed, false, "processing jobs cannot be claimed twice");
+
+  const ready = {
+    item_id: "mob_official:" + externalId, external_id: externalId, title: "Official Mob test post",
+    media_type: "image", caption: "کپشن ساده", original_caption: "Original caption",
+    persian_translation: "کپشن ساده", storage_key: "/Rubika-Agent/official/test.jpg",
+    source_tier: "official", review_state: "pending", publishing_attempted: false,
+  };
+  response = await read(await worker.fetch(request("/api/console/mob-x/jobs/job_abcdef1234567890/transition", {
+    method: "POST", body: { status: "ready_for_review", result: ready },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "ready_for_review");
+  assert.equal(state.DB.consoleJobs.get("job_abcdef1234567890").status, "ready_for_review");
+  assert.equal(state.DB.panelLinks.get(linkId).status, "ready_for_review");
+  assert.equal(JSON.parse(state.DB.consoleJobs.get("job_abcdef1234567890").result_json).publishing_attempted, false);
+
+  response = await read(await worker.fetch(request("/api/console/mob-x/jobs/job_abcdef1234567890/transition", {
+    method: "POST", body: { status: "sent" },
+  }), state));
+  assert.equal(response.status, 400, "processor cannot mark a post sent");
 }
 
 // Jobs are durable queue records only: creating one does not run a worker, workflow, or publisher.
