@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from agent.brain.mob_x_rubika import (
+    TEST_CHANNEL_GUID,
     owner_preview_keypad,
-    send_file_once,
     send_owner_preview,
     send_test_channel_once,
     send_uncertain_notice,
@@ -75,11 +75,23 @@ class MobXRubikaTests(unittest.TestCase):
         def factory(**kwargs):
             holder["bot"] = RubikaMediaMock(**kwargs)
             return holder["bot"]
-        send_test_channel_once("test-token", "test-channel", "rubika-file-001", "کپشن ساده", bot_factory=factory)
+        send_test_channel_once("test-token", TEST_CHANNEL_GUID, "rubika-file-001", "کپشن ساده", bot_factory=factory)
         holder["bot"]._post.assert_called_once()
         _, payload = holder["bot"]._post.call_args.args
-        self.assertEqual(payload["chat_id"], "test-channel")
+        self.assertEqual(payload["chat_id"], TEST_CHANNEL_GUID)
         self.assertNotIn("inline_keypad", payload)
+
+    def test_non_test_channel_is_rejected_before_bot_creation(self):
+        holder = {}
+        def factory(**kwargs):
+            holder["bot"] = RubikaMediaMock(**kwargs)
+            return holder["bot"]
+        with self.assertRaisesRegex(RuntimeError, "rubika_destination_not_test_channel"):
+            send_test_channel_once(
+                "test-token", "different-channel", "rubika-file-001", "کپشن ساده",
+                bot_factory=factory,
+            )
+        self.assertNotIn("bot", holder)
 
     def test_ambiguous_send_response_raises_without_retrying(self):
         holder = {}
@@ -88,7 +100,7 @@ class MobXRubikaTests(unittest.TestCase):
             holder["bot"]._post.return_value = {"status": "ERROR", "data": {}}
             return holder["bot"]
         with self.assertRaisesRegex(RuntimeError, "rubika_send_file_response_invalid"):
-            send_file_once("test-token", "test-channel", "rubika-file-001", "caption", bot_factory=factory)
+            send_test_channel_once("test-token", TEST_CHANNEL_GUID, "rubika-file-001", "caption", bot_factory=factory)
         holder["bot"]._post.assert_called_once()
 
     def test_uncertain_notice_has_manual_confirmation_not_retry(self):

@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
+TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
+
+
 def _bot(token: str, bot_factory: Any | None = None):
     if not str(token or "").strip():
         raise RuntimeError("rubika_token_missing")
@@ -80,7 +83,7 @@ def upload_preview_media(
     return file_id.strip()
 
 
-def send_file_once(
+def _send_file_once(
     token: str, chat_id: str, file_id: str, caption: str, *,
     inline_keypad: dict | None = None, bot_factory: Any | None = None,
 ) -> str | None:
@@ -108,7 +111,7 @@ def send_owner_preview(
     token: str, owner_chat_id: str, file_id: str, caption: str, job_id: str, *,
     bot_factory: Any | None = None,
 ) -> str | None:
-    return send_file_once(
+    return _send_file_once(
         token, owner_chat_id, file_id, caption,
         inline_keypad=owner_preview_keypad(job_id), bot_factory=bot_factory,
     )
@@ -118,7 +121,9 @@ def send_test_channel_once(
     token: str, channel_guid: str, file_id: str, caption: str, *,
     bot_factory: Any | None = None,
 ) -> str | None:
-    return send_file_once(token, channel_guid, file_id, caption, bot_factory=bot_factory)
+    if str(channel_guid or "").strip() != TEST_CHANNEL_GUID:
+        raise RuntimeError("rubika_destination_not_test_channel")
+    return _send_file_once(token, TEST_CHANNEL_GUID, file_id, caption, bot_factory=bot_factory)
 
 
 def send_uncertain_notice(
