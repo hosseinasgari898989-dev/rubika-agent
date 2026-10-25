@@ -639,11 +639,8 @@ export async function handleConsoleApi(request, env, h) {
         env.DB.prepare(
           "UPDATE panel_links SET status = 'sending', updated_at = ? WHERE id = ? AND status = 'approved' AND changes() > 0"
         ).bind(now, candidate.panel_link_id),
-        env.DB.prepare(
-          "UPDATE items SET status = 'sending' WHERE id = ? AND status = 'ready' AND review_state = 'approved' AND changes() > 0"
-        ).bind(result.item_id),
       ]);
-      if (!claims?.[0]?.meta?.changes || !claims?.[2]?.meta?.changes) return json({ ok: true, claimed: false, reason: "publish_job_claimed_by_another_runner" });
+      if (!claims?.[0]?.meta?.changes) return json({ ok: true, claimed: false, reason: "publish_job_claimed_by_another_runner" });
       await audit("mob_x_publish_claim", result.item_id, { job_id: candidate.id, panel_link_id: candidate.panel_link_id });
       return json({
         ok: true, claimed: true,
@@ -681,7 +678,7 @@ export async function handleConsoleApi(request, env, h) {
           "UPDATE panel_links SET status = ?, updated_at = ? WHERE id = ? AND status = 'sending' AND changes() > 0"
         ).bind(body.status, now, row.panel_link_id),
         env.DB.prepare(
-          "UPDATE items SET status = ?, sent_at = CASE WHEN ? = 'sent' THEN ? ELSE sent_at END WHERE id = ? AND status = 'sending' AND changes() > 0"
+          "UPDATE items SET status = ?, sent_at = CASE WHEN ? = 'sent' THEN ? ELSE sent_at END WHERE id = ? AND platform = 'mob_official' AND status IN ('ready', 'uncertain') AND review_state = 'approved' AND changes() > 0"
         ).bind(body.status, body.status, now, result.item_id),
       ];
       const changed = await env.DB.batch(statements);
