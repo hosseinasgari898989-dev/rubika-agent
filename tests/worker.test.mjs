@@ -137,6 +137,18 @@ class FakeStatement {
       const row = [...this.db.consoleInvites.values()].find(item => item.code_hash === this.values[0] && item.used_at == null && item.expires_at > (this.values[1] || ""));
       return row ? { ...row } : null;
     }
+    if (this.sql.includes("FROM panel_links WHERE external_id = ?")) {
+      const row = [...this.db.panelLinks.values()].find(item => item.external_id === String(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM panel_links WHERE id = ?")) {
+      const row = this.db.panelLinks.get(Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE panel_link_id = ?")) {
+      const row = [...this.db.consoleJobs.values()].find(item => Number(item.panel_link_id) === Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
     if (this.sql.includes("FROM console_jobs WHERE id = ?")) {
       const row = this.db.consoleJobs.get(this.values[0]);
       return row ? { ...row } : null;
@@ -198,6 +210,9 @@ class FakeStatement {
     }
     if (this.sql.includes("FROM console_channels ORDER BY id")) {
       return { results: [...this.db.consoleChannels.values()].sort((a, b) => a.id - b.id).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM panel_links ORDER BY id DESC")) {
+      return { results: [...this.db.panelLinks.values()].sort((a, b) => b.id - a.id).slice(0, this.values.at(-1) || 100).map(row => ({ ...row })) };
     }
     if (this.sql.includes("FROM console_jobs ORDER BY created_at DESC LIMIT ?")) {
       return { results: [...this.db.consoleJobs.values()].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, this.values[0]).map(row => ({ ...row })) };
@@ -274,6 +289,33 @@ class FakeStatement {
     }
     if (sql.startsWith("DELETE FROM console_channels WHERE id = ?")) {
       return { meta: { changes: this.db.consoleChannels.delete(Number(v[0])) ? 1 : 0 } };
+    }
+    if (sql.startsWith("INSERT INTO panel_links (url, external_id, status)")) {
+      const [url, externalId] = v;
+      if ([...this.db.panelLinks.values()].some(row => row.external_id === String(externalId) || row.url === url)) return { meta: { changes: 0 } };
+      const id = this.db.nextPanelLinkId++;
+      this.db.panelLinks.set(id, { id, url, external_id: String(externalId), status: "pending", created_at: new Date().toISOString(), confirmed_at: null, updated_at: new Date().toISOString() });
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("UPDATE panel_links SET status = 'rejected'")) {
+      const row = this.db.panelLinks.get(Number(v[0]));
+      if (!row || row.status !== "pending") return { meta: { changes: 0 } };
+      Object.assign(row, { status: "rejected", updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE panel_links SET status = 'confirmed'")) {
+      const row = this.db.panelLinks.get(Number(v[0]));
+      if (!row || !["pending", "confirmed"].includes(row.status)) return { meta: { changes: 0 } };
+      Object.assign(row, { status: "confirmed", confirmed_at: row.confirmed_at || new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO console_jobs") && sql.includes("SELECT ?, 'mob_x_link'")) {
+      const [id, paramsJson, panelLinkId] = v;
+      const existing = [...this.db.consoleJobs.values()].find(row => Number(row.panel_link_id) === Number(panelLinkId));
+      const link = this.db.panelLinks.get(Number(panelLinkId));
+      if (existing || !link || link.status !== "confirmed") return { meta: { changes: 0 } };
+      this.db.consoleJobs.set(id, { id, type: "mob_x_link", status: "confirmed", progress: 0, params_json: paramsJson, result_json: null, error: null, panel_link_id: Number(panelLinkId), created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
     }
     if (sql.startsWith("INSERT INTO console_jobs")) {
       const row = { id: v[0], type: v[1], status: "queued", progress: 0, params_json: v[2], result_json: null, error: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
@@ -457,6 +499,8 @@ class FakeDB {
     this.consoleChannels = new Map();
     this.nextConsoleChannelId = 1;
     this.consoleJobs = new Map();
+    this.panelLinks = new Map();
+    this.nextPanelLinkId = 1;
     this.lastChanges = 0;
   }
   prepare(sql) {
@@ -1174,6 +1218,18 @@ class PanelFakeStatement {
     if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) {
       return { c: this.db.links.length };
     }
+    if (this.sql.includes("FROM panel_links WHERE external_id = ?")) {
+      const row = this.db.links.find(item => item.external_id === String(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM panel_links WHERE id = ?")) {
+      const row = this.db.links.find(item => Number(item.id) === Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE panel_link_id = ?")) {
+      const row = [...this.db.consoleJobs.values()].find(item => Number(item.panel_link_id) === Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
     if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
       const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
       if (!row || (this.sql.includes("AND enabled = 1") && Number(row.enabled) !== 1)) return null;
@@ -1188,7 +1244,7 @@ class PanelFakeStatement {
     return null;
   }
   async all() {
-    if (this.sql.includes("SELECT url, status, created_at FROM panel_links")) {
+    if (this.sql.includes("FROM panel_links ORDER BY id DESC")) {
       return { results: this.db.links.slice().reverse().slice(0, 8).map(row => ({ ...row })) };
     }
     return { results: [] };
@@ -1199,6 +1255,33 @@ class PanelFakeStatement {
       this.db.links = [];
       this.db.linkDeleteCalls += 1;
       return { meta: { changes: count } };
+    }
+    if (this.sql.startsWith("INSERT OR IGNORE INTO panel_links (url, external_id, status)")) {
+      const [url, externalId] = this.values;
+      if (this.db.links.some(row => row.external_id === String(externalId) || row.url === url)) return { meta: { changes: 0 } };
+      const id = this.db.nextPanelLinkId++;
+      this.db.links.push({ id, url, external_id: String(externalId), status: "pending", created_at: new Date().toISOString(), confirmed_at: null, updated_at: new Date().toISOString() });
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (this.sql.startsWith("UPDATE panel_links SET status = 'rejected'")) {
+      const row = this.db.links.find(item => Number(item.id) === Number(this.values[0]));
+      if (!row || row.status !== "pending") return { meta: { changes: 0 } };
+      Object.assign(row, { status: "rejected", updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("UPDATE panel_links SET status = 'confirmed'")) {
+      const row = this.db.links.find(item => Number(item.id) === Number(this.values[0]));
+      if (!row || !["pending", "confirmed"].includes(row.status)) return { meta: { changes: 0 } };
+      Object.assign(row, { status: "confirmed", confirmed_at: row.confirmed_at || new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT INTO console_jobs") && this.sql.includes("SELECT ?, 'mob_x_link'")) {
+      const [id, paramsJson, panelLinkId] = this.values;
+      const existing = [...this.db.consoleJobs.values()].find(row => Number(row.panel_link_id) === Number(panelLinkId));
+      const link = this.db.links.find(item => Number(item.id) === Number(panelLinkId));
+      if (existing || !link || link.status !== "confirmed") return { meta: { changes: 0 } };
+      this.db.consoleJobs.set(id, { id, type: "mob_x_link", status: "confirmed", progress: 0, params_json: paramsJson, result_json: null, error: null, panel_link_id: Number(panelLinkId), created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("INSERT INTO panel_state")) {
       this.db.state.set(this.values[0], String(this.values[1]));
@@ -1256,6 +1339,8 @@ class PanelFakeDB {
     this.events = new Set();
     this.links = [];
     this.linkDeleteCalls = 0;
+    this.nextPanelLinkId = 1;
+    this.consoleJobs = new Map();
     this.consoleOwners = new Map();
     this.nextConsoleOwnerId = 1;
     this.consoleInvites = new Map();
@@ -1368,11 +1453,56 @@ async function postPanelUpdate(state, update, secret) {
   assert.equal(panel.isPrivateChat(event({ types: ["group"] })), false);
 }
 
-// Link parsing canonicalises X/Twitter post URLs and rejects unrelated text.
+// Link parsing accepts only a canonical post from the exact official Mob handle.
 {
-  assert.equal(panel.parseXLink("New post https://twitter.com/Test_User/status/2107878755079213476?s=20"),
-    "https://x.com/Test_User/status/2107878755079213476");
+  assert.equal(panel.parseXLink("https://twitter.com/mobgamesstudios/status/2107878755079213476"),
+    "https://x.com/mobgamesstudios/status/2107878755079213476");
+  assert.equal(panel.parseXLink("https://www.x.com/mobgamesstudios/status/2107878755079213476/"),
+    "https://x.com/mobgamesstudios/status/2107878755079213476");
+  assert.equal(panel.parseXLink("New post https://twitter.com/mobgamesstudios/status/2107878755079213476?s=20"), null);
+  assert.equal(panel.parseXLink("https://x.com/Test_User/status/2107878755079213476"), null);
+  assert.equal(panel.parseXLink("http://x.com/mobgamesstudios/status/2107878755079213476"), null);
   assert.equal(panel.parseXLink("https://example.com/not-a-post"), null);
+}
+
+// PV link submission remains pending until the owner confirms, then creates exactly one Mob X job.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "mob-link-confirm-panel");
+    const secret = await panel.hookSecret(state);
+    const postText = async (text, messageId) => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: messageId, chat_id: "b0actualowner", text,
+      } },
+    }, secret);
+    const click = async (button, messageId) => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+      } },
+    }, secret);
+
+    await click("p_mob", "mob-link-open-1");
+    await postText("https://x.com/mobgamesstudios/status/2107878755079213476", "mob-link-text-2");
+    assert.equal(state.DB.links.length, 1);
+    assert.equal(state.DB.links[0].status, "pending");
+    assert.equal(state.DB.consoleJobs.size, 0, "submitting a link must not start processing before owner confirmation");
+    assert.equal(calls.some(call => call.method === "sendMessage" && call.payload.text.includes("این لینک است؟")), true);
+
+    const confirmMessageId = state.DB.state.get("panel_mid");
+    await click("p_mob_confirm", confirmMessageId);
+    assert.equal(state.DB.links[0].status, "confirmed");
+    assert.equal(state.DB.consoleJobs.size, 1);
+    const job = [...state.DB.consoleJobs.values()][0];
+    assert.equal(job.type, "mob_x_link");
+    assert.equal(job.status, "confirmed");
+    assert.deepEqual(JSON.parse(job.params_json), {
+      url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+      panel_link_id: state.DB.links[0].id,
+    });
+    assert.equal(calls.filter(call => call.method === "editMessageText").length > 0, true);
+  });
 }
 
 // safeEqual compares values without treating differing lengths or Unicode values as equal.
@@ -1870,7 +2000,7 @@ class ScreenFakeStatement {
       return { results: this.db.aiCalls.slice().sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))
         .slice(0, 8).map(row => ({ ...row })) };
     }
-    if (this.sql.includes("SELECT url, status, created_at FROM panel_links")) {
+    if (this.sql.includes("FROM panel_links ORDER BY id DESC")) {
       return { results: this.db.links.slice().reverse().slice(0, 8).map(row => ({ ...row })) };
     }
     return { results: [] };
@@ -1911,7 +2041,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   const emptyPages = [
     ["p_digest", "خلاصهٔ ۲۴ ساعت"], ["p_errors", "خطاها"], ["p_runs", "آخرین اجراها"],
     ["p_qs", "صف انتشار"], ["p_ailog", "تاریخچهٔ تماس‌های AI"], ["p_links", "لینک‌های X"],
-    ["p_links_clear", "همهٔ 0 لینک"],
+    ["p_jobs", "کارهای کنسول"], ["p_links_clear", "همهٔ 0 لینک"],
   ];
   for (const [id, phrase] of emptyPages) {
     const result = await screens.buildScreen(screenEnv(), id);
@@ -1932,12 +2062,12 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     runs: [{ trigger_type: "daily", status: "success", started_at: "2026-10-24T03:00:00Z", found_count: 4, eligible_count: 3, sent_count: 2, skipped_count: 1, failed_count: 0 }],
     queue: screenStatuses.map((status, i) => ({ status, platform: "rubika", title: "Queue_" + status, last_error_code: status === "failed" ? "network_error" : null, updated_at: "2026-10-24T0" + i + ":00:00Z", sent_at: status === "sent" ? today + "T09:00:00Z" : null })),
     aiCalls: [{ provider: "groq", role: "code_repair", status: "success", error_code: null, started_at: "2026-10-24T04:00:00Z" }],
-    links: [{ url: "https://x.com/Test/status/2107878755079213476", status: "queued", created_at: "2026-10-24T05:00:00Z" }],
+    links: [{ id: 1, url: "https://x.com/mobgamesstudios/status/2107878755079213476", external_id: "2107878755079213476", status: "confirmed", created_at: "2026-10-24T05:00:00Z" }],
   };
   const seeded = screenEnv(seed);
   for (const [id, phrase] of [
     ["p_digest", "Digest title"], ["p_errors", "Digest title"], ["p_runs", "success"],
-    ["p_qs", "در انتظار: 1"], ["p_ailog", "groq/code_repair"], ["p_links", "@Test"],
+    ["p_qs", "در انتظار: 1"], ["p_ailog", "groq/code_repair"], ["p_links", "mobgamesstudios"],
     ["p_links_clear", "همهٔ 1 لینک"],
   ]) {
     const result = await screens.buildScreen(seeded, id);
@@ -1956,7 +2086,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(invalidDb.queryCount, 0, "invalid queue status must not query D1");
 }
 {
-  const ids = ["p_digest", "p_errors", "p_runs", "p_qs", "p_ailog", "p_links", "p_links_clear", "p_links_clear_yes"]
+  const ids = ["p_digest", "p_errors", "p_runs", "p_qs", "p_ailog", "p_links", "p_jobs", "p_links_clear", "p_links_clear_yes"]
     .concat(screenStatuses.map(status => "p_ql_" + status + "_0"));
   for (const id of ids) {
     const result = await screens.buildScreen(screenEnv({ failReads: true }), id);
@@ -2159,6 +2289,75 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.events.some(event => event.code === "console_channel_create"), true);
   assert.equal(state.DB.events.some(event => event.code === "console_channel_delete"), true);
   assert.equal(state.DB.events.some(event => event.code === "console_channel_create" && String(event.details_json).includes("production") && String(event.details_json).includes("enabled")) === true, true);
+}
+
+// Mob X links require confirmation; external_id prevents duplicates and confirmation creates one idempotent job.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: "https://twitter.com/mobgamesstudios/status/2107878755079213476" },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.link.external_id, "2107878755079213476");
+  assert.equal(response.body.link.status, "pending");
+  assert.equal(response.body.confirmation_required, true);
+  const linkId = response.body.link.id;
+
+  response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: "https://x.com/Test/status/2107878755079213476" },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "only_official_mob_x_status_links_allowed");
+
+  response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: "https://x.com/mobgamesstudios/status/2107878755079213476/" },
+  }), state));
+  assert.equal(response.status, 409, "same external_id must be rejected even when the URL variant differs");
+
+  response = await read(await worker.fetch(request("/api/console/jobs", {
+    method: "POST", body: { type: "mob_x_link", params: { url: response.body?.url || "https://x.com/mobgamesstudios/status/2107878755079213476" } },
+  }), state));
+  assert.equal(response.status, 400, "mob_x_link jobs must only be created through explicit link confirmation");
+  assert.equal(response.body.error, "mob_x_link_requires_link_confirmation");
+
+  response = await read(await worker.fetch(request("/api/console/links/" + linkId + "/confirm", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "confirmed");
+  const firstJobId = response.body.job_id;
+  const job = state.DB.consoleJobs.get(firstJobId);
+  assert.equal(job.type, "mob_x_link");
+  assert.equal(job.status, "confirmed");
+  assert.equal(Number(job.panel_link_id), Number(linkId));
+  assert.deepEqual(JSON.parse(job.params_json), {
+    url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+    panel_link_id: linkId,
+  });
+  assert.equal(state.DB.panelLinks.get(linkId).status, "confirmed");
+
+  response = await read(await worker.fetch(request("/api/console/links/" + linkId + "/confirm", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.job_id, firstJobId, "repeated confirmation must return the same job");
+  assert.equal(state.DB.consoleJobs.size, 1, "repeated confirmation must not create another job");
+
+  response = await read(await worker.fetch(request("/api/console/links"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items[0].status, "confirmed");
+
+  response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: "https://x.com/mobgamesstudios/status/2107878755079213477" },
+  }), state));
+  const cancelId = response.body.link.id;
+  response = await read(await worker.fetch(request("/api/console/links/" + cancelId + "/cancel", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "rejected");
+  assert.equal(state.DB.panelLinks.get(cancelId).status, "rejected");
+  assert.equal(state.DB.consoleJobs.size, 1, "cancellation must not enqueue work");
 }
 
 // Jobs are durable queue records only: creating one does not run a worker, workflow, or publisher.

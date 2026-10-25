@@ -1507,7 +1507,7 @@ PAGES.runs = function(root){
     // jobs
     const newJob = el("div",{class:"row"});
     const typeSel = el("select",{"aria-label":"نوع جاب",style:{width:"auto"}});
-    ["queue_intake_dry_run","ai_health_check","log_zip","d1_backup","mob_x_link","requeue_stuck"].forEach(t=>typeSel.appendChild(el("option",{value:t,text:t})));
+    ["queue_intake_dry_run","ai_health_check","log_zip","d1_backup","requeue_stuck"].forEach(t=>typeSel.appendChild(el("option",{value:t,text:t})));
     const paramInp = el("input",{type:"text",placeholder:'پارامتر JSON اختیاری مثل {"url":"https://..."}',"aria-label":"پارامترها"});
     newJob.appendChild(typeSel); newJob.appendChild(paramInp);
     newJob.appendChild(el("button",{class:"btn primary",text:"ساخت جاب",onclick:async()=>{
@@ -1555,7 +1555,7 @@ PAGES.runs = function(root){
 
 /* ---------- PAGE: Mob (X news) ---------- */
 PAGES.mob = function(root){
-  const st = ps("mob",{step:0, url:"", job:null, caption:""});
+  const st = ps("mob",{step:0,url:"",job:null,caption:"",linkId:null,result:null});
   const steps = ["تأیید لینک","ترجمهٔ فارسی","دانلود رسانه","پیش‌نمایش","انتشار آزمایشی"];
   const stepper = el("div",{class:"row",style:{marginBottom:"8px"}});
   const body = el("div",{});
@@ -1566,94 +1566,122 @@ PAGES.mob = function(root){
     clear(stepper);
     steps.forEach((s,i)=> stepper.appendChild(el("span",{class:"chip "+(i<st.step?"ok":i===st.step?"info":""), text:nf(i+1)+". "+s})));
   }
+  function reset(){
+    st.step=0; st.url=""; st.job=null; st.linkId=null; st.result=null; st.caption="";
+    draw(); loadLinks();
+  }
   function draw(){
     drawStepper(); clear(body);
-    if(st.step===0){
-      const inp = el("input",{type:"text",placeholder:"https://x.com/.../status/...",value:st.url,"aria-label":"لینک خبر"});
-      body.appendChild(el("label",{class:"field"},[el("span",{text:"لینک پست X"}), inp]));
+    if(st.step===0 && !Number(st.linkId)){
+      const inp = el("input",{type:"text",placeholder:"https://x.com/mobgamesstudios/status/...",value:st.url,"aria-label":"لینک خبر"});
+      body.appendChild(el("label",{class:"field"},[el("span",{text:"لینک پست رسمی Mob در X"}), inp]));
       body.appendChild(el("div",{class:"row"},[
-        el("button",{class:"btn primary",text:"تأیید و شروع",onclick:async()=>{
-          const u = safeUrl(inp.value.trim());
-          if(!u) return toast("لینک باید http/https معتبر باشد","err");
-          st.url=u; 
-          try{ await api("POST","/api/console/links",{body:{url:u}}); loadLinks() }catch(e){}
+        el("button",{class:"btn primary",text:"ثبت لینک برای تأیید",onclick:async()=>{
+          const raw=inp.value.trim();
+          const u=safeUrl(raw);
+          if(!u || !/^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/\d{15,22}\/?$/i.test(raw))
+            return toast("فقط لینک HTTPS پست حساب رسمی mobgamesstudios پذیرفته می‌شود","err");
           try{
-            const r = await api("POST","/api/console/mob/preview",{body:{url:u}});
-            st.job = r.job_id; st.step=1; draw(); pollJob();
-          }catch(e){ clear(body); body.appendChild(e.notFound? plannedBox("mobPreview",draw) : errorBox(e,draw)) }
+            const r=await api("POST","/api/console/links",{body:{url:raw}});
+            st.url=r.link.url; st.linkId=r.link.id; st.step=0; draw(); loadLinks();
+          }catch(e){ toast(e.fa||("ثبت لینک ناموفق بود: "+String(e.message||"خطا")),"err") }
         }}),
-        el("button",{class:"btn ghost",text:"پاک کردن",onclick:()=>{ st.url=""; st.job=null; st.step=0; draw() }})
+        el("button",{class:"btn ghost",text:"پاک کردن",onclick:()=>{st.url="";draw()}})
       ]));
-      body.appendChild(sectionNote("این جریان هرگز در کانال production منتشر نمی‌کند."));
+      body.appendChild(sectionNote("پس از ثبت، قبل از ایجاد کار پردازش، تأیید مالک لازم است."));
+      return;
+    }
+    if(st.step===0 && Number(st.linkId)>0){
+      body.appendChild(el("div",{class:"kv"},[el("b",{text:"این لینک است؟"}),linkNode(st.url,st.url)]));
+      body.appendChild(el("div",{class:"row"},[
+        el("button",{class:"btn primary",text:"✅ تأیید",onclick:async()=>{
+          try{
+            const r=await api("POST","/api/console/links/"+encodeURIComponent(st.linkId)+"/confirm",{body:{}});
+            st.job=r.job_id; st.step=1; draw(); loadLinks(); pollJob();
+          }catch(e){toast(e.fa||("تأیید لینک ناموفق بود: "+String(e.message||"خطا")),"err")}
+        }}),
+        el("button",{class:"btn danger",text:"✖️ لغو",onclick:async()=>{
+          try{await api("POST","/api/console/links/"+encodeURIComponent(st.linkId)+"/cancel",{body:{}});
+            toast("لینک رد شد","ok"); reset()
+          }catch(e){toast(e.fa||("لغو لینک ناموفق بود: "+String(e.message||"خطا")),"err")}
+        }})
+      ]));
+      body.appendChild(sectionNote("تنها لینک رسمی mobgamesstudios و شناسهٔ همین پست ثبت می‌شود."));
       return;
     }
     body.appendChild(el("div",{class:"small muted",text:"لینک: "+st.url}));
-    const prog = el("div",{}); body.appendChild(prog);
-    if(st.step<4){ prog.appendChild(el("div",{class:"skel"})); prog.appendChild(el("div",{class:"small muted",text:"در حال پردازش روی سرور… (job: "+String(st.job)+")"})) }
+    if(st.step<4){
+      body.appendChild(el("div",{class:"skel"}));
+      body.appendChild(el("div",{class:"small muted",text:"در انتظار پردازش جاب: "+String(st.job||"—")}));
+    }
     if(st.step===4 && st.result){
-      const r = st.result;
+      const r=st.result;
       body.appendChild(el("div",{class:"kv"},[el("b",{text:"عنوان"}),el("span",{text:String(r.title||"—")})]));
       body.appendChild(el("div",{class:"kv"},[el("b",{text:"متن اصلی"}),el("span",{text:String(r.original_caption||"—")})]));
-      const ta = el("textarea",{"aria-label":"کپشن فارسی"}); ta.value = st.caption || String(r.persian_translation||"");
-      const cnt = el("div",{class:"small muted",text:"طول: "+nf(ta.value.length)});
-      ta.addEventListener("input",()=>{ st.caption=ta.value; cnt.textContent="طول: "+nf(ta.value.length) });
-      body.appendChild(el("label",{class:"field"},[el("span",{text:"کپشن فارسی (قابل ویرایش)"}), ta, cnt]));
-      const mu = safeUrl(r.media_url);
-      body.appendChild(el("div",{class:"kv"},[el("b",{text:"رسانه"}), mu? linkNode(mu,"لینک رسانه"):el("span",{text:"—"})]));
-      const pubBtn = el("button",{class:"btn primary",text:"انتشار در کانال آزمایشی",disabled:true});
-      const note = el("div",{class:"small muted",text:"در حال بررسی مجوز انتشار…"});
-      body.appendChild(el("div",{class:"row"},[pubBtn, el("button",{class:"btn ghost",text:"شروع دوباره",onclick:()=>{st.step=0;st.job=null;st.result=null;st.caption="";draw()}})]));
-      body.appendChild(note);
-      (async()=>{
-        let caps={}, rules={};
-        try{ const s = await cachedGet("status",()=>api("GET","/api/status")); caps = s.capabilities||{} }catch(e){}
-        try{ const rr = await api("GET","/api/console/rules"); rules = rr.rules||{} }catch(e){ rules={test_channel_only:true} }
-        const allowed = caps.publishing===true && rules.test_channel_only!==false;
-        pubBtn.disabled = !allowed;
-        note.textContent = allowed? "فقط کانال آزمایشی. هیچ مسیری برای کانال production وجود ندارد."
-          : "انتشار غیرفعال است: capabilities.publishing یا قانون test_channel_only اجازه نمی‌دهد.";
-        pubBtn.addEventListener("click", async()=>{
-          const ok = await confirmDanger("انتشار در کانال آزمایشی","این محتوا فقط در «کانال آزمایشی» روبیکا منتشر می‌شود. کانال production هرگز هدف نیست.");
-          if(!ok) return;
-          try{ const res = await api("POST","/api/console/mob/publish-test",{body:{job_id:st.job, caption: st.caption||String(r.persian_translation||"")}});
-            audit("mob.publish_test","job="+st.job); toast("در کانال آزمایشی منتشر شد"+(res.message_id?(" ("+res.message_id+")"):""),"ok") }
-          catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
-        });
-      })();
+      const ta=el("textarea",{"aria-label":"کپشن فارسی"});
+      ta.value=st.caption || String(r.persian_translation||r.caption||"");
+      const cnt=el("div",{class:"small muted",text:"طول: "+nf(ta.value.length)});
+      ta.addEventListener("input",()=>{st.caption=ta.value;cnt.textContent="طول: "+nf(ta.value.length)});
+      body.appendChild(el("label",{class:"field"},[el("span",{text:"کپشن فارسی"}),ta,cnt]));
+      const media=safeUrl(r.media_url||r.media_download_url||"");
+      if(media) body.appendChild(el("div",{class:"kv"},[el("b",{text:"رسانه"}),linkNode(media,"بازکردن رسانه")]));
+      body.appendChild(sectionNote("پیش‌نمایش آمادهٔ بررسی است. کنترل‌های ویرایش و انتشار با تأیید صریح مالک در مرحلهٔ بعد فعال می‌شوند."));
+      body.appendChild(el("div",{class:"row"},[
+        el("button",{class:"btn",text:"🔄 تازه‌سازی وضعیت",onclick:()=>pollJob()}),
+        el("button",{class:"btn ghost",text:"شروع دوباره",onclick:reset})
+      ]));
     }
   }
   function pollJob(){
-    const iv = setInterval(async()=>{
+    if(!st.job) return;
+    const iv=setInterval(async()=>{
       try{
-        const r = await api("GET","/api/console/jobs/"+encodeURIComponent(st.job));
-        const j = r.job;
-        st.step = j.status==="done"? 4 : (j.progress>60?3: j.progress>30?2:1);
-        if(j.status==="done"){ st.result = j.result||{}; clearInterval(iv) }
-        if(j.status==="failed"){ clearInterval(iv); clear(body); body.appendChild(errorBox({fa:"جاب ناموفق: "+String(j.error||"")},()=>{st.step=0;draw()})); return }
+        const r=await api("GET","/api/console/jobs/"+encodeURIComponent(st.job));
+        const j=r.job;
+        if(j.status==="ready_for_review" || j.status==="done"){
+          st.result=j.result||{}; st.step=4; clearInterval(iv); draw(); loadLinks(); return;
+        }
+        if(j.status==="failed" || j.status==="rejected"){
+          clearInterval(iv); clear(body); body.appendChild(errorBox({fa:"جاب ناموفق: "+String(j.error||j.status||"")},reset)); loadLinks(); return;
+        }
+        st.step=j.status==="processing"||j.status==="running"?2:1;
         draw();
-      }catch(e){ clearInterval(iv); clear(body); body.appendChild(e.notFound? plannedBox("jobGet"):errorBox(e,()=>{st.step=0;draw()})) }
-    }, 2200); S.timers.push(iv);
+      }catch(e){clearInterval(iv);clear(body);body.appendChild(errorBox(e,reset))}
+    },2500);
+    S.timers.push(iv);
   }
   function loadLinks(){
     loadInto(linksBox, ()=>api("GET","/api/console/links"), d=>{
-      const w = el("div",{});
-      w.appendChild(el("div",{class:"row"},[el("button",{class:"btn sm danger",text:"پاک‌سازی همهٔ لینک‌ها",onclick:async()=>{
-        const a = await confirmDanger("پاک‌سازی لینک‌ها","همهٔ ردیف‌های جدول panel_links حذف می‌شوند.");
-        if(!a) return;
-        const b = await confirmDanger("تأیید نهایی","این عمل برگشت‌ناپذیر است. برای ادامه کلمهٔ «تایید» را تایپ کنید.", true);
-        if(!b) return;
-        try{ await api("POST","/api/console/links/clear"); audit("links.clear",""); toast("پاک شد","ok"); loadLinks() }catch(e){ toast(e.fa||"خطا","err") }
-      }})]));
-      const items = d.items||[];
+      const w=el("div",{});
+      const items=d.items||[];
       if(!items.length) w.appendChild(emptyBox("لینکی ذخیره نشده"));
-      else w.appendChild(tableFrom([{label:"#",key:"id"},{label:"لینک",render:r=>linkNode(r.url)},
-        {label:"وضعیت",render:r=>statusChip(r.status)},{label:"ساخت",render:r=>el("span",{text:fmtDate(r.created_at)})}], items));
+      else w.appendChild(tableFrom([
+        {label:"#",key:"id"},
+        {label:"لینک",render:r=>linkNode(r.url)},
+        {label:"وضعیت",render:r=>statusChip(r.status)},
+        {label:"ساخت",render:r=>el("span",{text:fmtDate(r.created_at)})},
+        {label:"اقدام",render:r=>{
+          const acts=el("div",{class:"row"});
+          if(r.status==="pending"){
+            acts.appendChild(el("button",{class:"btn sm primary",text:"✅ تأیید",onclick:async()=>{
+              try{const result=await api("POST","/api/console/links/"+encodeURIComponent(r.id)+"/confirm",{body:{}});
+                toast("لینک تأیید شد؛ job: "+String(result.job_id||"—"),"ok"); loadLinks();
+                if(Number(st.linkId)===Number(r.id)){st.job=result.job_id;st.step=1;draw();pollJob()}
+              }catch(e){toast(e.fa||"تأیید ناموفق بود","err")}
+            }}));
+            acts.appendChild(el("button",{class:"btn sm danger",text:"✖️ لغو",onclick:async()=>{
+              try{await api("POST","/api/console/links/"+encodeURIComponent(r.id)+"/cancel",{body:{}});toast("لینک رد شد","ok");loadLinks()}
+              catch(e){toast(e.fa||"لغو ناموفق بود","err")}
+            }}));
+          } else acts.appendChild(el("span",{class:"small muted",text:"—"}));
+          return acts;
+        }}
+      ],items));
       return w;
     },"linksGet");
   }
   draw(); loadLinks(); root._refresh=()=>{draw();loadLinks()};
 };
-
 /* ---------- PAGE: AI ---------- */
 PAGES.ai = function(root){
   const box = el("div",{class:"grid g2"});

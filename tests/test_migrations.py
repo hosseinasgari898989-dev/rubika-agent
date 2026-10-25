@@ -262,5 +262,67 @@ class D1MigrationTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_mob_x_link_flow_migration_preserves_jobs_and_adds_idempotency(self):
+        db = sqlite3.connect(":memory:")
+        try:
+            for name in (
+                "0001_init.sql",
+                "0002_brain_metadata.sql",
+                "0003_ai_usage_daily.sql",
+                "0004_automation_queue.sql",
+                "0005_ai_provider_ledger.sql",
+                "0006_owner_daily_digest.sql",
+                "0007_owner_console.sql",
+                "0008_ai_provider_translation_role.sql",
+                "0009_owner_panel.sql",
+                "0010_console_phase2.sql",
+            ):
+                db.executescript((ROOT / "migrations" / name).read_text(encoding="utf-8"))
+
+            db.execute(
+                "INSERT INTO console_jobs (id, type, status, progress, params_json, result_json, error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("job_existing_001", "ai_health_check", "done", 100, '{"source":"before-migration"}', '{"ok":true}', None),
+            )
+            db.execute(
+                "INSERT INTO panel_links (url, status) VALUES (?, ?)",
+                ("https://x.com/old/status/2107878755079213476", "received"),
+            )
+            db.commit()
+
+            db.executescript((ROOT / "migrations" / "0011_mob_x_link_flow.sql").read_text(encoding="utf-8"))
+            existing = db.execute(
+                "SELECT type, status, progress, params_json, result_json FROM console_jobs WHERE id = ?",
+                ("job_existing_001",),
+            ).fetchone()
+            self.assertEqual(existing, (
+                "ai_health_check", "done", 100, '{"source":"before-migration"}', '{"ok":true}'
+            ))
+            columns = {row[1] for row in db.execute("PRAGMA table_info(panel_links)").fetchall()}
+            self.assertTrue({"external_id", "confirmed_at", "updated_at"}.issubset(columns))
+            job_columns = {row[1] for row in db.execute("PRAGMA table_info(console_jobs)").fetchall()}
+            self.assertIn("panel_link_id", job_columns)
+
+            db.execute(
+                "INSERT INTO panel_links (url, external_id, status) VALUES (?, ?, ?)",
+                ("https://x.com/mobgamesstudios/status/2107878755079213477", "2107878755079213477", "pending"),
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO panel_links (url, external_id, status) VALUES (?, ?, ?)",
+                    ("https://x.com/mobgamesstudios/status/2107878755079213478", "2107878755079213477", "pending"),
+                )
+            db.execute(
+                "INSERT INTO console_jobs (id, type, status, progress, panel_link_id) VALUES (?, ?, ?, ?, ?)",
+                ("job_mob_link_001", "mob_x_link", "ready_for_review", 100, 1),
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO console_jobs (id, type, status, progress, panel_link_id) VALUES (?, ?, ?, ?, ?)",
+                    ("job_mob_link_002", "mob_x_link", "confirmed", 0, 1),
+                )
+        finally:
+            db.close()
+
 if __name__ == "__main__":
     unittest.main()

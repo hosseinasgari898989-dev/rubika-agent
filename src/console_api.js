@@ -30,7 +30,7 @@ const AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch", "translat
 const EDITABLE_REVIEW = new Set(["pending", "rejected", "needs_review"]); // "approved" is never set from the console
 const LOCKED_ITEM_STATUSES = new Set(["sending", "sent"]);
 const SOURCE_PLATFORMS = new Set(["tiktok", "youtube", "instagram", "x", "mob_official"]);
-const X_LINK = /^https:\/\/(?:www\.)?x\.com\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/;
+const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
 
 export async function handleConsoleApi(request, env, h) {
   const { json, readJson, text, validIdentifier } = h;
@@ -449,6 +449,7 @@ export async function handleConsoleApi(request, env, h) {
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const b = parsed.value;
       if (!jobTypes.has(b.type)) return fail("invalid_job_type", 400);
+      if (b.type === "mob_x_link") return fail("mob_x_link_requires_link_confirmation", 400);
       const params = b.params === undefined ? {} : b.params;
       if (!isRecord(params)) return fail("job_params_object_required", 400);
       let paramsJson;
@@ -477,7 +478,7 @@ export async function handleConsoleApi(request, env, h) {
 
     // ---------- X links saved by the owner (panel_links) ----------
     if (sub === "/links" && m === "GET") {
-      const items = await all("SELECT id, url, status, created_at FROM panel_links ORDER BY id DESC LIMIT 100");
+      const items = await all("SELECT id, url, external_id, status, created_at, confirmed_at, updated_at FROM panel_links ORDER BY id DESC LIMIT 100");
       return json({ ok: true, items });
     }
     if (sub === "/links" && m === "POST") {
@@ -485,11 +486,49 @@ export async function handleConsoleApi(request, env, h) {
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const mm = X_LINK.exec(text(parsed.value.url, 300));
       if (!mm) return fail("only_official_mob_x_status_links_allowed", 400);
-      const canonical = "https://x.com/mobgamesstudios/status/" + mm[1];
-      if (await first("SELECT id FROM panel_links WHERE url = ?", canonical)) return fail("link_already_saved", 409);
-      await env.DB.prepare("INSERT INTO panel_links (url, status) VALUES (?, 'pending')").bind(canonical).run();
-      await audit("console_link_add", null, { tail: mm[1].slice(-6) });
-      return json({ ok: true, url: canonical }, 201);
+      const externalId = mm[1];
+      const canonical = "https://x.com/mobgamesstudios/status/" + externalId;
+      if (await first("SELECT id FROM panel_links WHERE external_id = ?", externalId)) return fail("link_already_saved", 409);
+      await env.DB.prepare("INSERT INTO panel_links (url, external_id, status) VALUES (?, ?, 'pending')").bind(canonical, externalId).run();
+      const created = await first("SELECT id, url, external_id, status, created_at FROM panel_links WHERE external_id = ?", externalId);
+      if (!created) return fail("link_save_failed", 500);
+      await audit("console_link_add", null, { tail: externalId.slice(-6) });
+      return json({ ok: true, link: created, confirmation_required: true, confirmation_text: "این لینک است؟ ✅ تأیید / ✖️ لغو" }, 201);
+    }
+    const linkAction = /^\/links\/(\d+)\/(confirm|cancel)$/.exec(sub);
+    if (linkAction && m === "POST") {
+      const linkId = Number(linkAction[1]);
+      if (!Number.isSafeInteger(linkId) || linkId < 1) return fail("invalid_panel_link_id", 400);
+      const link = await first("SELECT id, url, external_id, status FROM panel_links WHERE id = ?", linkId);
+      if (!link) return fail("panel_link_not_found", 404);
+      if (!/^\d{15,22}$/.test(String(link.external_id || ""))) return fail("panel_link_external_id_missing", 409);
+
+      if (linkAction[2] === "cancel") {
+        const result = await env.DB.prepare(
+          "UPDATE panel_links SET status = 'rejected', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'pending'"
+        ).bind(linkId).run();
+        if (!result?.meta?.changes) return fail("link_not_pending", 409);
+        await audit("console_link_reject", null, { id: linkId });
+        return json({ ok: true, id: linkId, status: "rejected" });
+      }
+
+      const existingJob = await first("SELECT id FROM console_jobs WHERE panel_link_id = ?", linkId);
+      if (existingJob) return json({ ok: true, id: linkId, status: link.status, job_id: existingJob.id, already_confirmed: true });
+      if (!["pending", "confirmed"].includes(link.status)) return fail("link_state_not_confirmable", 409);
+
+      const jobId = "job_" + randomHex(12);
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE panel_links SET status = 'confirmed', confirmed_at = COALESCE(confirmed_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status IN ('pending', 'confirmed')"
+        ).bind(linkId),
+        env.DB.prepare(
+          "INSERT INTO console_jobs (id, type, status, progress, params_json, result_json, error, panel_link_id) SELECT ?, 'mob_x_link', 'confirmed', 0, ?, NULL, NULL, ? WHERE EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'confirmed') ON CONFLICT(panel_link_id) WHERE type = 'mob_x_link' AND panel_link_id IS NOT NULL DO NOTHING"
+        ).bind(jobId, JSON.stringify({ url: link.url, panel_link_id: linkId }), linkId, linkId),
+      ]);
+      const job = await first("SELECT id FROM console_jobs WHERE panel_link_id = ?", linkId);
+      if (!job) return fail("mob_x_link_job_create_failed", 503);
+      await audit("console_link_confirm", null, { id: linkId, job_id: job.id, external_id_tail: link.external_id.slice(-6) });
+      return json({ ok: true, id: linkId, status: "confirmed", job_id: job.id });
     }
     if (sub === "/links/clear" && m === "POST") {
       const parsed = await readJson(request);

@@ -6,7 +6,7 @@ const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
 const MAX_BODY = 64 * 1024;
 const PRIVATE_TYPES = new Set(["private", "privatechat", "user", "userchat", "personal"]);
-const X_LINK = /https?:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/([A-Za-z0-9_]{1,15})\/status\/([0-9]{15,22})/i;
+const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
 const te = new TextEncoder();
 const PANEL_TIMING = Symbol("panel_timing");
 const elapsedMs = (startedAt) => Math.max(0, Math.round(performance.now() - startedAt));
@@ -117,8 +117,8 @@ export function isPrivateChat(ev) {
   return l.startsWith("b0");
 }
 export function parseXLink(text) {
-  const m = X_LINK.exec(String(text || ""));
-  return m ? `https://x.com/${m[1]}/status/${m[2]}` : null;
+  const m = X_LINK.exec(String(text || "").trim());
+  return m ? "https://x.com/mobgamesstudios/status/" + m[1] : null;
 }
 
 // ---------- Rubika Bot API (token never appears in errors/logs)
@@ -446,12 +446,59 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const env = ui.env;
   const chat = ui.chat;
   if (id !== "p_mob") await setState(env, "mode", "idle");
+  if (id === "p_mob_confirm" || id === "p_mob_cancel") {
+    const rawLinkId = await getState(env, "panel_mob_pending_link_id", "");
+    const linkId = Number(rawLinkId);
+    if (!Number.isSafeInteger(linkId) || linkId < 1) {
+      await send(env, chat, "این تأیید منقضی شده است؛ لینک را دوباره بفرست.", HOME_KB);
+      return;
+    }
+    const link = await env.DB.prepare("SELECT id, url, external_id, status FROM panel_links WHERE id = ?").bind(linkId).first();
+    if (!link) {
+      await setState(env, "panel_mob_pending_link_id", "");
+      await send(env, chat, "لینک پیدا نشد؛ دوباره ارسالش کن.", HOME_KB);
+      return;
+    }
+    if (id === "p_mob_cancel") {
+      const canceled = await env.DB.prepare("UPDATE panel_links SET status = 'rejected', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'pending'").bind(linkId).run();
+      await setState(env, "panel_mob_pending_link_id", "");
+      if (!canceled?.meta?.changes && link.status !== "rejected") {
+        await send(env, chat, "وضعیت لینک تغییر کرده؛ بخش «لینک‌های X» را تازه‌سازی کن.", HOME_KB);
+        return;
+      }
+      return render(ui, "p_links", { clickedMid });
+    }
+
+    if (!/^\d{15,22}$/.test(String(link.external_id || ""))) {
+      await send(env, chat, "شناسهٔ پست معتبر نیست؛ لینک دوباره بررسی شود.", HOME_KB);
+      return;
+    }
+    const existing = await env.DB.prepare("SELECT id FROM console_jobs WHERE panel_link_id = ?").bind(linkId).first();
+    if (!existing) {
+      if (!["pending", "confirmed"].includes(link.status)) {
+        await send(env, chat, "این لینک دیگر در وضعیت قابل تأیید نیست.", HOME_KB);
+        return;
+      }
+      const jobId = "job_" + Array.from(crypto.getRandomValues(new Uint8Array(12)), value => value.toString(16).padStart(2, "0")).join("");
+      await env.DB.batch([
+        env.DB.prepare("UPDATE panel_links SET status = 'confirmed', confirmed_at = COALESCE(confirmed_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status IN ('pending', 'confirmed')").bind(linkId),
+        env.DB.prepare("INSERT INTO console_jobs (id, type, status, progress, params_json, result_json, error, panel_link_id) SELECT ?, 'mob_x_link', 'confirmed', 0, ?, NULL, NULL, ? WHERE EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'confirmed') ON CONFLICT(panel_link_id) WHERE type = 'mob_x_link' AND panel_link_id IS NOT NULL DO NOTHING").bind(jobId, JSON.stringify({ url: link.url, panel_link_id: linkId }), linkId, linkId),
+      ]);
+    }
+    const job = await env.DB.prepare("SELECT id FROM console_jobs WHERE panel_link_id = ?").bind(linkId).first();
+    if (!job) {
+      await send(env, chat, "ثبت کار انجام نشد؛ خطا: mob_x_link_job_create_failed", HOME_KB);
+      return;
+    }
+    await setState(env, "panel_mob_pending_link_id", "");
+    return render(ui, "p_links", { clickedMid });
+  }
   if (id !== "p_links_clear" && id !== "p_links_clear_yes") {
     await setState(env, "panel_links_clear_pending", "no");
   }
   const statics = {
     p_help: [HELP_TEXT, BACK_KB],
-    p_mob: ["📰 **خبر Mob از لینک X**\n\nلینک پست X را بفرست (x.com/نام/status/شناسه).", CANCEL_KB],
+    p_mob: ["📰 **خبر رسمی Mob از لینک X**\n\nلینک https://x.com/mobgamesstudios/status/شناسه را بفرست.", CANCEL_KB],
   };
   if (id === "p_mob") await setState(env, "mode", "waiting_link");
   const previousMid = await getState(env, "panel_mid", "");
@@ -612,10 +659,23 @@ async function processEvent(env, selfFetch, origin, ev) {
     if (COMMANDS[word]) { await render(ui, COMMANDS[word], { fresh: true }); return; }
     if ((await getState(timedEnv, "mode", "idle")) === "waiting_link") {
       const link = parseXLink(ev.text);
-      if (!link) { await send(timedEnv, ev.chat, "لینک معتبر نیست. شکل درست: x.com/نام/status/شناسه", CANCEL_KB); return; }
-      await timedEnv.DB.prepare("INSERT OR IGNORE INTO panel_links(url) VALUES(?)").bind(link).run();
+      if (!link) {
+        await send(timedEnv, ev.chat, "فقط لینک پست حساب رسمی mobgamesstudios در x.com یا twitter.com پذیرفته می‌شود.", CANCEL_KB);
+        return;
+      }
+      const externalId = link.split("/").pop();
+      await timedEnv.DB.prepare("INSERT OR IGNORE INTO panel_links (url, external_id, status) VALUES (?, ?, 'pending')").bind(link, externalId).run();
+      const saved = await timedEnv.DB.prepare("SELECT id, url, external_id, status FROM panel_links WHERE external_id = ?").bind(externalId).first();
+      if (!saved) throw new PanelError("mob_x_link_save_failed");
+      if (saved.status !== "pending") {
+        await setState(timedEnv, "mode", "idle");
+        await send(timedEnv, ev.chat, "این پست قبلاً ثبت شده است؛ وضعیت فعلی: " + esc(saved.status) + ".", HOME_KB);
+        return;
+      }
+      await setState(timedEnv, "panel_mob_pending_link_id", String(saved.id));
       await setState(timedEnv, "mode", "idle");
-      await send(timedEnv, ev.chat, "✅ لینک ذخیره شد:\n" + String.fromCharCode(96) + link + String.fromCharCode(96) + "\nپردازش (ترجمه، دانلود، انتشار) در مرحلهٔ بعد اضافه می‌شود.", HOME_KB);
+      const confirmKb = kb([[["✅ تأیید", "p_mob_confirm"], ["✖️ لغو", "p_mob_cancel"]]]);
+      await send(timedEnv, ev.chat, "این لینک است؟\n" + saved.url, confirmKb);
       return;
     }
     await send(timedEnv, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
