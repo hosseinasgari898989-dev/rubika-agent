@@ -40,7 +40,7 @@ class FakeClient:
 class MobXPublisherTests(unittest.TestCase):
     def setUp(self):
         self.env = patch.dict(os.environ, {
-            "MOB_X_TEST_PUBLISH_ENABLED": "true",
+            "RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014": "approved",
             "RUBIKA_TOKEN": "mock-rubika-token",
             "RUBIKA_OWNER_CHAT_ID": "owner-private-chat",
             "RUBIKA_CHANNEL_GUID": TEST_CHANNEL_GUID,
@@ -51,7 +51,7 @@ class MobXPublisherTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
 
     def test_disabled_gate_does_not_claim_or_send(self):
-        os.environ["MOB_X_TEST_PUBLISH_ENABLED"] = "false"
+        os.environ["RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014"] = "not-approved"
         client = FakeClient()
         sender = Mock()
         report = publish_one(client=client, sender=sender, notifier=Mock())
