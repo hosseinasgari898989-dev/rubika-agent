@@ -137,6 +137,18 @@ class FakeStatement {
       const row = [...this.db.consoleInvites.values()].find(item => item.code_hash === this.values[0] && item.used_at == null && item.expires_at > (this.values[1] || ""));
       return row ? { ...row } : null;
     }
+    if (this.sql.includes("FROM panel_links WHERE external_id = ?")) {
+      const row = [...this.db.panelLinks.values()].find(item => item.external_id === String(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM panel_links WHERE id = ?")) {
+      const row = this.db.panelLinks.get(Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE panel_link_id = ?")) {
+      const row = [...this.db.consoleJobs.values()].find(item => Number(item.panel_link_id) === Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
     if (this.sql.includes("FROM console_jobs WHERE id = ?")) {
       const row = this.db.consoleJobs.get(this.values[0]);
       return row ? { ...row } : null;
@@ -198,6 +210,9 @@ class FakeStatement {
     }
     if (this.sql.includes("FROM console_channels ORDER BY id")) {
       return { results: [...this.db.consoleChannels.values()].sort((a, b) => a.id - b.id).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM panel_links ORDER BY id DESC")) {
+      return { results: [...this.db.panelLinks.values()].sort((a, b) => b.id - a.id).slice(0, this.values.at(-1) || 100).map(row => ({ ...row })) };
     }
     if (this.sql.includes("FROM console_jobs ORDER BY created_at DESC LIMIT ?")) {
       return { results: [...this.db.consoleJobs.values()].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, this.values[0]).map(row => ({ ...row })) };
@@ -274,6 +289,33 @@ class FakeStatement {
     }
     if (sql.startsWith("DELETE FROM console_channels WHERE id = ?")) {
       return { meta: { changes: this.db.consoleChannels.delete(Number(v[0])) ? 1 : 0 } };
+    }
+    if (sql.startsWith("INSERT INTO panel_links (url, external_id, status)")) {
+      const [url, externalId] = v;
+      if ([...this.db.panelLinks.values()].some(row => row.external_id === String(externalId) || row.url === url)) return { meta: { changes: 0 } };
+      const id = this.db.nextPanelLinkId++;
+      this.db.panelLinks.set(id, { id, url, external_id: String(externalId), status: "pending", created_at: new Date().toISOString(), confirmed_at: null, updated_at: new Date().toISOString() });
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("UPDATE panel_links SET status = 'rejected'")) {
+      const row = this.db.panelLinks.get(Number(v[0]));
+      if (!row || row.status !== "pending") return { meta: { changes: 0 } };
+      Object.assign(row, { status: "rejected", updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE panel_links SET status = 'confirmed'")) {
+      const row = this.db.panelLinks.get(Number(v[0]));
+      if (!row || !["pending", "confirmed"].includes(row.status)) return { meta: { changes: 0 } };
+      Object.assign(row, { status: "confirmed", confirmed_at: row.confirmed_at || new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO console_jobs") && sql.includes("SELECT ?, 'mob_x_link'")) {
+      const [id, paramsJson, panelLinkId] = v;
+      const existing = [...this.db.consoleJobs.values()].find(row => Number(row.panel_link_id) === Number(panelLinkId));
+      const link = this.db.panelLinks.get(Number(panelLinkId));
+      if (existing || !link || link.status !== "confirmed") return { meta: { changes: 0 } };
+      this.db.consoleJobs.set(id, { id, type: "mob_x_link", status: "confirmed", progress: 0, params_json: paramsJson, result_json: null, error: null, panel_link_id: Number(panelLinkId), created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
     }
     if (sql.startsWith("INSERT INTO console_jobs")) {
       const row = { id: v[0], type: v[1], status: "queued", progress: 0, params_json: v[2], result_json: null, error: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
@@ -457,6 +499,8 @@ class FakeDB {
     this.consoleChannels = new Map();
     this.nextConsoleChannelId = 1;
     this.consoleJobs = new Map();
+    this.panelLinks = new Map();
+    this.nextPanelLinkId = 1;
     this.lastChanges = 0;
   }
   prepare(sql) {
@@ -1368,10 +1412,15 @@ async function postPanelUpdate(state, update, secret) {
   assert.equal(panel.isPrivateChat(event({ types: ["group"] })), false);
 }
 
-// Link parsing canonicalises X/Twitter post URLs and rejects unrelated text.
+// Link parsing accepts only a canonical post from the exact official Mob handle.
 {
-  assert.equal(panel.parseXLink("New post https://twitter.com/Test_User/status/2107878755079213476?s=20"),
-    "https://x.com/Test_User/status/2107878755079213476");
+  assert.equal(panel.parseXLink("https://twitter.com/mobgamesstudios/status/2107878755079213476"),
+    "https://x.com/mobgamesstudios/status/2107878755079213476");
+  assert.equal(panel.parseXLink("https://www.x.com/mobgamesstudios/status/2107878755079213476/"),
+    "https://x.com/mobgamesstudios/status/2107878755079213476");
+  assert.equal(panel.parseXLink("New post https://twitter.com/mobgamesstudios/status/2107878755079213476?s=20"), null);
+  assert.equal(panel.parseXLink("https://x.com/Test_User/status/2107878755079213476"), null);
+  assert.equal(panel.parseXLink("http://x.com/mobgamesstudios/status/2107878755079213476"), null);
   assert.equal(panel.parseXLink("https://example.com/not-a-post"), null);
 }
 
