@@ -154,9 +154,18 @@ def publish_one(
             )
             report.update(status="sent", message_id=str(message_id))
         except Exception:
-            # Do not send again if the status write is lost after a successful send.
-            report.update(status="sent_status_write_unknown", message_id=str(message_id), automatic_retry=False)
-            _notify_uncertain(token, owner_chat, job_id, "mob_x_delivery_status_write_failed")
+            # Never send again if the status write is lost after a successful send.
+            # A second status-only attempt can make a still-sending job uncertain;
+            # it never invokes the Rubika channel sender.
+            try:
+                worker.request(
+                    "POST", "/api/console/mob-x/jobs/" + job_id + "/delivery",
+                    {"status": "uncertain", "error_code": "mob_x_delivery_status_write_failed"},
+                )
+            except Exception:
+                report["delivery_state_update_failed"] = True
+            notice_sent = _notify_uncertain(token, owner_chat, job_id, "mob_x_delivery_status_write_failed")
+            report.update(status="uncertain", message_id=str(message_id), owner_notified=notice_sent, automatic_retry=False)
         return _write_report(report, report_path, 0)
     except MobXLinkError as exc:
         report.update(status="failed", error_code=_safe_code(exc.code))
