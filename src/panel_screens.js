@@ -11,11 +11,12 @@ export const HOME_ROWS = [
   [["🚨 خطاها", "p_errors"], ["📜 تاریخچهٔ AI", "p_ailog"]],
   [["🤖 هوش مصنوعی", "p_ai"], ["🧾 گزارش کامل", "p_report"]],
   [["📰 خبر Mob از لینک X", "p_mob"], ["🔗 لینک‌های X", "p_links"]],
+  [["🧰 کارها", "p_jobs"], ["❓ راهنما", "p_help"]],
   [["❓ راهنما", "p_help"]],
   [["🏠 منوی اصلی", "p_home"]],
 ];
 
-const SCREEN_ID = /^p_(digest|errors|runs|qs|ailog|links|links_clear|links_clear_yes|ql_[a-z]+_\d{1,3})$/;
+const SCREEN_ID = /^p_(digest|errors|runs|qs|ailog|links|jobs|links_clear|links_clear_yes|ql_[a-z]+_\d{1,3})$/;
 export const isScreenId = (id) => SCREEN_ID.test(String(id || ""));
 
 // ---- safe text helpers (values from D1 never carry rich-text markers into the message)
@@ -140,9 +141,14 @@ const shortLink = (u) => {
 };
 async function links(env) {
   const total = num((await one(env, "SELECT COUNT(*) AS c FROM panel_links"))?.c);
-  const r = await all(env, "SELECT url, status, created_at FROM panel_links ORDER BY id DESC LIMIT 8");
-  const lines = r.map((x) => `• ${when(x.created_at)} ${shortLink(x.url)} (${tag(x.status, 12)})`);
+  const r = await all(env, "SELECT url, status, created_at, external_id FROM panel_links ORDER BY id DESC LIMIT 8");
+  const lines = r.map((x) => `• ${when(x.created_at)} ${shortLink(x.url)} (${tag(x.status, 20)})`);
   return { text: [`🔗 **لینک‌های X** — ${total} مورد`, ...(lines.length ? lines : ["لینکی ذخیره نشده."])].join("\n"), rows: [...(total ? [[["🗑 پاک‌کردن همه", "p_links_clear"]]] : []), ...nav("p_links")] };
+}
+async function jobs(env) {
+  const r = await all(env, "SELECT id, type, status, progress, error, created_at, updated_at FROM console_jobs ORDER BY created_at DESC LIMIT 8");
+  const lines = r.map((x) => "• " + when(x.created_at) + " " + tag(x.type, 20) + " — " + tag(x.status, 20) + " (" + num(x.progress) + "%)" + (x.error ? " " + tag(x.error, 28) : ""));
+  return { text: ["🧰 **کارهای کنسول**", ...(lines.length ? lines : ["کاری ثبت نشده."])].join("\n"), rows: nav("p_jobs") };
 }
 async function linksClear(env) {
   const total = num((await one(env, "SELECT COUNT(*) AS c FROM panel_links"))?.c);
@@ -180,6 +186,7 @@ export async function buildScreen(env, id) {
     else if (id === "p_qs") screen = await queueSummary(env);
     else if (id === "p_ailog") screen = await aiLog(env);
     else if (id === "p_links") screen = await links(env);
+    else if (id === "p_jobs") screen = await jobs(env);
     else if (id === "p_links_clear") screen = await linksClear(env);
     else if (id === "p_links_clear_yes") screen = await linksClearYes(env);
     else if (/^p_ql_/.test(id)) screen = await queueList(env, id);
