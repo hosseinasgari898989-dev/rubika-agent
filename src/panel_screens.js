@@ -12,6 +12,7 @@ export const HOME_ROWS = [
   [["🤖 هوش مصنوعی", "p_ai"], ["🧾 گزارش کامل", "p_report"]],
   [["📰 خبر Mob از لینک X", "p_mob"], ["🔗 لینک‌های X", "p_links"]],
   [["❓ راهنما", "p_help"]],
+  [["🏠 منوی اصلی", "p_home"]],
 ];
 
 const SCREEN_ID = /^p_(digest|errors|runs|qs|ailog|links|links_clear|links_clear_yes|ql_[a-z]+_\d{1,3})$/;
@@ -38,6 +39,41 @@ const one = async (env, sql, ...b) => (await env.DB.prepare(sql).bind(...b).firs
 const nav = (id) => [[["🔄 تازه‌سازی", id], ["🏠 منوی اصلی", "p_home"]]];
 const HOME_ONLY = [[["🏠 منوی اصلی", "p_home"]]];
 const icon = (c) => CAT_ICON[tag(c)] ?? "•";
+
+export async function homeSummary(env) {
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      "SELECT " +
+      "SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS queued, " +
+      "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed, " +
+      "SUM(CASE WHEN status='sent' AND substr(sent_at,1,10)=date('now') THEN 1 ELSE 0 END) AS sent_today " +
+      "FROM automation_queue"
+    ),
+    env.DB.prepare("SELECT status FROM runs ORDER BY started_at DESC LIMIT 1"),
+    env.DB.prepare(
+      "SELECT " +
+      "(SELECT COUNT(*) FROM brain_events WHERE lower(level) IN ('error','critical') " +
+      "AND julianday(created_at) >= julianday('now','-24 hours')) + " +
+      "(SELECT COUNT(*) FROM owner_digest_events WHERE category IN ('error','ai_error') " +
+      "AND julianday(occurred_at) >= julianday('now','-24 hours')) AS errors_24h"
+    ),
+  ]);
+  const queue = results?.[0]?.results?.[0] || {};
+  const lastRun = results?.[1]?.results?.[0] || {};
+  const errorStats = results?.[2]?.results?.[0] || {};
+  return [
+    "🤖 **پنل مدیریت Rubika-Agent**",
+    "",
+    "───",
+    `📦 صف: ${num(queue.queued)} در انتظار | ${num(queue.failed)} ناموفق`,
+    `✅ ارسال امروز (UTC): ${num(queue.sent_today)}`,
+    `🏃 آخرین اجرا: ${tag(lastRun.status, 20) || "ثبت نشده"}`,
+    `🚨 خطاهای ۲۴ ساعت اخیر: ${num(errorStats.errors_24h)}`,
+    "───",
+    "",
+    "یکی از بخش‌ها را انتخاب کن:",
+  ].join("\n");
+}
 
 // ---- screens
 async function digest(env) {
@@ -117,19 +153,39 @@ async function linksClearYes(env) {
   return { text: "✅ لینک‌های ذخیره‌شده پاک شدند.", rows: [[["🔗 لینک‌ها", "p_links"], ["🏠 منوی اصلی", "p_home"]]] };
 }
 
+function withNavigation(id, screen) {
+  const rows = Array.isArray(screen?.rows)
+    ? screen.rows.filter((row) => Array.isArray(row) && row.some((button) =>
+      Array.isArray(button) && button.length >= 2 && String(button[0] || "").trim() && String(button[1] || "").trim()))
+    : [];
+  if (!rows.length) return { ...screen, rows: HOME_ONLY };
+  const buttons = rows.flat().filter((button) => Array.isArray(button) && button.length >= 2);
+  const extra = [];
+  if (!buttons.some((button) => button[1] === id && String(button[0]).includes("تازه‌سازی"))) {
+    extra.push(["🔄 تازه‌سازی", id]);
+  }
+  if (!buttons.some((button) => button[1] === "p_home" && String(button[0]).includes("منوی اصلی"))) {
+    extra.push(["🏠 منوی اصلی", "p_home"]);
+  }
+  if (extra.length) rows.push(extra);
+  return { ...screen, rows };
+}
+
 export async function buildScreen(env, id) {
   try {
-    if (id === "p_digest") return await digest(env);
-    if (id === "p_errors") return await errors(env);
-    if (id === "p_runs") return await runs(env);
-    if (id === "p_qs") return await queueSummary(env);
-    if (id === "p_ailog") return await aiLog(env);
-    if (id === "p_links") return await links(env);
-    if (id === "p_links_clear") return await linksClear(env);
-    if (id === "p_links_clear_yes") return await linksClearYes(env);
-    if (/^p_ql_/.test(id)) return await queueList(env, id);
+    let screen;
+    if (id === "p_digest") screen = await digest(env);
+    else if (id === "p_errors") screen = await errors(env);
+    else if (id === "p_runs") screen = await runs(env);
+    else if (id === "p_qs") screen = await queueSummary(env);
+    else if (id === "p_ailog") screen = await aiLog(env);
+    else if (id === "p_links") screen = await links(env);
+    else if (id === "p_links_clear") screen = await linksClear(env);
+    else if (id === "p_links_clear_yes") screen = await linksClearYes(env);
+    else if (/^p_ql_/.test(id)) screen = await queueList(env, id);
+    else return { text: "گزینهٔ نامعتبر.", rows: HOME_ONLY };
+    return withNavigation(id, screen);
   } catch {
     return { text: "❌ خواندن داده ناموفق بود (d1_error).", rows: HOME_ONLY };
   }
-  return { text: "گزینهٔ نامعتبر.", rows: HOME_ONLY };
 }

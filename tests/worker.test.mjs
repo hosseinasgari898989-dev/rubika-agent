@@ -1261,9 +1261,18 @@ class PanelFakeDB {
     this.consoleInvites = new Map();
     this.brainEvents = [];
     this.lastChanges = 0;
+    this.failReadOnlyBatch = false;
   }
   prepare(sql) { return new PanelFakeStatement(this, sql); }
   async batch(statements) {
+    if (statements.length && statements.every((statement) => /^SELECT\b/i.test(statement.sql.trim()))) {
+      if (this.failReadOnlyBatch) throw new Error("mock_d1_read_failure");
+      return [
+        { results: [{ queued: 2, failed: 1, sent_today: 3 }] },
+        { results: [{ status: "success" }] },
+        { results: [{ errors_24h: 4 }] },
+      ];
+    }
     const results = [];
     for (const statement of statements) {
       const result = await statement.run();
@@ -1634,6 +1643,80 @@ async function postPanelUpdate(state, update, secret) {
     assert.equal(editCalls.some(call => call.payload.message_id === "stale-click-message-1234"), false);
     assert.equal(state.DB.state.get("panel_mid"), "latest-live-panel-9876");
     assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+  });
+}
+
+// editMessageText is completed before editMessageKeypad starts.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "ordered-live-panel-2468");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "ordered-click-2468", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_links" },
+      } },
+    }, secret);
+    const textIndex = calls.findIndex(call => call.method === "editMessageText");
+    const keypadIndex = calls.findIndex(call => call.method === "editMessageKeypad");
+    assert.equal(textIndex >= 0, true);
+    assert.equal(keypadIndex > textIndex, true);
+    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+  });
+}
+
+// A keypad edit failure is retried once; a second failure falls back to a new message with buttons.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "old-keypad-panel-1357");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "keypad-retry-click-1357", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_links" },
+      } },
+    }, secret);
+    const textIndex = calls.findIndex(call => call.method === "editMessageText");
+    const keypadIndexes = calls.map((call, index) => call.method === "editMessageKeypad" ? index : -1).filter(index => index >= 0);
+    const sendIndex = calls.findIndex(call => call.method === "sendMessage");
+    assert.equal(keypadIndexes.length, 2);
+    assert.equal(textIndex >= 0 && keypadIndexes[0] > textIndex, true);
+    assert.equal(keypadIndexes[1] > keypadIndexes[0], true);
+    assert.equal(sendIndex > keypadIndexes[1], true);
+    assert.equal(state.DB.state.get("last_error"), "rubika_editmessagekeypad_edit_failed");
+    assert.equal(state.DB.state.get("panel_edit_fail"), "1");
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    const fallback = calls[sendIndex];
+    assert.equal(Array.isArray(fallback.payload.inline_keypad.rows), true);
+    assert.equal(fallback.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0), true);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "old-keypad-panel-1357"), true);
+  }, ({ method }) => method === "editMessageKeypad"
+    ? new Response(JSON.stringify({ status: "EDIT_FAILED" }), { status: 200 })
+    : null);
+}
+
+// p_home still renders its fallback text and main-menu buttons when the read-only D1 batch fails.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.failReadOnlyBatch = true;
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "home-d1-failure-1234", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_home" },
+      } },
+    }, secret);
+    const displayed = calls.find(call => call.method === "sendMessage");
+    assert.equal(displayed.payload.text.includes("پنل مدیریت Rubika-Agent"), true);
+    assert.equal(displayed.payload.text.includes("صف:"), false);
+    assert.equal(displayed.payload.inline_keypad.rows.some(row =>
+      row.buttons && row.buttons.some(button => button.id === "p_home" && button.button_text === "🏠 منوی اصلی")), true);
   });
 }
 
