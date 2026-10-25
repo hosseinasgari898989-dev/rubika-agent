@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#05060f">
 <title>کنسول مالک — Rubika-Agent</title>
 <!--
 ASSUMPTIONS (فرض‌ها)
-1. پنل هرگز منتشر نمی‌کند؛ تنها مسیر انتشار «کانال آزمایشی» است و فقط اگر capabilities.publishing===true و rules.test_channel_only===true و تأیید کاربر.
+1. پنل مستقیماً Rubika API را برای انتشار صدا نمی‌زند. مسیرهای Mob preview/publish-test در Worker فعلی فعال نیستند؛ بخش GitHub Actions می‌تواند workflow اجرا کند و عملیات آن تابع guardهای خود workflow است. هر اجرای دستی می‌تواند عملیات واقعی ایجاد کند و فقط پس از تأیید صریح انجام می‌شود.
 2. Secretها فقط با «نام» نمایش داده می‌شوند. هیچ مقداری لاگ/نمایش داده نمی‌شود. توکن‌ها در لاگ درخواست‌ها redact می‌شوند.
 3. endpointهای «برنامه‌ریزی‌شده» ممکن است 404 بدهند؛ در آن صورت کارت «هنوز فعال نشده» + مثال پاسخ نمایش داده می‌شود.
 4. زمان تهران با Intl (Asia/Tehran) محاسبه می‌شود؛ fallback ثابت UTC+3:30.
@@ -16,139 +17,177 @@ ASSUMPTIONS (فرض‌ها)
 8. ویرایش فایل به‌صورت پیش‌فرض روی شاخهٔ feature جدید؛ commit مستقیم روی main نیاز به تایپ «تایید» دارد.
 9. حالت Mock داده‌های واقع‌نما تولید می‌کند (۶۰ ردیف صف و ...) و تأخیر/خطای تصادفی شبیه‌سازی می‌کند.
 10. کش stale-while-revalidate 15 ثانیه برای GETها.
-11. فونت Vazirmatn فقط اگر روی دستگاه نصب باشد؛ هیچ فونت خارجی لود نمی‌شود.
+11. فونت Vazirmatn از Google Fonts لود می‌شود؛ اگر شبکه در دسترس نباشد، فونت جایگزین سیستمی استفاده می‌شود.
 12. ذخیرهٔ توکن پیش‌فرض sessionStorage.
 -->
-<style>
-:root{
-  --bg:#f5f6f8; --panel:#ffffff; --panel2:#eef1f5; --txt:#15181d; --muted:#5d6672;
-  --line:#dce1e8; --brand:#2563eb; --brand2:#1d4ed8; --ok:#128a4e; --warn:#b45309;
-  --err:#c62424; --chip:#e7ecf3; --shadow:0 2px 10px rgba(16,24,40,.08);
-  --radius:14px;
-}
-html[data-theme="dark"]{
-  --bg:#0e1116; --panel:#161b22; --panel2:#1d232c; --txt:#e7ecf3; --muted:#9aa6b4;
-  --line:#2a323d; --brand:#4f8cff; --brand2:#3b7bff; --ok:#3fd07f; --warn:#f0b357;
-  --err:#ff6b6b; --chip:#232b36; --shadow:0 2px 12px rgba(0,0,0,.4);
-}
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
-  font-family:Vazirmatn,Tahoma,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.75}
-body{overflow-x:hidden;padding-bottom:env(safe-area-inset-bottom)}
-button,input,select,textarea{font-family:inherit;font-size:1rem;color:inherit}
-a{color:var(--brand);text-decoration:none}
+<style id="rc-v5">
+:root{--bg:#eef1fb;--panel:rgba(255,255,255,.78);--panel2:rgba(238,242,252,.92);--txt:#121832;--muted:#5a6486;--line:rgba(40,50,110,.14);--brand:#6d4aff;--brand2:#4f8cff;--ok:#0f9d62;--warn:#b45309;--err:#d12c3f;--chip:rgba(60,70,140,.1);--shadow:0 20px 40px -24px rgba(40,50,130,.45);--radius:22px;--grad:linear-gradient(135deg,#8b5cf6,#22b8e6);--acc:#8b5cf6;--acc2:#22d3ee;--acc3:#f472b6;--solid:#ffffff;color-scheme:light}
+html[data-theme="dark"]{--bg:#05060f;--panel:rgba(255,255,255,.05);--panel2:rgba(255,255,255,.09);--txt:#f1f4ff;--muted:#8f9bbf;--line:rgba(255,255,255,.1);--brand:#8b6cff;--brand2:#4f9cff;--ok:#34d399;--warn:#fbbf24;--err:#fb7185;--chip:rgba(255,255,255,.09);--shadow:0 30px 60px -30px rgba(0,0,0,.85);--grad:linear-gradient(135deg,#8b5cf6,#22d3ee);--solid:#0c1124;color-scheme:dark}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);font-family:'Vazirmatn',Vazir,Tahoma,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.75}
+body{overflow-x:hidden;min-height:100vh;min-height:100dvh}
+button,input,select,textarea{font-family:inherit;font-size:16px;color:inherit}
+a{color:var(--brand2);text-decoration:none}
 a:hover{text-decoration:underline}
-:focus-visible{outline:3px solid var(--brand);outline-offset:2px;border-radius:6px}
+:focus-visible{outline:3px solid var(--brand2);outline-offset:2px;border-radius:8px}
+::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-thumb{background:var(--chip);border-radius:9px}::-webkit-scrollbar-track{background:transparent}
 .hidden{display:none !important}
-/* layout */
-#app{display:flex;min-height:100vh}
-#sidebar{width:240px;flex:0 0 240px;background:var(--panel);border-left:1px solid var(--line);
-  position:sticky;top:0;height:100vh;overflow-y:auto;padding:12px 10px}
+.bg{position:fixed;inset:0;overflow:hidden;z-index:0;pointer-events:none}
+.bg::after{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 50% 120%,transparent 40%,rgba(0,0,0,.35))}
+html[data-theme="light"] .bg::after{background:none}
+.orb{position:absolute;border-radius:50%;filter:blur(90px);opacity:.5;animation:fl 20s ease-in-out infinite alternate;will-change:transform}
+.o1{width:520px;height:520px;background:var(--acc);top:-160px;right:-100px}
+.o2{width:460px;height:460px;background:var(--acc2);bottom:-140px;left:-80px;animation-delay:-7s}
+.o3{width:320px;height:320px;background:var(--acc3);top:38%;left:42%;opacity:.22;animation-delay:-12s}
+html[data-theme="light"] .orb{opacity:.3}
+@keyframes fl{to{transform:translate3d(70px,-60px,0) scale(1.18)}}
+.floor{position:absolute;inset:auto -25% -10% -25%;height:58vh;background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:64px 64px;transform:perspective(520px) rotateX(64deg);transform-origin:bottom;-webkit-mask-image:linear-gradient(to top,#000,transparent);mask-image:linear-gradient(to top,#000,transparent);animation:flow 9s linear infinite;opacity:.6}
+@keyframes flow{to{background-position:0 64px}}
+#app{position:relative;z-index:1;display:flex;min-height:100vh;min-height:100dvh}
+#sidebar{width:262px;flex:0 0 262px;margin:14px 14px 14px 0;height:calc(100vh - 28px);height:calc(100dvh - 28px);position:sticky;top:14px;overflow-y:auto;overflow-x:hidden;padding:14px 10px;background:linear-gradient(180deg,var(--panel2),var(--panel));backdrop-filter:blur(26px) saturate(150%);-webkit-backdrop-filter:blur(26px) saturate(150%);border:1px solid var(--line);border-radius:28px;box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.12)}
 #main{flex:1;min-width:0;display:flex;flex-direction:column}
-header#topbar{position:sticky;top:0;z-index:40;background:var(--panel);border-bottom:1px solid var(--line);
-  display:flex;align-items:center;gap:8px;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top))}
-#pageWrap{padding:12px;flex:1}
-.brand{display:flex;align-items:center;gap:8px;font-weight:700;padding:8px 10px}
-.brand .dot{width:10px;height:10px;border-radius:50%;background:var(--brand)}
-.navlink{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;color:var(--txt);
-  min-height:44px;cursor:pointer;border:0;background:none;width:100%;text-align:right}
-.navlink:hover{background:var(--panel2);text-decoration:none}
-.navlink.active{background:var(--brand);color:#fff}
-.navlink .ic{width:22px;text-align:center}
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:8px 14px;
-  border-radius:10px;border:1px solid var(--line);background:var(--panel2);cursor:pointer;font-weight:600}
-.btn:active{transform:translateY(1px)}
-.btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
-.btn.danger{background:var(--err);border-color:var(--err);color:#fff}
+header#topbar{position:sticky;top:0;z-index:40;margin:14px 14px 0 14px;display:flex;align-items:center;gap:8px;padding:8px 16px;padding-top:calc(8px + env(safe-area-inset-top,0px));background:linear-gradient(180deg,var(--panel2),var(--panel));backdrop-filter:blur(22px) saturate(150%);-webkit-backdrop-filter:blur(22px) saturate(150%);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.1)}
+#pageTitle{font-size:20px;font-weight:800;background:linear-gradient(90deg,var(--txt),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+#pageWrap{padding:16px 14px 30px;flex:1;width:100%;max-width:1320px;margin:0 auto}
+#page>*{animation:up .55s cubic-bezier(.2,.8,.2,1) both}
+#page>*:nth-child(2){animation-delay:.06s}#page>*:nth-child(3){animation-delay:.12s}#page>*:nth-child(4){animation-delay:.18s}#page>*:nth-child(n+5){animation-delay:.24s}
+@keyframes up{from{opacity:0;transform:translateY(16px)}}
+.brand{display:flex;align-items:center;gap:13px;font-weight:800;padding:8px 8px 18px;margin-bottom:6px;border-bottom:1px solid var(--line)}
+.brand b{font-size:17px;display:block;letter-spacing:.3px;background:linear-gradient(90deg,var(--txt),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.brand small{color:var(--muted);font-size:11px;font-weight:400}
+.brand .dot{width:12px;height:12px;border-radius:50%;background:var(--grad);box-shadow:0 0 14px var(--brand2)}
+.cw{width:38px;height:38px;perspective:260px;flex:none;filter:drop-shadow(0 0 14px rgba(34,211,238,.55))}
+.cube{width:38px;height:38px;position:relative;transform-style:preserve-3d;animation:spin 12s linear infinite}
+.cube i{position:absolute;inset:0;border:1px solid var(--acc2);background:linear-gradient(135deg,rgba(139,92,246,.5),rgba(34,211,238,.3))}
+.cube i:nth-child(1){transform:translateZ(19px)}.cube i:nth-child(2){transform:rotateY(180deg) translateZ(19px)}.cube i:nth-child(3){transform:rotateY(90deg) translateZ(19px)}.cube i:nth-child(4){transform:rotateY(-90deg) translateZ(19px)}.cube i:nth-child(5){transform:rotateX(90deg) translateZ(19px)}.cube i:nth-child(6){transform:rotateX(-90deg) translateZ(19px)}
+@keyframes spin{from{transform:rotateX(-22deg) rotateY(0)}to{transform:rotateX(-22deg) rotateY(360deg)}}
+.navlink{display:flex;align-items:center;gap:11px;padding:7px 10px;border-radius:16px;color:var(--muted);min-height:46px;cursor:pointer;border:1px solid transparent;background:none;width:100%;text-align:right;position:relative;transition:background .2s,color .2s,transform .2s;font-size:14px}
+.navlink .ic{width:32px;height:32px;display:grid;place-items:center;flex:none;border-radius:11px;background:var(--panel);border:1px solid var(--line);font-size:15px;transition:.2s}
+.navlink:hover{background:var(--panel);color:var(--txt);text-decoration:none;transform:translateX(-4px)}
+.navlink:hover .ic{border-color:var(--acc2)}
+.navlink.active{background:linear-gradient(90deg,rgba(139,92,246,.3),rgba(34,211,238,.1));color:var(--txt);font-weight:700;border-color:rgba(139,92,246,.35);box-shadow:0 10px 26px -14px var(--acc)}
+.navlink.active .ic{background:var(--grad);border-color:transparent;color:#fff;box-shadow:0 6px 16px -4px var(--acc)}
+.navlink.active::after{content:"";position:absolute;right:-13px;top:22%;bottom:22%;width:4px;border-radius:4px;background:linear-gradient(var(--acc),var(--acc2));box-shadow:0 0 14px var(--acc2)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:8px 16px;border-radius:14px;border:1px solid var(--line);background:var(--panel2);cursor:pointer;font-weight:700;font-size:14px;transition:transform .18s,filter .18s,box-shadow .18s}
+.btn:hover{transform:translateY(-2px);filter:brightness(1.12)}
+.btn:active{transform:translateY(0) scale(.97)}
+.btn.primary{background:var(--grad);border-color:transparent;color:#fff;box-shadow:0 10px 24px -10px var(--acc),inset 0 1px 0 rgba(255,255,255,.3)}
+.btn.danger{background:linear-gradient(135deg,var(--err),#f43f5e);border-color:transparent;color:#fff;box-shadow:0 10px 24px -10px var(--err),inset 0 1px 0 rgba(255,255,255,.25)}
 .btn.ghost{background:transparent}
-.btn.sm{min-height:34px;padding:4px 10px;font-size:.86rem;font-weight:600}
-.btn[disabled]{opacity:.5;cursor:not-allowed}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow);margin-bottom:12px}
-.card h3{margin:0 0 8px;font-size:1rem}
+.btn.sm{min-height:36px;padding:4px 12px;font-size:12.5px;border-radius:11px}
+.btn[disabled]{opacity:.45;cursor:not-allowed;transform:none;filter:grayscale(.4)}
+.card{position:relative;background:linear-gradient(160deg,var(--panel2),var(--panel));backdrop-filter:blur(20px) saturate(140%);-webkit-backdrop-filter:blur(20px) saturate(140%);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);margin-bottom:14px;min-width:0}
+.card::after{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;background:linear-gradient(150deg,rgba(255,255,255,.3),rgba(255,255,255,.04) 40%,rgba(139,92,246,.4));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+html[data-theme="light"] .card::after{background:linear-gradient(150deg,rgba(255,255,255,1),rgba(40,50,110,.08) 50%,rgba(139,92,246,.3))}
+.card:hover{box-shadow:0 34px 60px -28px rgba(139,92,246,.5)}
+.card h3{margin:0 0 12px;font-size:15px;font-weight:800;display:flex;align-items:center;gap:8px}
+.card h3::before{content:"";width:4px;height:16px;border-radius:4px;background:var(--grad);flex:none}
+.card .card{background:var(--panel);box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none}
 .grid{display:grid;gap:12px}
-.g2{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
-.g3{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
-.g4{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
-.stat .v{font-size:1.5rem;font-weight:800}
-.stat .l{color:var(--muted);font-size:.82rem}
+.g2{grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr))}
+.stat{background:linear-gradient(160deg,rgba(139,92,246,.16),transparent 65%),linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:20px;padding:14px;min-width:0;transition:transform .2s,border-color .2s}
+.stat:hover{transform:translateY(-3px);border-color:rgba(139,92,246,.5)}
+.stat .v{font-size:1.7rem;font-weight:900;line-height:1.4;overflow-wrap:anywhere;background:linear-gradient(90deg,var(--txt),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat .l{color:var(--muted);font-size:.8rem;font-weight:600}
 .muted{color:var(--muted)}
 .small{font-size:.82rem}
-.chip{display:inline-flex;align-items:center;gap:4px;background:var(--chip);border-radius:999px;padding:2px 10px;font-size:.78rem;margin:2px}
-.chip.ok{background:rgba(18,138,78,.16);color:var(--ok)}
-.chip.err{background:rgba(198,36,36,.15);color:var(--err)}
-.chip.warn{background:rgba(180,83,9,.16);color:var(--warn)}
-.chip.info{background:rgba(37,99,235,.14);color:var(--brand)}
+.chip{display:inline-flex;align-items:center;gap:5px;background:var(--chip);border-radius:999px;padding:2px 11px;font-size:.78rem;margin:2px;font-weight:600;border:1px solid transparent;max-width:100%}
+.chip.ok{background:rgba(52,211,153,.15);color:var(--ok);border-color:rgba(52,211,153,.3)}
+.chip.err{background:rgba(251,113,133,.15);color:var(--err);border-color:rgba(251,113,133,.3)}
+.chip.warn{background:rgba(251,191,36,.15);color:var(--warn);border-color:rgba(251,191,36,.3)}
+.chip.info{background:rgba(34,211,238,.14);color:var(--brand2);border-color:rgba(34,211,238,.3)}
 label.field{display:block;margin-bottom:10px}
-label.field > span{display:block;font-size:.85rem;color:var(--muted);margin-bottom:4px}
-input[type=text],input[type=password],input[type=number],select,textarea{
-  width:100%;padding:10px;min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--panel2)}
-textarea{min-height:120px;line-height:1.8}
+label.field > span{display:block;font-size:.82rem;color:var(--muted);font-weight:600;margin-bottom:5px}
+input[type=text],input[type=password],input[type=number],select,textarea{width:100%;padding:10px 13px;min-height:44px;border-radius:14px;border:1px solid var(--line);background:var(--panel);outline:0;transition:border-color .18s,box-shadow .18s,background .18s}
+input:focus,select:focus,textarea:focus{border-color:var(--acc2);background:var(--panel2);box-shadow:0 0 0 4px rgba(34,211,238,.16)}
+select option{background:var(--solid);color:var(--txt)}
+input[type=checkbox]{width:22px;height:22px;min-height:22px;accent-color:var(--acc);vertical-align:middle;cursor:pointer}
+textarea{min-height:120px;line-height:1.8;resize:vertical}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>input[type=text],.row>input[type=number],.row>input[type=password],.row>select,.row>textarea{flex:1 1 150px;min-width:0}
 .row.end{justify-content:flex-end}
-table{width:100%;border-collapse:collapse;font-size:.88rem}
-th,td{padding:8px;border-bottom:1px solid var(--line);text-align:right;vertical-align:top}
-th{color:var(--muted);font-weight:600;white-space:nowrap}
-.tblwrap{overflow-x:auto}
-.skel{background:linear-gradient(90deg,var(--panel2),var(--line),var(--panel2));background-size:200% 100%;
-  animation:sk 1.2s infinite;border-radius:8px;height:16px;margin:8px 0}
+.tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:18px;-webkit-overflow-scrolling:touch;background:var(--panel)}
+table{width:100%;border-collapse:collapse;font-size:.86rem}
+th{padding:11px 13px;color:var(--muted);font-weight:700;white-space:nowrap;text-align:right;font-size:.78rem;background:var(--panel2);border-bottom:1px solid var(--line)}
+td{padding:10px 13px;border-bottom:1px solid var(--line);text-align:right;vertical-align:middle;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis}
+tbody tr:last-child td{border-bottom:0}
+tbody tr{transition:background .15s}
+tbody tr:hover td{background:var(--panel2)}
+.skel{background:linear-gradient(90deg,var(--panel),var(--panel2),var(--panel));background-size:200% 100%;animation:sk 1.3s infinite;border-radius:10px;height:16px;margin:9px 0}
 @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
-.empty{text-align:center;padding:26px;color:var(--muted)}
-.toastwrap{position:fixed;bottom:84px;left:12px;right:12px;z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-.toast{background:var(--panel);border:1px solid var(--line);border-right:5px solid var(--brand);
-  border-radius:10px;padding:10px 12px;box-shadow:var(--shadow);pointer-events:auto}
-.toast.ok{border-right-color:var(--ok)} .toast.err{border-right-color:var(--err)} .toast.warn{border-right-color:var(--warn)}
-.modalbg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:300;display:flex;align-items:center;justify-content:center;padding:12px}
-.modal{background:var(--panel);border-radius:16px;max-width:560px;width:100%;max-height:88vh;overflow:auto;padding:16px;border:1px solid var(--line)}
+.empty{text-align:center;padding:34px 12px;color:var(--muted)}
+.toastwrap{position:fixed;bottom:24px;left:12px;right:12px;z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{background:var(--solid);border:1px solid var(--line);border-right:5px solid var(--acc2);border-radius:16px;padding:12px 20px;box-shadow:var(--shadow);pointer-events:auto;font-weight:600;max-width:min(520px,100%);transition:opacity .3s}
+.toast.ok{border-right-color:var(--ok)}.toast.err{border-right-color:var(--err)}.toast.warn{border-right-color:var(--warn)}
+.modalbg{position:fixed;inset:0;background:rgba(3,6,18,.62);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:300;display:flex;align-items:center;justify-content:center;padding:12px}
+.modal{background:linear-gradient(160deg,var(--solid),var(--bg));border-radius:26px;max-width:600px;width:100%;max-height:88vh;max-height:88dvh;overflow:auto;padding:20px;border:1px solid var(--line);box-shadow:0 40px 80px -20px rgba(0,0,0,.8);animation:pop .4s cubic-bezier(.2,.8,.2,1) both}
+@keyframes pop{from{opacity:0;transform:perspective(700px) rotateX(14deg) translateY(20px) scale(.94)}}
+.modal h3{margin-top:0}
 #bottomnav{display:none}
-.tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:10px}
-.tabs button{white-space:nowrap;min-height:38px;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel);cursor:pointer}
-.tabs button.active{background:var(--brand);color:#fff;border-color:var(--brand)}
-pre{background:var(--panel2);padding:10px;border-radius:10px;overflow:auto;direction:ltr;text-align:left;font-size:.8rem;max-height:420px}
-code{direction:ltr;unicode-bidi:embed}
-.kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:.87rem}
-.kv b{font-weight:600;color:var(--muted)}
-.kv span{word-break:break-all;text-align:left;direction:ltr}
-.jt{font-family:ui-monospace,Menlo,Consolas,monospace;direction:ltr;text-align:left;font-size:.8rem}
-.jt .k{color:var(--brand)} .jt .s{color:var(--ok)} .jt .n{color:var(--warn)}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding:5px;margin-bottom:14px;background:var(--panel);border:1px solid var(--line);border-radius:18px;max-width:100%;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{white-space:nowrap;min-height:38px;padding:4px 16px;border-radius:13px;border:0;background:transparent;cursor:pointer;color:var(--muted);font-weight:600;font-size:14px;transition:.18s}
+.tabs button:hover{color:var(--txt)}
+.tabs button.active{background:var(--grad);color:#fff;box-shadow:0 8px 18px -8px var(--acc)}
+pre{background:var(--panel2);border:1px solid var(--line);padding:10px;border-radius:14px;overflow:auto;direction:ltr;text-align:left;font-size:.8rem;max-height:420px}
+code{direction:ltr;unicode-bidi:embed;font-family:ui-monospace,Menlo,Consolas,monospace}
+.kv{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px 12px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:.87rem}
+.kv b{font-weight:700;color:var(--muted);flex:none}
+.kv span{flex:1 1 140px;min-width:0;overflow-wrap:anywhere;word-break:break-word;text-align:left;unicode-bidi:plaintext}
+.jt{font-family:ui-monospace,Menlo,Consolas,monospace;direction:ltr;text-align:left;font-size:.8rem;overflow-wrap:anywhere}
+.jt .k{color:var(--brand2)}.jt .s{color:var(--ok)}.jt .n{color:var(--warn)}
 .jt details{margin-right:12px}
-.badge{display:inline-block;padding:1px 8px;border-radius:6px;font-size:.75rem;background:var(--chip)}
-.bar{height:8px;border-radius:6px;background:var(--panel2);overflow:hidden}
-.bar>i{display:block;height:100%;background:var(--brand)}
-.listitem{border-bottom:1px solid var(--line);padding:10px 0;cursor:pointer}
+.badge{display:inline-block;padding:1px 9px;border-radius:7px;font-size:.75rem;background:var(--chip)}
+.bar{height:10px;border-radius:99px;background:var(--panel2);overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.25)}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2));border-radius:99px;box-shadow:0 0 12px var(--acc2);transition:width 1s cubic-bezier(.2,.8,.2,1)}
+.listitem{border-bottom:1px solid var(--line);padding:11px 0;cursor:pointer;min-width:0}
 .listitem:last-child{border-bottom:0}
-.editor{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;direction:ltr}
-.editor .gut{background:var(--panel2);color:var(--muted);padding:8px 6px;text-align:right;font-family:ui-monospace,monospace;
-  font-size:.78rem;line-height:1.6;user-select:none;min-width:44px;overflow:hidden}
-.editor textarea{border:0;border-radius:0;background:var(--panel);font-family:ui-monospace,Menlo,Consolas,monospace;
-  font-size:.82rem;line-height:1.6;min-height:420px;white-space:pre;overflow-wrap:normal;overflow-x:auto}
-.diff div{font-family:ui-monospace,monospace;font-size:.78rem;direction:ltr;text-align:left;white-space:pre-wrap;padding:0 4px}
-.diff .add{background:rgba(18,138,78,.18)} .diff .del{background:rgba(198,36,36,.18)}
+.editor{display:flex;border:1px solid var(--line);border-radius:16px;overflow:hidden;direction:ltr;background:var(--panel)}
+.editor .gut{background:var(--panel2);color:var(--muted);padding:8px 6px;text-align:right;font-family:ui-monospace,monospace;font-size:.78rem;line-height:1.6;user-select:none;min-width:44px;overflow:hidden}
+.editor textarea{border:0;border-radius:0;background:transparent;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.82rem;line-height:1.6;min-height:420px;white-space:pre;overflow-wrap:normal;overflow-x:auto;box-shadow:none}
+.diff div{font-family:ui-monospace,monospace;font-size:.78rem;direction:ltr;text-align:left;white-space:pre-wrap;padding:0 6px;overflow-wrap:anywhere}
+.diff .add{background:rgba(52,211,153,.18)}.diff .del{background:rgba(251,113,133,.18)}
 .lock{position:fixed;inset:0;background:var(--bg);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px}
-.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;min-height:44px}
-.switch input{width:auto;min-height:auto;transform:scale(1.3);margin-left:6px}
+.switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;min-height:44px}
 .sep{height:1px;background:var(--line);margin:10px 0}
+details>summary{cursor:pointer;padding:4px 0;font-weight:600}
+@media(max-width:1100px){#sidebar{width:226px;flex-basis:226px}}
 @media(max-width:860px){
-  #sidebar{display:none}
-  #pageWrap{padding:10px 10px 90px}
-  #bottomnav{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:50;background:var(--panel);
-    border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom))}
-  #bottomnav button{flex:1;min-height:52px;border:0;background:none;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;gap:2px;font-size:.68rem;color:var(--muted);cursor:pointer}
-  #bottomnav button.active{color:var(--brand);font-weight:700}
-  #bottomnav .ic{font-size:1.1rem}
-  table.resp thead{display:none}
-  table.resp tr{display:block;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;padding:6px;background:var(--panel)}
-  table.resp td{display:flex;justify-content:space-between;gap:8px;border-bottom:1px dashed var(--line);padding:6px}
-  table.resp td:last-child{border-bottom:0}
-  table.resp td::before{content:attr(data-l);color:var(--muted);font-size:.78rem}
-  .toastwrap{bottom:76px}
+.orb{filter:blur(70px)}
+#sidebar{display:none}
+header#topbar{margin:8px 8px 0;padding:6px 12px;padding-top:calc(6px + env(safe-area-inset-top,0px));border-radius:20px}
+#pageTitle{font-size:17px}
+#pageWrap{padding:10px 8px calc(104px + env(safe-area-inset-bottom,0px))}
+.card{padding:14px;border-radius:20px}
+.stat .v{font-size:1.35rem}
+.g4{grid-template-columns:1fr 1fr}
+#bottomnav{display:flex;position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));z-index:50;padding:5px;gap:2px;border-radius:26px;background:linear-gradient(180deg,var(--panel2),var(--panel)),var(--solid);backdrop-filter:blur(26px) saturate(150%);-webkit-backdrop-filter:blur(26px) saturate(150%);border:1px solid var(--line);box-shadow:0 20px 40px -10px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.14)}
+#bottomnav button{flex:1;min-width:0;min-height:54px;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;font-size:.66rem;color:var(--muted);cursor:pointer;border-radius:18px;white-space:nowrap}
+#bottomnav .ic{font-size:1.15rem;width:40px;height:26px;display:grid;place-items:center;border-radius:13px;transition:.2s}
+#bottomnav button.active{color:var(--txt);font-weight:800}
+#bottomnav button.active .ic{background:var(--grad);color:#fff;box-shadow:0 6px 14px -4px var(--acc)}
+td,th{padding:9px 10px}
+td{max-width:220px}
+.toastwrap{bottom:calc(88px + env(safe-area-inset-bottom,0px))}
+.modalbg{align-items:flex-end;padding:0}
+.modal{border-radius:28px 28px 0 0;max-width:100%;max-height:92vh;max-height:92dvh;padding:18px 16px calc(16px + env(safe-area-inset-bottom,0px))}
+.editor textarea{min-height:320px}
+.row.end[style*="sticky"]{bottom:calc(84px + env(safe-area-inset-bottom,0px)) !important;padding:6px;background:var(--panel2);border-radius:16px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 }
+@media(min-width:861px){td{white-space:normal;overflow-wrap:anywhere;max-width:340px}}
+@media(max-width:380px){.g4,.g3{grid-template-columns:1fr}.stat .v{font-size:1.2rem}}
+@media(prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
 </style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700;800;900&display=swap">
 </head>
 <body>
+<div class="bg"><div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div><div class="floor"></div></div>
 <div id="app">
-  <aside id="sidebar"><div class="brand"><span class="dot"></span><span>کنسول مالک</span></div><nav id="navlist"></nav></aside>
+  <aside id="sidebar"><div class="brand"><div class="cw"><div class="cube"><i></i><i></i><i></i><i></i><i></i><i></i></div></div><div><b>Rubika-Agent</b><small>کنسول مالک</small></div></div><nav id="navlist"></nav></aside>
   <div id="main">
     <header id="topbar">
       <button class="btn sm ghost" id="btnBack" aria-label="برگشت">◀ برگشت</button>
@@ -168,7 +207,7 @@ code{direction:ltr;unicode-bidi:embed}
 <script>
 "use strict";
 /* ============================ CONFIG ============================ */
-const VERSION = "1.0.0";
+const VERSION = "5.0.0";
 const DEFAULTS = {
   apiBase: "https://rubika-agent.h98609294.workers.dev",
   ghOwner: "hosseinasgari898989-dev",
@@ -209,39 +248,39 @@ const API_CONTRACT = {
   queueState:        {m:"POST", p:"/api/brain/automation-queue/{id}/state", auth:true, planned:false, desc:"تغییر وضعیت ردیف صف"},
   itemsSeen:         {m:"GET",  p:"/api/brain/items/seen", auth:true, planned:false, desc:"آیتم‌های دیده‌شده"},
   ownerDigestClaim:  {m:"POST", p:"/api/brain/owner-digest/claim", auth:true, planned:false, desc:"فقط در عیب‌یابی؛ کنسول خودکار صدا نمی‌زند"},
-  events:            {m:"GET",  p:"/api/console/events", auth:true, planned:true, desc:"رخدادها (owner_digest_events)"},
-  runs:              {m:"GET",  p:"/api/console/runs", auth:true, planned:true, desc:"اجراها"},
-  deliveryAttempts:  {m:"GET",  p:"/api/console/delivery-attempts", auth:true, planned:true, desc:"تلاش‌های ارسال"},
-  brainEvents:       {m:"GET",  p:"/api/console/brain-events", auth:true, planned:true, desc:"رخدادهای مغز"},
-  consoleItems:      {m:"GET",  p:"/api/console/items", auth:true, planned:true, desc:"آیتم‌ها"},
-  patchItem:         {m:"PATCH",p:"/api/console/items/{id}", auth:true, planned:true, desc:"ویرایش آیتم"},
-  queueAction:       {m:"POST", p:"/api/console/queue/{id}/action", auth:true, planned:true, desc:"اقدام روی صف"},
-  sourcesList:       {m:"GET",  p:"/api/console/sources", auth:true, planned:true, desc:"منابع"},
-  sourcesCreate:     {m:"POST", p:"/api/console/sources", auth:true, planned:true, desc:"افزودن منبع"},
-  sourcesPatch:      {m:"PATCH",p:"/api/console/sources/{id}", auth:true, planned:true, desc:"ویرایش منبع"},
-  sourcesDelete:     {m:"DELETE",p:"/api/console/sources/{id}", auth:true, planned:true, desc:"حذف منبع"},
-  channelsList:      {m:"GET",  p:"/api/console/channels", auth:true, planned:true, desc:"کانال‌های مقصد"},
-  channelsCreate:    {m:"POST", p:"/api/console/channels", auth:true, planned:true, desc:"افزودن کانال"},
-  channelsDelete:    {m:"DELETE",p:"/api/console/channels/{id}", auth:true, planned:true, desc:"حذف کانال"},
-  ownersList:        {m:"GET",  p:"/api/console/owners", auth:true, planned:true, desc:"مالک‌ها"},
-  ownersCreate:      {m:"POST", p:"/api/console/owners", auth:true, planned:true, desc:"افزودن مالک"},
-  ownersDelete:      {m:"DELETE",p:"/api/console/owners/{id}", auth:true, planned:true, desc:"حذف مالک"},
-  ownersInvite:      {m:"POST", p:"/api/console/owners/invite", auth:true, planned:true, desc:"کد دعوت یک‌بارمصرف"},
-  rulesGet:          {m:"GET",  p:"/api/console/rules", auth:true, planned:true, desc:"قوانین"},
-  rulesPut:          {m:"PUT",  p:"/api/console/rules", auth:true, planned:true, desc:"ذخیرهٔ قوانین (قفل خوش‌بینانه)"},
-  linksGet:          {m:"GET",  p:"/api/console/links", auth:true, planned:true, desc:"لینک‌های panel_links"},
-  linksPost:         {m:"POST", p:"/api/console/links", auth:true, planned:true, desc:"افزودن لینک"},
-  linksClear:        {m:"POST", p:"/api/console/links/clear", auth:true, planned:true, desc:"پاک‌سازی لینک‌ها"},
+  events:            {m:"GET",  p:"/api/console/events", auth:true, planned:false, desc:"رخدادها (owner_digest_events)"},
+  runs:              {m:"GET",  p:"/api/console/runs", auth:true, planned:false, desc:"اجراها"},
+  deliveryAttempts:  {m:"GET",  p:"/api/console/delivery-attempts", auth:true, planned:false, desc:"تلاش‌های ارسال"},
+  brainEvents:       {m:"GET",  p:"/api/console/brain-events", auth:true, planned:false, desc:"رخدادهای مغز"},
+  consoleItems:      {m:"GET",  p:"/api/console/items", auth:true, planned:false, desc:"آیتم‌ها"},
+  patchItem:         {m:"PATCH",p:"/api/console/items/{id}", auth:true, planned:false, desc:"ویرایش آیتم"},
+  queueAction:       {m:"POST", p:"/api/console/queue/{id}/action", auth:true, planned:false, desc:"اقدام روی صف"},
+  sourcesList:       {m:"GET",  p:"/api/console/sources", auth:true, planned:false, desc:"منابع"},
+  sourcesCreate:     {m:"POST", p:"/api/console/sources", auth:true, planned:false, desc:"افزودن منبع"},
+  sourcesPatch:      {m:"PATCH",p:"/api/console/sources/{id}", auth:true, planned:false, desc:"ویرایش منبع"},
+  sourcesDelete:     {m:"DELETE",p:"/api/console/sources/{id}", auth:true, planned:false, desc:"حذف منبع"},
+  channelsList:      {m:"GET",  p:"/api/console/channels", auth:true, planned:false, desc:"کانال‌های مقصد"},
+  channelsCreate:    {m:"POST", p:"/api/console/channels", auth:true, planned:false, desc:"افزودن کانال"},
+  channelsDelete:    {m:"DELETE",p:"/api/console/channels/{id}", auth:true, planned:false, desc:"حذف کانال"},
+  ownersList:        {m:"GET",  p:"/api/console/owners", auth:true, planned:false, desc:"مالک‌ها"},
+  ownersCreate:      {m:"POST", p:"/api/console/owners", auth:true, planned:false, desc:"افزودن مالک"},
+  ownersDelete:      {m:"DELETE",p:"/api/console/owners/{id}", auth:true, planned:false, desc:"حذف مالک"},
+  ownersInvite:      {m:"POST", p:"/api/console/owners/invite", auth:true, planned:false, desc:"کد دعوت یک‌بارمصرف"},
+  rulesGet:          {m:"GET",  p:"/api/console/rules", auth:true, planned:false, desc:"قوانین"},
+  rulesPut:          {m:"PUT",  p:"/api/console/rules", auth:true, planned:false, desc:"ذخیرهٔ قوانین (قفل خوش‌بینانه)"},
+  linksGet:          {m:"GET",  p:"/api/console/links", auth:true, planned:false, desc:"لینک‌های panel_links"},
+  linksPost:         {m:"POST", p:"/api/console/links", auth:true, planned:false, desc:"افزودن لینک"},
+  linksClear:        {m:"POST", p:"/api/console/links/clear", auth:true, planned:false, desc:"پاک‌سازی لینک‌ها"},
   mobPreview:        {m:"POST", p:"/api/console/mob/preview", auth:true, planned:true, desc:"پیش‌نمایش خبر X"},
   mobPublishTest:    {m:"POST", p:"/api/console/mob/publish-test", auth:true, planned:true, desc:"انتشار فقط در کانال آزمایشی"},
-  jobsCreate:        {m:"POST", p:"/api/console/jobs", auth:true, planned:true, desc:"ساخت job"},
-  jobsList:          {m:"GET",  p:"/api/console/jobs", auth:true, planned:true, desc:"لیست jobها"},
-  jobGet:            {m:"GET",  p:"/api/console/jobs/{id}", auth:true, planned:true, desc:"وضعیت job"},
-  aiCalls:           {m:"GET",  p:"/api/console/ai/calls", auth:true, planned:true, desc:"لاگ تماس‌های AI"},
-  d1Tables:          {m:"GET",  p:"/api/console/d1/tables", auth:true, planned:true, desc:"جدول‌های D1"},
-  d1Query:           {m:"POST", p:"/api/console/d1/query", auth:true, planned:true, desc:"کوئری SELECT فقط‌خواندنی"},
+  jobsCreate:        {m:"POST", p:"/api/console/jobs", auth:true, planned:false, desc:"ساخت job"},
+  jobsList:          {m:"GET",  p:"/api/console/jobs", auth:true, planned:false, desc:"لیست jobها"},
+  jobGet:            {m:"GET",  p:"/api/console/jobs/{id}", auth:true, planned:false, desc:"وضعیت job"},
+  aiCalls:           {m:"GET",  p:"/api/console/ai/calls", auth:true, planned:false, desc:"لاگ تماس‌های AI"},
+  d1Tables:          {m:"GET",  p:"/api/console/d1/tables", auth:true, planned:false, desc:"جدول‌های D1"},
+  d1Query:           {m:"POST", p:"/api/console/d1/query", auth:true, planned:false, desc:"کوئری SELECT فقط‌خواندنی"},
   megaInventory:     {m:"GET",  p:"/api/console/mega/inventory", auth:true, planned:true, desc:"موجودی Mega"},
-  audit:             {m:"GET",  p:"/api/console/audit", auth:true, planned:true, desc:"لاگ ممیزی سمت سرور"}
+  audit:             {m:"GET",  p:"/api/console/audit", auth:true, planned:false, desc:"لاگ ممیزی سمت سرور"}
 };
 const PLANNED_SAMPLE = {
   events: {ok:true, items:[{id:1,occurred_at:"2026-01-01T07:05:00Z",category:"success",source:"digest",title:"ارسال شد",detail:"..."}], total:1},
@@ -418,7 +457,7 @@ function isSelectOnly(sql){
   const s = String(sql||"").replace(/--[^\n]*/g,"").replace(/\/\*[\s\S]*?\*\//g,"").trim().replace(/;+\s*$/,"");
   if(!s) return false;
   if(s.indexOf(";")>=0) return false;
-  if(!/^(select|with)\b/i.test(s)) return false;
+  if(!/^select\b/i.test(s)) return false;
   if(/\b(insert|update|delete|drop|alter|create|replace|attach|detach|pragma|vacuum|reindex|truncate|grant|begin|commit)\b/i.test(s)) return false;
   return true;
 }
@@ -1129,7 +1168,7 @@ PAGES.events = function(root){
   const search = el("input",{type:"text",placeholder:"جست‌وجو در عنوان/جزئیات",value:st.q,"aria-label":"جست‌وجو"});
   search.addEventListener("input", debounce(e=>{ st.q=e.target.value; st.offset=0; load() },350));
   const body = el("div",{});
-  root.appendChild(card("رخدادهای ۲۴ ساعت گذشته",[tabs, search, sectionNote("جایگزین دایجست روبیکا — تمام متن‌ها امن نمایش داده می‌شوند.")]));
+  root.appendChild(card("آخرین رخدادها",[tabs, search, sectionNote("جایگزین دایجست روبیکا — تمام متن‌ها امن نمایش داده می‌شوند.")]));
   root.appendChild(body);
   function sync(){ Array.from(tabs.children).forEach((b,i)=>{ const v=["","info","success","error","ai_success","ai_error"][i]; b.className = st.cat===v?"active":"" }) }
   function load(){
@@ -1473,7 +1512,7 @@ PAGES.runs = function(root){
     newJob.appendChild(typeSel); newJob.appendChild(paramInp);
     newJob.appendChild(el("button",{class:"btn primary",text:"ساخت جاب",onclick:async()=>{
       let params={}; if(paramInp.value.trim()){ try{ params=JSON.parse(paramInp.value) }catch(e){ return toast("JSON پارامتر نامعتبر است","err") } }
-      const ok = await confirmDanger("ساخت جاب","جاب «"+typeSel.value+"» روی سرور اجرا می‌شود. هیچ انتشاری در کانال production انجام نمی‌شود.");
+      const ok = await confirmDanger("ثبت درخواست جاب","درخواست جاب «"+typeSel.value+"» در دیتابیس کنسول ثبت می‌شود؛ اجرای واقعی به موتور جاب وابسته است. این مسیر مستقیماً چیزی منتشر نمی‌کند.");
       if(!ok) return;
       try{ const r = await api("POST","/api/console/jobs",{body:{type:typeSel.value, params}}); audit("job.create",typeSel.value);
         toast("جاب ساخته شد: "+String(r.job_id),"ok"); draw() }catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
@@ -2256,7 +2295,7 @@ PAGES.data = function(root){
         w.appendChild(det);
       });
       w.appendChild(el("div",{class:"row",style:{marginTop:"8px"}},[el("button",{class:"btn",text:"بکاپ D1 (جاب)",onclick:async()=>{
-        const ok = await confirmDanger("بکاپ D1","یک جاب d1_backup روی سرور اجرا می‌شود.");
+        const ok = await confirmDanger("ثبت درخواست بکاپ D1","درخواست جاب d1_backup در دیتابیس کنسول ثبت می‌شود؛ اجرای واقعی به موتور جاب وابسته است.");
         if(!ok) return;
         try{ const r = await api("POST","/api/console/jobs",{body:{type:"d1_backup",params:{}}}); toast("جاب ساخته شد: "+r.job_id,"ok"); audit("job.d1_backup","") }
         catch(e){ toast(e.notFound?"این قابلیت هنوز در Worker فعال نشده است":(e.fa||"خطا"),"err") }
@@ -2269,7 +2308,7 @@ PAGES.data = function(root){
   qBox.appendChild(sqlArea);
   qBox.appendChild(el("div",{class:"row"},[
     el("button",{class:"btn primary",text:"اجرا",onclick:runQuery}),
-    el("span",{class:"small muted",text:"فقط SELECT/WITH مجاز است؛ LIMIT خودکار اضافه می‌شود."})]));
+    el("span",{class:"small muted",text:"فقط SELECT مجاز است؛ LIMIT خودکار اضافه می‌شود."})]));
   qBox.appendChild(res);
   async function runQuery(){
     const sql = sqlArea.value.trim();
@@ -2691,7 +2730,7 @@ if(document.readyState!=="loading") boot();
 /* ============================================================
 CHANGELOG / KNOWN LIMITS
 ------------------------------------------------------------
-v1.0.0 — نسخهٔ اول کامل کنسول مالک (تک‌فایل، بدون CDN/فونت خارجی/فریم‌ورک).
+v5.0.0 — کنسول یک‌فایلی مالک با رابط واکنش‌گرا، مخزن GitHub، زمان‌بندی و خودآزمون.
 شامل ۱۷ مسیر: home, queue, queue/item/<id>, events, items, runs, mob, ai, sources,
 owners, rules, schedules, repo, data, debug, help, settings, selftest.
 
@@ -2702,40 +2741,37 @@ KNOWN LIMITS:
 - GET /api/brain/automation-queue رکوردهای processing قدیمی‌تر از ۱۲ ساعت را uncertain می‌کند (یادداشت در UI).
 - جست‌وجو/مرتب‌سازی صف روی «صفحهٔ جاری» انجام می‌شود (سرور فیلتر متنی ندارد).
 - حالت Mock داده را در حافظه نگه می‌دارد؛ با رفرش صفحه ریست می‌شود.
-- هیچ مسیر کدی برای انتشار در کانال production وجود ندارد؛ تنها POST /api/console/mob/publish-test (کانال آزمایشی) با دو شرط و تأیید.
+- Worker فعلی capability انتشار را غیرفعال کرده و مسیرهای /api/console/mob/preview و /api/console/mob/publish-test هنوز پیاده‌سازی نشده‌اند. اجرای workflowهای GitHub از صفحهٔ زمان‌بندی‌ها جداست و تابع guardهای خود workflow است.
 
-ENDPOINTهای فرض‌شده (از API_CONTRACT):
-موجود:
-  GET  /api/status
-  GET  /api/brain/owner-console/queue-summary
-  GET  /api/brain/ai-provider/status?provider=
-  GET  /api/brain/automation-queue (+?summary=1)
+وضعیت endpointها با Worker فعلی تطبیق داده شده است:
+فعال:
+  GET /api/status
+  GET /api/brain/owner-console/queue-summary
+  GET /api/brain/ai-provider/status?provider=
+  GET/POST /api/brain/automation-queue
   POST /api/brain/automation-queue/{id}/state
-  GET  /api/brain/items/seen
-  POST /api/brain/owner-digest/claim   (فقط در عیب‌یابی، دستی)
-برنامه‌ریزی‌شده (graceful degradation در 404 / {ok:false,error:"not_found"}):
-  GET    /api/console/events
-  GET    /api/console/runs
-  GET    /api/console/delivery-attempts
-  GET    /api/console/brain-events
-  GET    /api/console/items
-  PATCH  /api/console/items/{id}
-  POST   /api/console/queue/{id}/action
+  GET /api/brain/items/seen
+  POST /api/brain/owner-digest/claim (فقط در عیب‌یابی و با تأیید صریح)
+  GET /api/console/events, /runs, /delivery-attempts, /brain-events, /audit
+  GET/PATCH /api/console/items[/{id}]
+  POST /api/console/queue/{id}/action
   GET/POST/PATCH/DELETE /api/console/sources[/{id}]
   GET/POST/DELETE /api/console/channels[/{id}]
-  GET/POST/DELETE /api/console/owners[/{id}]
-  POST   /api/console/owners/invite
+  GET/POST/DELETE /api/console/owners[/{id}], POST /owners/invite
   GET/PUT /api/console/rules
-  GET/POST /api/console/links , POST /api/console/links/clear
-  POST   /api/console/mob/preview , POST /api/console/mob/publish-test
-  POST/GET /api/console/jobs , GET /api/console/jobs/{id}
-  GET    /api/console/ai/calls
-  GET    /api/console/d1/tables , POST /api/console/d1/query
-  GET    /api/console/mega/inventory
-  GET    /api/console/audit
+  GET/POST /api/console/links, POST /api/console/links/clear
+  GET/POST /api/console/jobs, GET /api/console/jobs/{id}
+  GET /api/console/ai/calls
+  GET /api/console/d1/tables, POST /api/console/d1/query (فقط SELECT)
+
+هنوز در Worker فعال نیستند و باید پیام 404 «فعال نشده» نمایش دهند:
+  POST /api/console/mob/preview
+  POST /api/console/mob/publish-test
+  GET /api/console/mega/inventory
+
 GitHub (api.github.com): /user, /repos/{o}/{r}, git/trees, contents, git/ref, git/refs,
   branches, pulls (+merge), commits, compare, actions/runs, actions/workflows(+dispatches), issues.
-============================================================ */
+*/
 </script>
 </body>
 </html>
