@@ -1,6 +1,6 @@
 // Owner panel on Cloudflare (stage 1): instant Rubika webhook, owner claim, menu, live screens.
 // Heavy work (video, edits, YouTube) stays on GitHub Actions; this module never runs shell or publishes.
-import { HOME_ROWS, isScreenId, buildScreen } from "./panel_screens.js";
+import { HOME_ROWS, isScreenId, buildScreen, homeSummary } from "./panel_screens.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
@@ -68,11 +68,18 @@ const esc = (s) => String(s ?? "").replace(/\*\*|__|--|~~|\|\||`|\[|\]/g, "");
 
 // ---------- keypads
 const kb = (rows) => ({ rows: rows.map((r) => ({ buttons: r.map(([t, id]) => ({ id, type: "Simple", button_text: t })) })) });
+const HOME_ONLY = [[["🏠 منوی اصلی", "p_home"]]];
 const HOME_KB = kb(HOME_ROWS);
-const BACK_KB = kb([[["🏠 منوی اصلی", "p_home"]]]);
-const CANCEL_KB = kb([[["✖️ لغو", "p_home"]]]);
 const refreshKb = (id) => kb([[["🔄 تازه‌سازی", id], ["🏠 منوی اصلی", "p_home"]]]);
+const BACK_KB = refreshKb("p_help");
+const CANCEL_KB = kb([
+  [["🔄 تازه‌سازی", "p_mob"], ["🏠 منوی اصلی", "p_home"]],
+  [["✖️ لغو", "p_home"]],
+]);
 const HOME_TEXT = "🤖 **پنل مدیریت Rubika-Agent**\n\nیکی از بخش‌ها را انتخاب کن:";
+async function homeText(env) {
+  try { return await homeSummary(env); } catch { return HOME_TEXT; }
+}
 const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /digest خلاصهٔ ۲۴ ساعت، /errors خطاها، /runs اجراها\n• /links لینک‌های X، /ailog تاریخچهٔ AI\n• /debug: خطای آخر و مشخصات امن رویداد آخر\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه گزارش می‌دهد و لینک X را ذخیره می‌کند؛ انتشار خودکار از این پنل انجام نمی‌شود."; 
 
 // ---------- event normalisation (webhook shapes: {update}, {inline_message}, or a bare update)
@@ -183,17 +190,18 @@ async function edit(env, chat, mid, src, keypad) {
   const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
     keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
   try {
-    const operations = [
-      rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base),
-    ];
-    if (hasKeypad) operations.push(
-      rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad }),
-    );
-    const results = await Promise.all(operations.map((operation) =>
-      operation.then(() => null, (error) => ({ error })),
-    ));
-    const failure = results.find(Boolean);
-    if (failure) throw failure.error;
+    await rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base);
+    if (hasKeypad) {
+      try {
+        await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad });
+      } catch (firstKeypadError) {
+        try {
+          await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad });
+        } catch (retryKeypadError) {
+          throw retryKeypadError || firstKeypadError;
+        }
+      }
+    }
     try { await bumpCounter(env, "panel_edit_ok"); } catch { /* diagnostics must not block panel rendering */ }
     return targetMid;
   } catch (e) {
@@ -442,12 +450,18 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     await setState(env, "panel_links_clear_pending", "no");
   }
   const statics = {
-    p_home: [HOME_TEXT, HOME_KB], p_help: [HELP_TEXT, BACK_KB],
+    p_help: [HELP_TEXT, BACK_KB],
     p_mob: ["📰 **خبر Mob از لینک X**\n\nلینک پست X را بفرست (x.com/نام/status/شناسه).", CANCEL_KB],
   };
   if (id === "p_mob") await setState(env, "mode", "waiting_link");
   const previousMid = await getState(env, "panel_mid", "");
   const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
+  if (id === "p_home") {
+    const text = await homeText(env);
+    if (fresh) return sendFreshPanel(ui, text, HOME_KB, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, text, HOME_KB);
+    return send(env, chat, text, HOME_KB);
+  }
   if (isScreenId(id)) {
     let screenId = id;
     if (id === "p_links_clear_yes") {
@@ -459,7 +473,9 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     if (id === "p_links_clear" && !s.text.includes("d1_error")) {
       await setState(env, "panel_links_clear_pending", "yes");
     }
-    const keypad = kb(s.rows);
+    const rows = Array.isArray(s.rows) && s.rows.some((row) => Array.isArray(row) && row.length > 0)
+      ? s.rows : HOME_ONLY;
+    const keypad = kb(rows);
     if (targetMid) return edit(env, chat, targetMid, s.text, keypad);
     return send(env, chat, s.text, keypad);
   }
@@ -471,9 +487,10 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   }
   if (id === "p_debug") {
     const text = await debugText(env);
-    if (fresh) return sendFreshPanel(ui, text, BACK_KB, previousMid);
-    if (targetMid) return edit(env, chat, targetMid, text, BACK_KB);
-    return send(env, chat, text, BACK_KB);
+    const keypad = refreshKb("p_debug");
+    if (fresh) return sendFreshPanel(ui, text, keypad, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, text, keypad);
+    return send(env, chat, text, keypad);
   }
   if (["p_status", "p_queue", "p_ai", "p_report"].includes(id)) return renderData(ui, id, { fresh, clickedMid });
   return render(ui, "p_home", { fresh, clickedMid });
