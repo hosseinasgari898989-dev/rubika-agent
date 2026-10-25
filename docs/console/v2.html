@@ -124,7 +124,8 @@ function modal(h){$('#sheet').innerHTML=h;$('#modal').classList.add('on')}
 function closeModal(){$('#modal').classList.remove('on')}
 $('#modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()});
 A.close=closeModal;
-document.addEventListener('click',e=>{const el=e.target.closest('[data-a]');if(el&&A[el.dataset.a]){e.preventDefault();Promise.resolve(A[el.dataset.a](el,e)).catch(x=>toast(em(x),'bad'))}});
+document.addEventListener('click',e=>{const el=e.target.closest('[data-a]');if(el&&el.tagName==='SELECT')return;if(el&&A[el.dataset.a]){e.preventDefault();Promise.resolve(A[el.dataset.a](el,e)).catch(x=>toast(em(x),'bad'))}});
+document.addEventListener('change',e=>{const el=e.target;if(el.tagName==='SELECT'&&el.dataset.a&&A[el.dataset.a])Promise.resolve(A[el.dataset.a](el,e)).catch(x=>toast(em(x),'bad'))});
 A.theme=()=>{const t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;LS('rc_theme',t)};
 
 const NAV=[['dash','داشبورد','◈'],['items','آیتم‌ها','▤'],['queue','صف انتشار','☰'],['hist','تاریخچه و لاگ','◷'],['ai','تماس‌های AI','✦'],['src','منابع و لینک‌ها','⎈'],['owners','مالک‌ها','♛'],['rules','قوانین','⚙'],['chan','کانال‌ها','⌁'],['jobs','کارها','⚡'],['d1','دیتابیس','⛁'],['soon','به‌زودی','◌'],['set','اتصال','⚿']];
