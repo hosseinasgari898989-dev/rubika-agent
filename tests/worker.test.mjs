@@ -345,40 +345,6 @@ class FakeStatement {
       Object.assign(link, { status, updated_at: updatedAt });
       return { meta: { changes: 1 } };
     }
-    if (sql.startsWith("UPDATE console_jobs SET status = 'processing'")) {
-      const [updatedAt, jobId, panelLinkId, existsLinkId] = v;
-      const job = this.db.consoleJobs.get(jobId);
-      const link = this.db.panelLinks.get(Number(panelLinkId));
-      if (!job || job.type !== "mob_x_link" || Number(job.panel_link_id) !== Number(panelLinkId) ||
-          !["confirmed", "queued"].includes(job.status) || Number(existsLinkId) !== Number(panelLinkId) ||
-          !link || !["confirmed", "queued"].includes(link.status)) return { meta: { changes: 0 } };
-      Object.assign(job, { status: "processing", progress: 10, error: null, updated_at: updatedAt });
-      return { meta: { changes: 1 } };
-    }
-    if (sql.startsWith("UPDATE panel_links SET status = 'processing'")) {
-      const [updatedAt, linkId] = v;
-      const link = this.db.panelLinks.get(Number(linkId));
-      if (Number(this.db.lastChanges || 0) <= 0 || !link || !["confirmed", "queued"].includes(link.status)) return { meta: { changes: 0 } };
-      Object.assign(link, { status: "processing", updated_at: updatedAt });
-      return { meta: { changes: 1 } };
-    }
-    if (sql.startsWith("UPDATE console_jobs SET status = ?, progress = ?, result_json = COALESCE")) {
-      const [status, progress, resultJson, error, updatedAt, jobId] = v;
-      const job = this.db.consoleJobs.get(jobId);
-      if (!job || job.type !== "mob_x_link" || job.status !== "processing") return { meta: { changes: 0 } };
-      Object.assign(job, { status, progress, result_json: resultJson == null ? job.result_json : resultJson, error, updated_at: updatedAt });
-      return { meta: { changes: 1 } };
-    }
-    if (sql.startsWith("UPDATE panel_links SET status = ?, updated_at = ? WHERE id = (SELECT panel_link_id")) {
-      const [status, updatedAt, jobId, requiredStatus] = v;
-      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
-      const job = this.db.consoleJobs.get(jobId);
-      if (!job || job.status !== requiredStatus || job.panel_link_id == null) return { meta: { changes: 0 } };
-      const link = this.db.panelLinks.get(Number(job.panel_link_id));
-      if (!link) return { meta: { changes: 0 } };
-      Object.assign(link, { status, updated_at: updatedAt });
-      return { meta: { changes: 1 } };
-    }
     if (sql.startsWith("UPDATE panel_links SET status = 'confirmed'")) {
       const row = this.db.panelLinks.get(Number(v[0]));
       if (!row || !["pending", "confirmed"].includes(row.status)) return { meta: { changes: 0 } };
