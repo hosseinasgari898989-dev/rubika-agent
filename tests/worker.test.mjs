@@ -137,6 +137,14 @@ class FakeStatement {
       const row = [...this.db.consoleInvites.values()].find(item => item.code_hash === this.values[0] && item.used_at == null && item.expires_at > (this.values[1] || ""));
       return row ? { ...row } : null;
     }
+    if (this.sql.includes("JOIN panel_links p ON p.id = j.panel_link_id")) {
+      const pair = [...this.db.consoleJobs.values()]
+        .filter(job => job.type === "mob_x_link" && ["confirmed", "queued"].includes(job.status))
+        .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+        .map(job => ({ job, link: this.db.panelLinks.get(Number(job.panel_link_id)) }))
+        .find(value => value.link && ["confirmed", "queued"].includes(value.link.status));
+      return pair ? { id: pair.job.id, panel_link_id: pair.job.panel_link_id, url: pair.link.url, external_id: pair.link.external_id } : null;
+    }
     if (this.sql.includes("FROM panel_links WHERE external_id = ?")) {
       const row = [...this.db.panelLinks.values()].find(item => item.external_id === String(this.values[0]));
       return row ? { ...row } : null;
