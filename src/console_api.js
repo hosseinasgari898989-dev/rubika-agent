@@ -528,7 +528,7 @@ export async function handleConsoleApi(request, env, h) {
       try {
         if (resultValue !== null) {
           resultJson = JSON.stringify(resultValue);
-          if (new TextEncoder().encode(resultJson).byteLength > 12000) return fail("mob_x_result_too_large", 400);
+          if (new TextEncoder().encode(resultJson).byteLength > 30000) return fail("mob_x_result_too_large", 400);
         }
       } catch { return fail("mob_x_result_not_serializable", 400); }
       const errorCode = body.status === "failed" ? text(body.error_code, 80) : null;
@@ -597,7 +597,7 @@ export async function handleConsoleApi(request, env, h) {
       try { rules = JSON.parse(row.rules_json || "{}"); } catch { return fail("rules_invalid_json", 503); }
 
       const quiet = isRecord(rules.quiet_hours) ? rules.quiet_hours : null;
-      if (quiet && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.start || "")) &&
+      if (quiet && quiet.enabled !== false && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.start || "")) &&
           /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.end || ""))) {
         const now = new Date();
         const current = now.getUTCHours() * 60 + now.getUTCMinutes();
