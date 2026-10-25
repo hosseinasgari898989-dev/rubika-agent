@@ -1218,6 +1218,18 @@ class PanelFakeStatement {
     if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) {
       return { c: this.db.links.length };
     }
+    if (this.sql.includes("FROM panel_links WHERE external_id = ?")) {
+      const row = this.db.links.find(item => item.external_id === String(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM panel_links WHERE id = ?")) {
+      const row = this.db.links.find(item => Number(item.id) === Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE panel_link_id = ?")) {
+      const row = [...this.db.consoleJobs.values()].find(item => Number(item.panel_link_id) === Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
     if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
       const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
       if (!row || (this.sql.includes("AND enabled = 1") && Number(row.enabled) !== 1)) return null;
@@ -1243,6 +1255,33 @@ class PanelFakeStatement {
       this.db.links = [];
       this.db.linkDeleteCalls += 1;
       return { meta: { changes: count } };
+    }
+    if (this.sql.startsWith("INSERT OR IGNORE INTO panel_links (url, external_id, status)")) {
+      const [url, externalId] = this.values;
+      if (this.db.links.some(row => row.external_id === String(externalId) || row.url === url)) return { meta: { changes: 0 } };
+      const id = this.db.nextPanelLinkId++;
+      this.db.links.push({ id, url, external_id: String(externalId), status: "pending", created_at: new Date().toISOString(), confirmed_at: null, updated_at: new Date().toISOString() });
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (this.sql.startsWith("UPDATE panel_links SET status = 'rejected'")) {
+      const row = this.db.links.find(item => Number(item.id) === Number(this.values[0]));
+      if (!row || row.status !== "pending") return { meta: { changes: 0 } };
+      Object.assign(row, { status: "rejected", updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("UPDATE panel_links SET status = 'confirmed'")) {
+      const row = this.db.links.find(item => Number(item.id) === Number(this.values[0]));
+      if (!row || !["pending", "confirmed"].includes(row.status)) return { meta: { changes: 0 } };
+      Object.assign(row, { status: "confirmed", confirmed_at: row.confirmed_at || new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT INTO console_jobs") && this.sql.includes("SELECT ?, 'mob_x_link'")) {
+      const [id, paramsJson, panelLinkId] = this.values;
+      const existing = [...this.db.consoleJobs.values()].find(row => Number(row.panel_link_id) === Number(panelLinkId));
+      const link = this.db.links.find(item => Number(item.id) === Number(panelLinkId));
+      if (existing || !link || link.status !== "confirmed") return { meta: { changes: 0 } };
+      this.db.consoleJobs.set(id, { id, type: "mob_x_link", status: "confirmed", progress: 0, params_json: paramsJson, result_json: null, error: null, panel_link_id: Number(panelLinkId), created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("INSERT INTO panel_state")) {
       this.db.state.set(this.values[0], String(this.values[1]));
@@ -1300,6 +1339,8 @@ class PanelFakeDB {
     this.events = new Set();
     this.links = [];
     this.linkDeleteCalls = 0;
+    this.nextPanelLinkId = 1;
+    this.consoleJobs = new Map();
     this.consoleOwners = new Map();
     this.nextConsoleOwnerId = 1;
     this.consoleInvites = new Map();
@@ -1960,7 +2001,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   const emptyPages = [
     ["p_digest", "خلاصهٔ ۲۴ ساعت"], ["p_errors", "خطاها"], ["p_runs", "آخرین اجراها"],
     ["p_qs", "صف انتشار"], ["p_ailog", "تاریخچهٔ تماس‌های AI"], ["p_links", "لینک‌های X"],
-    ["p_links_clear", "همهٔ 0 لینک"],
+    ["p_jobs", "کارهای کنسول"], ["p_links_clear", "همهٔ 0 لینک"],
   ];
   for (const [id, phrase] of emptyPages) {
     const result = await screens.buildScreen(screenEnv(), id);
@@ -2005,7 +2046,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(invalidDb.queryCount, 0, "invalid queue status must not query D1");
 }
 {
-  const ids = ["p_digest", "p_errors", "p_runs", "p_qs", "p_ailog", "p_links", "p_links_clear", "p_links_clear_yes"]
+  const ids = ["p_digest", "p_errors", "p_runs", "p_qs", "p_ailog", "p_links", "p_jobs", "p_links_clear", "p_links_clear_yes"]
     .concat(screenStatuses.map(status => "p_ql_" + status + "_0"));
   for (const id of ids) {
     const result = await screens.buildScreen(screenEnv({ failReads: true }), id);
