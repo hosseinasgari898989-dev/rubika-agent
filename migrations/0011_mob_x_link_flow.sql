@@ -33,7 +33,7 @@ CREATE TABLE console_jobs (
   id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 8 AND 100),
   type TEXT NOT NULL CHECK (type IN ('queue_intake_dry_run', 'ai_health_check', 'log_zip', 'd1_backup', 'mob_x_link', 'requeue_stuck')),
   status TEXT NOT NULL DEFAULT 'queued'
-    CHECK (status IN ('pending', 'confirmed', 'queued', 'running', 'processing', 'ready_for_review', 'sent', 'failed', 'rejected', 'uncertain', 'done')),
+    CHECK (status IN ('pending', 'confirmed', 'queued', 'running', 'processing', 'ready_for_review', 'approved', 'sending', 'sent', 'failed', 'rejected', 'uncertain', 'done')),
   progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
   params_json TEXT,
   result_json TEXT,
