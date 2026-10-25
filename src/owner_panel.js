@@ -488,7 +488,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       const updated = await env.DB.batch([
         env.DB.prepare("UPDATE console_jobs SET status = 'rejected', progress = 100, error = NULL, updated_at = ? WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review'").bind(now, jobId),
         env.DB.prepare("UPDATE panel_links SET status = 'rejected', updated_at = ? WHERE id = ? AND status = 'ready_for_review' AND changes() > 0").bind(now, row.panel_link_id),
-        env.DB.prepare("UPDATE items SET review_state = 'rejected', updated_at = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0").bind(now, result.item_id),
+        env.DB.prepare("UPDATE items SET review_state = 'rejected' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0").bind(result.item_id),
       ]);
       if (!updated?.[0]?.meta?.changes) {
         await send(env, chat, "وضعیت کار هم‌زمان تغییر کرده؛ هیچ اقدامی انجام نشد.", HOME_KB);
@@ -516,7 +516,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
           "AND EXISTS (SELECT 1 FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending')"
         ).bind(now, jobId, result.item_id),
         env.DB.prepare("UPDATE panel_links SET status = 'approved', updated_at = ? WHERE id = ? AND status = 'ready_for_review' AND changes() > 0").bind(now, row.panel_link_id),
-        env.DB.prepare("UPDATE items SET review_state = 'approved', updated_at = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0").bind(now, result.item_id),
+        env.DB.prepare("UPDATE items SET review_state = 'approved' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0").bind(result.item_id),
       ]);
       if (!updated?.[0]?.meta?.changes || !updated?.[2]?.meta?.changes) {
         await send(env, chat, "تأیید انتشار ثبت نشد؛ وضعیت کار یا آیتم تغییر کرده است.", HOME_KB);
@@ -546,7 +546,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       const saved = await env.DB.batch([
         env.DB.prepare("UPDATE console_jobs SET status = 'sent', progress = 100, result_json = ?, error = NULL, updated_at = ? WHERE id = ? AND type = 'mob_x_link' AND status = 'uncertain'").bind(JSON.stringify(result), now, jobId),
         env.DB.prepare("UPDATE panel_links SET status = 'sent', updated_at = ? WHERE id = ? AND status = 'uncertain' AND changes() > 0").bind(now, row.panel_link_id),
-        env.DB.prepare("UPDATE items SET status = 'sent', updated_at = ? WHERE id = ? AND platform = 'mob_official' AND status = 'uncertain' AND changes() > 0").bind(now, result.item_id),
+        env.DB.prepare("UPDATE items SET status = 'sent', sent_at = ? WHERE id = ? AND platform = 'mob_official' AND status = 'uncertain' AND changes() > 0").bind(now, result.item_id),
       ]);
       if (!saved?.[0]?.meta?.changes) {
         await send(env, chat, "تأیید دستی ثبت نشد؛ وضعیت کار تغییر کرده است.", HOME_KB);
@@ -816,7 +816,7 @@ async function processEvent(env, selfFetch, origin, ev) {
         await send(timedEnv, ev.chat, "ذخیرهٔ کپشن انجام نشد؛ وضعیت کار تغییر کرده است.", HOME_KB);
         return;
       }
-      await timedEnv.DB.prepare("UPDATE items SET caption = ?, updated_at = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready'").bind(caption, now, result.item_id).run();
+      await timedEnv.DB.prepare("UPDATE items SET caption = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready'").bind(caption, result.item_id).run();
       try {
         const preview = await rubika(timedEnv, "sendFile", {
           chat_id: ev.chat,
