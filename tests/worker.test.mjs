@@ -102,6 +102,11 @@ class FakeStatement {
     if (this.sql.includes("FROM items WHERE id = ?")) {
       return this.db.items.get(this.values[0]) || null;
     }
+    if (this.sql.includes("FROM sources WHERE platform = ? AND source_key = ?")) {
+      const [platform, sourceKey] = this.values;
+      const row = [...this.db.sources.values()].find(item => item.platform === platform && item.source_key === sourceKey);
+      return row ? { id: row.id } : null;
+    }
     if (this.sql.includes("FROM automation_queue WHERE id = ?")) {
       return this.db.automationQueue.get(this.values[0]) || null;
     }
@@ -202,6 +207,17 @@ class FakeStatement {
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("INSERT INTO sources (id, platform, source_key, display_name, enabled) VALUES")) {
+      const [id, platform, source_key, display_name, enabled] = v;
+      if ([...this.db.sources.values()].some(row => row.platform === platform && row.source_key === source_key)) {
+        return { meta: { changes: 0 } };
+      }
+      this.db.sources.set(id, {
+        id, platform, source_key, display_name, enabled: Number(enabled),
+        created_at: new Date().toISOString(), last_checked_at: null, last_seen_published_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("INSERT INTO console_owners (chat_id, label, role, enabled, claimed_at, last_seen_at) VALUES")) {
       if ([...this.db.consoleOwners.values()].some(row => row.chat_id === v[0])) return { meta: { changes: 0 } };
       const id = this.db.nextConsoleOwnerId++;
@@ -417,6 +433,7 @@ class FakeDB {
   constructor() {
     this.runs = new Map();
     this.items = new Map();
+    this.sources = new Map();
     this.automationQueue = new Map();
     this.attempts = [];
     this.events = [];
@@ -501,6 +518,24 @@ const read = async response => ({ status: response.status, body: await response.
   response = await read(await worker.fetch(request("/api/console/not-a-route"), state));
   assert.equal(response.status, 404);
   assert.equal(response.body.error, "not_found");
+}
+
+// POST /sources accepts X but stores it under the schema-supported mob_official platform.
+{
+  const state = env();
+  const body = { platform: "x", source_key: "mob-entertainment", display_name: "Mob Entertainment" };
+  let response = await read(await worker.fetch(request("/api/console/sources", {
+    method: "POST", body,
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.id, "mob_official:mob-entertainment");
+  assert.equal(state.DB.sources.get("mob_official:mob-entertainment").platform, "mob_official");
+
+  response = await read(await worker.fetch(request("/api/console/sources", {
+    method: "POST", body,
+  }), state));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "source_already_exists");
 }
 
 // Console API rejects destructive SQL, unauthorized review approval, uncertain requeue without confirmation,
