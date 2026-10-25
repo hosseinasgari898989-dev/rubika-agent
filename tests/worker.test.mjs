@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -101,8 +102,44 @@ class FakeStatement {
     if (this.sql.includes("FROM items WHERE id = ?")) {
       return this.db.items.get(this.values[0]) || null;
     }
+    if (this.sql.includes("FROM sources WHERE platform = ? AND source_key = ?")) {
+      const [platform, sourceKey] = this.values;
+      const row = [...this.db.sources.values()].find(item => item.platform === platform && item.source_key === sourceKey);
+      return row ? { id: row.id } : null;
+    }
     if (this.sql.includes("FROM automation_queue WHERE id = ?")) {
       return this.db.automationQueue.get(this.values[0]) || null;
+    }
+    if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
+      const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
+      if (!row || (this.sql.includes("AND enabled = 1") && Number(row.enabled) !== 1)) return null;
+      return { ...row };
+    }
+    if (this.sql.includes("FROM console_owners WHERE id = ?")) {
+      const row = this.db.consoleOwners.get(Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS total FROM console_owners WHERE role = 'owner' AND enabled = 1")) {
+      return { total: [...this.db.consoleOwners.values()].filter(row => row.role === "owner" && Number(row.enabled) === 1).length };
+    }
+    if (this.sql.includes("FROM console_rules WHERE id = 1")) {
+      return this.db.consoleRules ? { ...this.db.consoleRules } : null;
+    }
+    if (this.sql.includes("FROM console_channels WHERE rubika_channel_id = ?")) {
+      const row = [...this.db.consoleChannels.values()].find(item => item.rubika_channel_id === this.values[0]);
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_channels WHERE id = ?")) {
+      const row = this.db.consoleChannels.get(Number(this.values[0]));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_owner_invites WHERE code_hash = ?")) {
+      const row = [...this.db.consoleInvites.values()].find(item => item.code_hash === this.values[0] && item.used_at == null && item.expires_at > (this.values[1] || ""));
+      return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE id = ?")) {
+      const row = this.db.consoleJobs.get(this.values[0]);
+      return row ? { ...row } : null;
     }
     return null;
   }
@@ -156,11 +193,101 @@ class FakeStatement {
       const offset = this.sql.includes("WHERE platform = ?") ? this.values[2] : this.values[1];
       return { results: filtered.slice(offset, offset + limit) };
     }
+    if (this.sql.includes("FROM console_owners ORDER BY id")) {
+      return { results: [...this.db.consoleOwners.values()].sort((a, b) => a.id - b.id).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM console_channels ORDER BY id")) {
+      return { results: [...this.db.consoleChannels.values()].sort((a, b) => a.id - b.id).map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM console_jobs ORDER BY created_at DESC LIMIT ?")) {
+      return { results: [...this.db.consoleJobs.values()].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, this.values[0]).map(row => ({ ...row })) };
+    }
     return { results: [] };
   }
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("INSERT INTO sources (id, platform, source_key, display_name, enabled) VALUES")) {
+      const [id, platform, source_key, display_name, enabled] = v;
+      if ([...this.db.sources.values()].some(row => row.platform === platform && row.source_key === source_key)) {
+        return { meta: { changes: 0 } };
+      }
+      this.db.sources.set(id, {
+        id, platform, source_key, display_name, enabled: Number(enabled),
+        created_at: new Date().toISOString(), last_checked_at: null, last_seen_published_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO console_owners (chat_id, label, role, enabled, claimed_at, last_seen_at) VALUES")) {
+      if ([...this.db.consoleOwners.values()].some(row => row.chat_id === v[0])) return { meta: { changes: 0 } };
+      const id = this.db.nextConsoleOwnerId++;
+      const row = { id, chat_id: v[0], label: v[1], role: v[2], enabled: Number(v[3]), claimed_at: v[4] || new Date().toISOString(), last_seen_at: v[5] || null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      this.db.consoleOwners.set(id, row);
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("INSERT OR IGNORE INTO console_owners")) {
+      if ([...this.db.consoleOwners.values()].some(row => row.chat_id === v[0])) return { meta: { changes: 0 } };
+      const id = this.db.nextConsoleOwnerId++;
+      this.db.consoleOwners.set(id, { id, chat_id: v[0], label: "مالک اصلی", role: "owner", enabled: 1, claimed_at: new Date().toISOString(), last_seen_at: new Date().toISOString(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("UPDATE console_owners SET")) {
+      const id = Number(v[v.length - 1]);
+      const row = this.db.consoleOwners.get(id);
+      if (!row) return { meta: { changes: 0 } };
+      const setPart = sql.slice(sql.indexOf(" SET ") + 5, sql.indexOf(" WHERE id = ?"));
+      let vi = 0;
+      for (const assignment of setPart.split(",")) {
+        const key = assignment.split("=")[0].trim();
+        if (assignment.includes("?")) row[key] = v[vi++];
+        else if (key === "updated_at") row.updated_at = new Date().toISOString();
+      }
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("DELETE FROM console_owners WHERE id = ?")) {
+      return { meta: { changes: this.db.consoleOwners.delete(Number(v[0])) ? 1 : 0 } };
+    }
+    if (sql.startsWith("INSERT INTO console_owner_invites")) {
+      const id = this.db.nextConsoleInviteId++;
+      const row = { id, code_hash: v[0], expires_at: v[1], created_at: new Date().toISOString(), used_at: null, used_by: null };
+      this.db.consoleInvites.set(id, row);
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("UPDATE console_owner_invites SET used_at")) {
+      const row = this.db.consoleInvites.get(Number(v[2]));
+      if (!row || row.used_at || row.expires_at <= v[3]) return { meta: { changes: 0 } };
+      Object.assign(row, { used_at: v[0], used_by: v[1] });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE console_rules SET version = version + 1")) {
+      const [rulesJson, updatedAt, baseVersion] = v;
+      if (!this.db.consoleRules || Number(this.db.consoleRules.version) !== Number(baseVersion)) return { meta: { changes: 0 } };
+      Object.assign(this.db.consoleRules, { version: Number(baseVersion) + 1, rules_json: rulesJson, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO console_channels")) {
+      if ([...this.db.consoleChannels.values()].some(row => row.rubika_channel_id === v[1])) return { meta: { changes: 0 } };
+      const id = this.db.nextConsoleChannelId++;
+      const row = { id, label: v[0], rubika_channel_id: v[1], role: v[2], enabled: Number(v[3]), created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      this.db.consoleChannels.set(id, row);
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (sql.startsWith("DELETE FROM console_channels WHERE id = ?")) {
+      return { meta: { changes: this.db.consoleChannels.delete(Number(v[0])) ? 1 : 0 } };
+    }
+    if (sql.startsWith("INSERT INTO console_jobs")) {
+      const row = { id: v[0], type: v[1], status: "queued", progress: 0, params_json: v[2], result_json: null, error: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      this.db.consoleJobs.set(row.id, row);
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO brain_events") && sql.includes("SELECT NULL")) {
+      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
+      let code = null, details = null;
+      if (sql.includes("'console_owner_claim'")) { code = "console_owner_claim"; details = v[0]; }
+      else { code = v[0]; details = v[1]; }
+      this.db.events.push({ item_id: null, level: "info", code, details_json: details, created_at: new Date().toISOString(), sql });
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("UPDATE owner_console_state SET offset_id")) {
       if (!this.db.ownerConsoleState) return { meta: { changes: 0 } };
       Object.assign(this.db.ownerConsoleState, { offset_id: v[0], updated_at: v[1] });
@@ -306,6 +433,7 @@ class FakeDB {
   constructor() {
     this.runs = new Map();
     this.items = new Map();
+    this.sources = new Map();
     this.automationQueue = new Map();
     this.attempts = [];
     this.events = [];
@@ -317,12 +445,31 @@ class FakeDB {
     this.ownerConsoleState = { id: 1, offset_id: null, updated_at: null };
     this.ownerConsoleUpdates = new Map();
     this.queueStateRepairCalls = 0;
+    this.consoleOwners = new Map();
+    this.nextConsoleOwnerId = 1;
+    this.consoleInvites = new Map();
+    this.nextConsoleInviteId = 1;
+    this.consoleRules = {
+      id: 1, version: 1,
+      rules_json: JSON.stringify({ publishing_enabled: false, test_channel_only: true, daily_success_cap: 4, daily_edit_count: 6, mob_posts_per_run: 1, mob_since_cutoff: "", freshness_hours: 24, ai_provider_order: ["groq", "openrouter"], ai_daily_limit_groq: 200, ai_daily_limit_openrouter: 50, translate_enabled: true, quiet_hours: { start: "00:30", end: "07:00" }, caption_max_chars: 900, digest_window_utc: "07:05" }),
+      updated_at: new Date().toISOString(),
+    };
+    this.consoleChannels = new Map();
+    this.nextConsoleChannelId = 1;
+    this.consoleJobs = new Map();
+    this.lastChanges = 0;
   }
   prepare(sql) {
     return new FakeStatement(this, sql);
   }
   async batch(statements) {
-    return Promise.all(statements.map(statement => statement.run()));
+    const results = [];
+    for (const statement of statements) {
+      const result = await statement.run();
+      this.lastChanges = Number(result?.meta?.changes || 0);
+      results.push(result);
+    }
+    return results;
   }
 }
 
@@ -371,6 +518,24 @@ const read = async response => ({ status: response.status, body: await response.
   response = await read(await worker.fetch(request("/api/console/not-a-route"), state));
   assert.equal(response.status, 404);
   assert.equal(response.body.error, "not_found");
+}
+
+// POST /sources accepts X but stores it under the schema-supported mob_official platform.
+{
+  const state = env();
+  const body = { platform: "x", source_key: "mob-entertainment", display_name: "Mob Entertainment" };
+  let response = await read(await worker.fetch(request("/api/console/sources", {
+    method: "POST", body,
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.id, "mob_official:mob-entertainment");
+  assert.equal(state.DB.sources.get("mob_official:mob-entertainment").platform, "mob_official");
+
+  response = await read(await worker.fetch(request("/api/console/sources", {
+    method: "POST", body,
+  }), state));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "source_already_exists");
 }
 
 // Console API rejects destructive SQL, unauthorized review approval, uncertain requeue without confirmation,
@@ -1009,6 +1174,17 @@ class PanelFakeStatement {
     if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) {
       return { c: this.db.links.length };
     }
+    if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
+      const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
+      if (!row || (this.sql.includes("AND enabled = 1") && Number(row.enabled) !== 1)) return null;
+      return { ...row };
+    }
+    if (this.sql.includes("FROM console_owner_invites WHERE code_hash = ?")) {
+      const row = [...this.db.consoleInvites.values()].find(item =>
+        item.code_hash === this.values[0] && item.used_at == null && item.expires_at > (this.values[1] || "")
+      );
+      return row ? { ...row } : null;
+    }
     return null;
   }
   async all() {
@@ -1043,6 +1219,33 @@ class PanelFakeStatement {
       this.db.events.clear();
       return { meta: { changes: 1 } };
     }
+    if (this.sql.startsWith("INSERT OR IGNORE INTO console_owners")) {
+      if ([...this.db.consoleOwners.values()].some(row => row.chat_id === this.values[0])) return { meta: { changes: 0 } };
+      const id = this.db.nextConsoleOwnerId++;
+      this.db.consoleOwners.set(id, { id, chat_id: this.values[0], label: "مالک اصلی", role: "owner", enabled: 1, claimed_at: new Date().toISOString(), last_seen_at: new Date().toISOString() });
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (this.sql.startsWith("UPDATE console_owner_invites SET used_at")) {
+      const row = this.db.consoleInvites.get(Number(this.values[2]));
+      if (!row || row.used_at || row.expires_at <= this.values[3]) return { meta: { changes: 0 } };
+      Object.assign(row, { used_at: this.values[0], used_by: this.values[1] });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT INTO console_owners") && this.sql.includes("SELECT ?")) {
+      if (Number(this.db.lastChanges || 0) <= 0 || [...this.db.consoleOwners.values()].some(row => row.chat_id === this.values[0])) {
+        return { meta: { changes: 0 } };
+      }
+      const id = this.db.nextConsoleOwnerId++;
+      const row = { id, chat_id: this.values[0], label: this.values[1], role: "viewer", enabled: 1, claimed_at: this.values[2], last_seen_at: this.values[3] };
+      this.db.consoleOwners.set(id, row);
+      return { meta: { changes: 1, last_row_id: id } };
+    }
+    if (this.sql.startsWith("INSERT INTO brain_events") && this.sql.includes("SELECT NULL")) {
+      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
+      const code = this.sql.includes("'console_owner_claim_bootstrap'") ? "console_owner_claim_bootstrap" : "console_owner_claim";
+      this.db.brainEvents.push({ code, level: "info", details_json: this.values[0] });
+      return { meta: { changes: 1 } };
+    }
     return { meta: { changes: 1 } };
   }
 }
@@ -1053,8 +1256,22 @@ class PanelFakeDB {
     this.events = new Set();
     this.links = [];
     this.linkDeleteCalls = 0;
+    this.consoleOwners = new Map();
+    this.nextConsoleOwnerId = 1;
+    this.consoleInvites = new Map();
+    this.brainEvents = [];
+    this.lastChanges = 0;
   }
   prepare(sql) { return new PanelFakeStatement(this, sql); }
+  async batch(statements) {
+    const results = [];
+    for (const statement of statements) {
+      const result = await statement.run();
+      this.lastChanges = Number(result?.meta?.changes || 0);
+      results.push(result);
+    }
+    return results;
+  }
 }
 const panelEnv = () => ({
   DB: new PanelFakeDB(),
@@ -1197,6 +1414,48 @@ async function postPanelUpdate(state, update, secret) {
     assert.equal(response.status, 200);
     assert.equal(state.DB.ownerChat, "b0ownerclaim");
     assert.equal(calls.some(call => call.method === "sendMessage" && call.payload.inline_keypad), true);
+  });
+}
+
+// A console invitation is hashed in D1, grants one viewer claim, and cannot be reused.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0existingowner";
+    state.DB.consoleOwners.set(1, {
+      id: 1, chat_id: "b0existingowner", label: "مالک اصلی", role: "owner", enabled: 1,
+      claimed_at: new Date().toISOString(), last_seen_at: null,
+    });
+    state.DB.nextConsoleOwnerId = 2;
+    const inviteCode = "INV-" + "A".repeat(32);
+    const codeHash = createHash("sha256").update(inviteCode).digest("hex");
+    state.DB.consoleInvites.set(1, {
+      id: 1, code_hash: codeHash, created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(), used_at: null, used_by: null,
+    });
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0invitedviewer", new_message: {
+        message_id: "invite-claim-1", chat_id: "b0invitedviewer", text: "/claim " + inviteCode,
+      } },
+    }, secret);
+    const invited = [...state.DB.consoleOwners.values()].find(row => row.chat_id === "b0invitedviewer");
+    assert.ok(invited, "invite claim should register a new console owner");
+    assert.equal(invited.role, "viewer");
+    assert.equal(Number(invited.enabled), 1);
+    assert.ok(state.DB.consoleInvites.get(1).used_at);
+    assert.equal(state.DB.consoleInvites.get(1).used_by, "b0invitedviewer");
+    assert.equal(state.DB.brainEvents.some(event => event.code === "console_owner_claim"), true);
+    assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("دعوت پذیرفته شد")), true);
+
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0secondviewer", new_message: {
+        message_id: "invite-claim-2", chat_id: "b0secondviewer", text: "/claim " + inviteCode,
+      } },
+    }, secret);
+    assert.equal([...state.DB.consoleOwners.values()].filter(row => row.chat_id.startsWith("b0")).length, 2,
+      "one-time invite must not register a second user");
+    assert.equal(state.DB.consoleInvites.get(1).used_by, "b0invitedviewer");
   });
 }
 
@@ -1708,6 +1967,146 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.match(inlineJs, /url = base \+ path/, "Worker requests must be built from the approved base");
   assert.equal((inlineJs.match(/\b(?:XMLHttpRequest|WebSocket|EventSource)\b|\bsendBeacon\s*\(|\bimportScripts\s*\(/g) || []).length, 0,
     "no alternate network request primitive is allowed");
+}
+
+// Phase-two console endpoints use the fake D1 database and audit each successful mutation to brain_events.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/owners"), state));
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.items, []);
+
+  response = await read(await worker.fetch(request("/api/console/owners", {
+    method: "POST", body: { chat_id: "owner-chat-001", label: "مالک اصلی", role: "owner", enabled: 1 },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.item.role, "owner");
+  const ownerId = response.body.item.id;
+
+  response = await read(await worker.fetch(request("/api/console/owners", {
+    method: "POST", body: { chat_id: "viewer-chat-002", label: "ناظر", role: "viewer", enabled: 1 },
+  }), state));
+  assert.equal(response.status, 201);
+  const viewerId = response.body.item.id;
+
+  response = await read(await worker.fetch(request("/api/console/owners", {
+    method: "POST", body: { id: viewerId, enabled: 0 },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(Number(response.body.item.enabled), 0);
+
+  response = await read(await worker.fetch(request("/api/console/owners/" + viewerId, { method: "DELETE" }), state));
+  assert.equal(response.status, 200);
+  response = await read(await worker.fetch(request("/api/console/owners/" + ownerId, { method: "DELETE" }), state));
+  assert.equal(response.status, 409, "the last enabled owner must not be removable");
+
+  response = await read(await worker.fetch(request("/api/console/owners/invite", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 201);
+  assert.match(response.body.invite_code, /^INV-[A-F0-9]{32}$/);
+  assert.ok(Date.parse(response.body.expires_at) > Date.now());
+  assert.equal([...state.DB.consoleInvites.values()].some(row => row.code_hash === response.body.invite_code), false,
+    "plaintext invitation code must not be stored in D1");
+  assert.equal(state.DB.events.some(event => event.code === "console_owner_create"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_owner_update"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_owner_delete"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_owner_invite"), true);
+  assert.equal(state.DB.events.some(event => JSON.stringify(event).includes(response.body.invite_code)), false,
+    "audit logs must never contain the plaintext invite code");
+}
+
+// Rules follow the HTML's {ok, version, rules, updated_at} contract and optimistic base_version.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/rules"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.version, 1);
+  assert.equal(response.body.rules.publishing_enabled, false);
+  assert.equal(response.body.rules.test_channel_only, true);
+
+  response = await read(await worker.fetch(request("/api/console/rules", {
+    method: "PUT",
+    body: { base_version: 1, rules: { publishing_enabled: true, test_channel_only: false, daily_success_cap: 4, daily_edit_count: 7 } },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.version, 2);
+  assert.equal(response.body.rules.publishing_enabled, false, "publishing must remain disabled");
+  assert.equal(response.body.rules.test_channel_only, true);
+  assert.equal(JSON.parse(state.DB.consoleRules.rules_json).publishing_enabled, false);
+
+  response = await read(await worker.fetch(request("/api/console/rules", {
+    method: "PUT", body: { base_version: 1, rules: { daily_edit_count: 8 } },
+  }), state));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "version_conflict");
+  assert.equal(response.body.server.version, 2);
+  assert.equal(state.DB.events.filter(event => event.code === "console_rules_update").length, 1);
+}
+
+// Channels are configuration only; production role cannot be enabled and no publish path is called.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/channels"), state));
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.items, []);
+
+  response = await read(await worker.fetch(request("/api/console/channels", {
+    method: "POST", body: { label: "کانال تست", rubika_channel_id: "@test_channel", role: "test" },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.item.role, "test");
+  assert.equal(Number(response.body.item.enabled), 1);
+  const testChannelId = response.body.item.id;
+
+  response = await read(await worker.fetch(request("/api/console/channels", {
+    method: "POST", body: { label: "کانال اصلی", rubika_channel_id: "@main_channel", role: "production", enabled: 1 },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.item.role, "production");
+  assert.equal(Number(response.body.item.enabled), 0);
+
+  response = await read(await worker.fetch(request("/api/console/channels", {
+    method: "POST", body: { label: "تکراری", rubika_channel_id: "@test_channel", role: "test" },
+  }), state));
+  assert.equal(response.status, 409);
+
+  response = await read(await worker.fetch(request("/api/console/channels/" + testChannelId, { method: "DELETE" }), state));
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.events.some(event => event.code === "console_channel_create"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_channel_delete"), true);
+  assert.equal(state.DB.events.some(event => event.code === "console_channel_create" && String(event.details_json).includes("production") && String(event.details_json).includes("enabled")) === true, true);
+}
+
+// Jobs are durable queue records only: creating one does not run a worker, workflow, or publisher.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/jobs", {
+    method: "POST", body: { type: "ai_health_check", params: { source: "console-test" } },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.match(response.body.job_id, /^job_[a-f0-9]{24}$/);
+  const jobId = response.body.job_id;
+
+  response = await read(await worker.fetch(request("/api/console/jobs/" + encodeURIComponent(jobId)), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.job.id, jobId);
+  assert.equal(response.body.job.type, "ai_health_check");
+  assert.equal(response.body.job.status, "queued");
+  assert.equal(response.body.job.progress, 0);
+  assert.equal(response.body.job.result, null);
+
+  response = await read(await worker.fetch(request("/api/console/jobs?limit=5"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 1);
+
+  response = await read(await worker.fetch(request("/api/console/jobs", {
+    method: "POST", body: { type: "run_arbitrary_workflow", params: {} },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "invalid_job_type");
+  assert.equal(state.DB.events.some(event => event.code === "console_job_create"), true);
+  assert.equal(state.DB.consoleJobs.get(jobId).status, "queued");
 }
 
 console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");

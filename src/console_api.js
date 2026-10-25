@@ -4,7 +4,7 @@
 
 const CORS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "access-control-allow-headers": "authorization, content-type",
   "access-control-max-age": "86400",
 };
@@ -55,6 +55,23 @@ export async function handleConsoleApi(request, env, h) {
       await env.DB.prepare("INSERT INTO brain_events (item_id, level, code, details_json) VALUES (?, 'info', ?, ?)")
         .bind(itemId || null, code, JSON.stringify(details || {}).slice(0, 900)).run();
     } catch { /* audit must never break the action */ }
+  };
+  const auditMutation = async (statements, code, details) => {
+    const safeDetails = JSON.stringify(details || {}).slice(0, 900);
+    const auditStatement = env.DB.prepare(
+      "INSERT INTO brain_events (item_id, level, code, details_json) SELECT NULL, 'info', ?, ? WHERE changes() > 0"
+    ).bind(code, safeDetails);
+    return env.DB.batch([...statements, auditStatement]);
+  };
+  const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const bounded = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+  const randomHex = (size = 16) => {
+    const bytes = crypto.getRandomValues(new Uint8Array(size));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  };
+  const sha256Hex = async (value) => {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
   };
   const like = (q) => "%" + q.replace(/[\\%_]/g, (c) => "\\" + c) + "%";
 
@@ -205,6 +222,259 @@ export async function handleConsoleApi(request, env, h) {
       return json({ ok: true, columns, rows, duration_ms: Date.now() - started });
     }
 
+    // ---------- owners and one-time invitations ----------
+    if (sub === "/owners" && m === "GET") {
+      const items = await all("SELECT id, chat_id, label, role, enabled, claimed_at, last_seen_at, created_at, updated_at FROM console_owners ORDER BY id");
+      return json({ ok: true, items });
+    }
+    if (sub === "/owners" && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const b = parsed.value;
+      if (b.id !== undefined) {
+        const id = Number(b.id);
+        if (!Number.isInteger(id) || id < 1) return fail("invalid_owner_id", 400);
+        if (Object.keys(b).some((k) => !["id", "enabled", "role", "label"].includes(k))) return fail("fields_not_editable", 400);
+        const current = await first("SELECT id, chat_id, label, role, enabled FROM console_owners WHERE id = ?", id);
+        if (!current) return fail("owner_not_found", 404);
+        const sets = [], args = [], changed = [];
+        if ("enabled" in b) {
+          if (![0, 1, true, false].includes(b.enabled)) return fail("invalid_enabled", 400);
+          const next = b.enabled === true || b.enabled === 1 ? 1 : 0;
+          if (current.role === "owner" && Number(current.enabled) === 1 && next === 0) {
+            const count = Number((await first("SELECT COUNT(*) AS total FROM console_owners WHERE role = 'owner' AND enabled = 1"))?.total || 0);
+            if (count <= 1) return fail("last_enabled_owner", 409);
+          }
+          sets.push("enabled = ?");
+          args.push(next);
+          changed.push("enabled");
+        }
+        if ("role" in b) {
+          if (!["owner", "viewer"].includes(b.role)) return fail("invalid_owner_role", 400);
+          if (current.role === "owner" && current.enabled && b.role !== "owner") {
+            const count = Number((await first("SELECT COUNT(*) AS total FROM console_owners WHERE role = 'owner' AND enabled = 1"))?.total || 0);
+            if (count <= 1) return fail("last_enabled_owner", 409);
+          }
+          sets.push("role = ?");
+          args.push(b.role);
+          changed.push("role");
+        }
+        if ("label" in b) {
+          const label = text(b.label, 120);
+          if (!label) return fail("invalid_owner_label", 400);
+          sets.push("label = ?");
+          args.push(label);
+          changed.push("label");
+        }
+        if (!sets.length) return fail("nothing_to_update", 400);
+        sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+        await auditMutation([
+          env.DB.prepare("UPDATE console_owners SET " + sets.join(", ") + " WHERE id = ?").bind(...args, id),
+        ], "console_owner_update", { id, fields: changed });
+        const item = await first("SELECT id, chat_id, label, role, enabled, claimed_at, last_seen_at, created_at, updated_at FROM console_owners WHERE id = ?", id);
+        return json({ ok: true, item });
+      }
+
+      if (Object.keys(b).some((k) => !["chat_id", "label", "role", "enabled"].includes(k))) return fail("fields_not_editable", 400);
+      const chatId = text(b.chat_id, 128);
+      if (!chatId || !/^[A-Za-z0-9._:@-]{1,128}$/.test(chatId)) return fail("invalid_chat_id", 400);
+      const label = text(b.label, 120) || ("مالک " + chatId.slice(-4));
+      const role = b.role === undefined ? "viewer" : b.role;
+      if (!["owner", "viewer"].includes(role)) return fail("invalid_owner_role", 400);
+      let enabled = b.enabled === undefined ? 1 : b.enabled;
+      if (![0, 1, true, false].includes(enabled)) return fail("invalid_enabled", 400);
+      enabled = enabled === true || enabled === 1 ? 1 : 0;
+      if (await first("SELECT id FROM console_owners WHERE chat_id = ?", chatId)) return fail("owner_already_exists", 409);
+      await auditMutation([
+        env.DB.prepare("INSERT INTO console_owners (chat_id, label, role, enabled, claimed_at, last_seen_at) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), NULL)")
+          .bind(chatId, label, role, enabled),
+      ], "console_owner_create", { role, enabled, label });
+      const item = await first("SELECT id, chat_id, label, role, enabled, claimed_at, last_seen_at, created_at, updated_at FROM console_owners WHERE chat_id = ?", chatId);
+      return json({ ok: true, item }, 201);
+    }
+    const ownerMatch = /^\/owners\/(\d+)$/.exec(sub);
+    if (ownerMatch && m === "DELETE") {
+      const id = Number(ownerMatch[1]);
+      const current = await first("SELECT id, role, enabled FROM console_owners WHERE id = ?", id);
+      if (!current) return fail("owner_not_found", 404);
+      if (current.role === "owner" && Number(current.enabled) === 1) {
+        const count = Number((await first("SELECT COUNT(*) AS total FROM console_owners WHERE role = 'owner' AND enabled = 1"))?.total || 0);
+        if (count <= 1) return fail("last_enabled_owner", 409);
+      }
+      await auditMutation([
+        env.DB.prepare("DELETE FROM console_owners WHERE id = ?").bind(id),
+      ], "console_owner_delete", { id, role: current.role });
+      return json({ ok: true, id });
+    }
+    if (sub === "/owners/invite" && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const inviteCode = "INV-" + randomHex(16).toUpperCase();
+      const codeHash = await sha256Hex(inviteCode);
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      await auditMutation([
+        env.DB.prepare("INSERT INTO console_owner_invites (code_hash, expires_at) VALUES (?, ?)").bind(codeHash, expiresAt),
+      ], "console_owner_invite", { expires_at: expiresAt, lifetime_minutes: 60 });
+      return json({ ok: true, invite_code: inviteCode, expires_at: expiresAt }, 201);
+    }
+
+    // ---------- versioned, optimistic-lock rules ----------
+    if (sub === "/rules" && m === "GET") {
+      const row = await first("SELECT version, rules_json, updated_at FROM console_rules WHERE id = 1");
+      if (!row) return fail("rules_not_initialized", 503);
+      let rules;
+      try { rules = JSON.parse(row.rules_json); } catch { return fail("rules_invalid_json", 503); }
+      rules.publishing_enabled = false;
+      rules.test_channel_only = true;
+      return json({ ok: true, version: Number(row.version), rules, updated_at: row.updated_at });
+    }
+    if (sub === "/rules" && m === "PUT") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const b = parsed.value;
+      if (!bounded(b.base_version, 1, 1000000000)) return fail("invalid_base_version", 400);
+      if (!isRecord(b.rules)) return fail("rules_object_required", 400);
+      const current = await first("SELECT version, rules_json, updated_at FROM console_rules WHERE id = 1");
+      if (!current) return fail("rules_not_initialized", 503);
+      let currentRules;
+      try { currentRules = JSON.parse(current.rules_json); } catch { return fail("rules_invalid_json", 503); }
+      const server = { version: Number(current.version), rules: currentRules, updated_at: current.updated_at };
+      if (Number(current.version) !== b.base_version) return json({ ok: false, error: "version_conflict", server }, 409);
+
+      const rules = { ...b.rules };
+      rules.publishing_enabled = false;
+      rules.test_channel_only = true;
+      const integerRules = {
+        daily_success_cap: [0, 50], daily_edit_count: [0, 50], mob_posts_per_run: [0, 10],
+        freshness_hours: [1, 168], ai_daily_limit_groq: [0, 5000],
+        ai_daily_limit_openrouter: [0, 5000], caption_max_chars: [50, 4000],
+      };
+      for (const [key, range] of Object.entries(integerRules)) {
+        if (key in rules && !bounded(rules[key], range[0], range[1])) return fail("invalid_rule_" + key, 400);
+      }
+      for (const key of ["translate_enabled"]) {
+        if (key in rules && typeof rules[key] !== "boolean") return fail("invalid_rule_" + key, 400);
+      }
+      if ("ai_provider_order" in rules &&
+          (!Array.isArray(rules.ai_provider_order) || rules.ai_provider_order.length < 1 || rules.ai_provider_order.length > 2 ||
+           rules.ai_provider_order.some((provider) => !AI_PROVIDERS.has(provider)) ||
+           new Set(rules.ai_provider_order).size !== rules.ai_provider_order.length)) {
+        return fail("invalid_rule_ai_provider_order", 400);
+      }
+      if ("quiet_hours" in rules &&
+          (!isRecord(rules.quiet_hours) ||
+           !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(rules.quiet_hours.start || "")) ||
+           !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(rules.quiet_hours.end || "")))) {
+        return fail("invalid_rule_quiet_hours", 400);
+      }
+      if ("digest_window_utc" in rules && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(rules.digest_window_utc))) {
+        return fail("invalid_rule_digest_window_utc", 400);
+      }
+      if ("mob_since_cutoff" in rules &&
+          (typeof rules.mob_since_cutoff !== "string" || rules.mob_since_cutoff.length > 80 ||
+           (rules.mob_since_cutoff !== "" && Number.isNaN(Date.parse(rules.mob_since_cutoff))))) {
+        return fail("invalid_rule_mob_since_cutoff", 400);
+      }
+      if ("ai_provider_order" in rules) rules.ai_provider_order = rules.ai_provider_order.slice();
+      let rulesJson;
+      try {
+        rulesJson = JSON.stringify(rules);
+        if (new TextEncoder().encode(rulesJson).byteLength > 12000) return fail("rules_too_large", 400);
+      } catch { return fail("rules_not_serializable", 400); }
+      const now = new Date().toISOString();
+      const result = await auditMutation([
+        env.DB.prepare("UPDATE console_rules SET version = version + 1, rules_json = ?, updated_at = ? WHERE id = 1 AND version = ?")
+          .bind(rulesJson, now, b.base_version),
+      ], "console_rules_update", { from_version: b.base_version, fields: Object.keys(rules).slice(0, 40) });
+      if (!result[0]?.meta?.changes) {
+        const latest = await first("SELECT version, rules_json, updated_at FROM console_rules WHERE id = 1");
+        let latestRules = {};
+        try { latestRules = JSON.parse(latest?.rules_json || "{}"); } catch {}
+        return json({ ok: false, error: "version_conflict", server: { version: Number(latest?.version || 0), rules: latestRules, updated_at: latest?.updated_at || null } }, 409);
+      }
+      return json({ ok: true, version: b.base_version + 1, rules, updated_at: now });
+    }
+
+    // ---------- destination channels (configuration only; this Worker never publishes) ----------
+    if (sub === "/channels" && m === "GET") {
+      const items = await all("SELECT id, label, rubika_channel_id, role, enabled, created_at, updated_at FROM console_channels ORDER BY id");
+      return json({ ok: true, items });
+    }
+    if (sub === "/channels" && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const b = parsed.value;
+      const rubikaChannelId = text(b.rubika_channel_id, 40);
+      if (!/^@?[A-Za-z0-9_]{3,40}$/.test(rubikaChannelId)) return fail("invalid_channel_id", 400);
+      const role = b.role === undefined ? "test" : b.role;
+      if (!["test", "production"].includes(role)) return fail("invalid_channel_role", 400);
+      const label = text(b.label, 120) || rubikaChannelId;
+      if (await first("SELECT id FROM console_channels WHERE rubika_channel_id = ?", rubikaChannelId)) return fail("channel_already_exists", 409);
+      let enabled = b.enabled === undefined ? (role === "test" ? 1 : 0) : b.enabled;
+      if (![0, 1, true, false].includes(enabled)) return fail("invalid_enabled", 400);
+      enabled = enabled === true || enabled === 1 ? 1 : 0;
+      if (role === "production") enabled = 0; // production destinations are metadata only and never enabled here
+      await auditMutation([
+        env.DB.prepare("INSERT INTO console_channels (label, rubika_channel_id, role, enabled) VALUES (?, ?, ?, ?)")
+          .bind(label, rubikaChannelId, role, enabled),
+      ], "console_channel_create", { role, enabled, label });
+      const item = await first("SELECT id, label, rubika_channel_id, role, enabled, created_at, updated_at FROM console_channels WHERE rubika_channel_id = ?", rubikaChannelId);
+      return json({ ok: true, item }, 201);
+    }
+    const channelMatch = /^\/channels\/(\d+)$/.exec(sub);
+    if (channelMatch && m === "DELETE") {
+      const id = Number(channelMatch[1]);
+      const current = await first("SELECT id, label, role FROM console_channels WHERE id = ?", id);
+      if (!current) return fail("channel_not_found", 404);
+      await auditMutation([
+        env.DB.prepare("DELETE FROM console_channels WHERE id = ?").bind(id),
+      ], "console_channel_delete", { id, role: current.role, label: current.label });
+      return json({ ok: true, id });
+    }
+
+    // ---------- persisted job records only; this route never starts a workflow or publishes ----------
+    const jobTypes = new Set(["queue_intake_dry_run", "ai_health_check", "log_zip", "d1_backup", "mob_x_link", "requeue_stuck"]);
+    if (sub === "/jobs" && m === "GET") {
+      const rawLimit = Number(url.searchParams.get("limit") || "20");
+      const limit = Number.isInteger(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 20;
+      const items = await all("SELECT id, type, status, progress, result_json, error, created_at, updated_at FROM console_jobs ORDER BY created_at DESC LIMIT ?", limit);
+      return json({ ok: true, items: items.map((row) => ({
+        id: row.id, type: row.type, status: row.status, progress: Number(row.progress || 0),
+        result: row.result_json ? (() => { try { return JSON.parse(row.result_json); } catch { return null; } })() : null,
+        error: row.error || null, created_at: row.created_at, updated_at: row.updated_at,
+      })) });
+    }
+    if (sub === "/jobs" && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const b = parsed.value;
+      if (!jobTypes.has(b.type)) return fail("invalid_job_type", 400);
+      const params = b.params === undefined ? {} : b.params;
+      if (!isRecord(params)) return fail("job_params_object_required", 400);
+      let paramsJson;
+      try {
+        paramsJson = JSON.stringify(params);
+        if (new TextEncoder().encode(paramsJson).byteLength > 12000) return fail("job_params_too_large", 400);
+      } catch { return fail("job_params_not_serializable", 400); }
+      const id = "job_" + randomHex(12);
+      await auditMutation([
+        env.DB.prepare("INSERT INTO console_jobs (id, type, status, progress, params_json, result_json, error) VALUES (?, ?, 'queued', 0, ?, NULL, NULL)")
+          .bind(id, b.type, paramsJson),
+      ], "console_job_create", { id, type: b.type });
+      return json({ ok: true, job_id: id }, 201);
+    }
+    const jobMatch = /^\/jobs\/([A-Za-z0-9_-]{1,100})$/.exec(sub);
+    if (jobMatch && m === "GET") {
+      const row = await first("SELECT id, type, status, progress, result_json, error, created_at, updated_at FROM console_jobs WHERE id = ?", jobMatch[1]);
+      if (!row) return fail("job_not_found", 404);
+      let result = null;
+      try { result = row.result_json ? JSON.parse(row.result_json) : null; } catch {}
+      return json({ ok: true, job: {
+        id: row.id, type: row.type, status: row.status, progress: Number(row.progress || 0),
+        result, error: row.error || null, created_at: row.created_at, updated_at: row.updated_at,
+      } });
+    }
+
     // ---------- X links saved by the owner (panel_links) ----------
     if (sub === "/links" && m === "GET") {
       const items = await all("SELECT id, url, status, created_at FROM panel_links ORDER BY id DESC LIMIT 100");
@@ -239,7 +509,8 @@ export async function handleConsoleApi(request, env, h) {
       const parsed = await readJson(request);
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const b = parsed.value;
-      const platform = text(b.platform, 24);
+      const requestedPlatform = text(b.platform, 24);
+      const platform = requestedPlatform === "x" ? "mob_official" : requestedPlatform;
       const key = text(b.source_key, 200);
       if (!SOURCE_PLATFORMS.has(platform)) return fail("invalid_platform", 400);
       if (!/^[A-Za-z0-9._@:/-]{1,200}$/.test(key)) return fail("invalid_source_key", 400);
