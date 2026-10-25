@@ -32,7 +32,7 @@ concurrency:
 jobs:
   public-api-probe:
     name: Read-only free X API probe
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -69,7 +69,59 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install Python dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Check for a confirmed Mob X job before system setup
+        id: preflight
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          base = os.environ.get("AGENT_API_BASE_URL", "").rstrip("/")
+          token = os.environ.get("AGENT_API_TOKEN", "").strip()
+          if not base.startswith("https://") or not token:
+              raise SystemExit("mob_x_preflight_credentials_missing")
+
+          def rows(path):
+              req = urllib.request.Request(
+                  base + path,
+                  headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
+              )
+              with urllib.request.urlopen(req, timeout=15) as response:
+                  value = json.load(response)
+              if not isinstance(value, dict) or value.get("ok") is not True:
+                  raise RuntimeError("worker_api_response_invalid")
+              items = value.get("items")
+              if not isinstance(items, list):
+                  raise RuntimeError("worker_api_items_missing")
+              return [item for item in items if isinstance(item, dict)]
+
+          try:
+              jobs = rows("/api/console/jobs?limit=100")
+              links = rows("/api/console/links?limit=100")
+          except Exception:
+              raise SystemExit("mob_x_preflight_worker_api_unavailable") from None
+
+          links_by_id = {str(link.get("id")): link for link in links}
+          # Confirmation currently creates status=confirmed; queued is accepted for compatible queues.
+          has_job = any(
+              job.get("type") == "mob_x_link"
+              and job.get("status") in {"queued", "confirmed"}
+              and str(job.get("panel_link_id")) in links_by_id
+              and links_by_id[str(job.get("panel_link_id"))].get("status") in {"confirmed", "queued"}
+              for job in jobs
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("has_job=" + ("true" if has_job else "false") + "\\n")
+          print("has_job=true — confirmed Mob X work found" if has_job else
+                "has_job=false — no confirmed Mob X work; downstream setup will be skipped")
+          PY
       - name: Check required existing secret names without printing values
+        if: ${{ steps.preflight.outputs.has_job == 'true' }}
         env:
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
@@ -87,6 +139,7 @@ jobs:
             exit 2
           fi
       - name: Install ffmpeg and official MEGAcmd package
+        if: ${{ steps.preflight.outputs.has_job == 'true' }}
         run: |
           set -euo pipefail
           package="$RUNNER_TEMP/megacmd-xUbuntu_24.04_amd64.deb"
@@ -98,6 +151,7 @@ jobs:
           command -v mega-login
           command -v mega-put
       - name: Log in to existing MEGA storage
+        if: ${{ steps.preflight.outputs.has_job == 'true' }}
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
@@ -107,6 +161,7 @@ jobs:
           mega-whoami >/dev/null
           echo "MEGA login verified; account details are not printed."
       - name: Claim and process at most one owner link
+        if: ${{ steps.preflight.outputs.has_job == 'true' }}
         id: process
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
@@ -119,7 +174,7 @@ jobs:
           set -euo pipefail
           python -m agent.brain.mob_x_link_processor --process-one --report "$RUNNER_TEMP/mob-x-link-report.json"
       - name: Notify owner once when a claimed job fails
-        if: ${{ failure() }}
+        if: ${{ failure() && steps.preflight.outputs.has_job == 'true' }}
         continue-on-error: true
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
@@ -146,7 +201,7 @@ jobs:
             echo "Owner notification unavailable; safe error code: $reason"
           }
       - name: Log out of MEGA
-        if: always()
+        if: ${{ always() && steps.preflight.outputs.has_job == 'true' }}
         run: |
           mega-logout >/dev/null 2>&1 || true
           mega-quit >/dev/null 2>&1 || true
