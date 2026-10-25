@@ -1,0 +1,37 @@
+name: Mob X test-channel GUID hash audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hash-test-channel-guid:
+    name: Print only the configured channel GUID SHA-256
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Compute SHA-256 without printing the secret
+        env:
+          RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
+            echo "::error::RUBIKA_CHANNEL_GUID secret is missing or empty."
+            exit 1
+          fi
+          hash="$(python - <<'PY'
+          import hashlib
+          import os
+          value = os.environ["RUBIKA_CHANNEL_GUID"].encode("utf-8")
+          print(hashlib.sha256(value).hexdigest())
+          PY
+          )"
+          if [[ ! "$hash" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "::error::SHA-256 computation failed."
+            exit 1
+          fi
+          echo "RUBIKA_CHANNEL_GUID_SHA256=$hash"
+          echo "The raw secret and all request headers remain unprinted."
