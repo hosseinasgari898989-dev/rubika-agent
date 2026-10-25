@@ -1,7 +1,9 @@
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from agent.brain.edit_caption import EDIT_CAPTION
-from agent.brain.e2e_batch_from_report import _round_robin_candidates
+from agent.brain.e2e_batch_from_report import _round_robin_candidates, run_batch
 from agent.brain.e2e_from_report import _stage_failure_summary
 from agent.brain.e2e_from_report import _blocking_ledger_ids, _is_reusable_staged_item
 from agent.brain.models import Candidate
@@ -124,6 +126,19 @@ class BatchOrderTests(unittest.TestCase):
         self.assertNotIn("**", EDIT_CAPTION)
         self.assertIn("CHANEL» @poppy_play_time_HV", EDIT_CAPTION)
         self.assertIn("ˡⁱᵏᵉ", EDIT_CAPTION)
+
+
+class BatchDestinationGuardTests(unittest.TestCase):
+    def test_non_test_destination_is_rejected_before_report_or_candidates_are_read(self):
+        with (
+            patch.dict("os.environ", {"RUBIKA_CHANNEL_GUID": "different-channel"}),
+            patch("agent.brain.e2e_batch_from_report._load_rows") as load_rows,
+            patch("agent.brain.e2e_batch_from_report.candidates_from_report") as candidates,
+        ):
+            with self.assertRaisesRegex(ValueError, "rubika_destination_not_test_channel"):
+                run_batch(Path("does-not-exist.json"), Path("unused-report.json"))
+        load_rows.assert_not_called()
+        candidates.assert_not_called()
 
 
 if __name__ == "__main__":
