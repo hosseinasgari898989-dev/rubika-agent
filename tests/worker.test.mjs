@@ -596,6 +596,14 @@ const read = async response => ({ status: response.status, body: await response.
   response = await read(await worker.fetch(request("/api/status"), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.publishing, false);
+  assert.equal(response.body.capabilities.publishing, false, "publishing capability must default to false");
+
+  state.PUBLISHING_ENABLED = "true";
+  response = await read(await worker.fetch(request("/api/status"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.capabilities.publishing, true, "only the exact string true enables the capability");
+  assert.equal(response.body.publishing, false, "other publishing guard remains unchanged");
+  delete state.PUBLISHING_ENABLED;
 
   response = await read(await worker.fetch(request("/api/brain/owner-console/state"), state));
   assert.equal(response.status, 200);
