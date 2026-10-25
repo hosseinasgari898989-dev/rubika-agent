@@ -397,8 +397,9 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         raise MobXLinkError("mob_x_post_already_delivery_blocked")
 
     post = fetch_public_post(external_id, session=session)
-    original = clean_caption(post.get("text"), 5000)
-    if not original:
+    original = str(post.get("text") or "").strip()[:5000]
+    translation_source = clean_caption(original, 5000)
+    if not translation_source:
         raise MobXLinkError("mob_x_caption_missing")
     rules = client.rules()
     try:
@@ -407,7 +408,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         caption_limit = 900
     if rules.get("translate_enabled", True) is True:
         try:
-            translation = clean_caption(translate_to_persian(original), caption_limit)
+            translation = clean_caption(translate_to_persian(translation_source), caption_limit)
         except Exception:
             translation = ""
         if not translation:
@@ -415,7 +416,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         caption = translation
     else:
         translation = None
-        caption = clean_caption(original, caption_limit)
+        caption = clean_caption(translation_source, caption_limit)
         if not caption:
             raise MobXLinkError("mob_x_caption_missing")
 
