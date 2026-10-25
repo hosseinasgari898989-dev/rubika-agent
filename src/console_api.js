@@ -432,14 +432,63 @@ export async function handleConsoleApi(request, env, h) {
       return json({ ok: true, id });
     }
 
+    // ---------- official Mob X job processor contract (no publication endpoint) ----------
+    if (sub === "/mob-x/claim" && m === "POST") {
+      const candidate = await first(
+        "SELECT j.id, j.panel_link_id, p.url, p.external_id FROM console_jobs j " +
+        "JOIN panel_links p ON p.id = j.panel_link_id " +
+        "WHERE j.type = 'mob_x_link' AND j.status IN ('confirmed', 'queued') " +
+        "AND p.status IN ('confirmed', 'queued') ORDER BY j.created_at ASC LIMIT 1"
+      );
+      if (!candidate) return json({ ok: true, claimed: false, reason: "no_queued_mob_x_link" });
+
+      const claimedAt = new Date().toISOString();
+      const result = await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE console_jobs SET status = 'processing', progress = 10, error = NULL, updated_at = ? " +
+          "WHERE id = ? AND type = 'mob_x_link' AND panel_link_id = ? AND status IN ('confirmed', 'queued') " +
+          "AND EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status IN ('confirmed', 'queued'))"
+        ).bind(claimedAt, candidate.id, candidate.panel_link_id, candidate.panel_link_id),
+        env.DB.prepare(
+          "UPDATE panel_links SET status = 'processing', updated_at = ? WHERE id = ? " +
+          "AND status IN ('confirmed', 'queued') AND changes() > 0"
+        ).bind(claimedAt, candidate.panel_link_id),
+      ]);
+      if (!result?.[0]?.meta?.changes) {
+        return json({ ok: true, claimed: false, reason: "job_claimed_by_another_runner" });
+      }
+      const row = await first(
+        "SELECT id, params_json, panel_link_id, progress, status FROM console_jobs WHERE id = ? AND status = 'processing'",
+        candidate.id
+      );
+      let params = {};
+      try { params = row?.params_json ? JSON.parse(row.params_json) : {}; } catch {}
+      if (!row || !isRecord(params)) return fail("mob_x_link_claim_payload_invalid", 503);
+      await audit("mob_x_link_claim", "mob_official:" + candidate.external_id, { job_id: row.id, panel_link_id: candidate.panel_link_id });
+      return json({
+        ok: true,
+        claimed: true,
+        job: {
+          id: row.id,
+          type: "mob_x_link",
+          status: "processing",
+          progress: Number(row.progress || 0),
+          panel_link_id: Number(row.panel_link_id),
+          params,
+          url: candidate.url,
+          external_id: String(candidate.external_id || ""),
+        },
+      });
+    }
+
     // ---------- persisted job records only; this route never starts a workflow or publishes ----------
     const jobTypes = new Set(["queue_intake_dry_run", "ai_health_check", "log_zip", "d1_backup", "mob_x_link", "requeue_stuck"]);
     if (sub === "/jobs" && m === "GET") {
       const rawLimit = Number(url.searchParams.get("limit") || "20");
       const limit = Number.isInteger(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 20;
-      const items = await all("SELECT id, type, status, progress, result_json, error, created_at, updated_at FROM console_jobs ORDER BY created_at DESC LIMIT ?", limit);
+      const items = await all("SELECT id, type, status, progress, result_json, error, panel_link_id, created_at, updated_at FROM console_jobs ORDER BY created_at DESC LIMIT ?", limit);
       return json({ ok: true, items: items.map((row) => ({
-        id: row.id, type: row.type, status: row.status, progress: Number(row.progress || 0),
+        id: row.id, type: row.type, status: row.status, progress: Number(row.progress || 0), panel_link_id: row.panel_link_id == null ? null : Number(row.panel_link_id),
         result: row.result_json ? (() => { try { return JSON.parse(row.result_json); } catch { return null; } })() : null,
         error: row.error || null, created_at: row.created_at, updated_at: row.updated_at,
       })) });
@@ -464,6 +513,57 @@ export async function handleConsoleApi(request, env, h) {
       ], "console_job_create", { id, type: b.type });
       return json({ ok: true, job_id: id }, 201);
     }
+    const mobTransition = /^\/mob-x\/jobs\/([A-Za-z0-9_-]{1,100})\/transition$/.exec(sub);
+    if (mobTransition && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const body = parsed.value;
+      if (!isRecord(body) || !["ready_for_review", "failed"].includes(body.status)) {
+        return fail("mob_x_transition_status_invalid", 400);
+      }
+      const progress = body.status === "ready_for_review" ? 100 : bounded(body.progress, 10, 100) ? body.progress : 100;
+      const resultValue = body.result == null ? null : body.result;
+      if (resultValue !== null && !isRecord(resultValue)) return fail("mob_x_result_object_required", 400);
+      let resultJson = null;
+      try {
+        if (resultValue !== null) {
+          resultJson = JSON.stringify(resultValue);
+          if (new TextEncoder().encode(resultJson).byteLength > 12000) return fail("mob_x_result_too_large", 400);
+        }
+      } catch { return fail("mob_x_result_not_serializable", 400); }
+      const errorCode = body.status === "failed" ? text(body.error_code, 80) : null;
+      if (body.status === "failed" && !/^[a-z0-9_-]{1,80}$/.test(errorCode || "")) {
+        return fail("mob_x_error_code_required", 400);
+      }
+      if (body.status === "ready_for_review" && (
+        !resultValue || !/^\d{15,22}$/.test(String(resultValue.external_id || "")) ||
+        typeof resultValue.caption !== "string" || !resultValue.caption.trim() ||
+        !["video", "image"].includes(resultValue.media_type) ||
+        typeof resultValue.storage_key !== "string" || !resultValue.storage_key.startsWith("/Rubika-Agent/")
+      )) return fail("mob_x_review_result_incomplete", 400);
+
+      const jobId = mobTransition[1];
+      const now = new Date().toISOString();
+      const statements = [
+        env.DB.prepare(
+          "UPDATE console_jobs SET status = ?, progress = ?, result_json = COALESCE(?, result_json), error = ?, updated_at = ? " +
+          "WHERE id = ? AND type = 'mob_x_link' AND status = 'processing'"
+        ).bind(body.status, progress, resultJson, errorCode, now, jobId),
+        env.DB.prepare(
+          "UPDATE panel_links SET status = ?, updated_at = ? WHERE id = " +
+          "(SELECT panel_link_id FROM console_jobs WHERE id = ? AND type = 'mob_x_link' AND status = ?) AND changes() > 0"
+        ).bind(body.status, now, jobId, body.status),
+      ];
+      const changed = await env.DB.batch(statements);
+      if (!changed?.[0]?.meta?.changes) return fail("mob_x_job_not_processing", 409);
+      await audit(
+        body.status === "failed" ? "mob_x_link_failed" : "mob_x_link_ready_for_review",
+        resultValue?.item_id || null,
+        { job_id: jobId, error_code: errorCode, external_id_tail: String(resultValue?.external_id || "").slice(-6) }
+      );
+      return json({ ok: true, job_id: jobId, status: body.status, progress });
+    }
+
     const jobMatch = /^\/jobs\/([A-Za-z0-9_-]{1,100})$/.exec(sub);
     if (jobMatch && m === "GET") {
       const row = await first("SELECT id, type, status, progress, result_json, error, created_at, updated_at FROM console_jobs WHERE id = ?", jobMatch[1]);
