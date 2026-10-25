@@ -39,7 +39,7 @@ class MobXLinkParserTests(unittest.TestCase):
         workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mob-x-link-processor.yml"
         workflow = workflow_path.read_text(encoding="utf-8")
         start = workflow.index("  public-api-probe:")
-        end = workflow.index("\\n  process-one-confirmed-link:", start)
+        end = workflow.index("\n  process-one-confirmed-link:", start)
         probe_job = workflow[start:end]
         self.assertIn("github.event_name == 'push'", probe_job)
         self.assertIn("github.event_name == 'pull_request'", probe_job)
