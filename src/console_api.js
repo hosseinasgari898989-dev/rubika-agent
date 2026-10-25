@@ -509,7 +509,8 @@ export async function handleConsoleApi(request, env, h) {
       const parsed = await readJson(request);
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const b = parsed.value;
-      const platform = text(b.platform, 24);
+      const requestedPlatform = text(b.platform, 24);
+      const platform = requestedPlatform === "x" ? "mob_official" : requestedPlatform;
       const key = text(b.source_key, 200);
       if (!SOURCE_PLATFORMS.has(platform)) return fail("invalid_platform", 400);
       if (!/^[A-Za-z0-9._@:/-]{1,200}$/.test(key)) return fail("invalid_source_key", 400);
