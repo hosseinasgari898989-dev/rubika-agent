@@ -5,6 +5,24 @@ ALTER TABLE panel_links ADD COLUMN external_id TEXT;
 ALTER TABLE panel_links ADD COLUMN confirmed_at TEXT;
 ALTER TABLE panel_links ADD COLUMN updated_at TEXT;
 
+-- Backfill legacy links only when their host and handle are exactly the official Mob account.
+-- Older official links that were merely received still require a fresh owner confirmation.
+UPDATE panel_links
+SET external_id = substr(url, instr(url, '/status/') + 8),
+    status = CASE WHEN status IN ('received', 'pending') THEN 'pending' ELSE status END,
+    updated_at = COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+WHERE external_id IS NULL
+  AND (
+    lower(url) LIKE 'https://x.com/mobgamesstudios/status/%'
+    OR lower(url) LIKE 'https://www.x.com/mobgamesstudios/status/%'
+    OR lower(url) LIKE 'https://mobile.x.com/mobgamesstudios/status/%'
+    OR lower(url) LIKE 'https://twitter.com/mobgamesstudios/status/%'
+    OR lower(url) LIKE 'https://www.twitter.com/mobgamesstudios/status/%'
+    OR lower(url) LIKE 'https://mobile.twitter.com/mobgamesstudios/status/%'
+  )
+  AND length(substr(url, instr(url, '/status/') + 8)) BETWEEN 15 AND 22
+  AND substr(url, instr(url, '/status/') + 8) NOT GLOB '*[^0-9]*';
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_panel_links_external_id_unique
   ON panel_links(external_id) WHERE external_id IS NOT NULL;
 
