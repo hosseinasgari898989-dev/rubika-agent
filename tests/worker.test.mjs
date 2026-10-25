@@ -2251,6 +2251,75 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.events.some(event => event.code === "console_channel_create" && String(event.details_json).includes("production") && String(event.details_json).includes("enabled")) === true, true);
 }
 
+// Mob X links require confirmation; external_id prevents duplicates and confirmation creates one idempotent job.
+{
+  const state = env();
+  let response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: "https://twitter.com/mobgamesstudios/status/2107878755079213476" },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.link.external_id, "2107878755079213476");
+  assert.equal(response.body.link.status, "pending");
+  assert.equal(response.body.confirmation_required, true);
+  const linkId = response.body.link.id;
+
+  response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: "https://x.com/Test/status/2107878755079213476" },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "only_official_mob_x_status_links_allowed");
+
+  response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: "https://x.com/mobgamesstudios/status/2107878755079213476/" },
+  }), state));
+  assert.equal(response.status, 409, "same external_id must be rejected even when the URL variant differs");
+
+  response = await read(await worker.fetch(request("/api/console/jobs", {
+    method: "POST", body: { type: "mob_x_link", params: { url: response.body?.url || "https://x.com/mobgamesstudios/status/2107878755079213476" } },
+  }), state));
+  assert.equal(response.status, 400, "mob_x_link jobs must only be created through explicit link confirmation");
+  assert.equal(response.body.error, "mob_x_link_requires_link_confirmation");
+
+  response = await read(await worker.fetch(request("/api/console/links/" + linkId + "/confirm", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "confirmed");
+  const firstJobId = response.body.job_id;
+  const job = state.DB.consoleJobs.get(firstJobId);
+  assert.equal(job.type, "mob_x_link");
+  assert.equal(job.status, "confirmed");
+  assert.equal(Number(job.panel_link_id), Number(linkId));
+  assert.deepEqual(JSON.parse(job.params_json), {
+    url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+    panel_link_id: linkId,
+  });
+  assert.equal(state.DB.panelLinks.get(linkId).status, "confirmed");
+
+  response = await read(await worker.fetch(request("/api/console/links/" + linkId + "/confirm", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.job_id, firstJobId, "repeated confirmation must return the same job");
+  assert.equal(state.DB.consoleJobs.size, 1, "repeated confirmation must not create another job");
+
+  response = await read(await worker.fetch(request("/api/console/links"), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items[0].status, "confirmed");
+
+  response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: "https://x.com/mobgamesstudios/status/2107878755079213477" },
+  }), state));
+  const cancelId = response.body.link.id;
+  response = await read(await worker.fetch(request("/api/console/links/" + cancelId + "/cancel", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "rejected");
+  assert.equal(state.DB.panelLinks.get(cancelId).status, "rejected");
+  assert.equal(state.DB.consoleJobs.size, 1, "cancellation must not enqueue work");
+}
+
 // Jobs are durable queue records only: creating one does not run a worker, workflow, or publisher.
 {
   const state = env();
