@@ -12,6 +12,11 @@ on:
       - ".github/workflows/mob-x-link-processor.yml"
       - "agent/brain/mob_x_link_processor.py"
       - "tests/test_mob_x_link_processor.py"
+      - "tests/test_mob_x_link_publisher.py"
+      - "tests/test_mob_x_rubika.py"
+      - "agent/brain/mob_x_link_publisher.py"
+      - "agent/brain/mob_x_rubika.py"
+      - "src/owner_panel.js"
       - "src/console_api.js"
   schedule:
     - cron: "*/5 * * * *"
@@ -149,7 +154,7 @@ jobs:
 
   publish-one-approved-link:
     name: Publish one owner-approved link to test channel
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && vars.MOB_X_TEST_PUBLISH_ENABLED == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 6
     steps:
@@ -169,18 +174,18 @@ jobs:
       - name: Enforce exact test-channel destination without exposing the configured value
         env:
           RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
-          MOB_X_TEST_PUBLISH_ENABLED: ${{ vars.MOB_X_TEST_PUBLISH_ENABLED }}
+          RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 }}
         run: |
           set -euo pipefail
-          if [ "${MOB_X_TEST_PUBLISH_ENABLED:-}" != "true" ]; then
-            echo "::error::Mob X test publish gate is not enabled."
+          if [ "${RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014:-}" != "approved" ]; then
+            echo "::error::Existing Mob X publish approval gate is not approved."
             exit 2
           fi
           if [ "${RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230" ]; then
             echo "::error::RUBIKA_CHANNEL_GUID does not match the expected test channel; configured value is redacted."
             exit 2
           fi
-          echo "Publish gate and test-channel destination validated; no value printed."
+          echo "Existing Mob X approval gate and exact test-channel destination validated; no values printed."
       - name: Claim and publish one owner-approved job at most once
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
@@ -188,7 +193,7 @@ jobs:
           RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
           RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
           RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
-          MOB_X_TEST_PUBLISH_ENABLED: ${{ vars.MOB_X_TEST_PUBLISH_ENABLED }}
+          RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 }}
         run: |
           set -euo pipefail
           python -m agent.brain.mob_x_link_publisher --publish-one --report "$RUNNER_TEMP/mob-x-publish-report.json"
