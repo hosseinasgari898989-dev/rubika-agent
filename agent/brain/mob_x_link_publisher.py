@@ -83,6 +83,18 @@ def publish_one(
                 os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
                 os.getenv("AGENT_API_TOKEN", ""),
             )
+        # The Worker owns the global publishing capability. Never claim work unless
+        # /api/status explicitly reports capabilities.publishing=true.
+        try:
+            status_payload = worker.request("GET", "/api/status")
+        except Exception:
+            report.update(status="blocked", error_code="publishing_disabled", capability_check="unavailable")
+            return _write_report(report, report_path, 1)
+        capabilities = status_payload.get("capabilities") if isinstance(status_payload, dict) else None
+        if not isinstance(capabilities, dict) or capabilities.get("publishing") is not True:
+            report.update(status="blocked", error_code="publishing_disabled", capability_check="disabled_or_invalid")
+            return _write_report(report, report_path, 1)
+
         rules = worker.rules()
         if rules.get("test_channel_only") is not True:
             report.update(status="blocked", error_code="console_test_channel_guard_not_enabled")
