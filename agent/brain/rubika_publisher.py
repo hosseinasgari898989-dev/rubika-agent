@@ -16,6 +16,20 @@ from typing import Any
 MARKDOWN_SIGNAL = re.compile(r"\*\*.+?\*\*|__(.+?)__|--(.+?)--|~~(.+?)~~|\|\|.+?\|\||`.+?`|^>.+?$", re.MULTILINE | re.DOTALL)
 
 
+TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
+
+
+class RubikaDestinationGuardError(ValueError):
+    code = "rubika_destination_not_test_channel"
+
+
+def assert_test_channel_destination(channel_guid: str) -> str:
+    destination = str(channel_guid or "").strip()
+    if destination != TEST_CHANNEL_GUID:
+        raise RubikaDestinationGuardError("rubika_destination_not_test_channel")
+    return destination
+
+
 def _escape_source_markup(value: str) -> str:
     """Prevent source-caption text from injecting formatting metadata."""
     for marker in ("**", "__", "~~", "||"):
@@ -85,13 +99,14 @@ class RubikaPublisher:
             raise ValueError("missing_RUBIKA_TOKEN")
         if not channel_guid.strip():
             raise ValueError("missing_RUBIKA_CHANNEL_GUID")
-        self.channel_guid = channel_guid
+        self.channel_guid = channel_guid.strip()
         if bot_factory is None:
             from rubka import Bot
             bot_factory = Bot
         self.bot = bot_factory(token=token, timeout=30, show_progress=True)
 
     def _send_formatted_media(self, path: Path, media_type: str, caption: dict[str, Any]) -> Any:
+        assert_test_channel_destination(self.channel_guid)
         post = getattr(self.bot, "_post", None)
         get_upload_url = getattr(self.bot, "get_upload_url", None)
         upload_media_file = getattr(self.bot, "upload_media_file", None)
@@ -120,6 +135,7 @@ class RubikaPublisher:
         return post("sendFile", payload)
 
     def send_media(self, path: str | Path, media_type: str, caption: str | None = None) -> Any:
+        assert_test_channel_destination(self.channel_guid)
         local_path = Path(path)
         if not local_path.is_file() or local_path.stat().st_size <= 0:
             raise ValueError("media_file_missing_or_empty")

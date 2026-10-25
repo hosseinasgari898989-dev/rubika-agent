@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent.brain.rubika_publisher import RubikaPublisher, _decorate_official_mob_caption
+from agent.brain.rubika_publisher import TEST_CHANNEL_GUID, RubikaPublisher, _decorate_official_mob_caption
 
 
 class FakeBot:
@@ -50,7 +50,7 @@ class RubikaPublisherMediaTests(unittest.TestCase):
         self.fake_bot = FakeBot()
         self.publisher = RubikaPublisher(
             "test-token",
-            "test-channel",
+            TEST_CHANNEL_GUID,
             bot_factory=lambda **kwargs: self.fake_bot,
         )
 
@@ -103,7 +103,7 @@ class RubikaPublisherMediaTests(unittest.TestCase):
         self.assertEqual(len(self.fake_bot.posts), 1)
         method, payload = self.fake_bot.posts[0]
         self.assertEqual(method, "sendFile")
-        self.assertEqual(payload["chat_id"], "test-channel")
+        self.assertEqual(payload["chat_id"], TEST_CHANNEL_GUID)
         self.assertEqual(payload["file_id"], "uploaded-file-id")
         self.assertNotIn("**", payload["text"])
         self.assertNotIn("||", payload["text"])
@@ -127,7 +127,7 @@ class RubikaPublisherMediaTests(unittest.TestCase):
         self.assertEqual(len(self.fake_bot.calls), 1)
         method, payload = self.fake_bot.calls[0]
         self.assertEqual(method, "send_image")
-        self.assertEqual(payload["chat_id"], "test-channel")
+        self.assertEqual(payload["chat_id"], TEST_CHANNEL_GUID)
         self.assertEqual(payload["path"], str(self.media_path))
         self.assertEqual(payload["text"], "A test caption")
         self.assertEqual(payload["file_name"], "official_media.webp")
@@ -154,9 +154,22 @@ class RubikaPublisherMediaTests(unittest.TestCase):
 
         method, payload = self.fake_bot.calls[-1]
         self.assertEqual(method, "send_video")
-        self.assertEqual(payload["chat_id"], "test-channel")
+        self.assertEqual(payload["chat_id"], TEST_CHANNEL_GUID)
         self.assertEqual(payload["path"], str(video_path))
         self.assertEqual(payload["text"], "A video caption")
+
+
+    def test_non_test_destination_is_rejected_before_any_upload_or_send(self):
+        blocked = RubikaPublisher(
+            "test-token",
+            "not-the-test-channel",
+            bot_factory=lambda **kwargs: self.fake_bot,
+        )
+        with self.assertRaisesRegex(ValueError, "rubika_destination_not_test_channel"):
+            blocked.send_media(self.media_path, "image", "A test caption")
+        self.assertEqual(self.fake_bot.uploads, [])
+        self.assertEqual(self.fake_bot.calls, [])
+        self.assertEqual(self.fake_bot.posts, [])
 
 
 if __name__ == "__main__":

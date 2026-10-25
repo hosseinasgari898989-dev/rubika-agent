@@ -26,7 +26,7 @@ from agent.brain.inspector import inspect_media
 from agent.brain.models import Candidate
 from agent.brain.orchestrator import StagingOrchestrator, candidates_from_report
 from agent.brain.relay_client import AuthorizedYouTubeRelay
-from agent.brain.rubika_publisher import RubikaPublisher
+from agent.brain.rubika_publisher import RubikaPublisher, assert_test_channel_destination
 from agent.brain.vision_moderator import CloudflareVideoModerator
 from agent.storage.mega import MegaStorage
 from agent.brain.edit_caption import EDIT_CAPTION
@@ -214,6 +214,9 @@ def run_one(
     candidate_limit: int = 1,
     candidate_offset: int = 0,
 ) -> dict[str, Any]:
+    channel_guid = assert_test_channel_destination(
+        os.getenv("RUBIKA_CHANNEL_GUID", DEFAULT_CHANNEL_GUID)
+    )
     if platform == "youtube" and not delivery_enabled("youtube"):
         raise RuntimeError("youtube_delivery_paused_by_owner")
     api_url = os.getenv("AGENT_API_BASE_URL", DEFAULT_CLOUD_API).strip()
@@ -431,7 +434,7 @@ def run_one(
         cloud.create_run(trigger_type="e2e_publish_smoke", run_id=publish_run_id)
         publisher = RubikaPublisher(
             os.getenv("RUBIKA_TOKEN", ""),
-            os.getenv("RUBIKA_CHANNEL_GUID", DEFAULT_CHANNEL_GUID),
+            channel_guid,
         )
         last_response: dict[str, Any] = {}
 

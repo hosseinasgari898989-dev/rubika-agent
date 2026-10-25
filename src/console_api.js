@@ -528,7 +528,7 @@ export async function handleConsoleApi(request, env, h) {
       try {
         if (resultValue !== null) {
           resultJson = JSON.stringify(resultValue);
-          if (new TextEncoder().encode(resultJson).byteLength > 12000) return fail("mob_x_result_too_large", 400);
+          if (new TextEncoder().encode(resultJson).byteLength > 30000) return fail("mob_x_result_too_large", 400);
         }
       } catch { return fail("mob_x_result_not_serializable", 400); }
       const errorCode = body.status === "failed" ? text(body.error_code, 80) : null;
@@ -547,7 +547,8 @@ export async function handleConsoleApi(request, env, h) {
       const statements = [
         env.DB.prepare(
           "UPDATE console_jobs SET status = ?, progress = ?, result_json = COALESCE(?, result_json), error = ?, updated_at = ? " +
-          "WHERE id = ? AND type = 'mob_x_link' AND status = 'processing'"
+          "WHERE id = ? AND type = 'mob_x_link' AND status " +
+          (body.status === "failed" ? "IN ('processing', 'ready_for_review')" : "= 'processing'")
         ).bind(body.status, progress, resultJson, errorCode, now, jobId),
         env.DB.prepare(
           "UPDATE panel_links SET status = ?, updated_at = ? WHERE id = " +
@@ -562,6 +563,131 @@ export async function handleConsoleApi(request, env, h) {
         { job_id: jobId, error_code: errorCode, external_id_tail: String(resultValue?.external_id || "").slice(-6) }
       );
       return json({ ok: true, job_id: jobId, status: body.status, progress });
+    }
+
+    const mobPreview = /^\/mob-x\/jobs\/([A-Za-z0-9_-]{1,100})\/preview$/.exec(sub);
+    if (mobPreview && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const body = parsed.value;
+      if (!isRecord(body) || body.preview_sent !== true) return fail("mob_x_preview_confirmation_required", 400);
+      const row = await first("SELECT result_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review'", mobPreview[1]);
+      if (!row) return fail("mob_x_job_not_ready_for_review", 409);
+      let result = {};
+      try { result = row.result_json ? JSON.parse(row.result_json) : {}; } catch {}
+      if (!isRecord(result) || typeof result.rubika_file_id !== "string" || !result.rubika_file_id) {
+        return fail("mob_x_preview_file_id_missing", 409);
+      }
+      result.preview_sent = true;
+      if (typeof body.preview_message_id === "string" && body.preview_message_id.length <= 160) {
+        result.preview_message_id = body.preview_message_id;
+      }
+      const saved = await env.DB.prepare(
+        "UPDATE console_jobs SET result_json = ?, updated_at = ? WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review'"
+      ).bind(JSON.stringify(result), new Date().toISOString(), mobPreview[1]).run();
+      if (!saved?.meta?.changes) return fail("mob_x_job_not_ready_for_review", 409);
+      await audit("mob_x_preview_sent", result.item_id || null, { job_id: mobPreview[1], external_id_tail: String(result.external_id || "").slice(-6) });
+      return json({ ok: true, job_id: mobPreview[1], preview_sent: true });
+    }
+
+    if (sub === "/mob-x/publish-claim" && m === "POST") {
+      const row = await first("SELECT rules_json FROM console_rules WHERE id = 1");
+      if (!row) return fail("rules_not_initialized", 503);
+      let rules = {};
+      try { rules = JSON.parse(row.rules_json || "{}"); } catch { return fail("rules_invalid_json", 503); }
+
+      const quiet = isRecord(rules.quiet_hours) ? rules.quiet_hours : null;
+      if (quiet && quiet.enabled !== false && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.start || "")) &&
+          /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.end || ""))) {
+        const now = new Date();
+        const current = now.getUTCHours() * 60 + now.getUTCMinutes();
+        const parseMinutes = (value) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
+        const start = parseMinutes(quiet.start), end = parseMinutes(quiet.end);
+        const inQuiet = start === end ? true : (start < end ? current >= start && current < end : current >= start || current < end);
+        if (inQuiet) return json({ ok: true, claimed: false, reason: "quiet_hours" });
+      }
+
+      const capRaw = Number(rules.daily_success_cap ?? 4);
+      const cap = Number.isFinite(capRaw) ? Math.max(0, Math.min(50, Math.trunc(capRaw))) : 4;
+      const dayStart = new Date();
+      dayStart.setUTCHours(0, 0, 0, 0);
+      const sentToday = await first("SELECT COUNT(*) AS count FROM items WHERE status = 'sent' AND sent_at >= ?", dayStart.toISOString());
+      if (Number(sentToday?.count || 0) >= cap) {
+        return json({ ok: true, claimed: false, reason: "daily_success_cap_reached", sent_today: Number(sentToday?.count || 0), cap });
+      }
+
+      const candidate = await first(
+        "SELECT j.id, j.panel_link_id, j.result_json FROM console_jobs j " +
+        "JOIN panel_links p ON p.id = j.panel_link_id " +
+        "WHERE j.type = 'mob_x_link' AND j.status = 'approved' AND p.status = 'approved' " +
+        "ORDER BY j.updated_at ASC LIMIT 1"
+      );
+      if (!candidate) return json({ ok: true, claimed: false, reason: "no_owner_approved_mob_x_job" });
+      let result = {};
+      try { result = candidate.result_json ? JSON.parse(candidate.result_json) : {}; } catch {}
+      if (!isRecord(result) || !result.rubika_file_id || !result.caption || !result.item_id) {
+        return fail("mob_x_approved_payload_incomplete", 409);
+      }
+      const now = new Date().toISOString();
+      const claims = await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE console_jobs SET status = 'sending', progress = 10, error = NULL, updated_at = ? " +
+          "WHERE id = ? AND type = 'mob_x_link' AND status = 'approved' " +
+          "AND EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'approved') " +
+          "AND EXISTS (SELECT 1 FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'approved')"
+        ).bind(now, candidate.id, candidate.panel_link_id, result.item_id),
+        env.DB.prepare(
+          "UPDATE panel_links SET status = 'sending', updated_at = ? WHERE id = ? AND status = 'approved' AND changes() > 0"
+        ).bind(now, candidate.panel_link_id),
+      ]);
+      if (!claims?.[0]?.meta?.changes) return json({ ok: true, claimed: false, reason: "publish_job_claimed_by_another_runner" });
+      await audit("mob_x_publish_claim", result.item_id, { job_id: candidate.id, panel_link_id: candidate.panel_link_id });
+      return json({
+        ok: true, claimed: true,
+        job: { id: candidate.id, type: "mob_x_link", status: "sending", panel_link_id: Number(candidate.panel_link_id), result },
+        channel_policy: "test_channel_only",
+      });
+    }
+
+    const mobDelivery = /^\/mob-x\/jobs\/([A-Za-z0-9_-]{1,100})\/delivery$/.exec(sub);
+    if (mobDelivery && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const body = parsed.value;
+      if (!isRecord(body) || !["sent", "failed", "uncertain"].includes(body.status)) return fail("mob_x_delivery_status_invalid", 400);
+      if (body.status === "sent" && (typeof body.message_id !== "string" || !body.message_id.trim())) {
+        return fail("mob_x_delivery_message_id_required", 400);
+      }
+      const errorCode = body.status === "sent" ? null : text(body.error_code, 80);
+      if (body.status !== "sent" && !/^[a-z0-9_-]{1,80}$/.test(errorCode || "")) return fail("mob_x_delivery_error_code_required", 400);
+      const jobId = mobDelivery[1];
+      const row = await first("SELECT panel_link_id, result_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link' AND status = 'sending'", jobId);
+      if (!row) return fail("mob_x_job_not_sending", 409);
+      let result = {};
+      try { result = row.result_json ? JSON.parse(row.result_json) : {}; } catch {}
+      if (!isRecord(result)) return fail("mob_x_result_invalid", 409);
+      result.delivery_status = body.status;
+      if (body.message_id) result.rubika_message_id = text(body.message_id, 160);
+      if (errorCode) result.delivery_error = errorCode;
+      const now = new Date().toISOString();
+      const statements = [
+        env.DB.prepare(
+          "UPDATE console_jobs SET status = ?, progress = 100, result_json = ?, error = ?, updated_at = ? WHERE id = ? AND type = 'mob_x_link' AND status = 'sending'"
+        ).bind(body.status, JSON.stringify(result), errorCode, now, jobId),
+        env.DB.prepare(
+          "UPDATE panel_links SET status = ?, updated_at = ? WHERE id = ? AND status = 'sending' AND changes() > 0"
+        ).bind(body.status, now, row.panel_link_id),
+        env.DB.prepare(
+          "UPDATE items SET status = ?, sent_at = CASE WHEN ? = 'sent' THEN ? ELSE sent_at END WHERE id = ? AND platform = 'mob_official' AND status IN ('ready', 'uncertain') AND review_state = 'approved' AND changes() > 0"
+        ).bind(body.status, body.status, now, result.item_id),
+      ];
+      const changed = await env.DB.batch(statements);
+      if (!changed?.[0]?.meta?.changes) return fail("mob_x_job_not_sending", 409);
+      await audit(
+        body.status === "sent" ? "mob_x_test_channel_sent" : body.status === "uncertain" ? "mob_x_test_channel_uncertain" : "mob_x_test_channel_failed",
+        result.item_id || null, { job_id: jobId, error_code: errorCode },
+      );
+      return json({ ok: true, job_id: jobId, status: body.status, message_id: result.rubika_message_id || null });
     }
 
     const jobMatch = /^\/jobs\/([A-Za-z0-9_-]{1,100})$/.exec(sub);

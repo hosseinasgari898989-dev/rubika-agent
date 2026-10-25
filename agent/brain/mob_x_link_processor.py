@@ -26,6 +26,7 @@ from agent.brain.mob_translation import translate_to_persian
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import StagedMedia
 from agent.storage.mega import MegaStorage
+from agent.brain.mob_x_rubika import upload_preview_media, send_owner_preview
 
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_VIDEO_SECONDS = 600
@@ -375,6 +376,12 @@ class WorkerClient:
             payload["error_code"] = error_code
         self.request("POST", f"/api/console/mob-x/jobs/{job_id}/transition", payload)
 
+    def record_preview(self, job_id: str, message_id: str | None) -> None:
+        payload = {"preview_sent": True}
+        if message_id:
+            payload["preview_message_id"] = str(message_id)
+        self.request("POST", f"/api/console/mob-x/jobs/{job_id}/preview", payload)
+
 
 def process_job(job: dict, client: WorkerClient, *, session: requests.Session | None = None,
                 storage: MegaStorage | None = None) -> dict:
@@ -442,6 +449,14 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
             raise MobXLinkError("mob_x_media_validation_failed")
         selected_storage = storage or MegaStorage()
         storage_key = selected_storage.upload(local_path, "official")
+        rubika_token = os.getenv("RUBIKA_TOKEN", "")
+        owner_chat_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "")
+        if not rubika_token.strip() or not owner_chat_id.strip():
+            raise MobXLinkError("mob_x_preview_credentials_missing")
+        try:
+            rubika_file_id = upload_preview_media(rubika_token, local_path, media_type)
+        except Exception:
+            raise MobXLinkError("mob_x_preview_upload_failed") from None
         staged = StagedMedia(
             candidate=candidate, original_path=str(local_path), publish_path=str(local_path),
             inspection=inspection, evaluation=evaluation, storage_key=storage_key, caption=caption,
@@ -461,9 +476,21 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
             "original_caption": original, "persian_translation": translation,
             "media_url": media_url, "storage_key": storage_key,
             "source_tier": "official", "review_state": "pending",
+            "rubika_file_id": rubika_file_id, "preview_sent": False,
             "publishing_attempted": False,
         }
         client.transition(job_id, "ready_for_review", result=result)
+        try:
+            preview_message_id = send_owner_preview(
+                rubika_token, owner_chat_id, rubika_file_id, caption, job_id,
+            )
+        except Exception:
+            raise MobXLinkError("mob_x_owner_preview_failed") from None
+        try:
+            client.record_preview(job_id, preview_message_id)
+        except MobXLinkError:
+            # The preview and controls were sent; preserve the durable reusable file_id.
+            pass
         return {"status": "ready_for_review", "job_id": job_id, "item_id": result["item_id"], "external_id": external_id}
 
 

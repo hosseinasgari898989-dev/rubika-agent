@@ -219,7 +219,7 @@ async function status(env) {
         discovery: true,
         metadata_api: true,
         download: false,
-        publishing: false
+        publishing: env.PUBLISHING_ENABLED === "true"
       },
       publishing: PUBLISHING_ENABLED
     });

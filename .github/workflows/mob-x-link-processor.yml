@@ -12,6 +12,11 @@ on:
       - ".github/workflows/mob-x-link-processor.yml"
       - "agent/brain/mob_x_link_processor.py"
       - "tests/test_mob_x_link_processor.py"
+      - "tests/test_mob_x_link_publisher.py"
+      - "tests/test_mob_x_rubika.py"
+      - "agent/brain/mob_x_link_publisher.py"
+      - "agent/brain/mob_x_rubika.py"
+      - "src/owner_panel.js"
       - "src/console_api.js"
   schedule:
     - cron: "*/5 * * * *"
@@ -121,10 +126,12 @@ jobs:
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+          RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+          RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
         run: |
           set -euo pipefail
           missing=()
-          for name in AGENT_API_TOKEN MEGA_EMAIL MEGA_PASSWORD; do
+          for name in AGENT_API_TOKEN MEGA_EMAIL MEGA_PASSWORD RUBIKA_TOKEN RUBIKA_OWNER_CHAT_ID; do
             if [ -z "${!name:-}" ]; then missing+=("$name"); fi
           done
           if [ "${#missing[@]}" -gt 0 ]; then
@@ -161,6 +168,8 @@ jobs:
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+          RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
         run: |
           set -euo pipefail
           python -m agent.brain.mob_x_link_processor --process-one --report "$RUNNER_TEMP/mob-x-link-report.json"
@@ -196,3 +205,77 @@ jobs:
         run: |
           mega-logout >/dev/null 2>&1 || true
           mega-quit >/dev/null 2>&1 || true
+
+
+  publish-one-approved-link:
+    name: Publish one owner-approved link to test channel
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Checkout main safely
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Enforce exact test-channel destination without exposing the configured value
+        env:
+          RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
+          RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 }}
+        run: |
+          set -euo pipefail
+          if [ "${RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014:-}" != "approved" ]; then
+            echo "::error::Existing Mob X publish approval gate is not approved."
+            exit 2
+          fi
+          if [ "${RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230" ]; then
+            echo "::error::RUBIKA_CHANNEL_GUID does not match the expected test channel; configured value is redacted."
+            exit 2
+          fi
+          echo "Existing Mob X approval gate and exact test-channel destination validated; no values printed."
+      - name: Claim and publish one owner-approved job at most once
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+          RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
+          RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+          RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 }}
+        run: |
+          set -euo pipefail
+          python -m agent.brain.mob_x_link_publisher --publish-one --report "$RUNNER_TEMP/mob-x-publish-report.json"
+      - name: Notify owner about publisher failure without exposing secrets
+        if: ${{ failure() }}
+        continue-on-error: true
+        env:
+          AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+          RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          reason="mob_x_publisher_workflow_failed"
+          if [ -s "$RUNNER_TEMP/mob-x-publish-report.json" ]; then
+            reason="$(python - "$RUNNER_TEMP/mob-x-publish-report.json" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          try:
+              row = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              value = str(row.get("error_code") or "mob_x_publisher_workflow_failed")
+              print(value if re.fullmatch(r"[a-z0-9_-]{1,80}", value) else "mob_x_publisher_workflow_failed")
+          except Exception:
+              print("mob_x_publisher_workflow_failed")
+          PY
+          )"
+          fi
+          python -m agent.brain.owner_notify --event workflow_failed --workflow "Mob X test publisher" --reason "$reason" || {
+            echo "Owner notification unavailable; safe error code: $reason"
+          }
