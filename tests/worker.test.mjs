@@ -1244,7 +1244,7 @@ class PanelFakeStatement {
     return null;
   }
   async all() {
-    if (this.sql.includes("SELECT url, status, created_at FROM panel_links")) {
+    if (this.sql.includes("FROM panel_links ORDER BY id DESC")) {
       return { results: this.db.links.slice().reverse().slice(0, 8).map(row => ({ ...row })) };
     }
     return { results: [] };
@@ -2000,7 +2000,7 @@ class ScreenFakeStatement {
       return { results: this.db.aiCalls.slice().sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))
         .slice(0, 8).map(row => ({ ...row })) };
     }
-    if (this.sql.includes("SELECT url, status, created_at FROM panel_links")) {
+    if (this.sql.includes("FROM panel_links ORDER BY id DESC")) {
       return { results: this.db.links.slice().reverse().slice(0, 8).map(row => ({ ...row })) };
     }
     return { results: [] };
@@ -2062,12 +2062,12 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     runs: [{ trigger_type: "daily", status: "success", started_at: "2026-10-24T03:00:00Z", found_count: 4, eligible_count: 3, sent_count: 2, skipped_count: 1, failed_count: 0 }],
     queue: screenStatuses.map((status, i) => ({ status, platform: "rubika", title: "Queue_" + status, last_error_code: status === "failed" ? "network_error" : null, updated_at: "2026-10-24T0" + i + ":00:00Z", sent_at: status === "sent" ? today + "T09:00:00Z" : null })),
     aiCalls: [{ provider: "groq", role: "code_repair", status: "success", error_code: null, started_at: "2026-10-24T04:00:00Z" }],
-    links: [{ url: "https://x.com/Test/status/2107878755079213476", status: "queued", created_at: "2026-10-24T05:00:00Z" }],
+    links: [{ id: 1, url: "https://x.com/mobgamesstudios/status/2107878755079213476", external_id: "2107878755079213476", status: "confirmed", created_at: "2026-10-24T05:00:00Z" }],
   };
   const seeded = screenEnv(seed);
   for (const [id, phrase] of [
     ["p_digest", "Digest title"], ["p_errors", "Digest title"], ["p_runs", "success"],
-    ["p_qs", "در انتظار: 1"], ["p_ailog", "groq/code_repair"], ["p_links", "@Test"],
+    ["p_qs", "در انتظار: 1"], ["p_ailog", "groq/code_repair"], ["p_links", "mobgamesstudios"],
     ["p_links_clear", "همهٔ 1 لینک"],
   ]) {
     const result = await screens.buildScreen(seeded, id);
