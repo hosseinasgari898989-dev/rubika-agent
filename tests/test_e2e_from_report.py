@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain import e2e_from_report
+from agent.brain.rubika_publisher import RubikaDestinationGuardError
 
 
 class E2EDestinationGuardTests(unittest.TestCase):
@@ -16,7 +17,7 @@ class E2EDestinationGuardTests(unittest.TestCase):
             patch.object(e2e_from_report, "MegaStorage") as mega_storage,
         ):
             with self.assertRaisesRegex(
-                e2e_from_report.RubikaDestinationGuardError,
+                RubikaDestinationGuardError,
                 "rubika_destination_not_test_channel",
             ):
                 e2e_from_report.run_one(
