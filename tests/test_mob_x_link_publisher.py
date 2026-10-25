@@ -83,7 +83,8 @@ class MobXPublisherTests(unittest.TestCase):
         report = publish_one(client=client, sender=sender, notifier=Mock())
         self.assertEqual(report["status"], "blocked")
         self.assertEqual(report["error_code"], "console_test_channel_guard_not_enabled")
-        self.assertEqual(client.calls, [])
+        self.assertEqual([path for _, path, _ in client.calls], ["/api/status"])
+        self.assertEqual(sum(path == "/api/console/mob-x/publish-claim" for _, path, _ in client.calls), 0)
         sender.assert_not_called()
 
     def test_worker_publishing_false_never_claims_or_sends(self):
