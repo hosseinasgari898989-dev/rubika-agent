@@ -633,8 +633,9 @@ export async function handleConsoleApi(request, env, h) {
         env.DB.prepare(
           "UPDATE console_jobs SET status = 'sending', progress = 10, error = NULL, updated_at = ? " +
           "WHERE id = ? AND type = 'mob_x_link' AND status = 'approved' " +
-          "AND EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'approved')"
-        ).bind(now, candidate.id, candidate.panel_link_id),
+          "AND EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'approved') " +
+          "AND EXISTS (SELECT 1 FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'approved')"
+        ).bind(now, candidate.id, candidate.panel_link_id, result.item_id),
         env.DB.prepare(
           "UPDATE panel_links SET status = 'sending', updated_at = ? WHERE id = ? AND status = 'approved' AND changes() > 0"
         ).bind(now, candidate.panel_link_id),
