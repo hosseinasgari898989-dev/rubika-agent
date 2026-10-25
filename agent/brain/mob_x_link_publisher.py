@@ -46,9 +46,25 @@ def publish_one(
     report_path: str | Path | None = None,
 ) -> dict:
     report: dict[str, Any] = {"mode": "publish_one", "publishing_attempted": False, "channel": "test"}
-    if str(os.getenv("MOB_X_TEST_PUBLISH_ENABLED", "")).strip().lower() != "true":
-        report.update(status="idle", reason="mob_x_test_publish_gate_disabled")
+    if str(os.getenv("RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014", "")).strip().lower() != "approved":
+        report.update(status="idle", reason="mob_x_owner_publish_gate_not_approved")
         return _write_report(report, report_path, 0)
+
+    try:
+        source_config = json.loads(Path("config/mob_official_sources.json").read_text(encoding="utf-8"))
+        publishing = source_config.get("publishing", {})
+    except Exception:
+        report.update(status="blocked", error_code="mob_x_publish_config_unavailable")
+        return _write_report(report, report_path, 2)
+    if not (
+        publishing.get("enabled") is True
+        and publishing.get("mode") == "production"
+        and publishing.get("production_enabled") is True
+        and publishing.get("target_channel_guid") == TEST_CHANNEL_GUID
+        and publishing.get("max_posts_per_run") == 1
+    ):
+        report.update(status="blocked", error_code="mob_x_publish_config_guard_not_enabled")
+        return _write_report(report, report_path, 2)
 
     token = os.getenv("RUBIKA_TOKEN", "").strip()
     owner_chat = os.getenv("RUBIKA_OWNER_CHAT_ID", "").strip()
