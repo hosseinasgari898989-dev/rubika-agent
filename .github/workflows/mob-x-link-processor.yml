@@ -116,7 +116,7 @@ jobs:
               for job in jobs
           )
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write("has_job=" + ("true" if has_job else "false") + "\\n")
+              output.write("has_job=" + ("true" if has_job else "false") + "\n")
           print("has_job=true — confirmed Mob X work found" if has_job else
                 "has_job=false — no confirmed Mob X work; downstream setup will be skipped")
           PY
