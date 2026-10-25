@@ -1465,6 +1465,46 @@ async function postPanelUpdate(state, update, secret) {
   assert.equal(panel.parseXLink("https://example.com/not-a-post"), null);
 }
 
+// PV link submission remains pending until the owner confirms, then creates exactly one Mob X job.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "mob-link-confirm-panel");
+    const secret = await panel.hookSecret(state);
+    const postText = async (text, messageId) => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: messageId, chat_id: "b0actualowner", text,
+      } },
+    }, secret);
+    const click = async (button, messageId) => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+      } },
+    }, secret);
+
+    await click("p_mob", "mob-link-open-1");
+    await postText("https://x.com/mobgamesstudios/status/2107878755079213476", "mob-link-text-2");
+    assert.equal(state.DB.links.length, 1);
+    assert.equal(state.DB.links[0].status, "pending");
+    assert.equal(state.DB.consoleJobs.size, 0, "submitting a link must not start processing before owner confirmation");
+    assert.equal(calls.some(call => call.method === "sendMessage" && call.payload.text.includes("این لینک است؟")), true);
+
+    const confirmMessageId = state.DB.state.get("panel_mid");
+    await click("p_mob_confirm", confirmMessageId);
+    assert.equal(state.DB.links[0].status, "confirmed");
+    assert.equal(state.DB.consoleJobs.size, 1);
+    const job = [...state.DB.consoleJobs.values()][0];
+    assert.equal(job.type, "mob_x_link");
+    assert.equal(job.status, "confirmed");
+    assert.deepEqual(JSON.parse(job.params_json), {
+      url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+      panel_link_id: state.DB.links[0].id,
+    });
+    assert.equal(calls.filter(call => call.method === "editMessageText").length > 0, true);
+  });
+}
+
 // safeEqual compares values without treating differing lengths or Unicode values as equal.
 {
   assert.equal(panel.safeEqual("same-value", "same-value"), true);
