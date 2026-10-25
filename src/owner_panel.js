@@ -524,7 +524,7 @@ async function tryClaim(env, ev) {
       ]);
     } catch { /* migration 0010 may not be applied yet; panel_owner remains the compatibility fallback */ }
     try { await rubika(env, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch { /* best effort */ }
-    await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا چت تأییدشده به پنل دسترسی دارد.\\n\\n" + await homeText(env), HOME_KB);
+    await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا چت تأییدشده به پنل دسترسی دارد.\\n\\n" + HOME_TEXT, HOME_KB);
     return;
   }
 
@@ -563,7 +563,7 @@ async function tryClaim(env, ev) {
       return;
     }
     try { await rubika(env, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch { /* best effort */ }
-    await send(env, ev.chat, "✅ **دعوت پذیرفته شد.** دسترسی شما ثبت شد.\\n\\n" + await homeText(env), HOME_KB);
+    await send(env, ev.chat, "✅ **دعوت پذیرفته شد.** دسترسی شما ثبت شد.\\n\\n" + HOME_TEXT, HOME_KB);
   } catch {
     await send(env, ev.chat, "⚠️ امکان بررسی کد دعوت نیست؛ پایگاه داده یا migration لازم آماده نیست.");
   }
