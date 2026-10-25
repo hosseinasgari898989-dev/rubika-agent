@@ -11,9 +11,6 @@
   "observability": {
     "enabled": true
   },
-  "vars": {
-    "PUBLISHING_ENABLED": "false"
-  },
   "d1_databases": [
     {
       "binding": "DB",
