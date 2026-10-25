@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
@@ -33,6 +34,18 @@ def response(status=200, payload=None, headers=None, url=None):
 
 
 class MobXLinkParserTests(unittest.TestCase):
+
+    def test_public_api_probe_does_not_run_on_schedule(self):
+        workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mob-x-link-processor.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        start = workflow.index("  public-api-probe:")
+        end = workflow.index("\\n  process-one-confirmed-link:", start)
+        probe_job = workflow[start:end]
+        self.assertIn("github.event_name == 'push'", probe_job)
+        self.assertIn("github.event_name == 'pull_request'", probe_job)
+        self.assertIn("github.event_name == 'workflow_dispatch'", probe_job)
+        self.assertNotIn("github.event_name == 'schedule'", probe_job)
+
     def test_link_parser_requires_https_exact_official_handle_and_numeric_post_id(self):
         expected = f"https://x.com/mobgamesstudios/status/{POST_ID}"
         for url in (
