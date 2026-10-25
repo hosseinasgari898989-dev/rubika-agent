@@ -79,6 +79,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
 
           base = os.environ.get("AGENT_API_BASE_URL", "").rstrip("/")
