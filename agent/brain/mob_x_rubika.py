@@ -9,8 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-
-TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
+from agent.brain import test_channel
 
 
 def _bot(token: str, bot_factory: Any | None = None):
@@ -121,9 +120,10 @@ def send_test_channel_once(
     token: str, channel_guid: str, file_id: str, caption: str, *,
     bot_factory: Any | None = None,
 ) -> str | None:
-    if str(channel_guid or "").strip() != TEST_CHANNEL_GUID:
+    destination = str(channel_guid or "").strip()
+    if not test_channel.is_test_channel_guid(destination):
         raise RuntimeError("rubika_destination_not_test_channel")
-    return _send_file_once(token, TEST_CHANNEL_GUID, file_id, caption, bot_factory=bot_factory)
+    return _send_file_once(token, destination, file_id, caption, bot_factory=bot_factory)
 
 
 def send_uncertain_notice(
