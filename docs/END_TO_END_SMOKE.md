@@ -7,7 +7,7 @@
 ## پیش‌شرط‌ها
 
 1. آخرین اجرای **Actions → Online Termux discovery and queue sync** باید گزارشی معتبر در `main` ثبت کرده باشد.
-2. workflow از شاخهٔ `main` می‌خواند و شناسهٔ مقصد در کد آن به کانال تست قفل شده است: `c0EFohK0f3174377fb6fa422d3ccb230`.
+2. workflow از شاخهٔ `main` می‌خواند و مقصد تست را با hash ثابت SHA-256 از secret موجود بررسی می‌کند؛ مقدار خام شناسه در اسناد یا کد ثبت نمی‌شود.
 3. برای workflow دسته‌ای، متغیر GitHub Actions با نام `RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014` باید از قبل توسط صاحب پروژه روی `approved` تنظیم شده باشد. علاوه بر آن، باید ورودی تأیید انتشار هنگام اجرای دستی روشن شود.
 4. Secretهای موردنیاز باید از قبل در **Settings → Secrets and variables → Actions** ثبت شده باشند: `AGENT_API_TOKEN`، `RUBIKA_TOKEN`، `MEGA_EMAIL` و `MEGA_PASSWORD`. برای مسیرهای وابسته به Relay، تنظیمات Relay نیز باید موجود و معتبر باشند. هیچ مقدار Secret را در فایل یا چت قرار نده.
 
