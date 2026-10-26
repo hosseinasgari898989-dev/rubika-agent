@@ -1,6 +1,7 @@
 // Owner panel on Cloudflare (stage 1): instant Rubika webhook, owner claim, menu, live screens.
 // Heavy work (video, edits, YouTube) stays on GitHub Actions; this module never runs shell or publishes.
 import { HOME_ROWS, isScreenId, buildScreen, homeSummary } from "./panel_screens.js";
+import { isSettingsId, applySettingsAction, settingsScreen } from "./panel_settings.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
@@ -704,6 +705,18 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   if (id === "p_mob") await setState(env, "mode", "waiting_link");
   const previousMid = await getState(env, "panel_mid", "");
   const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
+  if (isSettingsId(id)) {
+    if (!safeEqual((await getOwner(env)) || "", chat)) {
+      try { await rubika(env, "sendMessage", { chat_id: chat, text: "فقط مالک اصلی اجازهٔ مشاهده و تغییر این تنظیمات را دارد." }); } catch {}
+      return;
+    }
+    const notice = await applySettingsAction(env, id);
+    const screen = await settingsScreen(env, notice || "");
+    const keypad = kb(screen.rows);
+    if (fresh) return sendFreshPanel(ui, screen.text, keypad, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, screen.text, keypad);
+    return send(env, chat, screen.text, keypad);
+  }
   if (id === "p_home") {
     const text = await homeText(env);
     if (fresh) return sendFreshPanel(ui, text, HOME_KB, previousMid);
@@ -749,7 +762,7 @@ const COMMANDS = {
   "/start": "p_home", "/menu": "p_home", "منو": "p_home", "/help": "p_help", "/status": "p_status",
   "/queue": "p_qs", "/ai": "p_ai", "/ai-status": "p_ai", "/report": "p_report", "/debug": "p_debug",
   "/digest": "p_digest", "/errors": "p_errors", "/runs": "p_runs",
-  "/links": "p_links", "/ailog": "p_ailog",
+  "/links": "p_links", "/ailog": "p_ailog", "/settings": "p_set",
 };
 
 async function tryClaim(env, ev) {
