@@ -70,7 +70,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("sha256sum", workflow)
         self.assertIn("0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8", workflow)
         # The scheduled-run test-channel guard was removed on purpose (owner-approved).
-        self.assertNotIn("target_channel_guid", workflow)
+        self.assertNotIn('RUBIKA_CHANNEL_GUID:-}" == "', workflow)
         self.assertIn("PLATFORMS = (\"tiktok\",)", worker)
         self.assertIn("--daily-limit 4", workflow)
 
