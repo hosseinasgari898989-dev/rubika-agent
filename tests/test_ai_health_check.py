@@ -141,6 +141,22 @@ class AIHealthCheckTests(unittest.TestCase):
                 self.assertEqual(result.error_code, expected_code)
                 self.assertNotEqual(result.status, "other error")
 
+    def test_error_codes_are_exposed_in_owner_panel_history_and_web_console(self):
+        worker = (ROOT / "src" / "index.js").read_text(encoding="utf-8")
+        owner_panel = (ROOT / "src" / "owner_panel.js").read_text(encoding="utf-8")
+        screens = (ROOT / "src" / "panel_screens.js").read_text(encoding="utf-8")
+        console = (ROOT / "docs" / "console" / "index.html").read_text(encoding="utf-8")
+
+        # Read only: show the latest known failure code even after a cooldown expires.
+        self.assertIn("SELECT error_code FROM ai_provider_calls WHERE provider = ? AND error_code IS NOT NULL", worker)
+        self.assertIn("last_error_code: (latestError && latestError.error_code)", worker)
+        self.assertIn("clean(d.last_error_code, 60)", owner_panel)
+        # /ailog and the web console already render error_code from the call ledger.
+        self.assertIn("SELECT provider, role, status, error_code, started_at FROM ai_provider_calls", screens)
+        self.assertIn("tag(x.error_code, 24)", screens)
+        self.assertIn('{label:"کد خطا",key:"error_code"}', console)
+        self.assertIn('String(d.last_error_code||"—")', console)
+
     def test_workflow_is_manual_only_and_uses_safe_health_check(self):
         workflow = (ROOT / ".github" / "workflows" / "ai-health-check.yml").read_text(encoding="utf-8")
         trigger = workflow.split("permissions:", 1)[0]
