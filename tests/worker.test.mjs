@@ -2451,6 +2451,142 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   });
 }
 
+// PV settings are wired from the owner home menu and apply the existing optimistic-lock console_rules contract.
+{
+  assert.equal(screens.HOME_ROWS.flat().some(([label, id]) => label === "⚙️ تنظیمات" && id === "p_set"), true,
+    "owner home menu must include the settings entry");
+
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "settings-panel-initial");
+    const secret = await panel.hookSecret(state);
+    const click = async button => {
+      const mid = state.DB.state.get("panel_mid");
+      await postPanelUpdate(state, {
+        update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+          message_id: mid, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+        } },
+      }, secret);
+    };
+    const rules = () => JSON.parse(state.DB.consoleRules.rules_json);
+
+    await click("p_set_cap_inc");
+    assert.equal(rules().daily_success_cap, 5, "➕ raises the cap by one");
+    assert.equal(state.DB.consoleRules.version, 2, "successful change increments the rules version once");
+    assert.equal(rules().publishing_enabled, false);
+    assert.equal(rules().test_channel_only, true);
+
+    await click("p_set_cap_dec");
+    assert.equal(rules().daily_success_cap, 4, "➖ lowers the cap by one");
+    assert.equal(state.DB.consoleRules.version, 3, "second successful change increments version once");
+
+    await click("p_set_cap_7");
+    assert.equal(rules().daily_success_cap, 7, "preset button sets the selected cap");
+    assert.equal(state.DB.consoleRules.version, 4, "preset increments version once");
+    assert.equal(rules().publishing_enabled, false, "settings must never enable publishing");
+    assert.equal(rules().test_channel_only, true, "settings must preserve test-channel-only mode");
+    assert.deepEqual(state.DB.brainEvents.map(event => event.code), [
+      "console_rules_update", "console_rules_update", "console_rules_update",
+    ], "every successful setting change is audited");
+    const details = JSON.parse(state.DB.brainEvents[0].details_json);
+    assert.deepEqual(details.fields, ["daily_success_cap"]);
+    assert.equal(details.source, "pv");
+    assert.equal(calls.some(call => call.method === "editMessageKeypad"), false,
+      "atomic settings navigation must not edit the keypad separately");
+    assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("سقف ارسال موفق امروز")), true);
+  });
+}
+
+// The settings cap rejects both boundaries (0 and 50) without changing the value/version or writing audit events.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "settings-boundary-panel");
+    state.DB.consoleRules.version = 7;
+    state.DB.consoleRules.rules_json = JSON.stringify({ daily_success_cap: 0, publishing_enabled: false, test_channel_only: true });
+    const secret = await panel.hookSecret(state);
+    const click = async button => {
+      await postPanelUpdate(state, {
+        update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+          message_id: state.DB.state.get("panel_mid"), chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+        } },
+      }, secret);
+    };
+    await click("p_set_cap_dec");
+    assert.equal(JSON.parse(state.DB.consoleRules.rules_json).daily_success_cap, 0);
+    assert.equal(state.DB.consoleRules.version, 7);
+    assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("عدد خارج از محدوده"), true);
+
+    state.DB.consoleRules.rules_json = JSON.stringify({ daily_success_cap: 50, publishing_enabled: false, test_channel_only: true });
+    await click("p_set_cap_inc");
+    assert.equal(JSON.parse(state.DB.consoleRules.rules_json).daily_success_cap, 50);
+    assert.equal(state.DB.consoleRules.version, 7);
+    assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("عدد خارج از محدوده"), true);
+  });
+}
+
+// Optimistic-lock conflict shows the existing Persian conflict notice, leaves the new concurrent version untouched, and writes no audit.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "settings-version-conflict");
+    state.DB.conflictConsoleRulesUpdate = true;
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "settings-version-conflict", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: "p_set_cap_7" },
+      } },
+    }, secret);
+    assert.equal(state.DB.consoleRules.version, 2, "mock concurrent write owns the newer version");
+    assert.equal(JSON.parse(state.DB.consoleRules.rules_json).daily_success_cap, 4, "conflicting update must not overwrite the value");
+    assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("هم‌زمان تغییر کرد"), true);
+  });
+}
+
+// Only the primary owner may read or modify PV settings, even when another viewer is allow-listed for ordinary screens.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.consoleOwners.set(2, { id: 2, chat_id: "b0viewer", role: "viewer", enabled: 1 });
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "primary-owner-panel");
+    const beforeRules = state.DB.consoleRules.rules_json;
+    const beforeVersion = state.DB.consoleRules.version;
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0viewer", new_message: {
+        message_id: "viewer-settings-command", chat_id: "b0viewer", text: "/settings",
+      } },
+    }, secret);
+    assert.equal(state.DB.consoleRules.rules_json, beforeRules);
+    assert.equal(state.DB.consoleRules.version, beforeVersion);
+    assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
+    assert.equal(state.DB.state.get("panel_mid"), "primary-owner-panel", "denying viewer must not replace the owner's tracked panel");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(calls[0].payload.text.includes("فقط مالک اصلی"), true);
+  });
+}
+
+// Settings command is mapped to p_set and the settings module is used without modifying its source.
+{
+  const panelSourceOnDisk = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8");
+  const settingsSourceOnDisk = fs.readFileSync(path.join(root, "src/panel_settings.js"), "utf8");
+  assert.match(panelSourceOnDisk, /"\/settings":\s*"p_set"/);
+  assert.match(panelSourceOnDisk, /import \{ isSettingsId, applySettingsAction, settingsScreen \} from "\.\/panel_settings\.js";/);
+  assert.equal(settingsSourceOnDisk, settingsSource, "Claude settings module must remain unchanged");
+}
+
 // Lightweight CI checks for the owner console HTML. The HTML itself must remain byte-for-byte unchanged.
 {
   const htmlPath = path.join(root, "docs/console/index.html");
