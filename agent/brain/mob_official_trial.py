@@ -5,8 +5,6 @@ anything to Rubika. Ambiguous delivery is never retried automatically.
 """
 from __future__ import annotations
 
-from agent.brain import test_channel
-
 import argparse
 import hashlib
 import json
@@ -20,6 +18,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from agent.brain import test_channel
 from urllib.parse import urlparse
 
 import requests
