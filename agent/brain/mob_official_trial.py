@@ -206,7 +206,7 @@ def _test_channel_publishing_config_enabled() -> bool:
     policy = _official_publishing_policy()
     if not (
         policy.get("enabled") is True
-        and policy.get("target_channel_guid") == TEST_CHANNEL_GUID
+        and policy.get("target_channel_guid_sha256") == test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256
         and policy.get("max_posts_per_run") == 1
     ):
         return False
