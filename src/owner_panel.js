@@ -862,7 +862,16 @@ async function processEvent(env, selfFetch, origin, ev) {
       const isMobJobAction = /^p_mob_(?:publish|edit|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || ""));
       if (currentPanelMid && String(ev.mid || "") !== currentPanelMid && !isMobJobAction) {
         try { if (ev.mid) await rubika(timedEnv, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch {}
-        await render(ui, ev.button, { fresh: true });
+        const staleButton = String(ev.button || "");
+        // Never execute confirmation/destructive actions from an old message.
+        let refreshId = staleButton;
+        if (["p_mob_confirm", "p_mob_cancel", "p_links_clear", "p_links_clear_yes"].includes(staleButton)) refreshId = "p_links";
+        else if (staleButton === "p_mob_edit_cancel") refreshId = "p_mob";
+        else if (!isScreenId(staleButton) &&
+          !["p_home", "p_status", "p_queue", "p_qs", "p_ai", "p_report", "p_mob", "p_help", "p_debug"].includes(staleButton)) {
+          refreshId = "p_home";
+        }
+        await render(ui, refreshId, { fresh: true });
         return;
       }
       await render(ui, ev.button, { clickedMid: ev.mid });
