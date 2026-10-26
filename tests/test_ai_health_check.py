@@ -131,6 +131,7 @@ class AIHealthCheckTests(unittest.TestCase):
             (ProviderClientError("groq_api_key_missing"), "auth error", "groq_api_key_missing"),
             (ProviderClientError("provider_model_invalid"), "model error", "provider_model_invalid"),
             (ProviderClientError("http_418", diagnostics={"http_status": 418}), "HTTP error", "http_418"),
+            (ProviderClientError("provider_internal_error", outcome="unknown"), "provider error", "provider_internal_error"),
         ]
         for error, expected_status, expected_code in cases:
             with self.subTest(code=error.code, expected=expected_status):
