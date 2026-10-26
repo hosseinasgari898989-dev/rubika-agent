@@ -503,11 +503,9 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         await send(env, chat, "پیش‌نمایش هنوز آمادهٔ تأیید نهایی نیست؛ لطفاً کمی بعد وضعیت را بررسی کن.", HOME_KB);
         return;
       }
-      const expectedTestChannel = "c0EFohK0f3174377fb6fa422d3ccb230";
-      if (String(env.RUBIKA_CHANNEL_GUID || "") !== expectedTestChannel) {
-        await send(env, chat, "انتشار متوقف شد: RUBIKA_CHANNEL_GUID با شناسهٔ کانال تست تطبیق ندارد. تنظیم فعلی تغییر داده نشد.", HOME_KB);
-        return;
-      }
+      // This Worker does not receive GitHub Actions secrets. This button only records
+      // owner approval; the GitHub publisher independently verifies the SHA-256 pin
+      // for secrets.RUBIKA_CHANNEL_GUID immediately before any channel send.
       const now = new Date().toISOString();
       const updated = await env.DB.batch([
         env.DB.prepare(
