@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import json
 import unittest
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
 from agent.brain import ai_provider_clients as clients
@@ -11,9 +11,9 @@ from agent.brain.ai_usage_ledger import UsageLedgerError
 
 
 class FakeResponse:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, raw=None):
         self.status = status
-        self.raw = json.dumps(payload).encode("utf-8")
+        self.raw = raw if raw is not None else json.dumps(payload).encode("utf-8")
 
     def __enter__(self):
         return self
@@ -131,7 +131,7 @@ class ProviderClientTests(unittest.TestCase):
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
             with self.assertRaises(clients.ProviderClientError) as caught:
                 clients.invoke_provider(config, "safe prompt")
-        self.assertEqual(caught.exception.code, "provider_http_429")
+        self.assertEqual(caught.exception.code, "http_429")
         self.assertEqual(caught.exception.outcome, "failed")
         self.assertNotIn("secret response body", str(caught.exception))
 
@@ -149,7 +149,7 @@ class ProviderClientTests(unittest.TestCase):
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
             with self.assertRaises(clients.ProviderClientError) as caught:
                 clients.invoke_provider(config, "safe prompt")
-        self.assertEqual(caught.exception.code, "provider_http_503")
+        self.assertEqual(caught.exception.code, "http_5xx")
         self.assertEqual(caught.exception.outcome, "unknown")
         self.assertEqual(caught.exception.diagnostics["http_status"], 503)
         self.assertEqual(caught.exception.diagnostics["retry_after_seconds"], 13)
@@ -171,6 +171,65 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.diagnostics["http_status"], 200)
         self.assertEqual(caught.exception.diagnostics["finish_reason"], "length")
         self.assertNotIn("response text", json.dumps(caught.exception.diagnostics))
+
+    def test_http_statuses_and_model_not_found_have_specific_safe_codes(self):
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        config = clients.ProviderConfig("groq", "g" * 32, "model", url)
+        cases = [
+            (401, b'{"error":{"code":"invalid_api_key"}}', "http_401", "failed"),
+            (403, b'{"error":{"code":"permission_denied"}}', "http_403", "failed"),
+            (429, b'{"error":{"code":"rate_limited"}}', "http_429", "failed"),
+            (503, b'{"error":{"type":"server_error"}}', "http_5xx", "unknown"),
+            (418, b'{"error":{"code":"unusual_status"}}', "http_418", "failed"),
+            (404, b'{"error":{"code":"model_not_found"}}', "model_not_found", "failed"),
+        ]
+        for status, raw, expected_code, expected_outcome in cases:
+            with self.subTest(status=status, expected_code=expected_code):
+                error = HTTPError(url, status, "private response detail", {}, io.BytesIO(raw))
+                with patch.object(clients.urllib.request, "build_opener", return_value=FakeOpener(error=error)):
+                    with self.assertRaises(clients.ProviderClientError) as caught:
+                        clients.invoke_provider(config, "safe prompt")
+                self.assertEqual(caught.exception.code, expected_code)
+                self.assertEqual(caught.exception.outcome, expected_outcome)
+                self.assertNotIn("private response detail", str(caught.exception))
+                self.assertNotIn("invalid_api_key", str(caught.exception))
+
+    def test_timeout_network_bad_json_and_bad_shape_are_separate(self):
+        config = clients.ProviderConfig(
+            "groq", "g" * 32, "model",
+            "https://api.groq.com/openai/v1/chat/completions",
+        )
+        cases = [
+            (FakeOpener(error=TimeoutError("private timeout detail")), "timeout"),
+            (FakeOpener(error=URLError("private network detail")), "network"),
+            (FakeOpener(response=FakeResponse(None, raw=b"{not-json")), "bad_json"),
+            (FakeOpener(response=FakeResponse({"unexpected": True})), "bad_response"),
+        ]
+        for opener, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                with patch.object(clients.urllib.request, "build_opener", return_value=opener):
+                    with self.assertRaises(clients.ProviderClientError) as caught:
+                        clients.invoke_provider(config, "safe prompt")
+                self.assertEqual(caught.exception.code, expected_code)
+                self.assertEqual(caught.exception.outcome, "unknown")
+                self.assertNotIn("private", str(caught.exception))
+
+    def test_http_429_keeps_existing_rate_limited_ledger_cooldown_code(self):
+        ledger = FakeLedger()
+        config = clients.ProviderConfig(
+            "groq", "g" * 32, "model",
+            "https://api.groq.com/openai/v1/chat/completions",
+        )
+        with (
+            patch.object(clients, "provider_config", return_value=config),
+            patch.object(clients, "invoke_provider", side_effect=clients.ProviderClientError("http_429", outcome="failed")),
+        ):
+            with self.assertRaises(clients.ProviderClientError):
+                clients.call_provider_with_ledger(
+                    provider="groq", role="diagnose", prompt="safe prompt", usage_client=ledger
+                )
+        self.assertEqual(ledger.events[0][0], "reserve")
+        self.assertEqual(ledger.events[1][0:4], ("finish", "groq", "failed", "rate_limited"))
 
     def test_ledger_reservation_happens_before_provider_request_and_result_is_finished(self):
         ledger = FakeLedger()
