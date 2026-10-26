@@ -96,7 +96,7 @@ jobs:
           TIKTOK_URL: "https://www.tiktok.com/@fame.yt.editx/video/7610592632179297558"
           # Public Instagram video URL previously downloaded and validated by the smoke test.
           INSTAGRAM_URL: "https://www.instagram.com/p/CmCVWoIr9OH/"
-          RUBIKA_CHANNEL_GUID: "c0EFohK0f3174377fb6fa422d3ccb230"
+          RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
         run: |
           python - <<'PY'
           import hashlib, json, os, sys, tempfile
@@ -125,6 +125,11 @@ jobs:
 
           api_url = os.environ["COBALT_API_URL"]
           channel_guid = os.environ["RUBIKA_CHANNEL_GUID"]
+          expected_test_channel_sha256 = "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8"
+          actual_channel_sha256 = hashlib.sha256(channel_guid.encode("utf-8")).hexdigest()
+          if not channel_guid or actual_channel_sha256 != expected_test_channel_sha256:
+              print("STOP: test-channel destination hash guard failed; nothing was posted.")
+              sys.exit(2)
           sources = [
               ("TikTok", "tiktok", os.environ["TIKTOK_URL"]),
               ("Instagram", "instagram", os.environ["INSTAGRAM_URL"]),
