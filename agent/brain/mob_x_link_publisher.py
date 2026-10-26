@@ -16,6 +16,8 @@ from typing import Any
 from agent.brain import test_channel
 from agent.brain.mob_x_link_processor import MobXLinkError, WorkerClient
 from agent.brain.mob_x_rubika import send_test_channel_once, send_uncertain_notice
+
+
 JOB_ID_RE = re.compile(r"job_[A-Fa-f0-9]{8,80}")
 
 
