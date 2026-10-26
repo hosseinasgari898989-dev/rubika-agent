@@ -37,6 +37,7 @@ class ProviderHealthResult:
     provider_error_code: str | None = None
     response_content_non_empty: bool | None = None
     finish_reason: str | None = None
+    error_code: str | None = None
 
 
 def _safe_field(value: Any) -> str | None:
@@ -59,25 +60,77 @@ def _model_label(provider: str, config: ProviderConfig | None = None) -> str:
     return candidate
 
 
-def _status_for_error(code: str, http_status: int | None) -> str:
+def _error_code_for_error(
+    code: str,
+    http_status: int | None,
+    provider_error_type: str | None = None,
+    provider_error_code: str | None = None,
+) -> str:
     normalized = str(code or "").strip().lower()
+    provider_details = " ".join((provider_error_type or "", provider_error_code or "")).lower().replace("-", "_")
+    model_markers = ("model_not_found", "model_not_available", "unknown_model", "invalid_model")
+    if any(marker in provider_details for marker in model_markers) or normalized == "model_not_found":
+        return "model_not_found"
+    if http_status == 429 or normalized in {"http_429", "provider_http_429"}:
+        return "http_429"
+    if http_status in {401, 403}:
+        return f"http_{http_status}"
+    if http_status is not None and 500 <= http_status <= 599:
+        return "http_5xx"
+    if re.fullmatch(r"provider_http_(\d{3})", normalized):
+        match = re.fullmatch(r"provider_http_(\d{3})", normalized)
+        value = int(match.group(1))
+        return "http_5xx" if 500 <= value <= 599 else f"http_{value}"
+    if normalized == "provider_network_result_unknown":
+        return "network"
+    if normalized == "provider_response_invalid":
+        return "bad_response"
+    return normalized if normalized else "provider_error"
+
+
+def _status_for_error(
+    code: str,
+    http_status: int | None,
+    provider_error_type: str | None = None,
+    provider_error_code: str | None = None,
+) -> str:
+    normalized = str(code or "").strip().lower()
+    details = " ".join((normalized, provider_error_type or "", provider_error_code or "")).lower().replace("-", "_")
     if (
         normalized.endswith("_api_key_missing")
         or http_status in {401, 403}
-        or normalized in {"provider_http_401", "provider_http_403"}
-        or "unauthorized" in normalized
-        or "authentication" in normalized
+        or normalized in {"http_401", "http_403", "provider_http_401", "provider_http_403"}
+        or any(marker in details for marker in ("invalid_api_key", "unauthorized", "authentication_error", "permission_denied"))
     ):
         return "auth error"
     if (
         http_status == 429
-        or normalized in {"provider_http_429", "rate_limited", "too_many_requests"}
-        or "rate_limit" in normalized
+        or normalized in {"http_429", "provider_http_429", "rate_limited", "too_many_requests"}
+        or "rate_limit" in details
     ):
         return "rate limit"
     if normalized == "provider_text_missing" and http_status == 200:
         return "empty response"
-    return "other error"
+    if (
+        normalized == "model_not_found"
+        or normalized.endswith("_model_invalid")
+        or any(marker in details for marker in ("model_not_found", "model_not_available", "unknown_model", "invalid_model"))
+    ):
+        return "model error"
+    if (http_status is not None and 500 <= http_status <= 599) or normalized in {"http_5xx", "provider_http_5xx"}:
+        return "server error"
+    if normalized == "timeout" or "timeout" in normalized:
+        return "timeout"
+    if normalized == "network" or "network" in normalized or normalized == "provider_network_result_unknown":
+        return "network error"
+    if normalized == "bad_json":
+        return "bad JSON"
+    if normalized in {"bad_response", "provider_response_invalid", "response_too_large"}:
+        return "invalid response"
+    if http_status is not None or normalized.startswith("http_") or normalized.startswith("provider_http_"):
+        return "HTTP error"
+    return "provider error"
+
 
 
 def _http_status(exc: BaseException) -> int | None:
@@ -112,7 +165,10 @@ def _exception_result(
     code = _safe_field(getattr(exc, "code", None))
     status_code = _http_status(exc)
     exception_class = _safe_field(type(exc).__name__)
-    status = _status_for_error(code or "", status_code)
+    provider_error_type = _diagnostic(exc, "provider_error_type")
+    provider_error_code = _diagnostic(exc, "provider_error_code")
+    status = _status_for_error(code or "", status_code, provider_error_type, provider_error_code)
+    diagnostic_code = _error_code_for_error(code or "", status_code, provider_error_type, provider_error_code)
     content_non_empty: bool | None = False if code == "provider_text_missing" and status_code == 200 else None
     return ProviderHealthResult(
         provider=provider,
@@ -122,10 +178,11 @@ def _exception_result(
         latency_ms=max(0, round((time.monotonic() - started) * 1000)),
         http_status=status_code,
         exception_class=exception_class,
-        provider_error_type=_diagnostic(exc, "provider_error_type"),
-        provider_error_code=_diagnostic(exc, "provider_error_code") or code,
+        provider_error_type=provider_error_type,
+        provider_error_code=provider_error_code or code,
         response_content_non_empty=content_non_empty,
         finish_reason=_diagnostic(exc, "finish_reason"),
+        error_code=diagnostic_code,
     )
 
 
@@ -148,11 +205,12 @@ def _probe_once(provider: str, config: ProviderConfig, max_tokens: int) -> Provi
             provider=provider,
             model=config.model,
             max_output_tokens=max_tokens,
-            status="other error",
+            status="unexpected result",
             latency_ms=max(0, round((time.monotonic() - started) * 1000)),
             exception_class="UnexpectedResult",
             http_status=None,
             response_content_non_empty=None,
+            error_code="unexpected_result",
         )
     content_non_empty = bool(isinstance(result.text, str) and result.text.strip())
     finish_reason = _safe_field(result.finish_reason)
@@ -166,6 +224,7 @@ def _probe_once(provider: str, config: ProviderConfig, max_tokens: int) -> Provi
             http_status=result.http_status if type(result.http_status) is int else 200,
             response_content_non_empty=False,
             finish_reason=finish_reason,
+            error_code="provider_text_missing",
         )
     return ProviderHealthResult(
         provider=provider,
@@ -201,8 +260,8 @@ def format_summary(results: tuple[ProviderHealthResult, ...]) -> str:
     lines = [
         "## Manual AI provider health check",
         "",
-        "| Provider | Model/route | Max tokens | Result | Latency | HTTP | Exception | Provider error type/code | Content non-empty | finish_reason |",
-        "|---|---|---:|---|---:|---:|---|---|---|---|",
+        "| Provider | Model/route | Max tokens | Result | Error code | Latency | HTTP | Exception | Provider error type/code | Content non-empty | finish_reason |",
+        "|---|---|---:|---|---|---:|---:|---|---|---|---|",
     ]
     labels = {"groq": "Groq", "openrouter": "OpenRouter"}
     for row in results:
@@ -224,6 +283,7 @@ def format_summary(results: tuple[ProviderHealthResult, ...]) -> str:
                 row.model,
                 str(row.max_output_tokens),
                 row.status,
+                row.error_code or "-",
                 f"{row.latency_ms} ms",
                 http_value,
                 row.exception_class or "-",

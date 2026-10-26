@@ -47,6 +47,7 @@ class AIHealthCheckTests(unittest.TestCase):
         self.assertEqual(results[0].http_status, 429)
         self.assertEqual(results[0].provider_error_type, "rate_limit_error")
         self.assertEqual(results[0].provider_error_code, "rate_limited")
+        self.assertEqual(results[0].error_code, "http_429")
         self.assertEqual(results[0].response_content_non_empty, None)
         self.assertEqual(results[1].http_status, 200)
         self.assertTrue(results[1].response_content_non_empty)
@@ -109,11 +110,53 @@ class AIHealthCheckTests(unittest.TestCase):
         ):
             rows = tuple(row for provider in health.PROVIDERS for row in health.check_provider(provider))
 
-        self.assertEqual([row.status for row in rows], ["auth error", "other error"])
+        self.assertEqual([row.status for row in rows], ["auth error", "server error"])
         self.assertEqual(rows[0].provider_error_code, "groq_api_key_missing")
         self.assertEqual(rows[1].http_status, 503)
         self.assertEqual(rows[1].provider_error_type, "server_error")
         self.assertEqual(rows[1].provider_error_code, "temporarily_unavailable")
+        self.assertEqual(rows[1].error_code, "http_5xx")
+
+    def test_error_categories_never_collapse_to_other_error(self):
+        cases = [
+            (ProviderClientError("http_401", diagnostics={"http_status": 401}), "auth error", "http_401"),
+            (ProviderClientError("http_403", diagnostics={"http_status": 403}), "auth error", "http_403"),
+            (ProviderClientError("http_429", diagnostics={"http_status": 429}), "rate limit", "http_429"),
+            (ProviderClientError("http_5xx", outcome="unknown", diagnostics={"http_status": 503}), "server error", "http_5xx"),
+            (ProviderClientError("timeout", outcome="unknown"), "timeout", "timeout"),
+            (ProviderClientError("network", outcome="unknown"), "network error", "network"),
+            (ProviderClientError("bad_json", outcome="unknown"), "bad JSON", "bad_json"),
+            (ProviderClientError("bad_response", outcome="unknown"), "invalid response", "bad_response"),
+            (ProviderClientError("http_404", diagnostics={"http_status": 404, "provider_error_code": "model_not_found"}), "model error", "model_not_found"),
+            (ProviderClientError("groq_api_key_missing"), "auth error", "groq_api_key_missing"),
+            (ProviderClientError("provider_model_invalid"), "model error", "provider_model_invalid"),
+            (ProviderClientError("http_418", diagnostics={"http_status": 418}), "HTTP error", "http_418"),
+            (ProviderClientError("provider_internal_error", outcome="unknown"), "provider error", "provider_internal_error"),
+        ]
+        for error, expected_status, expected_code in cases:
+            with self.subTest(code=error.code, expected=expected_status):
+                result = health._exception_result(
+                    "groq", "model", 10, health.time.monotonic(), error
+                )
+                self.assertEqual(result.status, expected_status)
+                self.assertEqual(result.error_code, expected_code)
+                self.assertNotEqual(result.status, "other error")
+
+    def test_error_codes_are_exposed_in_owner_panel_history_and_web_console(self):
+        worker = (ROOT / "src" / "index.js").read_text(encoding="utf-8")
+        owner_panel = (ROOT / "src" / "owner_panel.js").read_text(encoding="utf-8")
+        screens = (ROOT / "src" / "panel_screens.js").read_text(encoding="utf-8")
+        console = (ROOT / "docs" / "console" / "index.html").read_text(encoding="utf-8")
+
+        # Read only: show the latest known failure code even after a cooldown expires.
+        self.assertIn("SELECT error_code FROM ai_provider_calls WHERE provider = ? AND error_code IS NOT NULL", worker)
+        self.assertIn("last_error_code: (latestError && latestError.error_code)", worker)
+        self.assertIn("clean(d.last_error_code, 60)", owner_panel)
+        # /ailog and the web console already render error_code from the call ledger.
+        self.assertIn("SELECT provider, role, status, error_code, started_at FROM ai_provider_calls", screens)
+        self.assertIn("tag(x.error_code, 24)", screens)
+        self.assertIn('{label:"کد خطا",key:"error_code"}', console)
+        self.assertIn('String(d.last_error_code||"—")', console)
 
     def test_workflow_is_manual_only_and_uses_safe_health_check(self):
         workflow = (ROOT / ".github" / "workflows" / "ai-health-check.yml").read_text(encoding="utf-8")
@@ -149,6 +192,7 @@ class AIHealthCheckTests(unittest.TestCase):
             logged = output.getvalue()
             summary = summary_path.read_text(encoding="utf-8")
         self.assertEqual(logged, summary)
+        self.assertIn("Error code", summary)
         self.assertIn("Content non-empty", summary)
         self.assertIn("finish_reason", summary)
 

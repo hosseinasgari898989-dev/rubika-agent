@@ -2341,7 +2341,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     brainEvents: [{ level: "error", code: "worker_failed", created_at: "2026-10-24T02:00:00Z" }],
     runs: [{ trigger_type: "daily", status: "success", started_at: "2026-10-24T03:00:00Z", found_count: 4, eligible_count: 3, sent_count: 2, skipped_count: 1, failed_count: 0 }],
     queue: screenStatuses.map((status, i) => ({ status, platform: "rubika", title: "Queue_" + status, last_error_code: status === "failed" ? "network_error" : null, updated_at: "2026-10-24T0" + i + ":00:00Z", sent_at: status === "sent" ? today + "T09:00:00Z" : null })),
-    aiCalls: [{ provider: "groq", role: "code_repair", status: "success", error_code: null, started_at: "2026-10-24T04:00:00Z" }],
+    aiCalls: [{ provider: "groq", role: "code_repair", status: "failed", error_code: "http_5xx", started_at: "2026-10-24T04:00:00Z" }],
     links: [{ id: 1, url: "https://x.com/mobgamesstudios/status/2107878755079213476", external_id: "2107878755079213476", status: "confirmed", created_at: "2026-10-24T05:00:00Z" }],
   };
   const seeded = screenEnv(seed);
@@ -2354,6 +2354,9 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(result.text.includes(phrase), true, id + " should show seeded data");
     assert.equal(result.text.includes("d1_error"), false, id + " should not fail with seeded data");
   }
+  const aiLogWithCode = await screens.buildScreen(seeded, "p_ailog");
+  assert.equal(aiLogWithCode.text.includes("http_5xx"), true, "AI history should show the precise error code");
+
   for (const status of screenStatuses) {
     const id = "p_ql_" + status + "_0";
     assert.equal(screens.isScreenId(id), true, id + " should be recognized");

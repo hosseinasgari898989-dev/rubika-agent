@@ -954,7 +954,7 @@ function optionalCodeAiTokenCount(body, key) {
 }
 
 async function codeAiProviderSnapshot(env, provider, usageDay = new Date().toISOString().slice(0, 10)) {
-  const [usage, state, totalUsage] = await Promise.all([
+  const [usage, state, totalUsage, latestError] = await Promise.all([
     env.DB.prepare(
       "SELECT COUNT(*) AS request_count FROM ai_provider_calls WHERE usage_day = ? AND provider = ?"
     ).bind(usageDay, provider).first(),
@@ -963,7 +963,10 @@ async function codeAiProviderSnapshot(env, provider, usageDay = new Date().toISO
     ).bind(provider).first(),
     env.DB.prepare(
       "SELECT COUNT(*) AS request_count FROM ai_provider_calls WHERE usage_day = ?"
-    ).bind(usageDay).first()
+    ).bind(usageDay).first(),
+    env.DB.prepare(
+      "SELECT error_code FROM ai_provider_calls WHERE provider = ? AND error_code IS NOT NULL ORDER BY started_at DESC LIMIT 1"
+    ).bind(provider).first()
   ]);
   const callsUsed = Number(usage && usage.request_count || 0);
   const totalCallsUsed = Number(totalUsage && totalUsage.request_count || 0);
@@ -985,7 +988,7 @@ async function codeAiProviderSnapshot(env, provider, usageDay = new Date().toISO
     total_remaining: Math.max(0, CODE_AI_TOTAL_DAILY_LIMIT - totalCallsUsed),
     cooldown_until: state ? state.cooldown_until : null,
     cooldown_active: cooldownActive,
-    last_error_code: state && cooldownActive ? state.last_error_code : null,
+    last_error_code: (latestError && latestError.error_code) || (state && state.last_error_code) || null,
     ready: !cooldownActive && budgetAvailable,
     status: cooldownActive ? "cooldown_active"
       : !totalBudgetAvailable ? "global_daily_budget_exhausted"
