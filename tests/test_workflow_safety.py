@@ -24,11 +24,12 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("git push origin HEAD:refs/heads/main", workflow)
         self.assertNotIn("agent-brain-mega-v1", workflow)
 
-    def test_owner_console_poller_is_five_minute_serial_and_read_only(self):
+    def test_owner_console_poller_schedule_is_disabled_and_manual_dispatch_preserved(self):
         workflows = ROOT / ".github" / "workflows"
         workflow = (workflows / "owner-console-poll.yml").read_text(encoding="utf-8")
-        self.assertIn("schedule:", workflow)
-        self.assertIn('cron: "*/5 * * * *"', workflow)
+        trigger = workflow.split("permissions:", 1)[0]
+        self.assertNotIn("\\n  schedule:", trigger)
+        self.assertNotIn('cron: "*/5 * * * *"', workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("timeout-minutes: 4", workflow)
