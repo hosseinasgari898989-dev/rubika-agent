@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from agent.brain import mob_official_trial
+from agent.brain import mob_official_trial, test_channel
 from agent.brain.mob_official_trial import (
     filter_candidates_by_since,
     filter_official_candidates_by_source,
@@ -19,6 +19,9 @@ from agent.brain.mob_official_trial import (
     since_rule_rejection,
     sort_candidates_oldest_first,
 )
+
+
+TEST_CHANNEL_FOR_TESTS = "synthetic-test-channel-guid"
 
 
 class MobOfficialTrialReportTests(unittest.TestCase):
@@ -273,6 +276,13 @@ class OfficialPreviewSafetyTests(unittest.TestCase):
 
 
 class TestChannelPublishingGateTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(
+            test_channel, "is_test_channel_guid",
+            side_effect=lambda value: str(value or "").strip() == TEST_CHANNEL_FOR_TESTS,
+        )
+        guard.start()
+        self.addCleanup(guard.stop)
     def test_config_allows_production_x_publishing_and_the_fixed_test_channel_trial(self):
         self.assertTrue(mob_official_trial._official_publishing_config_enabled())
         self.assertTrue(mob_official_trial._test_channel_publishing_config_enabled())
@@ -322,7 +332,7 @@ class TestChannelPublishingGateTests(unittest.TestCase):
                 patch.object(mob_official_trial, "CloudState", FakeCloud),
                 patch.object(mob_official_trial, "load_lifecycle_policy", return_value=production_policy),
                 patch.dict("os.environ", {
-                    "RUBIKA_CHANNEL_GUID": mob_official_trial.TEST_CHANNEL_GUID,
+                    "RUBIKA_CHANNEL_GUID": TEST_CHANNEL_FOR_TESTS,
                     "RUBIKA_TOKEN": "dummy-token",
                 }),
             ):
@@ -418,7 +428,7 @@ class TestChannelPublishingGateTests(unittest.TestCase):
                 patch.object(mob_official_trial, "load_lifecycle_policy", return_value=test_policy),
                 patch.object(mob_official_trial, "_test_channel_publishing_config_enabled", return_value=False),
                 patch.dict("os.environ", {
-                    "RUBIKA_CHANNEL_GUID": mob_official_trial.TEST_CHANNEL_GUID,
+                    "RUBIKA_CHANNEL_GUID": TEST_CHANNEL_FOR_TESTS,
                     "RUBIKA_TOKEN": "dummy-token",
                 }),
             ):
@@ -436,6 +446,13 @@ class TestChannelPublishingGateTests(unittest.TestCase):
 
 
 class OfficialSinceRuleTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(
+            test_channel, "is_test_channel_guid",
+            side_effect=lambda value: str(value or "").strip() == TEST_CHANNEL_FOR_TESTS,
+        )
+        guard.start()
+        self.addCleanup(guard.stop)
     def row(self, external_id, published_at, **changes):
         row = {
             "platform": "mob_official",
@@ -559,7 +576,7 @@ class OfficialSinceRuleTests(unittest.TestCase):
                 patch.object(mob_official_trial, "download_and_validate", side_effect=fake_download),
                 patch.object(mob_official_trial, "RubikaPublisher", return_value=publisher),
                 patch.dict("os.environ", {
-                    "RUBIKA_CHANNEL_GUID": mob_official_trial.TEST_CHANNEL_GUID,
+                    "RUBIKA_CHANNEL_GUID": TEST_CHANNEL_FOR_TESTS,
                     "RUBIKA_TOKEN": "dummy-token",
                 }),
             ):

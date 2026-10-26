@@ -91,8 +91,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$RUBIKA_CHANNEL_GUID" == "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
-            echo "::error::RUBIKA_CHANNEL_GUID still points at the test channel; main-channel publishing stays blocked."
+          if [[ -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
+            echo "::error::RUBIKA_CHANNEL_GUID is missing; main-channel preflight stays blocked."
+            exit 2
+          fi
+          actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
+          if [[ "$actual_hash" == "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then
+            echo "::error::RUBIKA_CHANNEL_GUID hashes to the registered test-channel pin; main-channel publishing stays blocked."
             exit 2
           fi
           python - <<'PY'

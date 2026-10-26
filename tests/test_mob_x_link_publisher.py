@@ -4,9 +4,11 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from agent.brain.mob_x_link_publisher import TEST_CHANNEL_GUID, publish_one
+from agent.brain import test_channel
+from agent.brain.mob_x_link_publisher import publish_one
 
 
+TEST_CHANNEL_FOR_TESTS = "synthetic-test-channel-guid"
 JOB_ID = "job_abcdef1234567890"
 EXTERNAL_ID = "2107878755079213476"
 PAYLOAD = {
@@ -45,11 +47,17 @@ class FakeClient:
 
 class MobXPublisherTests(unittest.TestCase):
     def setUp(self):
+        guard = patch.object(
+            test_channel, "is_test_channel_guid",
+            side_effect=lambda value: str(value or "").strip() == TEST_CHANNEL_FOR_TESTS,
+        )
+        guard.start()
+        self.addCleanup(guard.stop)
         self.env = patch.dict(os.environ, {
             "RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014": "approved",
             "RUBIKA_TOKEN": "mock-rubika-token",
             "RUBIKA_OWNER_CHAT_ID": "owner-private-chat",
-            "RUBIKA_CHANNEL_GUID": TEST_CHANNEL_GUID,
+            "RUBIKA_CHANNEL_GUID": TEST_CHANNEL_FOR_TESTS,
             "AGENT_API_BASE_URL": "https://worker.example.invalid",
             "AGENT_API_TOKEN": "mock-worker-token-that-is-long-enough",
         }, clear=True)
@@ -110,7 +118,7 @@ class MobXPublisherTests(unittest.TestCase):
         client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": True}})
         sender = Mock(return_value="rubika-message-001")
         report = publish_one(client=client, sender=sender, notifier=Mock())
-        sender.assert_called_once_with("mock-rubika-token", TEST_CHANNEL_GUID, "mock-file-001", "کپشن ساده")
+        sender.assert_called_once_with("mock-rubika-token", TEST_CHANNEL_FOR_TESTS, "mock-file-001", "کپشن ساده")
         self.assertEqual(report["status"], "sent")
         self.assertTrue(report["publishing_attempted"])
         self.assertEqual(sum(path == "/api/console/mob-x/publish-claim" for _, path, _ in client.calls), 1)

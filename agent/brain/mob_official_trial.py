@@ -18,6 +18,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from agent.brain import test_channel
 from urllib.parse import urlparse
 
 import requests
@@ -177,7 +179,6 @@ def sort_candidates_oldest_first(candidates: list[dict[str, Any]]) -> list[dict[
     return sorted(candidates, key=key)
 
 
-TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
 
 
 def _official_publishing_policy() -> dict[str, Any]:
@@ -196,7 +197,7 @@ def _official_publishing_config_enabled() -> bool:
         policy.get("enabled") is True
         and policy.get("mode") == "production"
         and policy.get("production_enabled") is True
-        and policy.get("target_channel_guid") == TEST_CHANNEL_GUID
+        and policy.get("target_channel_guid_sha256") == test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256
         and policy.get("max_posts_per_run") == 1
     )
 
@@ -205,7 +206,7 @@ def _test_channel_publishing_config_enabled() -> bool:
     policy = _official_publishing_policy()
     if not (
         policy.get("enabled") is True
-        and policy.get("target_channel_guid") == TEST_CHANNEL_GUID
+        and policy.get("target_channel_guid_sha256") == test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256
         and policy.get("max_posts_per_run") == 1
     ):
         return False
@@ -681,8 +682,8 @@ def run_trial(
             }
             _report(output_report, report)
             return report
-        configured_target = _official_publishing_policy().get("target_channel_guid")
-        if configured_target != TEST_CHANNEL_GUID or os.getenv("RUBIKA_CHANNEL_GUID", "").strip() != TEST_CHANNEL_GUID:
+        configured_target_sha256 = _official_publishing_policy().get("target_channel_guid_sha256")
+        if configured_target_sha256 != test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256 or not test_channel.is_test_channel_guid(os.getenv("RUBIKA_CHANNEL_GUID", "")):
             report["error"] = "official_publishing_target_mismatch"
             report["lifecycle"] = {
                 "mode": lifecycle_policy["mode"],
@@ -711,7 +712,7 @@ def run_trial(
             report["error"] = "test_channel_publishing_config_disabled"
             _report(output_report, report)
             return report
-        if os.getenv("RUBIKA_CHANNEL_GUID", "").strip() != TEST_CHANNEL_GUID:
+        if not test_channel.is_test_channel_guid(os.getenv("RUBIKA_CHANNEL_GUID", "")):
             report["error"] = "test_channel_target_mismatch"
             _report(output_report, report)
             return report

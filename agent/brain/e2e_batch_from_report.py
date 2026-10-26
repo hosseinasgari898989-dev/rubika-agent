@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.brain.e2e_from_report import (DEFAULT_CHANNEL_GUID, _matches_poppy_edit, _safe_error, assert_test_channel_destination, run_one)
+from agent.brain.e2e_from_report import (_matches_poppy_edit, _safe_error, assert_test_channel_destination, run_one)
 from agent.brain.models import Candidate
 from agent.brain.orchestrator import candidates_from_report
 from agent.source_policy import delivery_enabled
@@ -97,7 +97,7 @@ def run_batch(
     platform: str = "both",
     daily_limit: int = 4,
 ) -> dict[str, Any]:
-    assert_test_channel_destination(os.getenv("RUBIKA_CHANNEL_GUID", DEFAULT_CHANNEL_GUID))
+    assert_test_channel_destination(os.getenv("RUBIKA_CHANNEL_GUID", ""))
     if platform not in {"tiktok", "youtube", "both"}:
         raise ValueError("unsupported_platform")
     if type(daily_limit) is not int or not 1 <= daily_limit <= 4:

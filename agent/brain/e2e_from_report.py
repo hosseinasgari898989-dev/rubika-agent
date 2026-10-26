@@ -34,7 +34,6 @@ from agent.source_policy import delivery_enabled
 
 
 DEFAULT_CLOUD_API = "https://rubika-agent.h98609294.workers.dev"
-DEFAULT_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
 # The agent brain enforces per-source metadata/edit/technical checks; AI only
 # classifies the extracted soundtrack. Every failed or uncertain gate stops delivery.
 
@@ -215,7 +214,7 @@ def run_one(
     candidate_offset: int = 0,
 ) -> dict[str, Any]:
     channel_guid = assert_test_channel_destination(
-        os.getenv("RUBIKA_CHANNEL_GUID", DEFAULT_CHANNEL_GUID)
+        os.getenv("RUBIKA_CHANNEL_GUID", "")
     )
     if platform == "youtube" and not delivery_enabled("youtube"):
         raise RuntimeError("youtube_delivery_paused_by_owner")

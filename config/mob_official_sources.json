@@ -102,7 +102,7 @@
     "since_utc": "2026-10-20T00:00:00Z",
     "enabled": true,
     "mode": "production",
-    "target_channel_guid": "c0EFohK0f3174377fb6fa422d3ccb230",
+    "target_channel_guid_sha256": "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8",
     "max_posts_per_run": 1,
     "production_enabled": true,
     "reason": "Only verified Mob Entertainment X posts are eligible. Non-X official sources remain disabled. Production mode is enabled for the fixed Rubika test channel, with the official-news birth cutoff independently enforced."

@@ -67,9 +67,10 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("default: false", workflow)
         self.assertIn("inputs.publish_four_tiktok_test == true", workflow)
         self.assertIn('if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]', workflow)
-        self.assertIn('RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230"', workflow)
+        self.assertIn("sha256sum", workflow)
+        self.assertIn("0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8", workflow)
         # The scheduled-run test-channel guard was removed on purpose (owner-approved).
-        self.assertNotIn('RUBIKA_CHANNEL_GUID:-}" == "c0EFohK0f3174377fb6fa422d3ccb230"', workflow)
+        self.assertNotIn('RUBIKA_CHANNEL_GUID:-}" == "', workflow)
         self.assertIn("PLATFORMS = (\"tiktok\",)", worker)
         self.assertIn("--daily-limit 4", workflow)
 
@@ -89,7 +90,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertTrue(publishing["enabled"])
         self.assertEqual(publishing["mode"], "production")
         self.assertTrue(publishing["production_enabled"])
-        self.assertEqual(publishing["target_channel_guid"], "c0EFohK0f3174377fb6fa422d3ccb230")
+        self.assertEqual(publishing["target_channel_guid_sha256"], "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8")
         self.assertEqual(publishing["max_posts_per_run"], 1)
         self.assertEqual(policy["mode"], "production")
         self.assertEqual(policy["born_at"], "2026-10-20T00:00:00Z")
@@ -103,13 +104,15 @@ class WorkflowSafetyTests(unittest.TestCase):
         production = (ROOT / ".github" / "workflows" / "mob-x-news-production.yml").read_text(encoding="utf-8")
         self.assertIn("RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved'", production)
         self.assertIn("--source-platform x", production)
-        self.assertIn('RUBIKA_CHANNEL_GUID" != "c0EFohK0f3174377fb6fa422d3ccb230', production)
+        self.assertIn("sha256sum", production)
+        self.assertIn("0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8", production)
         self.assertNotIn("Production Mob publishing cannot target the known test channel.", production)
 
         trial = (ROOT / ".github" / "workflows" / "mob-official-trial.yml").read_text(encoding="utf-8")
         self.assertIn("ref: main", trial)
         self.assertIn("--publish-test-channel", trial)
-        self.assertIn("RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230", trial)
+        self.assertIn("secrets.RUBIKA_CHANNEL_GUID", trial)
+        self.assertIn("0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8", trial)
 
         trial_code = (ROOT / "agent" / "brain" / "mob_official_trial.py").read_text(encoding="utf-8")
         self.assertIn('if kind not in {"image", "video"} or not media_url:', trial_code)
@@ -143,7 +146,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("confirm_test_channel_publish", workflow)
         self.assertIn("default: false", workflow)
         self.assertIn("if: ${{ inputs.confirm_test_channel_publish == true }}", workflow)
-        self.assertIn("RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230", workflow)
+        self.assertIn("secrets.RUBIKA_CHANNEL_GUID", workflow)
         self.assertIn("ref: main", workflow)
 
     def test_batch_e2e_requires_the_repo_gate_and_explicit_manual_confirmation(self):
@@ -153,7 +156,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("default: false", workflow)
         self.assertIn("inputs.confirm_test_channel_publish == true", workflow)
         self.assertIn("vars.RUBIKA_AGENT_E2E_PUBLISH_GATE_20261014 == 'approved'", workflow)
-        self.assertIn("RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230", workflow)
+        self.assertIn("secrets.RUBIKA_CHANNEL_GUID", workflow)
         self.assertIn("ref: main", workflow)
         self.assertIn("cloud discovery report", workflow)
 

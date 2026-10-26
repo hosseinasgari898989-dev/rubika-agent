@@ -286,8 +286,13 @@ jobs:
             echo "::error::Existing Mob X publish approval gate is not approved."
             exit 2
           fi
-          if [ "${RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230" ]; then
-            echo "::error::RUBIKA_CHANNEL_GUID does not match the expected test channel; configured value is redacted."
+          if [[ -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
+            echo "::error::RUBIKA_CHANNEL_GUID secret is missing; publication remains blocked."
+            exit 2
+          fi
+          actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
+          if [[ "$actual_hash" != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then
+            echo "::error::RUBIKA_CHANNEL_GUID SHA-256 does not match the registered test-channel pin; publication remains blocked."
             exit 2
           fi
           echo "Existing Mob X approval gate and exact test-channel destination validated; no values printed."

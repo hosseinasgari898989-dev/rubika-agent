@@ -12,11 +12,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agent.brain import test_channel
+
 
 MARKDOWN_SIGNAL = re.compile(r"\*\*.+?\*\*|__(.+?)__|--(.+?)--|~~(.+?)~~|\|\|.+?\|\||`.+?`|^>.+?$", re.MULTILINE | re.DOTALL)
 
 
-TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
 
 
 class RubikaDestinationGuardError(ValueError):
@@ -25,7 +26,7 @@ class RubikaDestinationGuardError(ValueError):
 
 def assert_test_channel_destination(channel_guid: str) -> str:
     destination = str(channel_guid or "").strip()
-    if destination != TEST_CHANNEL_GUID:
+    if not test_channel.is_test_channel_guid(destination):
         raise RubikaDestinationGuardError("rubika_destination_not_test_channel")
     return destination
 

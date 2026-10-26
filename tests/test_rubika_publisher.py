@@ -5,8 +5,10 @@ from agent.brain.edit_caption import EDIT_CAPTION
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from agent.brain.rubika_publisher import TEST_CHANNEL_GUID, RubikaPublisher, _decorate_official_mob_caption
+from agent.brain import test_channel
+from agent.brain.rubika_publisher import RubikaPublisher, _decorate_official_mob_caption
 
 
 class FakeBot:
@@ -41,8 +43,17 @@ class FakeBot:
         return {"status": "OK", "data": {"message_id": "formatted-media-message"}}
 
 
+TEST_CHANNEL_FOR_TESTS = "synthetic-test-channel-guid"
+
+
 class RubikaPublisherMediaTests(unittest.TestCase):
     def setUp(self):
+        guard = patch.object(
+            test_channel, "is_test_channel_guid",
+            side_effect=lambda value: str(value or "").strip() == TEST_CHANNEL_FOR_TESTS,
+        )
+        guard.start()
+        self.addCleanup(guard.stop)
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.media_path = Path(self.tempdir.name) / "official_media.webp"
@@ -50,7 +61,7 @@ class RubikaPublisherMediaTests(unittest.TestCase):
         self.fake_bot = FakeBot()
         self.publisher = RubikaPublisher(
             "test-token",
-            TEST_CHANNEL_GUID,
+            TEST_CHANNEL_FOR_TESTS,
             bot_factory=lambda **kwargs: self.fake_bot,
         )
 
@@ -103,7 +114,7 @@ class RubikaPublisherMediaTests(unittest.TestCase):
         self.assertEqual(len(self.fake_bot.posts), 1)
         method, payload = self.fake_bot.posts[0]
         self.assertEqual(method, "sendFile")
-        self.assertEqual(payload["chat_id"], TEST_CHANNEL_GUID)
+        self.assertEqual(payload["chat_id"], TEST_CHANNEL_FOR_TESTS)
         self.assertEqual(payload["file_id"], "uploaded-file-id")
         self.assertNotIn("**", payload["text"])
         self.assertNotIn("||", payload["text"])
@@ -127,7 +138,7 @@ class RubikaPublisherMediaTests(unittest.TestCase):
         self.assertEqual(len(self.fake_bot.calls), 1)
         method, payload = self.fake_bot.calls[0]
         self.assertEqual(method, "send_image")
-        self.assertEqual(payload["chat_id"], TEST_CHANNEL_GUID)
+        self.assertEqual(payload["chat_id"], TEST_CHANNEL_FOR_TESTS)
         self.assertEqual(payload["path"], str(self.media_path))
         self.assertEqual(payload["text"], "A test caption")
         self.assertEqual(payload["file_name"], "official_media.webp")
@@ -154,7 +165,7 @@ class RubikaPublisherMediaTests(unittest.TestCase):
 
         method, payload = self.fake_bot.calls[-1]
         self.assertEqual(method, "send_video")
-        self.assertEqual(payload["chat_id"], TEST_CHANNEL_GUID)
+        self.assertEqual(payload["chat_id"], TEST_CHANNEL_FOR_TESTS)
         self.assertEqual(payload["path"], str(video_path))
         self.assertEqual(payload["text"], "A video caption")
 

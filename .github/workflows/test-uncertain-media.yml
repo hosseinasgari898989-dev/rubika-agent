@@ -18,7 +18,7 @@ jobs:
       RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
       MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
       MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
-      RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
+      RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
       TARGET_EXTERNAL_ID: "7694421166508838165"
       TARGET_SHA256: b3d1f38d53939bd0b80f04354984579d7b6146eb091807a30c4ecf8839f5ee8e
       TARGET_BYTES: "26438523"
@@ -40,7 +40,8 @@ jobs:
               exit 2
             fi
           done
-          test "$RUBIKA_CHANNEL_GUID" = "c0EFohK0f3174377fb6fa422d3ccb230"
+          actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
+          test "$actual_hash" = "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8"
           test "$TARGET_EXTERNAL_ID" = "7694421166508838165"
           test "$TARGET_SHA256" = "b3d1f38d53939bd0b80f04354984579d7b6146eb091807a30c4ecf8839f5ee8e"
           echo "Destination verified: test channel only; target is the single uncertain D1 item."
@@ -81,7 +82,7 @@ jobs:
           mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
           mega-ls /Rubika-Agent/staging >/dev/null
           python - <<'PY'
-          import json, os, subprocess, sys
+          import hashlib, json, os, subprocess, sys
           from pathlib import Path
           from agent.brain.rubika_publisher import RubikaPublisher
           from agent.storage.mega import MegaStorage, sha256_file
@@ -91,7 +92,7 @@ jobs:
           expected_sha = os.environ["TARGET_SHA256"]
           expected_bytes = int(os.environ["TARGET_BYTES"])
           channel = os.environ["RUBIKA_CHANNEL_GUID"]
-          if channel != "c0EFohK0f3174377fb6fa422d3ccb230":
+          if not channel or hashlib.sha256(channel.encode("utf-8")).hexdigest() != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8":
               raise SystemExit("test_channel_guard_failed")
           destination = Path(os.environ["RUNNER_TEMP"]) / Path(remote_path).name
           media = MegaStorage().download(remote_path, destination.parent)

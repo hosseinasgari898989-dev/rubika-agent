@@ -13,10 +13,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agent.brain import test_channel
 from agent.brain.mob_x_link_processor import MobXLinkError, WorkerClient
 from agent.brain.mob_x_rubika import send_test_channel_once, send_uncertain_notice
 
-TEST_CHANNEL_GUID = "c0EFohK0f3174377fb6fa422d3ccb230"
+
 JOB_ID_RE = re.compile(r"job_[A-Fa-f0-9]{8,80}")
 
 
@@ -60,7 +61,7 @@ def publish_one(
         publishing.get("enabled") is True
         and publishing.get("mode") == "production"
         and publishing.get("production_enabled") is True
-        and publishing.get("target_channel_guid") == TEST_CHANNEL_GUID
+        and publishing.get("target_channel_guid_sha256") == test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256
         and publishing.get("max_posts_per_run") == 1
     ):
         report.update(status="blocked", error_code="mob_x_publish_config_guard_not_enabled")
@@ -72,7 +73,7 @@ def publish_one(
     if not token or not owner_chat:
         report.update(status="blocked", error_code="mob_x_publish_credentials_missing")
         return _write_report(report, report_path, 2)
-    if channel != TEST_CHANNEL_GUID:
+    if not test_channel.is_test_channel_guid(channel):
         report.update(status="blocked", error_code="rubika_channel_not_exact_test_target")
         return _write_report(report, report_path, 2)
 
