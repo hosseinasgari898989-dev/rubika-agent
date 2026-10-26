@@ -1708,7 +1708,7 @@ async function postPanelUpdate(state, update, secret) {
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
     assert.equal(state.DB.state.get("panel_edit_ok") || "0", "0");
     assert.equal(state.DB.state.get("panel_edit_fail") || "0", "0");
-    assert.equal(calls.some(call => call.payload.message_id === "clicked-event-original-9876"), false);
+    assert.equal(calls.some(call => call.method !== "deleteMessage" && call.payload.message_id === "clicked-event-original-9876"), false);
     assert.equal(calls.filter(call => call.method === "editMessageText").length, 0);
     assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 0);
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "clicked-event-original-9876"), true);
