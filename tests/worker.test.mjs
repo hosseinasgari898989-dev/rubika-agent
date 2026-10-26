@@ -1835,31 +1835,31 @@ async function postPanelUpdate(state, update, secret) {
 
 // A late first Rubika response is deleted after the newer event wins; old text/buttons cannot become current again.
 {
+  let signalSlowStarted;
+  const slowStarted = new Promise(resolve => { signalSlowStarted = resolve; });
+  let releaseSlow;
+  const slowGate = new Promise(resolve => { releaseSlow = resolve; });
+  let sendCount = 0;
+  const responder = async ({ method }) => {
+    if (method !== "sendMessage") return null;
+    sendCount += 1;
+    if (sendCount === 1) {
+      signalSlowStarted();
+      await slowGate;
+      return new Response(JSON.stringify({ status: "OK", data: { message_id: "slow-stale-panel-01" } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ status: "OK", data: { message_id: "fast-current-panel-02" } }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  };
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
     state.DB.state.set("panel_sync_mode", "atomic");
     state.DB.state.set("panel_mid", "race-base-panel-0101");
     const secret = await panel.hookSecret(state);
-    let signalSlowStarted;
-    const slowStarted = new Promise(resolve => { signalSlowStarted = resolve; });
-    let releaseSlow;
-    const slowGate = new Promise(resolve => { releaseSlow = resolve; });
-    let sendCount = 0;
-    const responder = async ({ method }) => {
-      if (method !== "sendMessage") return null;
-      sendCount += 1;
-      if (sendCount === 1) {
-        signalSlowStarted();
-        await slowGate;
-        return new Response(JSON.stringify({ status: "OK", data: { message_id: "slow-stale-panel-01" } }), {
-          status: 200, headers: { "content-type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify({ status: "OK", data: { message_id: "fast-current-panel-02" } }), {
-        status: 200, headers: { "content-type": "application/json" },
-      });
-    };
     const click = (button, messageId) => ({
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
         message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
@@ -1876,7 +1876,7 @@ async function postPanelUpdate(state, update, secret) {
     assert.equal(state.DB.state.get("atomic_ok"), "1");
     assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 2);
-  }, null);
+  }, responder);
 }
 
 // A duplicate tap with the same event key is idempotently ignored.
