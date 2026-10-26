@@ -73,6 +73,12 @@ class ProviderClientTests(unittest.TestCase):
         with self.assertRaises(clients.ProviderClientError) as caught:
             clients.provider_config("openrouter", environ={})
         self.assertEqual(caught.exception.code, "openrouter_api_key_missing")
+        with self.assertRaises(clients.ProviderClientError) as caught:
+            clients.provider_config(
+                "groq",
+                environ={"GROQ_API_KEY": "g" * 32, "GROQ_MODEL": "not a valid model!"},
+            )
+        self.assertEqual(caught.exception.code, "groq_model_invalid")
 
     def test_only_current_provider_clients_are_allowlisted(self):
         self.assertEqual(set(clients.PROVIDERS), {"groq", "openrouter"})
@@ -202,6 +208,7 @@ class ProviderClientTests(unittest.TestCase):
         cases = [
             (FakeOpener(error=TimeoutError("private timeout detail")), "timeout"),
             (FakeOpener(error=URLError("private network detail")), "network"),
+            (FakeOpener(error=URLError(TimeoutError("private wrapped timeout"))), "timeout"),
             (FakeOpener(response=FakeResponse(None, raw=b"{not-json")), "bad_json"),
             (FakeOpener(response=FakeResponse({"unexpected": True})), "bad_response"),
         ]
