@@ -28,7 +28,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         workflows = ROOT / ".github" / "workflows"
         workflow = (workflows / "owner-console-poll.yml").read_text(encoding="utf-8")
         trigger = workflow.split("permissions:", 1)[0]
-        self.assertNotIn("\\n  schedule:", trigger)
+        self.assertNotIn("schedule:", trigger)
         self.assertNotIn('cron: "*/5 * * * *"', workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
