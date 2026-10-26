@@ -20,7 +20,7 @@ jobs:
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
       AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
       RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
-      RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
+      RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
     steps:
       - name: Check out the current main agent
         uses: actions/checkout@v4
@@ -41,8 +41,13 @@ jobs:
             echo "::error::Missing Actions secret RUBIKA_TOKEN; no post was sent."
             exit 2
           fi
-          if [[ "${RUBIKA_CHANNEL_GUID:-}" != "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
-            echo "::error::Refusing to publish because the destination is not the fixed test channel."
+          if [[ -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
+            echo "::error::RUBIKA_CHANNEL_GUID secret is missing; no post was sent."
+            exit 2
+          fi
+          actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
+          if [[ "$actual_hash" != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then
+            echo "::error::Refusing to publish because the destination hash is not the registered test-channel hash."
             exit 2
           fi
           echo "Test-channel publishing verified: max 1 post, no production-channel target."
