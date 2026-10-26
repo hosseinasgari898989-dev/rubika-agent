@@ -1258,6 +1258,11 @@ class PanelFakeStatement {
   }
   bind(...values) { this.values = values; return this; }
   async first() {
+    if (this.sql.startsWith("INSERT INTO panel_state") && this.sql.includes("RETURNING value")) {
+      const next = Number(this.db.state.get("panel_seq") || 0) + 1;
+      this.db.state.set("panel_seq", String(next));
+      return { value: String(next) };
+    }
     if (this.sql.includes("SELECT chat_id FROM panel_owner WHERE id=1")) {
       return this.db.ownerChat ? { chat_id: this.db.ownerChat } : null;
     }
