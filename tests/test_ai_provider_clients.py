@@ -209,6 +209,7 @@ class ProviderClientTests(unittest.TestCase):
             (FakeOpener(error=TimeoutError("private timeout detail")), "timeout"),
             (FakeOpener(error=URLError("private network detail")), "network"),
             (FakeOpener(error=URLError(TimeoutError("private wrapped timeout"))), "timeout"),
+            (FakeOpener(response=FakeResponse(None, status=429)), "http_429"),
             (FakeOpener(response=FakeResponse(None, status=502)), "http_5xx"),
             (FakeOpener(response=FakeResponse(None, raw=b"{not-json")), "bad_json"),
             (FakeOpener(response=FakeResponse({"unexpected": True})), "bad_response"),
