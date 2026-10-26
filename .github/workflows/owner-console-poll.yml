@@ -1,8 +1,6 @@
 name: Rubika owner console poll
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
