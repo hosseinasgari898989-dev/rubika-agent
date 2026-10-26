@@ -30,7 +30,7 @@ class OwnerPanelCoordinationTests(unittest.TestCase):
         self.assertNotIn('parts.push("⏳ ۳ از ۳', OWNER_PANEL)
 
     def test_fresh_text_commands_refresh_screen_panels(self):
-        self.assertIn("if (fresh) return sendFreshPanel(ui, s.text, keypad, previousMid);", OWNER_PANEL)
+        self.assertIn('if (fresh && ["p_errors", "p_runs", "p_links", "p_digest"].includes(id)) return sendFreshPanel(ui, s.text, keypad, previousMid);', OWNER_PANEL)
 
     def test_second_publish_click_explains_existing_approval(self):
         self.assertIn('row.status === "approved"', OWNER_PANEL)
