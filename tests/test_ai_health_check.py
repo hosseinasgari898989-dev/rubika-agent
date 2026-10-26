@@ -47,6 +47,7 @@ class AIHealthCheckTests(unittest.TestCase):
         self.assertEqual(results[0].http_status, 429)
         self.assertEqual(results[0].provider_error_type, "rate_limit_error")
         self.assertEqual(results[0].provider_error_code, "rate_limited")
+        self.assertEqual(results[0].error_code, "http_429")
         self.assertEqual(results[0].response_content_non_empty, None)
         self.assertEqual(results[1].http_status, 200)
         self.assertTrue(results[1].response_content_non_empty)
@@ -109,11 +110,36 @@ class AIHealthCheckTests(unittest.TestCase):
         ):
             rows = tuple(row for provider in health.PROVIDERS for row in health.check_provider(provider))
 
-        self.assertEqual([row.status for row in rows], ["auth error", "other error"])
+        self.assertEqual([row.status for row in rows], ["auth error", "server error"])
         self.assertEqual(rows[0].provider_error_code, "groq_api_key_missing")
         self.assertEqual(rows[1].http_status, 503)
         self.assertEqual(rows[1].provider_error_type, "server_error")
         self.assertEqual(rows[1].provider_error_code, "temporarily_unavailable")
+        self.assertEqual(rows[1].error_code, "http_5xx")
+
+    def test_error_categories_never_collapse_to_other_error(self):
+        cases = [
+            (ProviderClientError("http_401", diagnostics={"http_status": 401}), "auth error", "http_401"),
+            (ProviderClientError("http_403", diagnostics={"http_status": 403}), "auth error", "http_403"),
+            (ProviderClientError("http_429", diagnostics={"http_status": 429}), "rate limit", "http_429"),
+            (ProviderClientError("http_5xx", outcome="unknown", diagnostics={"http_status": 503}), "server error", "http_5xx"),
+            (ProviderClientError("timeout", outcome="unknown"), "timeout", "timeout"),
+            (ProviderClientError("network", outcome="unknown"), "network error", "network"),
+            (ProviderClientError("bad_json", outcome="unknown"), "bad JSON", "bad_json"),
+            (ProviderClientError("bad_response", outcome="unknown"), "invalid response", "bad_response"),
+            (ProviderClientError("http_404", diagnostics={"http_status": 404, "provider_error_code": "model_not_found"}), "model error", "model_not_found"),
+            (ProviderClientError("groq_api_key_missing"), "auth error", "groq_api_key_missing"),
+            (ProviderClientError("provider_model_invalid"), "model error", "provider_model_invalid"),
+            (ProviderClientError("http_418", diagnostics={"http_status": 418}), "HTTP error", "http_418"),
+        ]
+        for error, expected_status, expected_code in cases:
+            with self.subTest(code=error.code, expected=expected_status):
+                result = health._exception_result(
+                    "groq", "model", 10, health.time.monotonic(), error
+                )
+                self.assertEqual(result.status, expected_status)
+                self.assertEqual(result.error_code, expected_code)
+                self.assertNotEqual(result.status, "other error")
 
     def test_workflow_is_manual_only_and_uses_safe_health_check(self):
         workflow = (ROOT / ".github" / "workflows" / "ai-health-check.yml").read_text(encoding="utf-8")
@@ -149,6 +175,7 @@ class AIHealthCheckTests(unittest.TestCase):
             logged = output.getvalue()
             summary = summary_path.read_text(encoding="utf-8")
         self.assertEqual(logged, summary)
+        self.assertIn("Error code", summary)
         self.assertIn("Content non-empty", summary)
         self.assertIn("finish_reason", summary)
 
