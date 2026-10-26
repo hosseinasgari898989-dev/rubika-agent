@@ -1258,6 +1258,11 @@ class PanelFakeStatement {
   }
   bind(...values) { this.values = values; return this; }
   async first() {
+    if (this.sql.startsWith("INSERT INTO panel_state") && this.sql.includes("RETURNING value")) {
+      const next = Number(this.db.state.get("panel_seq") || 0) + 1;
+      this.db.state.set("panel_seq", String(next));
+      return { value: String(next) };
+    }
     if (this.sql.includes("SELECT chat_id FROM panel_owner WHERE id=1")) {
       return this.db.ownerChat ? { chat_id: this.db.ownerChat } : null;
     }
@@ -1686,7 +1691,7 @@ async function postPanelUpdate(state, update, secret) {
   });
 }
 
-// A click with no existing panel creates one tracked message; every report stage edits that same message.
+// A click with no existing panel creates one tracked report; status, queue, and AI are gathered in parallel.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -1700,15 +1705,12 @@ async function postPanelUpdate(state, update, secret) {
     }, secret);
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
-    assert.equal(state.DB.state.get("panel_edit_ok"), "4");
+    assert.equal(state.DB.state.get("panel_edit_ok") || "0", "0");
     assert.equal(state.DB.state.get("panel_edit_fail") || "0", "0");
     assert.equal(calls.some(call => call.payload.message_id === "clicked-event-original-9876"), false);
-    assert.equal(calls.filter(call => call.method === "editMessageText").length >= 4, true);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 0);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 0);
     assert.equal(calls.every(call => !("message_id" in call.payload) || call.payload.message_id === "mock-reply-1"), true);
-    for (const call of calls.filter(call => call.method === "editMessageKeypad")) {
-      assert.equal(Array.isArray(call.payload.inline_keypad.rows), true);
-      assert.equal(call.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0), true);
-    }
     const stored = state.DB.state.get("last_event");
     assert.equal(stored.includes("b0actualowner"), false);
     assert.equal(stored.includes("clicked-event-original-9876"), false);
@@ -2146,7 +2148,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(statusText.includes("پایگاه داده"), false);
 }
 
-// New textual commands render the imported screens directly on the single tracked panel (without loading frames).
+// Fresh commands replace the panel only for the four requested screens; other text commands keep edit-in-place behavior.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -2158,6 +2160,10 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
       ["/digest", "خلاصهٔ ۲۴ ساعت"], ["/errors", "خطاها"], ["/runs", "آخرین اجراها"],
       ["/links", "لینک‌های X"], ["/ailog", "تاریخچهٔ تماس‌های AI"], ["/queue", "صف انتشار"],
     ];
+    const freshCommands = new Set(["/digest", "/errors", "/runs", "/links"]);
+    let expectedSends = 0;
+    let expectedEdits = 0;
+    let currentPanel = "one-live-screen-panel";
     for (let i = 0; i < commands.length; i += 1) {
       await postPanelUpdate(state, {
         update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
@@ -2165,13 +2171,25 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
         } },
       }, secret);
       const editCalls = calls.filter(call => call.method === "editMessageText");
-      assert.equal(editCalls.length, i + 1, commands[i][0] + " should edit exactly one page");
-      assert.equal(editCalls.at(-1).payload.message_id, "one-live-screen-panel");
-      assert.equal(editCalls.at(-1).payload.text.includes(commands[i][1]), true, commands[i][0] + " should render its screen");
+      const sendCalls = calls.filter(call => call.method === "sendMessage");
+      if (freshCommands.has(commands[i][0])) {
+        expectedSends += 1;
+        assert.equal(sendCalls.length, expectedSends, commands[i][0] + " should send one fresh page");
+        assert.equal(sendCalls.at(-1).payload.text.includes(commands[i][1]), true, commands[i][0] + " should render its screen");
+        assert.equal(state.DB.state.get("panel_mid"), "mock-reply-" + expectedSends);
+        assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === currentPanel), true);
+        currentPanel = state.DB.state.get("panel_mid");
+      } else {
+        expectedEdits += 1;
+        assert.equal(editCalls.length, expectedEdits, commands[i][0] + " should edit exactly one page");
+        assert.equal(editCalls.at(-1).payload.message_id, currentPanel);
+        assert.equal(editCalls.at(-1).payload.text.includes(commands[i][1]), true, commands[i][0] + " should render its screen");
+      }
       assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("در حال دریافت")), false);
       assert.equal(state.DB.state.get("mode"), "idle");
     }
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 4);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 2);
   });
 }
 
