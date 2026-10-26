@@ -2389,6 +2389,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
     state.DB.links = [{ url: "https://x.com/Test/status/2107878755079213476", status: "queued", created_at: "2026-10-24T05:00:00Z" }];
+    state.DB.state.set("panel_sync_mode", "atomic");
     state.DB.state.set("panel_mid", "link-confirmation-panel");
     const secret = await panel.hookSecret(state);
     const click = async (button, messageId) => postPanelUpdate(state, {
@@ -2396,16 +2397,19 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
         message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
       } },
     }, secret);
-    await click("p_links_clear_yes", "direct-yes-1");
+    await click("p_links_clear_yes", "link-confirmation-panel");
     assert.equal(state.DB.links.length, 1, "direct confirmation ID must not delete links");
     assert.equal(state.DB.linkDeleteCalls, 0);
-    await click("p_links_clear", "open-confirm-2");
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    await click("p_links_clear", "mock-reply-1");
     assert.equal(state.DB.links.length, 1, "opening confirmation must not delete links");
-    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("پاک شود؟"), true);
-    await click("p_links_clear_yes", "confirmed-yes-3");
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("پاک شود؟"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-2");
+    await click("p_links_clear_yes", "mock-reply-2");
     assert.equal(state.DB.links.length, 0, "confirmed action should clear links");
     assert.equal(state.DB.linkDeleteCalls, 1);
-    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("پاک شدند"), true);
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("پاک شدند"), true);
+    assert.equal(calls.some(call => call.method === "editMessageKeypad"), false);
   });
 }
 
