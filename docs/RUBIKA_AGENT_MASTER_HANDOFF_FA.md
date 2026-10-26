@@ -21,7 +21,7 @@
 - GitHub: hosseinasgari898989-dev/rubika-agent
 - Worker: https://rubika-agent.h98609294.workers.dev/
 - D1: rubika-agent-db، شناسه 70634eb9-70a8-48e8-b254-903a42e93304
-- شناسهٔ کانال تست شناخته‌شده: c0EFohK0f3174377fb6fa422d3ccb230
+- شناسهٔ کانال تست فقط در secret موجود نگهداری می‌شود؛ مسیر انتشار فقط hash ثبت‌شدهٔ SHA-256 را می‌پذیرد.
 - انتشار واقعی فقط بعد از تأیید مقصد اصلی و عبور از preflight read-only.
 - در این دوره هیچ پیام/ویدئویی در کانال اصلی ارسال نشده است. preflight معتبر بودن Bot را تأیید کرد، اما مقصد را به‌درستی مسدود کرد چون secret مربوط به RUBIKA_CHANNEL_GUID هنوز شناسهٔ کانال تست است.
 - Worker زنده در نسخهٔ 4f72c97e-75dd-4e9c-9c73-73e149027478 با ۱۰۰٪ ترافیک است. در بررسی 2026-10-16، کد زنده با src/index.js در main (blob SHA: 991f15ff06416ea7ca16530a8dad0d46de155ecd) دقیقاً برابر بود؛ بنابراین برای این فایل تغییر جدیدی برای Deploy باقی نمانده. PUBLISHING_ENABLED=false فقط وضعیت قابلیت‌های Worker API را نشان می‌دهد؛ ارسال مدیا از GitHub Actions/Python انجام می‌شود.
