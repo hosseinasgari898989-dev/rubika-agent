@@ -186,26 +186,24 @@ def _normalize_usage(*, prompt: Any = None, output: Any = None, total: Any = Non
 def _read_response(response: Any) -> dict[str, Any]:
     status = getattr(response, "status", 200)
     diagnostics = {"http_status": status} if type(status) is int else {}
+    if status != 200:
+        code = "http_5xx" if type(status) is int and 500 <= status <= 599 else "http_" + str(status)
+        raise ProviderClientError(code, outcome="unknown", diagnostics=diagnostics)
+    raw = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ProviderClientError(
+            "response_too_large", outcome="unknown", diagnostics=diagnostics
+        )
     try:
-        if status != 200:
-            raise ProviderClientError(
-                "provider_http_" + str(status), outcome="unknown", diagnostics=diagnostics
-            )
-        raw = response.read(MAX_RESPONSE_BYTES + 1)
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise ProviderClientError(
-                "provider_response_too_large", outcome="unknown", diagnostics=diagnostics
-            )
-        value = json.loads(raw.decode("utf-8"))
-    except ProviderClientError:
-        raise
+        decoded = raw.decode("utf-8")
+        value = json.loads(decoded)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         raise ProviderClientError(
-            "provider_response_invalid", outcome="unknown", diagnostics=diagnostics
+            "bad_json", outcome="unknown", diagnostics=diagnostics
         ) from None
     if not isinstance(value, dict):
         raise ProviderClientError(
-            "provider_response_invalid", outcome="unknown", diagnostics=diagnostics
+            "bad_response", outcome="unknown", diagnostics=diagnostics
         )
     return value
 
@@ -270,26 +268,40 @@ def invoke_provider(
     except urllib.error.HTTPError as exc:
         status = int(exc.code)
         diagnostics = _provider_http_diagnostics(exc, config.provider)
-        if status == 429:
-            raise ProviderClientError(
-                "provider_http_429", outcome="failed", diagnostics=diagnostics
-            ) from None
-        # A server-side error can be returned after processing began; account for
-        # the request as unknown rather than retrying or assuming no cost.
+        provider_markers = "_".join(
+            str(diagnostics.get(key, "")).lower()
+            for key in ("provider_error_type", "provider_error_code")
+        ).replace("-", "_")
+        model_markers = ("model_not_found", "model_not_available", "unknown_model", "invalid_model")
+        if any(marker in provider_markers for marker in model_markers):
+            code = "model_not_found"
+        elif status == 429:
+            code = "http_429"
+        elif 500 <= status <= 599:
+            code = "http_5xx"
+        else:
+            code = "http_" + str(status)
+        # A server-side error can be returned after processing began; keep its
+        # accounting outcome unknown. Rate limits remain failed so the ledger's
+        # existing rate_limited cooldown path is preserved.
         outcome = "unknown" if status >= 500 or 300 <= status < 400 else "failed"
-        raise ProviderClientError(
-            "provider_http_" + str(status), outcome=outcome, diagnostics=diagnostics
-        ) from None
+        raise ProviderClientError(code, outcome=outcome, diagnostics=diagnostics) from None
     except ProviderClientError:
         raise
-    except (urllib.error.URLError, TimeoutError, OSError):
-        raise ProviderClientError("provider_network_result_unknown", outcome="unknown") from None
+    except TimeoutError:
+        raise ProviderClientError("timeout", outcome="unknown") from None
+    except urllib.error.URLError as exc:
+        if isinstance(getattr(exc, "reason", None), TimeoutError):
+            raise ProviderClientError("timeout", outcome="unknown") from None
+        raise ProviderClientError("network", outcome="unknown") from None
+    except OSError:
+        raise ProviderClientError("network", outcome="unknown") from None
 
     answer = ""
     usage: dict[str, int] = {}
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-        raise ProviderClientError("provider_response_invalid", outcome="unknown")
+        raise ProviderClientError("bad_response", outcome="unknown")
     message = choices[0].get("message")
     content = message.get("content") if isinstance(message, dict) else None
     finish_reason_raw = choices[0].get("finish_reason")
@@ -365,7 +377,7 @@ def call_provider_with_ledger(
         outcome = exc.outcome
         # Keep the safe provider error even when the outcome is ambiguous.
         # The outcome field already captures uncertainty; erasing this code blocked diagnosis.
-        error_code = "rate_limited" if exc.code == "provider_http_429" else exc.code
+        error_code = "rate_limited" if exc.code in {"provider_http_429", "http_429"} else exc.code
         try:
             ledger.finish(
                 provider=provider,
