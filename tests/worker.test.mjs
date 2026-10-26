@@ -1711,7 +1711,8 @@ async function postPanelUpdate(state, update, secret) {
     assert.equal(calls.some(call => call.payload.message_id === "clicked-event-original-9876"), false);
     assert.equal(calls.filter(call => call.method === "editMessageText").length, 0);
     assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 0);
-    assert.equal(calls.every(call => !("message_id" in call.payload) || call.payload.message_id === "mock-reply-1"), true);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "clicked-event-original-9876"), true);
+    assert.equal(calls.every(call => call.method === "deleteMessage" || !("message_id" in call.payload) || call.payload.message_id === "mock-reply-1"), true);
     const stored = state.DB.state.get("last_event");
     assert.equal(stored.includes("b0actualowner"), false);
     assert.equal(stored.includes("clicked-event-original-9876"), false);
