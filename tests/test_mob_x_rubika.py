@@ -3,10 +3,10 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from agent.brain import test_channel
 from agent.brain.mob_x_rubika import (
-    TEST_CHANNEL_GUID,
     owner_preview_keypad,
     send_owner_preview,
     send_test_channel_once,
@@ -23,7 +23,18 @@ class RubikaMediaMock:
         self._post = Mock(return_value={"status": "OK", "data": {"message_id": "msg-123"}})
 
 
+TEST_CHANNEL_FOR_TESTS = "synthetic-test-channel-guid"
+
+
 class MobXRubikaTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(
+            test_channel, "is_test_channel_guid",
+            side_effect=lambda value: str(value or "").strip() == TEST_CHANNEL_FOR_TESTS,
+        )
+        guard.start()
+        self.addCleanup(guard.stop)
+
     def test_owner_preview_keyboard_has_publish_edit_and_reject_only(self):
         keyboard = owner_preview_keypad("job_abcdef1234567890")
         buttons = keyboard["rows"][0]["buttons"]
@@ -75,10 +86,10 @@ class MobXRubikaTests(unittest.TestCase):
         def factory(**kwargs):
             holder["bot"] = RubikaMediaMock(**kwargs)
             return holder["bot"]
-        send_test_channel_once("test-token", TEST_CHANNEL_GUID, "rubika-file-001", "کپشن ساده", bot_factory=factory)
+        send_test_channel_once("test-token", TEST_CHANNEL_FOR_TESTS, "rubika-file-001", "کپشن ساده", bot_factory=factory)
         holder["bot"]._post.assert_called_once()
         _, payload = holder["bot"]._post.call_args.args
-        self.assertEqual(payload["chat_id"], TEST_CHANNEL_GUID)
+        self.assertEqual(payload["chat_id"], TEST_CHANNEL_FOR_TESTS)
         self.assertNotIn("inline_keypad", payload)
 
     def test_non_test_channel_is_rejected_before_bot_creation(self):
@@ -100,7 +111,7 @@ class MobXRubikaTests(unittest.TestCase):
             holder["bot"]._post.return_value = {"status": "ERROR", "data": {}}
             return holder["bot"]
         with self.assertRaisesRegex(RuntimeError, "rubika_send_file_response_invalid"):
-            send_test_channel_once("test-token", TEST_CHANNEL_GUID, "rubika-file-001", "caption", bot_factory=factory)
+            send_test_channel_once("test-token", TEST_CHANNEL_FOR_TESTS, "rubika-file-001", "caption", bot_factory=factory)
         holder["bot"]._post.assert_called_once()
 
     def test_uncertain_notice_has_manual_confirmation_not_retry(self):
