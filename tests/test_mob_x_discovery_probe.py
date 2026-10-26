@@ -15,7 +15,8 @@ class MobXDiscoveryProbeWorkflowTests(unittest.TestCase):
         self.assertNotIn("--published-within-hours", workflow)
         self.assertNotIn("for attempt in $(seq 1 12)", workflow)
         self.assertIn("vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved'", workflow)
-        self.assertIn("c0EFohK0f3174377fb6fa422d3ccb230", workflow)
+        self.assertIn("target_channel_guid_sha256", workflow)
+        self.assertIn("0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8", workflow)
 
     def test_probe_is_manual_only_read_only_and_uploads_expected_artifact(self):
         workflow = (ROOT / ".github" / "workflows" / "mob-x-discovery-probe.yml").read_text(encoding="utf-8")
