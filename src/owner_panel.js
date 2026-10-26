@@ -88,7 +88,7 @@ const HOME_TEXT = "🤖 **پنل مدیریت Rubika-Agent**\n\nیکی از بخ
 async function homeText(env) {
   try { return await homeSummary(env); } catch { return HOME_TEXT; }
 }
-const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /digest خلاصهٔ ۲۴ ساعت، /errors خطاها، /runs اجراها\n• /links لینک‌های X، /ailog تاریخچهٔ AI\n• /debug: خطای آخر و مشخصات امن رویداد آخر\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه گزارش می‌دهد و لینک X را ذخیره می‌کند؛ انتشار خودکار از این پنل انجام نمی‌شود."; 
+const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /digest خلاصهٔ ۲۴ ساعت، /errors خطاها، /runs اجراها\n• /links لینک‌های X، /ailog تاریخچهٔ AI\n• /debug: خطای آخر و مشخصات امن رویداد آخر\n• /panelmode atomic|inplace: حالت هماهنگی پنل (مالک اصلی)\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه گزارش می‌دهد و لینک X را ذخیره می‌کند؛ انتشار خودکار از این پنل انجام نمی‌شود."; 
 
 // ---------- event normalisation (webhook shapes: {update}, {inline_message}, or a bare update)
 const bad = (o, k) => o && typeof o === "object" && o[k] === true;
@@ -136,7 +136,7 @@ async function rubika(env, method, payload) {
   if (timing) timing.rubika_calls += 1;
   const startedAt = performance.now();
   try {
-    await assertPanelEventCurrent(env);
+    if (method !== "deleteMessage") await assertPanelEventCurrent(env);
     let res;
     try {
       res = await fetch(RUBIKA_API + "/" + env.RUBIKA_TOKEN + "/" + method, {
@@ -158,7 +158,20 @@ async function rubika(env, method, payload) {
         : "http_" + res.status;
       throw new PanelError("rubika_" + methodName + "_" + statusCode);
     }
-    await assertPanelEventCurrent(env);
+    if (method !== "deleteMessage") {
+      try {
+        await assertPanelEventCurrent(env);
+      } catch (error) {
+        // A sendMessage may have succeeded after a newer panel event overtook it.
+        // Remove that late response so its stale keypad cannot remain actionable.
+        const staleMid = data && data.data && data.data.message_id;
+        if (error instanceof StalePanelEvent && method === "sendMessage" &&
+            typeof staleMid === "string" && staleMid) {
+          try { await rubika(env, "deleteMessage", { chat_id: payload && payload.chat_id, message_id: staleMid }); } catch {}
+        }
+        throw error;
+      }
+    }
     return data;
   } finally {
     if (timing) timing.rubika_ms += elapsedMs(startedAt);
@@ -179,7 +192,14 @@ async function send(env, chat, src, keypad) {
     ...(hasKeypad ? { inline_keypad: keypad } : {}),
   });
   const mid = response && response.data && response.data.message_id;
-  await assertPanelEventCurrent(env);
+  try {
+    await assertPanelEventCurrent(env);
+  } catch (error) {
+    if (error instanceof StalePanelEvent && typeof mid === "string" && mid) {
+      try { await rubika(env, "deleteMessage", { chat_id: chat, message_id: mid }); } catch {}
+    }
+    throw error;
+  }
   if (typeof mid === "string" && mid) {
     try { await setState(env, "panel_mid", mid); } catch { /* keep delivery successful if state storage is temporarily unavailable */ }
   }
@@ -209,6 +229,28 @@ async function edit(env, chat, mid, src, keypad) {
   const base = { chat_id: chat, message_id: targetMid, text: f.text };
   const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
     keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
+  const syncMode = await getState(env, "panel_sync_mode", "atomic");
+  // Atomic mode sends the full text+keypad together. Only explicit "inplace" opts into two edits.
+  if (syncMode !== "inplace") {
+    try {
+      const replacement = await send(env, chat, src, hasKeypad ? keypad : undefined);
+      const replacementMid = responseMessageId(replacement);
+      await assertPanelEventCurrent(env);
+      await deletePreviousPanel(env, chat, targetMid, replacementMid);
+      try { await bumpCounter(env, "panel_edit_ok"); } catch { /* metrics must never block panel sync */ }
+      try { await bumpCounter(env, "atomic_ok"); } catch { /* metrics must never block panel sync */ }
+      return replacementMid;
+    } catch (error) {
+      if (error instanceof StalePanelEvent) throw error;
+      const code = error && typeof error.code === "string" && /^[a-z0-9_-]{1,80}$/i.test(error.code)
+        ? error.code.toLowerCase() : "panel_atomic_failed";
+      try { await setState(env, "last_error", code); } catch { /* best effort diagnostics */ }
+      try { await bumpCounter(env, "panel_edit_fail"); } catch { /* best effort diagnostics */ }
+      try { await bumpCounter(env, "atomic_fail"); } catch { /* best effort diagnostics */ }
+      // Do not fall back to in-place edits: the current panel remains intact on send failure.
+      return targetMid;
+    }
+  }
   try {
     const updateKeypad = async () => {
       if (!hasKeypad) return;
@@ -419,6 +461,10 @@ async function debugText(env) {
   const editOk = await readCounter("panel_edit_ok");
   const editFail = await readCounter("panel_edit_fail");
   const staleSkip = await readCounter("panel_stale_skip");
+  const atomicOk = await readCounter("atomic_ok");
+  const atomicFail = await readCounter("atomic_fail");
+  const storedMode = await getState(env, "panel_sync_mode", "atomic");
+  const panelSyncMode = storedMode === "inplace" ? "inplace" : "atomic";
   let timings = [];
   try {
     const parsed = JSON.parse(await getState(env, "last_timings", "[]"));
@@ -442,6 +488,9 @@ async function debugText(env) {
     "panel_edit_ok: " + editOk,
     "panel_edit_fail: " + editFail,
     "panel_stale_skip: " + staleSkip,
+    "panel_sync_mode: " + panelSyncMode,
+    "atomic_ok: " + atomicOk,
+    "atomic_fail: " + atomicFail,
     "last_timings: " + JSON.stringify(timings),
     "last_event:",
     "kind: " + (clean(event && event.kind, 16) || "none"),
@@ -808,9 +857,46 @@ async function processEvent(env, selfFetch, origin, ev) {
     const seq = await nextPanelSeq(timedEnv);
     Object.defineProperty(timedEnv, PANEL_SEQ, { value: seq });
     const ui = { env: timedEnv, chat: ev.chat, selfFetch, origin };
-    if (ev.kind === "click") { await render(ui, ev.button, { clickedMid: ev.mid }); return; }
+    if (ev.kind === "click") {
+      const currentPanelMid = await getState(timedEnv, "panel_mid", "");
+      const isMobJobAction = /^p_mob_(?:publish|edit|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || ""));
+      if (String(ev.mid || "") !== currentPanelMid && !isMobJobAction) {
+        try { if (ev.mid) await rubika(timedEnv, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch {}
+        const staleButton = String(ev.button || "");
+        // Never execute confirmation/destructive actions from an old message.
+        let refreshId = staleButton;
+        if (["p_mob_confirm", "p_mob_cancel", "p_links_clear", "p_links_clear_yes"].includes(staleButton)) refreshId = "p_links";
+        else if (staleButton === "p_mob_edit_cancel") refreshId = "p_mob";
+        else if (!isScreenId(staleButton) &&
+          !["p_home", "p_status", "p_queue", "p_qs", "p_ai", "p_report", "p_mob", "p_help", "p_debug"].includes(staleButton)) {
+          refreshId = "p_home";
+        }
+        await render(ui, refreshId, { fresh: true });
+        return;
+      }
+      await render(ui, ev.button, { clickedMid: ev.mid });
+      return;
+    }
     const word = ev.text.split(/\s+/)[0].split("@")[0].toLowerCase();
     if (word === "/register") { await registerWebhook(timedEnv, origin); await send(timedEnv, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
+    if (word === "/panelmode") {
+      const match = /^\/panelmode\s+(atomic|inplace)\s*$/i.exec(ev.text);
+      if (!safeEqual(owner || "", ev.chat)) {
+        try { await rubika(timedEnv, "sendMessage", { chat_id: ev.chat, text: "فقط مالک اصلی اجازهٔ تغییر حالت پنل را دارد." }); } catch {}
+        return;
+      }
+      if (!match) {
+        const currentMode = (await getState(timedEnv, "panel_sync_mode", "atomic")) === "inplace" ? "inplace" : "atomic";
+        const currentMid = await getState(timedEnv, "panel_mid", "");
+        await sendFreshPanel(ui, "حالت فعلی پنل: " + currentMode + "\nاستفاده: /panelmode atomic یا /panelmode inplace", HOME_KB, currentMid);
+        return;
+      }
+      const mode = match[1].toLowerCase();
+      await setState(timedEnv, "panel_sync_mode", mode);
+      const currentMid = await getState(timedEnv, "panel_mid", "");
+      await sendFreshPanel(ui, "✅ حالت همگام‌سازی پنل تغییر کرد: **" + mode + "**", HOME_KB, currentMid);
+      return;
+    }
     if (COMMANDS[word]) { await render(ui, COMMANDS[word], { fresh: true }); return; }
     const activeMode = await getState(timedEnv, "mode", "idle");
     if (activeMode === "waiting_mob_caption_edit") {

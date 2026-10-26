@@ -1390,7 +1390,8 @@ class PanelFakeStatement {
 class PanelFakeDB {
   constructor() {
     this.ownerChat = null;
-    this.state = new Map();
+    // Legacy panel tests opt into the explicit in-place mode; atomic behavior has dedicated tests below.
+    this.state = new Map([["panel_sync_mode", "inplace"]]);
     this.events = new Set();
     this.links = [];
     this.linkDeleteCalls = 0;
@@ -1707,10 +1708,11 @@ async function postPanelUpdate(state, update, secret) {
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
     assert.equal(state.DB.state.get("panel_edit_ok") || "0", "0");
     assert.equal(state.DB.state.get("panel_edit_fail") || "0", "0");
-    assert.equal(calls.some(call => call.payload.message_id === "clicked-event-original-9876"), false);
+    assert.equal(calls.some(call => call.method !== "deleteMessage" && call.payload.message_id === "clicked-event-original-9876"), false);
     assert.equal(calls.filter(call => call.method === "editMessageText").length, 0);
     assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 0);
-    assert.equal(calls.every(call => !("message_id" in call.payload) || call.payload.message_id === "mock-reply-1"), true);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "clicked-event-original-9876"), true);
+    assert.equal(calls.every(call => call.method === "deleteMessage" || !("message_id" in call.payload) || call.payload.message_id === "mock-reply-1"), true);
     const stored = state.DB.state.get("last_event");
     assert.equal(stored.includes("b0actualowner"), false);
     assert.equal(stored.includes("clicked-event-original-9876"), false);
@@ -1727,7 +1729,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "status-click-4321", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
+        message_id: "old-live-panel-4321", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_edit_failed");
@@ -1756,7 +1758,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "status-click-3322", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
+        message_id: "old-http-panel-3322", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_http_503");
@@ -1805,26 +1807,214 @@ async function postPanelUpdate(state, update, secret) {
 }
 
 
-// Stale button clicks must edit the saved panel message, never the message that carried the click.
+// Atomic mode sends the whole text+keypad as one Rubika message; missing mode defaults to atomic.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.delete("panel_sync_mode");
+    state.DB.state.set("panel_mid", "atomic-old-panel-001");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "atomic-old-panel-001", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_status" },
+      } },
+    }, secret);
+    const sent = calls.filter(call => call.method === "sendMessage");
+    assert.equal(sent.length, 1);
+    assert.ok(sent[0].payload.inline_keypad?.rows?.some(row => row.buttons?.length));
+    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "atomic-old-panel-001"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(state.DB.state.get("panel_sync_mode") || "atomic", "atomic");
+    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+    assert.equal(state.DB.state.get("atomic_ok"), "1");
+    assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
+  });
+}
+
+// A late first Rubika response is deleted after the newer event wins; old text/buttons cannot become current again.
+{
+  let signalSlowStarted;
+  const slowStarted = new Promise(resolve => { signalSlowStarted = resolve; });
+  let releaseSlow;
+  const slowGate = new Promise(resolve => { releaseSlow = resolve; });
+  let sendCount = 0;
+  const responder = async ({ method }) => {
+    if (method !== "sendMessage") return null;
+    sendCount += 1;
+    if (sendCount === 1) {
+      signalSlowStarted();
+      await slowGate;
+      return new Response(JSON.stringify({ status: "OK", data: { message_id: "slow-stale-panel-01" } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ status: "OK", data: { message_id: "fast-current-panel-02" } }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  };
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "race-base-panel-0101");
+    const secret = await panel.hookSecret(state);
+    const click = (button, messageId) => ({
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+      } },
+    });
+    const first = postPanelUpdate(state, click("p_status", "race-base-panel-0101"), secret);
+    await slowStarted;
+    await postPanelUpdate(state, click("p_qs", "race-base-panel-0101"), secret);
+    releaseSlow();
+    await first;
+    assert.equal(state.DB.state.get("panel_mid"), "fast-current-panel-02");
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "slow-stale-panel-01"), true);
+    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
+    assert.equal(state.DB.state.get("atomic_ok"), "1");
+    assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 2);
+  }, responder);
+}
+
+// A duplicate tap with the same event key is idempotently ignored.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "double-tap-panel-0202");
+    const secret = await panel.hookSecret(state);
+    const update = {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "double-tap-panel-0202", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_status" },
+      } },
+    };
+    await postPanelUpdate(state, update, secret);
+    await postPanelUpdate(state, update, secret);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(calls.some(call => call.method === "editMessageKeypad" || call.method === "editMessageText"), false);
+  });
+}
+
+// When replacement send fails in atomic mode, keep the previous coherent panel and never start an in-place edit.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "atomic-send-failure-old");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "atomic-send-failure-old", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_status" },
+      } },
+    }, secret);
+    assert.equal(state.DB.state.get("panel_mid"), "atomic-send-failure-old");
+    assert.equal(state.DB.state.get("last_error"), "rubika_sendmessage_send_failed");
+    assert.equal(state.DB.state.get("atomic_fail"), "1");
+    assert.equal(state.DB.state.get("atomic_ok") || "0", "0");
+    assert.equal(state.DB.state.get("panel_edit_fail"), "1");
+    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "atomic-send-failure-old"), false);
+  }, ({ method }) => method === "sendMessage"
+    ? new Response(JSON.stringify({ status: "SEND_FAILED" }), { status: 200 })
+    : null);
+}
+
+// A best-effort old-panel delete failure must not corrupt the newly sent atomic panel.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "atomic-delete-failure-old");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "atomic-delete-failure-old", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_status" },
+      } },
+    }, secret);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "atomic-delete-failure-old"), true);
+    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
+    assert.equal(state.DB.state.get("atomic_ok"), "1");
+    assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
+  }, ({ method }) => method === "deleteMessage"
+    ? new Response(JSON.stringify({ status: "DELETE_FAILED" }), { status: 200 })
+    : null);
+}
+
+// /panelmode can be changed only by the primary owner.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "panelmode-old-panel");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "panelmode-command-1", chat_id: "b0actualowner", text: "/panelmode atomic",
+      } },
+    }, secret);
+    assert.equal(state.DB.state.get("panel_sync_mode"), "atomic");
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "panelmode-old-panel"), true);
+    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
+  });
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.consoleOwners.set(2, { id: 2, chat_id: "b0viewer", role: "viewer", enabled: 1 });
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "primary-owner-panel-stays");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0viewer", new_message: {
+        message_id: "viewer-panelmode-1", chat_id: "b0viewer", text: "/panelmode inplace",
+      } },
+    }, secret);
+    assert.equal(state.DB.state.get("panel_sync_mode"), "atomic");
+    assert.equal(state.DB.state.get("panel_mid"), "primary-owner-panel-stays");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+  });
+}
+
+// A stale confirm button is never executed; stale messages are deleted and the safe related page is refreshed.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
     state.DB.state.set("panel_mid", "latest-live-panel-9876");
+    state.DB.state.set("panel_mob_pending_link_id", "1");
+    state.DB.links.push({
+      id: 1, url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+      external_id: "2107878755079213476", status: "pending", created_at: new Date().toISOString(),
+      confirmed_at: null, updated_at: new Date().toISOString(),
+    });
+    state.DB.nextPanelLinkId = 2;
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
         message_id: "stale-click-message-1234", chat_id: "b0actualowner",
-        text: "", aux_data: { button_id: "p_home" },
+        text: "", aux_data: { button_id: "p_mob_confirm" },
       } },
     }, secret);
-    const editCalls = calls.filter(call => call.method === "editMessageText" || call.method === "editMessageKeypad");
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
-    assert.equal(editCalls.length, 2);
-    assert.equal(editCalls.every(call => call.payload.message_id === "latest-live-panel-9876"), true);
-    assert.equal(editCalls.some(call => call.payload.message_id === "stale-click-message-1234"), false);
-    assert.equal(state.DB.state.get("panel_mid"), "latest-live-panel-9876");
-    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+    assert.equal(state.DB.links[0].status, "pending", "stale confirm must not mutate the link");
+    assert.equal(state.DB.consoleJobs.size, 0, "stale confirm must not create a job");
+    assert.equal(state.DB.state.get("panel_mob_pending_link_id"), "1");
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "stale-click-message-1234"), true);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "latest-live-panel-9876"), true);
+    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
   });
 }
 
@@ -1837,7 +2027,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "ordered-click-2468", chat_id: "b0actualowner",
+        message_id: "ordered-live-panel-2468", chat_id: "b0actualowner",
         text: "", aux_data: { button_id: "p_links" },
       } },
     }, secret);
@@ -1858,7 +2048,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "keypad-retry-click-1357", chat_id: "b0actualowner",
+        message_id: "old-keypad-panel-1357", chat_id: "b0actualowner",
         text: "", aux_data: { button_id: "p_links" },
       } },
     }, secret);
@@ -1932,7 +2122,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "status-click-single-1", chat_id: "b0actualowner",
+        message_id: "existing-live-status-4321", chat_id: "b0actualowner",
         text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
@@ -2199,6 +2389,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
     state.DB.links = [{ url: "https://x.com/Test/status/2107878755079213476", status: "queued", created_at: "2026-10-24T05:00:00Z" }];
+    state.DB.state.set("panel_sync_mode", "atomic");
     state.DB.state.set("panel_mid", "link-confirmation-panel");
     const secret = await panel.hookSecret(state);
     const click = async (button, messageId) => postPanelUpdate(state, {
@@ -2206,16 +2397,19 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
         message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
       } },
     }, secret);
-    await click("p_links_clear_yes", "direct-yes-1");
+    await click("p_links_clear_yes", "link-confirmation-panel");
     assert.equal(state.DB.links.length, 1, "direct confirmation ID must not delete links");
     assert.equal(state.DB.linkDeleteCalls, 0);
-    await click("p_links_clear", "open-confirm-2");
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    await click("p_links_clear", "mock-reply-1");
     assert.equal(state.DB.links.length, 1, "opening confirmation must not delete links");
-    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("پاک شود؟"), true);
-    await click("p_links_clear_yes", "confirmed-yes-3");
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("پاک شود؟"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-2");
+    await click("p_links_clear_yes", "mock-reply-2");
     assert.equal(state.DB.links.length, 0, "confirmed action should clear links");
     assert.equal(state.DB.linkDeleteCalls, 1);
-    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("پاک شدند"), true);
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("پاک شدند"), true);
+    assert.equal(calls.some(call => call.method === "editMessageKeypad"), false);
   });
 }
 
