@@ -188,7 +188,8 @@ def _read_response(response: Any) -> dict[str, Any]:
     diagnostics = {"http_status": status} if type(status) is int else {}
     if status != 200:
         code = "http_5xx" if type(status) is int and 500 <= status <= 599 else "http_" + str(status)
-        raise ProviderClientError(code, outcome="unknown", diagnostics=diagnostics)
+        outcome = "unknown" if type(status) is int and (status >= 500 or 300 <= status < 400) else "failed"
+        raise ProviderClientError(code, outcome=outcome, diagnostics=diagnostics)
     raw = response.read(MAX_RESPONSE_BYTES + 1)
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ProviderClientError(
