@@ -24,7 +24,7 @@ jobs:
       RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
       MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
       MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
-      RUBIKA_CHANNEL_GUID: c0EFohK0f3174377fb6fa422d3ccb230
+      RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
       COBALT_API_URL: http://127.0.0.1:9000/
       RELAY_BASE_URL: ${{ secrets.RELAY_BASE_URL }}
       RELAY_API_TOKEN: ${{ secrets.RELAY_API_TOKEN }}
