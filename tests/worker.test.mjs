@@ -1729,7 +1729,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "status-click-4321", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
+        message_id: "old-live-panel-4321", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_edit_failed");
@@ -1758,7 +1758,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "status-click-3322", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
+        message_id: "old-http-panel-3322", chat_id: "b0actualowner", text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_http_503");
@@ -2027,7 +2027,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "ordered-click-2468", chat_id: "b0actualowner",
+        message_id: "ordered-live-panel-2468", chat_id: "b0actualowner",
         text: "", aux_data: { button_id: "p_links" },
       } },
     }, secret);
@@ -2048,7 +2048,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "keypad-retry-click-1357", chat_id: "b0actualowner",
+        message_id: "old-keypad-panel-1357", chat_id: "b0actualowner",
         text: "", aux_data: { button_id: "p_links" },
       } },
     }, secret);
@@ -2122,7 +2122,7 @@ async function postPanelUpdate(state, update, secret) {
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "status-click-single-1", chat_id: "b0actualowner",
+        message_id: "existing-live-status-4321", chat_id: "b0actualowner",
         text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
