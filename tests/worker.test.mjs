@@ -8,8 +8,11 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const screensSource = fs.readFileSync(path.join(root, "src/panel_screens.js"), "utf8");
 const screensModuleUrl = "data:text/javascript;base64," + Buffer.from(screensSource).toString("base64");
+const settingsSource = fs.readFileSync(path.join(root, "src/panel_settings.js"), "utf8");
+const settingsModuleUrl = "data:text/javascript;base64," + Buffer.from(settingsSource).toString("base64");
 const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8")
-  .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";');
+  .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
+  .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";');
 const panelModuleUrl = "data:text/javascript;base64," + Buffer.from(panelSource).toString("base64");
 const importedPanel = await import(panelModuleUrl);
 const screens = await import(screensModuleUrl);
@@ -1270,6 +1273,12 @@ class PanelFakeStatement {
       const value = this.db.state.get(this.values[0]);
       return value === undefined ? null : { value };
     }
+    if (this.sql.includes("SELECT version, rules_json FROM console_rules WHERE id = 1")) {
+      return this.db.consoleRules ? { ...this.db.consoleRules } : null;
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM items WHERE status = 'sent' AND sent_at >= ?")) {
+      return { c: this.db.itemsSentToday };
+    }
     if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) {
       return { c: this.db.links.length };
     }
@@ -1305,6 +1314,21 @@ class PanelFakeStatement {
     return { results: [] };
   }
   async run() {
+    if (this.sql.startsWith("UPDATE console_rules SET version = version + 1")) {
+      if (this.db.conflictConsoleRulesUpdate) {
+        this.db.conflictConsoleRulesUpdate = false;
+        this.db.consoleRules.version += 1;
+        return { meta: { changes: 0 } };
+      }
+      const [rulesJson, updatedAt, expectedVersion] = this.values;
+      if (!this.db.consoleRules || Number(this.db.consoleRules.version) !== Number(expectedVersion)) {
+        return { meta: { changes: 0 } };
+      }
+      this.db.consoleRules.version += 1;
+      this.db.consoleRules.rules_json = String(rulesJson);
+      this.db.consoleRules.updated_at = updatedAt;
+      return { meta: { changes: 1 } };
+    }
     if (this.sql.startsWith("DELETE FROM panel_links")) {
       const count = this.db.links.length;
       this.db.links = [];
@@ -1380,7 +1404,9 @@ class PanelFakeStatement {
     }
     if (this.sql.startsWith("INSERT INTO brain_events") && this.sql.includes("SELECT NULL")) {
       if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
-      const code = this.sql.includes("'console_owner_claim_bootstrap'") ? "console_owner_claim_bootstrap" : "console_owner_claim";
+      const code = this.sql.includes("'console_owner_claim_bootstrap'") ? "console_owner_claim_bootstrap"
+        : this.sql.includes("'console_rules_update'") ? "console_rules_update"
+        : "console_owner_claim";
       this.db.brainEvents.push({ code, level: "info", details_json: this.values[0] });
       return { meta: { changes: 1 } };
     }
@@ -1390,6 +1416,18 @@ class PanelFakeStatement {
 class PanelFakeDB {
   constructor() {
     this.ownerChat = null;
+    this.consoleRules = {
+      version: 1,
+      rules_json: JSON.stringify({
+        daily_success_cap: 4,
+        publishing_enabled: true,
+        test_channel_only: false,
+        quiet_hours: { start: "20:00", end: "07:00" },
+      }),
+      updated_at: null,
+    };
+    this.itemsSentToday = 3;
+    this.conflictConsoleRulesUpdate = false;
     // Legacy panel tests opt into the explicit in-place mode; atomic behavior has dedicated tests below.
     this.state = new Map([["panel_sync_mode", "inplace"]]);
     this.events = new Set();
