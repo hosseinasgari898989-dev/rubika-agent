@@ -860,7 +860,7 @@ async function processEvent(env, selfFetch, origin, ev) {
     if (ev.kind === "click") {
       const currentPanelMid = await getState(timedEnv, "panel_mid", "");
       const isMobJobAction = /^p_mob_(?:publish|edit|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || ""));
-      if (currentPanelMid && String(ev.mid || "") !== currentPanelMid && !isMobJobAction) {
+      if (String(ev.mid || "") !== currentPanelMid && !isMobJobAction) {
         try { if (ev.mid) await rubika(timedEnv, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch {}
         const staleButton = String(ev.button || "");
         // Never execute confirmation/destructive actions from an old message.
