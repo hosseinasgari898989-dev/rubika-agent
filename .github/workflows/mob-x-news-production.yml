@@ -51,7 +51,7 @@ jobs:
           publishing = cfg.get("publishing", {})
           if not (publishing.get("enabled") is True and publishing.get("mode") == "production" and publishing.get("production_enabled") is True):
               raise SystemExit("Mob production publishing is not explicitly enabled in config.")
-          if publishing.get("target_channel_guid") != "c0EFohK0f3174377fb6fa422d3ccb230" or publishing.get("max_posts_per_run") != 1:
+          if publishing.get("target_channel_guid_sha256") != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" or publishing.get("max_posts_per_run") != 1:
               raise SystemExit("Mob production publishing must remain locked to the fixed test channel and one-post config cap.")
           print("Mob-only launch boundary, production config, and fixed test destination verified.")
           PY
@@ -67,8 +67,9 @@ jobs:
             missing=1
           fi
           if [[ "$missing" -ne 0 ]]; then exit 2; fi
-          if [[ "$RUBIKA_CHANNEL_GUID" != "c0EFohK0f3174377fb6fa422d3ccb230" ]]; then
-            echo "::error::Production Mob publishing is locked to the configured fixed test channel."
+          actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
+          if [[ "$actual_hash" != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then
+            echo "::error::Production Mob publishing is locked to the registered test-channel hash."
             exit 2
           fi
 
