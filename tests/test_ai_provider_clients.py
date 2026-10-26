@@ -206,21 +206,22 @@ class ProviderClientTests(unittest.TestCase):
             "https://api.groq.com/openai/v1/chat/completions",
         )
         cases = [
-            (FakeOpener(error=TimeoutError("private timeout detail")), "timeout"),
-            (FakeOpener(error=URLError("private network detail")), "network"),
-            (FakeOpener(error=URLError(TimeoutError("private wrapped timeout"))), "timeout"),
-            (FakeOpener(response=FakeResponse(None, status=429)), "http_429"),
-            (FakeOpener(response=FakeResponse(None, status=502)), "http_5xx"),
-            (FakeOpener(response=FakeResponse(None, raw=b"{not-json")), "bad_json"),
-            (FakeOpener(response=FakeResponse({"unexpected": True})), "bad_response"),
+            (FakeOpener(error=TimeoutError("private timeout detail")), "timeout", "unknown"),
+            (FakeOpener(error=URLError("private network detail")), "network", "unknown"),
+            (FakeOpener(error=URLError(TimeoutError("private wrapped timeout"))), "timeout", "unknown"),
+            (FakeOpener(response=FakeResponse(None, status=429)), "http_429", "failed"),
+            (FakeOpener(response=FakeResponse(None, status=502)), "http_5xx", "unknown"),
+            (FakeOpener(response=FakeResponse(None, raw=b"{not-json")), "bad_json", "unknown"),
+            (FakeOpener(response=FakeResponse({"unexpected": True})), "bad_response", "unknown"),
+            (FakeOpener(response=FakeResponse(None, raw=b"x" * (clients.MAX_RESPONSE_BYTES + 1))), "response_too_large", "unknown"),
         ]
-        for opener, expected_code in cases:
+        for opener, expected_code, expected_outcome in cases:
             with self.subTest(expected_code=expected_code):
                 with patch.object(clients.urllib.request, "build_opener", return_value=opener):
                     with self.assertRaises(clients.ProviderClientError) as caught:
                         clients.invoke_provider(config, "safe prompt")
                 self.assertEqual(caught.exception.code, expected_code)
-                self.assertEqual(caught.exception.outcome, "unknown")
+                self.assertEqual(caught.exception.outcome, expected_outcome)
                 self.assertNotIn("private", str(caught.exception))
 
     def test_http_429_keeps_existing_rate_limited_ledger_cooldown_code(self):
