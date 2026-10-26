@@ -8,7 +8,7 @@
 - Do not assume this markdown commit changes the application code.
 
 ## Non-negotiable publishing safety
-- Authorized test channel only: `c0EFohK0f3174377fb6fa422d3ccb230`
+- Authorized test channel only: the existing secret; its SHA-256 must match the registered test-channel pin.
 - Production/main-channel publishing remains disabled.
 - One post maximum per run.
 - Never claim delivery without a successful run report plus a D1 `status=sent` row with Rubika message ID.
@@ -78,7 +78,7 @@ TikTok end-to-end test also verified:
 - Other source lanes were filtered out for publishing despite being read by the merge; actual trial was explicitly restricted to X.
 
 ### Safety state unchanged
-- Only authorized destination: `c0EFohK0f3174377fb6fa422d3ccb230`.
+- Only authorized destination: the existing secret, accepted only when its SHA-256 matches the registered test-channel pin.
 - Production/main-channel publishing remains disabled; limit stays at one post per trial run.
 - TikTok `tiktok:7694421166508838165` remains `uncertain`; do not automatically retry.
 - Next step: monitor ongoing free-source reliability and improve fallback resilience if the profile endpoint is unavailable. Any code change to `agent/discovery/termux_mob_x.py` triggers Brain CI, the read-only live check, and the one-post test-channel trial; prepare tests before a single atomic push.
