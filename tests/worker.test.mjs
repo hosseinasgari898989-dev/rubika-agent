@@ -1691,7 +1691,7 @@ async function postPanelUpdate(state, update, secret) {
   });
 }
 
-// A click with no existing panel creates one tracked message; every report stage edits that same message.
+// A click with no existing panel creates one tracked report; status, queue, and AI are gathered in parallel.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -1705,15 +1705,12 @@ async function postPanelUpdate(state, update, secret) {
     }, secret);
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
-    assert.equal(state.DB.state.get("panel_edit_ok"), "4");
+    assert.equal(state.DB.state.get("panel_edit_ok") || "0", "0");
     assert.equal(state.DB.state.get("panel_edit_fail") || "0", "0");
     assert.equal(calls.some(call => call.payload.message_id === "clicked-event-original-9876"), false);
-    assert.equal(calls.filter(call => call.method === "editMessageText").length >= 4, true);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 0);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 0);
     assert.equal(calls.every(call => !("message_id" in call.payload) || call.payload.message_id === "mock-reply-1"), true);
-    for (const call of calls.filter(call => call.method === "editMessageKeypad")) {
-      assert.equal(Array.isArray(call.payload.inline_keypad.rows), true);
-      assert.equal(call.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0), true);
-    }
     const stored = state.DB.state.get("last_event");
     assert.equal(stored.includes("b0actualowner"), false);
     assert.equal(stored.includes("clicked-event-original-9876"), false);
