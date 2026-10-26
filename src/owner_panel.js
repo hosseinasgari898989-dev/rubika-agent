@@ -675,7 +675,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     const rows = Array.isArray(s.rows) && s.rows.some((row) => Array.isArray(row) && row.length > 0)
       ? s.rows : HOME_ONLY;
     const keypad = kb(rows);
-    if (fresh) return sendFreshPanel(ui, s.text, keypad, previousMid);
+    if (fresh && ["p_errors", "p_runs", "p_links", "p_digest"].includes(id)) return sendFreshPanel(ui, s.text, keypad, previousMid);
     if (targetMid) return edit(env, chat, targetMid, s.text, keypad);
     return send(env, chat, s.text, keypad);
   }
