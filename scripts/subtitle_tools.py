@@ -48,15 +48,22 @@ def format_srt(cues: list) -> str:
 
 
 def make_batches(cues: list, max_chars: int = 3000, max_cues: int = 60) -> list:
-    """Split cues into (start_index, [texts]) batches to keep each AI call small."""
+    """Split cues so numbered requests, including cue IDs and newlines, stay bounded."""
+    if max_chars < 1 or max_cues < 1:
+        raise ValueError("invalid_subtitle_batch_limits")
     batches, cur, size, start = [], [], 0, 0
     for i, (_, _, t) in enumerate(cues):
-        flat = " ".join(t.split())
-        if cur and (size + len(flat) > max_chars or len(cur) >= max_cues):
+        flat = " ".join(str(t).split())
+        # A serialized line is "N|text" plus a newline separator. Count one extra
+        # character per cue so the final numbered request cannot exceed max_chars.
+        cost = len(flat) + len(str(i)) + 2
+        if cost > max_chars:
+            raise ValueError("subtitle_cue_too_long")
+        if cur and (size + cost > max_chars or len(cur) >= max_cues):
             batches.append((start, cur))
             cur, size, start = [], 0, i
         cur.append(flat)
-        size += len(flat)
+        size += cost
     if cur:
         batches.append((start, cur))
     return batches
