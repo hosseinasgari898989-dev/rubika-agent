@@ -29,7 +29,7 @@ const AI_PROVIDERS = new Set(["groq", "openrouter"]);
 const AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch", "translate_official"]);
 const EDITABLE_REVIEW = new Set(["pending", "rejected", "needs_review"]); // "approved" is never set from the console
 const LOCKED_ITEM_STATUSES = new Set(["sending", "sent"]);
-const SOURCE_PLATFORMS = new Set(["tiktok", "x", "mob_official"]);
+const SOURCE_PLATFORMS = new Set(["tiktok", "x"]);
 const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
 
 export async function handleConsoleApi(request, env, h) {
@@ -133,7 +133,7 @@ export async function handleConsoleApi(request, env, h) {
       const q = text(url.searchParams.get("q"), 80);
       if (status && !ITEM_STATUSES.has(status)) return fail("invalid_status", 400);
       if (platform && !PLATFORMS.has(platform)) return fail("invalid_platform", 400);
-      const conds = [], args = [];
+      const conds = ["platform IN ('tiktok','mob_official')"], args = [];
       if (status) { conds.push("status = ?"); args.push(status); }
       if (platform) { conds.push("platform = ?"); args.push(platform); }
       if (q) { conds.push("(title LIKE ? ESCAPE '\\' OR canonical_url LIKE ? ESCAPE '\\' OR external_id LIKE ? ESCAPE '\\')"); args.push(like(q), like(q), like(q)); }
@@ -767,7 +767,7 @@ export async function handleConsoleApi(request, env, h) {
 
     // ---------- sources (X / TikTok / Mob official compatibility) ----------
     if (sub === "/sources" && m === "GET") {
-      const items = await all("SELECT id, platform, source_key, display_name, enabled, created_at, last_checked_at, last_seen_published_at FROM sources ORDER BY platform, source_key LIMIT 500");
+      const items = await all("SELECT id, platform, source_key, display_name, enabled, created_at, last_checked_at, last_seen_published_at FROM sources WHERE platform IN ('tiktok','mob_official') ORDER BY platform, source_key LIMIT 500");
       return json({ ok: true, items });
     }
     if (sub === "/sources" && m === "POST") {
@@ -775,9 +775,9 @@ export async function handleConsoleApi(request, env, h) {
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const b = parsed.value;
       const requestedPlatform = text(b.platform, 24);
+      if (!SOURCE_PLATFORMS.has(requestedPlatform)) return fail("invalid_platform", 400);
       const platform = requestedPlatform === "x" ? "mob_official" : requestedPlatform;
       const key = text(b.source_key, 200);
-      if (!SOURCE_PLATFORMS.has(platform)) return fail("invalid_platform", 400);
       if (!/^[A-Za-z0-9._@:/-]{1,200}$/.test(key)) return fail("invalid_source_key", 400);
       const id = platform + ":" + key.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
       const exists = await first("SELECT id FROM sources WHERE platform = ? AND source_key = ?", platform, key);
