@@ -15,7 +15,7 @@ This file summarizes the active main-branch architecture. Older phone-only disco
 
 ### Official Mob Entertainment news
 
-- This is a separate legacy content track. Active official-Mob discovery is X-only; inactive non-X source entries are removed from the source registry while existing `mob_official` handlers remain for compatibility.
+- This is a separate official-news track. Intake accepts only canonical X status URLs from the exact `mobgamesstudios` handle; non-X source lanes and direct `mob_official` source registration are rejected.
 - The X path checks the authoritative publication timestamp, author identity, canonical URL and actual attached media. For publication, the news item's verified published_at must fall inside the five-hour news-only window; GitHub commit time is not used as a proxy for publication time.
 - Captions preserve source text and require a valid Persian translation when the caption is available. Outgoing captions are checked to ensure they have no URL. Actual media must be downloaded and validated before sending.
 - Several eligible X posts in one five-hour window can be processed one at a time with deduplication. An ambiguous Rubika delivery stops the run to avoid duplicates.
