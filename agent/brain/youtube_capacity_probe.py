@@ -442,7 +442,7 @@ def _stream_upload(upload_url: str, media_path: Path, filename: str) -> str:
         conn = http.client.HTTPSConnection(
             parsed.hostname, port=parsed.port or 443, timeout=UPLOAD_TIMEOUT_SECONDS
         )
-        conn.putrequest("POST", target)
+        conn.putrequest("POST", target, skip_host=True)
         host_header = parsed.hostname if parsed.port in (None, 443) else f"{parsed.hostname}:{parsed.port}"
         conn.putheader("Host", host_header)
         conn.putheader("User-Agent", "rubika-agent-capacity-probe/1.0")
