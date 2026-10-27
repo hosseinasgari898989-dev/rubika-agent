@@ -633,6 +633,16 @@ const read = async response => ({ status: response.status, body: await response.
   }), state));
   assert.equal(response.status, 409);
   assert.equal(response.body.error, "source_already_exists");
+
+  for (const platform of ["youtube", "instagram", "mob_official"]) {
+    response = await read(await worker.fetch(request("/api/console/sources", {
+      method: "POST",
+      body: { platform, source_key: "legacy-source", display_name: "Retired source" },
+    }), state));
+    assert.equal(response.status, 400, platform);
+    assert.equal(response.body.error, "invalid_platform", platform);
+  }
+  assert.equal(state.DB.sources.size, 1);
 }
 
 // Console API rejects destructive SQL, unauthorized review approval, uncertain requeue without confirmation,
