@@ -95,9 +95,20 @@ class CloudState:
             raise CloudStateError("control_api_" + safe)
         return result
 
-    def translate_official(self, source_text: str) -> str:
-        """Retired: official news translation now uses the metered Groq/OpenRouter client."""
-        raise CloudStateError("translation_route_retired")
+    def translate_official(self, source_text: str, *, kind: str = "caption", run_id: str | None = None) -> str:
+        """Last-resort translation through authenticated, D1-metered Worker AI."""
+        if kind not in {"caption","subtitle"}: raise ValueError("translation_kind_invalid")
+        if not isinstance(source_text,str) or not source_text.strip(): raise CloudStateError("translation_text_required")
+        identifier=run_id or ("mobcap_" if kind=="caption" else "mobsub_")+uuid.uuid4().hex[:32]
+        prefix="mobcap_" if kind=="caption" else "mobsub_"
+        if not re.fullmatch(prefix+r"[A-Za-z0-9_-]{8,100}",identifier): raise ValueError("translation_run_id_invalid")
+        result=self._request("POST","/api/brain/translate-official",{"text":source_text,"kind":kind,"run_id":identifier},max_body_bytes=20*1024)
+        value=result.get("translation")
+        if not isinstance(value,str) or not value.strip(): raise CloudStateError("control_api_translation_missing")
+        clean=re.sub(r"[ \t]+"," ",value).strip()
+        if not re.search(r"[\u0600-\u06FF]",clean): raise CloudStateError("control_api_translation_not_persian")
+        if re.search(r"[\u0400-\u04FF]",clean): raise CloudStateError("control_api_translation_wrong_script")
+        return clean
 
     def moderate_music(
         self,
