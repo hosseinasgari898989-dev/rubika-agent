@@ -54,7 +54,7 @@ jobs:
     name: Claim and stage one confirmed link
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - name: Checkout main safely
         uses: actions/checkout@v4
@@ -188,6 +188,15 @@ jobs:
             printf '::error::Missing repository Actions secret name(s): %s. Values were not read or printed by this check.\n' "${missing[*]}"
             exit 2
           fi
+      - name: Restore cached faster-whisper model
+        if: ${{ steps.preflight.outputs.has_job == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-mob-x-whisper-small-v1.2.1
+      - name: Install pinned speech gate runtime
+        if: ${{ steps.preflight.outputs.has_job == 'true' }}
+        run: python -m pip install --disable-pip-version-check "faster-whisper==1.2.1"
       - name: Install ffmpeg and official MEGAcmd package
         if: ${{ steps.preflight.outputs.has_job == 'true' }}
         run: |
@@ -198,6 +207,8 @@ jobs:
             --output "$package"
           sudo apt-get update
           sudo apt-get install --yes ffmpeg "$package"
+          command -v ffprobe
+          ffprobe -version
           command -v mega-login
           command -v mega-put
       - name: Log in to existing MEGA storage
