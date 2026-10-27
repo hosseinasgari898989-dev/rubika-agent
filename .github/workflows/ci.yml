@@ -60,6 +60,8 @@ jobs:
           PY
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Run subtitle tools tests
+        run: python tests/test_subtitle_tools.py
       - name: Run Cloudflare Worker unit tests
         run: node tests/worker.test.mjs
       - name: Run self-test
