@@ -65,6 +65,63 @@ class YouTubeCapacityProbeTests(unittest.TestCase):
             "youtube_unknown_failure",
         )
 
+    def test_stream_upload_emits_only_one_host_header(self):
+        instances = []
+
+        class FakeResponse:
+            status = 200
+
+            def read(self, _size):
+                return b'{"data":{"file_id":"test-file-id"}}'
+
+        class FakeConnection:
+            def __init__(self, host, port=443, timeout=None):
+                self.host = host
+                self.port = port
+                self.timeout = timeout
+                self.request = None
+                self.headers = []
+                self.response = FakeResponse()
+                instances.append(self)
+
+            def putrequest(self, method, url, **kwargs):
+                self.request = (method, url, kwargs)
+
+            def putheader(self, name, value):
+                self.headers.append((name.lower(), value))
+
+            def endheaders(self):
+                pass
+
+            def send(self, _data):
+                pass
+
+            def getresponse(self):
+                return self.response
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as folder:
+            media = Path(folder) / "test.mp4"
+            media.write_bytes(b"test media")
+            with patch.object(probe.http.client, "HTTPSConnection", FakeConnection):
+                file_id = probe._stream_upload(
+                    "https://uploads.example/upload?ticket=test",
+                    media,
+                    "test.mp4",
+                )
+
+        self.assertEqual(file_id, "test-file-id")
+        connection = instances[0]
+        self.assertEqual(
+            connection.request,
+            ("POST", "/upload?ticket=test", {"skip_host": True}),
+        )
+        host_headers = [value for name, value in connection.headers if name == "host"]
+        self.assertEqual(host_headers, ["uploads.example"])
+        self.assertTrue(any(name == "content-length" for name, _ in connection.headers))
+
     def test_ytdlp_smoke_download_selects_a_720_class_profile_for_portrait_video(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
