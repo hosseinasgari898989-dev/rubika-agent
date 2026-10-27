@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -14,6 +17,7 @@ from agent.brain.mob_x_link_processor import (
     normalize_published_at,
     parse_official_link,
     process_job,
+    process_one,
     run_video_speech_gate,
     probe_public_sources,
     select_media,
@@ -226,14 +230,59 @@ class MobXLinkParserTests(unittest.TestCase):
         self.assertEqual(result["decision"], "skip")
         self.assertEqual(result["reason"], "no_audio_track")
 
-    def test_video_speech_gate_fails_closed_if_asr_raises(self):
+    def test_video_speech_gate_fails_closed_and_preserves_safe_exception_details(self):
         inspection = Mock(duration_seconds=12.5, has_audio=True)
-        with patch(
-            "agent.brain.mob_x_link_processor.speech_gate.transcribe",
-            side_effect=RuntimeError("private ASR details"),
+        secret = "sensitive-hf-token-value"
+        message = (
+            "model download failed with token=" + secret
+            + " at https://huggingface.co/private/model?token=hidden "
+            + ("retry download " * 25)
+        )
+        with (
+            patch.dict(os.environ, {"HF_TOKEN": secret}),
+            patch(
+                "agent.brain.mob_x_link_processor.speech_gate.transcribe",
+                side_effect=RuntimeError(message),
+            ),
+            patch("builtins.print") as log,
         ):
-            with self.assertRaisesRegex(MobXLinkError, "mob_x_speech_gate_failed"):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_speech_gate_failed") as caught:
                 run_video_speech_gate("/tmp/broken-video.mp4", inspection)
+
+        self.assertEqual(caught.exception.error_class, "RuntimeError")
+        self.assertIsNotNone(caught.exception.error_detail)
+        self.assertLessEqual(len(caught.exception.error_detail), 150)
+        self.assertNotIn(secret, caught.exception.error_detail)
+        self.assertNotIn("https://", caught.exception.error_detail)
+        self.assertNotIn("token=hidden", caught.exception.error_detail)
+        diagnostic = json.loads(log.call_args.args[0])
+        self.assertEqual(diagnostic["error_code"], "mob_x_speech_gate_failed")
+        self.assertEqual(diagnostic["error_class"], "RuntimeError")
+        self.assertEqual(diagnostic["error_detail"], caught.exception.error_detail)
+
+    def test_process_one_includes_speech_gate_error_detail_in_report(self):
+        client = Mock()
+        client.claim.return_value = {"id": "job_abcdef1234567890"}
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "report.json"
+            with (
+                patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}),
+                patch("agent.brain.mob_x_link_processor.WorkerClient", return_value=client),
+                patch(
+                    "agent.brain.mob_x_link_processor.process_job",
+                    side_effect=MobXLinkError(
+                        "mob_x_speech_gate_failed",
+                        error_class="RuntimeError",
+                        error_detail="model download failed",
+                    ),
+                ),
+                patch("builtins.print"),
+            ):
+                self.assertEqual(process_one(str(report_path)), 1)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["error_code"], "mob_x_speech_gate_failed")
+        self.assertEqual(report["error_class"], "RuntimeError")
+        self.assertEqual(report["error_detail"], "model download failed")
 
     def test_caption_is_plain_and_published_time_is_normalized(self):
         self.assertEqual(clean_caption(" **Hello**\n\nhttps://example.org/a "), "Hello")

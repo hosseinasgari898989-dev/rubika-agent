@@ -258,7 +258,29 @@ jobs:
           PY
           )"
           fi
-          python -m agent.brain.owner_notify --event workflow_failed --workflow "Mob X link processor" --reason "$reason" || {
+          detail=""
+          if [ -s "$RUNNER_TEMP/mob-x-link-report.json" ]; then
+            detail="$(python - "$RUNNER_TEMP/mob-x-link-report.json" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          try:
+              value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              error_class = str(value.get("error_class") or "")
+              if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,79}", error_class):
+                  error_class = ""
+              candidate = str(value.get("error_detail") or "")
+              candidate = re.sub(r"https?://\S+", "[URL omitted]", candidate, flags=re.IGNORECASE)
+              candidate = re.sub(r"(?i)\b(?:token|password|secret|authorization|cookie|api[_-]?key)\s*[:=]\s*\S+", "[REDACTED]", candidate)
+              candidate = re.sub(r"\b[A-Za-z0-9_-]{32,}\b", "[REDACTED]", candidate)
+              candidate = re.sub(r"[\r\n\t]+", " ", candidate)
+              candidate = re.sub(r"[^A-Za-z0-9_. \-\[\]]", "_", candidate)[:150].strip()
+              print((error_class + ": " if error_class and candidate else "") + candidate)
+          except Exception:
+              print("")
+          PY
+          )"
+          fi
+          python -m agent.brain.owner_notify --event workflow_failed --workflow "Mob X link processor" --reason "$reason" --detail "$detail" || {
             echo "Owner notification unavailable; safe error code: $reason"
           }
       - name: Log out of MEGA

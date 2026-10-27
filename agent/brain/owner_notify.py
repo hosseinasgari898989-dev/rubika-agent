@@ -599,6 +599,7 @@ def main() -> int:
     parser.add_argument("--message", default="")
     parser.add_argument("--workflow", default="Rubika-Agent automation")
     parser.add_argument("--reason", default="unknown_error")
+    parser.add_argument("--detail", default="")
     args = parser.parse_args()
 
     if args.event == "digest_refresh":
@@ -608,12 +609,13 @@ def main() -> int:
             message = args.message.strip()
         elif args.event == "workflow_failed":
             reason = re.sub(r"[^A-Za-z0-9_-]", "", args.reason)[:80] or "unknown_error"
-            message = (
-                "🚨 هشدار عامل روبیکا\n"
-                f"گردش‌کار: {args.workflow[:100]}\n"
-                f"کد خطا: {reason}\n"
-                "جزئیات محرمانه در این اعلان درج نشده است."
-            )
+            detail = _sanitize_text(args.detail, 230) if args.detail.strip() else ""
+            message = "\n".join([
+                "🚨 هشدار عامل روبیکا",
+                f"گردش‌کار: {args.workflow[:100]}",
+                f"کد خطا: {reason}",
+                f"error_detail: {detail}" if detail else "جزئیات محرمانه در این اعلان درج نشده است.",
+            ])
         elif args.event == "queue_intake":
             message = "📥 دریافت فهرست جدید انجام شد."
         elif args.event == "daily_digest_start":
