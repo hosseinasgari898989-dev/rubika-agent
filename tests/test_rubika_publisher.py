@@ -150,6 +150,7 @@ class RubikaPublisherMediaTests(unittest.TestCase):
     def test_edit_caption_uses_plain_native_video_payload_without_bold_metadata(self):
         video_path = Path(self.tempdir.name) / "edit_video.mp4"
         video_path.write_bytes(b"fake-video-for-adapter-test")
+        self.assertEqual(_decorate_official_mob_caption(EDIT_CAPTION), EDIT_CAPTION)
         self.publisher.send_media(video_path, "video", EDIT_CAPTION)
         self.assertFalse(self.fake_bot.posts)
         method, payload = self.fake_bot.calls[-1]
