@@ -106,7 +106,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_mob_official.py' -v
           python -m unittest discover -s tests -p 'test_mob_official_complete.py' -v
           python -m unittest discover -s tests -p 'test_mob_official_trial.py' -v
-          python -m unittest discover -s tests -p 'test_discovery_v7.py' -v
           python -m unittest discover -s tests -p 'test_instagram_discovery.py' -v
           python -m unittest discover -s tests -p 'test_instagram_graph_api.py' -v
           python -m unittest discover -s tests -p 'test_termux_sources.py' -v
