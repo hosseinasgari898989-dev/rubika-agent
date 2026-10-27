@@ -888,13 +888,16 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.status, 400);
   assert.equal(response.body.error, "invalid_canonical_url");
 }
-{
+for (const [label, canonicalUrl] of [
+  ["YouTube", "https://www.youtube.com/watch?v=abcdefghijk"],
+  ["Instagram", "https://www.instagram.com/p/ABC123/"],
+]) {
   const state = env();
   const officialNonXPost = {
     platform: "mob_official",
     external_id: "legacy-video-id",
-    canonical_url: "https://www.youtube.com/watch?v=abcdefghijk",
-    source_key: "youtube.com",
+    canonical_url: canonicalUrl,
+    source_key: "legacy-non-x",
     status: "discovered",
     review_state: "pending",
     media_type: "video",
@@ -905,9 +908,9 @@ const read = async response => ({ status: response.status, body: await response.
   const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
     method: "POST", body: officialNonXPost,
   }), state));
-  assert.equal(response.status, 400);
-  assert.equal(response.body.error, "invalid_canonical_url");
-  assert.equal(state.DB.items.size, 0);
+  assert.equal(response.status, 400, label);
+  assert.equal(response.body.error, "invalid_canonical_url", label);
+  assert.equal(state.DB.items.size, 0, label);
 }
 {
   const state = env();
