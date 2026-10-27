@@ -44,7 +44,16 @@ def _positive_int(value: Any) -> int | None:
 
 
 def _positive_number(value: Any) -> float | None:
-    return float(value) if type(value) in (int, float) and math.isfinite(value) and value > 0 else None
+    if type(value) in (int, float):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    return number if math.isfinite(number) and number > 0 else None
 
 
 def _format_rate_bytes(duration_seconds: float, rate_kbps: Any) -> int | None:
