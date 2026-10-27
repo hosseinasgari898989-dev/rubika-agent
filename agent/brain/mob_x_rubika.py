@@ -133,6 +133,16 @@ def send_test_channel_once(
     return _send_file_once(token, destination, file_id, caption, bot_factory=bot_factory)
 
 
+def send_owner_translation_failure(token: str, owner_chat_id: str, job_id: str, *, bot_factory: Any | None = None) -> str | None:
+    """Send a private owner notice only; never publishes to any channel."""
+    if not re.fullmatch(r"job_[A-Fa-f0-9]{8,80}",str(job_id or "")): raise ValueError("mob_x_job_id_invalid")
+    if not str(owner_chat_id or "").strip(): raise RuntimeError("rubika_owner_chat_missing")
+    bot=_bot(token,bot_factory);post=getattr(bot,"_post",None)
+    if not callable(post): raise RuntimeError("rubika_send_message_api_unavailable")
+    response=_assert_ok(post("sendMessage",{"chat_id":str(owner_chat_id).strip(),"text":"⚠️ ترجمهٔ خبر رسمی Mob ناموفق شد (mob_x_translation_failed). هیچ ترجمهٔ ناقصی منتشر نشد؛ این مورد متوقف شد.","disable_notification":False,"chat_keypad_type":"None"}),"rubika_send_message_response_invalid")
+    return _message_id(response)
+
+
 def send_uncertain_notice(
     token: str, owner_chat_id: str, job_id: str, message: str, *,
     bot_factory: Any | None = None,

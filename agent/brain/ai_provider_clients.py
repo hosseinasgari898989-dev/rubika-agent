@@ -358,7 +358,8 @@ def call_provider_with_ledger(
         raise ProviderClientError("provider_role_invalid")
     config = provider_config(provider)
     ledger = usage_client or CodeAIUsageLedger.from_env()
-    reservation = ledger.reserve(provider=provider, role=role, run_id=run_id)
+    estimated_tokens = min(200_000, max(1, (len(prompt) + 3) // 4 + max_output_tokens))
+    reservation = ledger.reserve(provider=provider, role=role, run_id=run_id, estimated_tokens=estimated_tokens)
     call_id = reservation.get("call_id")
     if not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", call_id):
         raise UsageLedgerError("usage_ledger_reservation_unconfirmed")

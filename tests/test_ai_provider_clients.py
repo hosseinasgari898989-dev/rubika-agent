@@ -46,8 +46,9 @@ class FakeLedger:
         self.fail_finish = fail_finish
         self.events = []
 
-    def reserve(self, *, provider, role, run_id=None):
+    def reserve(self, *, provider, role, run_id=None, estimated_tokens=None):
         self.events.append(("reserve", provider, role, run_id))
+        self.estimated_tokens = estimated_tokens
         if self.fail_reserve:
             raise UsageLedgerError("code_ai_ledger_unavailable")
         return {"reserved": True, "call_id": "test-provider-call-0001"}

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "caption": {
+    "max_source_chars": 2100,
+    "max_output_tokens": 700,
+    "max_output_chars": 6000,
+    "daily_bucket": "caption"
+  },
+  "subtitle": {
+    "max_batch_chars": 3000,
+    "max_batch_cues": 60,
+    "max_batches": 2,
+    "max_output_tokens": 1200,
+    "max_output_chars": 9000,
+    "daily_bucket": "subtitle"
+  },
+  "daily": {
+    "translation_total_tokens": 200000,
+    "groq_total_tokens": 200000
+  }
+}
