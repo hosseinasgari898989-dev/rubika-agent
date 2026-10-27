@@ -122,7 +122,7 @@ function canonicalUrlFor(platform, value) {
   if (platform === "mob_official") {
     // Official Mob items are accepted only from the exact official X handle.
     if (!["x.com", "www.x.com"].includes(host) || parsed.search) return null;
-    const match = /^\\/mobgamesstudios\\/status\\/([0-9]{15,22})\\/?$/.exec(parsed.pathname);
+    const match = /^\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/.exec(parsed.pathname);
     if (!match) return null;
     return "https://x.com/mobgamesstudios/status/" + match[1];
   }
