@@ -31,7 +31,7 @@ class PhoneReportIntegrationTests(unittest.TestCase):
             source = root / "termux_discovery.json"
             output = root / "discovery_report.json"
             source.write_text(json.dumps(payload), encoding="utf-8")
-            with                  patch.object(runner, "discover_public_indexed_urls", side_effect=AssertionError("phone report should avoid Instagram fallback")), \
+            with patch.object(runner, "discover_public_indexed_urls", side_effect=AssertionError("phone report should avoid Instagram fallback")), \
                  patch.object(runner, "discover_official_hashtag_urls", side_effect=AssertionError("phone report should avoid Instagram API fallback")), \
                  patch.object(runner, "discover_social_urls", side_effect=AssertionError("phone report should avoid Tavily fallback")), \
                  patch.dict(os.environ, {"INSTAGRAM_GRAPH_ACCESS_TOKEN": "", "INSTAGRAM_GRAPH_USER_ID": "",
@@ -46,7 +46,7 @@ class PhoneReportIntegrationTests(unittest.TestCase):
     def test_termux_only_missing_report_does_not_run_hosted_search(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            with                  patch.object(runner, "discover_public_indexed_urls", side_effect=AssertionError("TERMUX_ONLY forbids hosted Instagram index")), \
+            with patch.object(runner, "discover_public_indexed_urls", side_effect=AssertionError("TERMUX_ONLY forbids hosted Instagram index")), \
                  patch.object(runner, "discover_official_hashtag_urls", side_effect=AssertionError("TERMUX_ONLY forbids hosted Instagram API")), \
                  patch.object(runner, "discover_social_urls", side_effect=AssertionError("TERMUX_ONLY forbids Tavily")), \
                  patch.dict(os.environ, {"TERMUX_ONLY": "true", "TAVILY_API_KEY": "",
