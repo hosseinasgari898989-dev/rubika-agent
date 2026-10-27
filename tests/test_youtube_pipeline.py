@@ -26,7 +26,7 @@ class YouTubePipelinePolicyTests(unittest.TestCase):
 
     def test_checked_in_policy_is_conservative_and_upload_limit_is_unverified(self):
         self.assertEqual(self.policy["schema_version"], 1)
-        self.assertEqual(self.policy["large_video_threshold_bytes"], 700_000_000)
+        self.assertEqual(self.policy["http_chunk_size_bytes"], 10_485_760)
         self.assertEqual(self.policy["transcription_chunk_seconds"], 900)
         self.assertEqual(self.policy["output_short_edge_max"], 720)
         self.assertEqual(self.policy["output_long_edge_max"], 1280)
@@ -109,7 +109,7 @@ class YouTubePipelinePolicyTests(unittest.TestCase):
             policy=policy,
             available_disk_bytes=5_000_000_000,
         )
-        self.assertTrue(plan["download"]["large_video"])
+        self.assertTrue(plan["download"]["http_chunking_enabled"])
         self.assertEqual(plan["download"]["http_chunk_size_bytes"], 10_485_760)
         self.assertTrue(plan["download"]["disk_budget"]["ok"])
         self.assertEqual(plan["output"]["max_width"], 1280)
@@ -122,13 +122,13 @@ class YouTubePipelinePolicyTests(unittest.TestCase):
             {"index": 3, "start_seconds": 1800, "end_seconds": 1900},
         ])
 
-    def test_estimated_size_fallback_and_threshold_boundary(self):
+    def test_estimated_size_is_observed_not_a_fixed_download_cutoff(self):
         plan = plan_video_processing(
             source_key="@plain_channel",
             metadata={"filesize": None, "filesize_approx": 700_000_001, "duration": 1800},
             policy=self.policy,
         )
-        self.assertTrue(plan["download"]["large_video"])
+        self.assertTrue(plan["download"]["http_chunking_enabled"])
         self.assertFalse(plan["transcription"]["required"])
         self.assertEqual(plan["transcription"]["chunks"], [])
         self.assertEqual(plan["download"]["disk_budget"]["status"], "not_checked")
@@ -138,7 +138,7 @@ class YouTubePipelinePolicyTests(unittest.TestCase):
             metadata={"filesize": 700_000_000, "duration": 1800},
             policy=self.policy,
         )
-        self.assertFalse(equal["download"]["large_video"])
+        self.assertTrue(equal["download"]["http_chunking_enabled"])
 
     def test_disk_budget_allows_one_gigabyte_only_when_space_is_sufficient(self):
         accepted = assess_download_disk_budget(
@@ -170,7 +170,7 @@ class YouTubePipelinePolicyTests(unittest.TestCase):
             policy=self.policy,
             available_disk_bytes=6_000_000_000,
         )
-        self.assertTrue(plan["download"]["large_video"])
+        self.assertTrue(plan["download"]["http_chunking_enabled"])
         self.assertFalse(plan["download"]["has_fixed_total_size_cap"])
         self.assertTrue(plan["download"]["resume_partial_downloads"])
         command = build_ytdlp_command(

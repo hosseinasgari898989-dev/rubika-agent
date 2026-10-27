@@ -132,10 +132,6 @@ def load_youtube_policy(path: Path | str | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         raise YouTubePolicyError("youtube_policy_schema_invalid")
 
-    threshold = _int_in_range(
-        payload.get("large_video_threshold_bytes"),
-        name="large_video_threshold_bytes", minimum=1_000_000, maximum=10**12,
-    )
     chunk_bytes = _int_in_range(
         payload.get("http_chunk_size_bytes"),
         name="http_chunk_size_bytes", minimum=1_000_000, maximum=100_000_000,
@@ -194,7 +190,6 @@ def load_youtube_policy(path: Path | str | None = None) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "large_video_threshold_bytes": threshold,
         "http_chunk_size_bytes": chunk_bytes,
         "download_retries": retries,
         "fragment_retries": fragment_retries,
@@ -319,7 +314,7 @@ def plan_video_processing(
     if type(size) is not int or size <= 0:
         size = metadata.get("filesize_approx")
     size_bytes = size if type(size) is int and size > 0 else None
-    large = size_bytes is not None and size_bytes > settings["large_video_threshold_bytes"]
+    # Estimated size is telemetry for capacity planning, not an arbitrary cutoff.
 
     width, height = metadata.get("width"), metadata.get("height")
     dimensions_known = type(width) is int and type(height) is int and width > 0 and height > 0
@@ -375,9 +370,9 @@ def plan_video_processing(
         "requires_persian_subtitles": requires_subtitles,
         "download": {
             "estimated_size_bytes": size_bytes,
-            "large_video": large,
             "has_fixed_total_size_cap": False,
-            "http_chunk_size_bytes": settings["http_chunk_size_bytes"] if large else None,
+            "http_chunking_enabled": True,
+            "http_chunk_size_bytes": settings["http_chunk_size_bytes"],
             "retries": settings["download_retries"],
             "fragment_retries": settings["fragment_retries"],
             "concurrent_fragments": settings["concurrent_fragments"],
@@ -438,8 +433,7 @@ def build_ytdlp_command(
     ):
         raise YouTubePolicyError("youtube_output_template_invalid")
     settings = dict(policy) if policy is not None else load_youtube_policy()
-    size = estimated_size_bytes if type(estimated_size_bytes) is int and estimated_size_bytes >= 0 else None
-    large = size is not None and size > settings["large_video_threshold_bytes"]
+    # estimated_size_bytes is intentionally not a hard-coded download cutoff.
     format_selector = _format_selector(source_width, source_height, settings)
     command = [
         "yt-dlp",
@@ -456,9 +450,8 @@ def build_ytdlp_command(
         "--merge-output-format", "mp4",
         "--output", output_template.strip(),
     ]
-    if large:
-        # This changes HTTP transfer chunking, not the resulting media size.
-        command.extend(["--http-chunk-size", str(settings["http_chunk_size_bytes"])])
+    # Chunking affects HTTP transfer behavior only; it sets no total-size limit.
+    command.extend(["--http-chunk-size", str(settings["http_chunk_size_bytes"])])
     command.extend(["--", url])
     return command
 
