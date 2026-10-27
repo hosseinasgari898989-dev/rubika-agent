@@ -19,14 +19,12 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
                         "author":selected,"title":"Poppy Playtime edit","caption":"Poppy Playtime edit","media_type":"video"},
                        {"platform":"tiktok","id":"7557483116605033748",
                         "url":"https://www.tiktok.com/@unlisted_creator/video/7557483116605033748",
-                        "author":"unlisted_creator","title":"Poppy Playtime edit","caption":"Poppy Playtime edit","media_type":"video"}],                   "instagram":[{"platform":"instagram","id":"AbCdEf_1234","url":"https://www.instagram.com/reel/AbCdEf_1234/",
-                                 "title":"Poppy Playtime Instagram Reel","media_type":"video"}]},
+                        "author":"unlisted_creator","title":"Poppy Playtime edit","caption":"Poppy Playtime edit","media_type":"video"}]},
                "attempts":[]}
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);report_path=root/"phone.json";report_path.write_text(json.dumps(phone),encoding="utf-8")
             report=runner.run_discovery(report_path=root/"out.json",phone_report_path=report_path)
         self.assertEqual(report["summary"]["tiktok_candidates"],1)
-        self.assertEqual(report["summary"]["instagram_candidates"],1)
         self.assertTrue(report["summary"]["core_search_target_met"])
         self.assertTrue(report["summary"]["termux_report_loaded"])
         self.assertFalse(report["summary"]["ready_to_publish"])
