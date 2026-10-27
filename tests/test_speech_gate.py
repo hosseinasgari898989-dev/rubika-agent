@@ -1,93 +1,66 @@
-from __future__ import annotations
-
+#!/usr/bin/env python3
+"""Offline tests for agent/brain/speech_gate.py (no ffprobe, no model, no network)."""
+import importlib.util
+import os
+import sys
 import unittest
 
-from agent.brain.speech_gate import evaluate_speech_segments
+_PATH = os.path.join(os.path.dirname(__file__), "..", "agent", "brain", "speech_gate.py")
+_SPEC = importlib.util.spec_from_file_location("speech_gate", _PATH)
+sg = importlib.util.module_from_spec(_SPEC)
+sys.modules["speech_gate"] = sg
+_SPEC.loader.exec_module(sg)
 
 
-class SpeechGateTests(unittest.TestCase):
-    def test_confident_segments_cross_duration_threshold_without_returning_transcript(self):
-        result = evaluate_speech_segments([
-            {
-                "start": 0.0, "end": 0.55, "text": "spoken words",
-                "no_speech_prob": 0.08, "avg_logprob": -0.3,
-            },
-            {
-                "start": 0.7, "end": 1.2, "text": "another phrase",
-                "no_speech_prob": 0.12, "avg_logprob": -0.5,
-            },
-        ], media_duration_seconds=2.0)
-        self.assertEqual(result.decision, "speech_detected")
-        self.assertEqual(result.accepted_segments, 2)
-        self.assertEqual(result.speech_seconds, 1.05)
-        self.assertEqual(result.reason_code, "speech_confident")
-        self.assertFalse(hasattr(result, "text"))
-        self.assertFalse(hasattr(result, "transcript"))
+def probe(duration=60.0, audio=True):
+    streams = [{"codec_type": "video"}]
+    if audio:
+        streams.append({"codec_type": "audio"})
+    return {"streams": streams, "format": {"duration": str(duration)}}
 
-    def test_empty_successful_transcription_means_no_speech_segments(self):
-        result = evaluate_speech_segments([])
-        self.assertEqual(result.decision, "no_speech_detected")
-        self.assertEqual(result.reason_code, "no_speech_segments")
 
-    def test_high_no_speech_probability_is_not_counted_as_speech(self):
-        result = evaluate_speech_segments([{
-            "start": 0, "end": 4, "text": "hallucinated words",
-            "no_speech_prob": 0.92, "avg_logprob": -0.2,
-        }])
-        self.assertEqual(result.decision, "no_speech_detected")
-        self.assertEqual(result.reason_code, "no_speech_probability_high")
-        self.assertEqual(result.accepted_segments, 0)
+class SpeechGateTest(unittest.TestCase):
+    def test_no_audio_track(self):
+        r = sg.evaluate(probe(audio=False), [], None, 0.0)
+        self.assertEqual((r.decision, r.reason), ("skip", "no_audio_track"))
 
-    def test_low_average_log_probability_remains_uncertain_not_silence(self):
-        result = evaluate_speech_segments([{
-            "start": 0, "end": 2, "text": "unclear words",
-            "no_speech_prob": 0.05, "avg_logprob": -2.8,
-        }])
-        self.assertEqual(result.decision, "uncertain")
-        self.assertEqual(result.reason_code, "speech_confidence_insufficient")
+    def test_media_too_short(self):
+        r = sg.evaluate(probe(duration=1.5), [], None, 0.0)
+        self.assertEqual(r.reason, "media_too_short")
 
-    def test_missing_confidence_fails_closed_to_uncertain(self):
-        result = evaluate_speech_segments([{
-            "start": 0, "end": 2, "text": "words without confidence metrics",
-        }])
-        self.assertEqual(result.decision, "uncertain")
-        self.assertEqual(result.reason_code, "speech_confidence_missing")
+    def test_music_only_has_no_speech(self):
+        r = sg.evaluate(probe(), [], "en", 0.2)
+        self.assertEqual(r.reason, "no_speech")
 
-    def test_short_confident_segment_is_uncertain(self):
-        result = evaluate_speech_segments([{
-            "start": 0.1, "end": 0.3, "text": "yes",
-            "no_speech_prob": 0.05, "avg_logprob": -0.4,
-        }])
-        self.assertEqual(result.decision, "uncertain")
-        self.assertEqual(result.reason_code, "speech_below_duration_threshold")
+    def test_overlapping_segments_not_double_counted(self):
+        segs = [{"start": 0, "end": 10}, {"start": 5, "end": 12}]
+        r = sg.evaluate(probe(duration=30), segs, "en", 0.9)
+        self.assertEqual(r.speech_seconds, 12.0)
+        self.assertEqual(r.decision, "subtitle")
 
-    def test_media_duration_clips_segments(self):
-        result = evaluate_speech_segments([{
-            "start": 0, "end": 10, "text": "short media",
-            "no_speech_prob": 0.05, "avg_logprob": -0.4,
-        }], media_duration_seconds=0.5, minimum_speech_seconds=0.4)
-        self.assertEqual(result.decision, "speech_detected")
-        self.assertEqual(result.speech_seconds, 0.5)
+    def test_noisy_segments_ignored(self):
+        segs = [{"start": 0, "end": 20, "no_speech_prob": 0.95}]
+        r = sg.evaluate(probe(), segs, "en", 0.9)
+        self.assertEqual(r.reason, "no_speech")
 
-    def test_failed_transcriber_never_reports_no_speech(self):
-        result = evaluate_speech_segments([], transcription_succeeded=False)
-        self.assertEqual(result.decision, "uncertain")
-        self.assertEqual(result.reason_code, "transcription_failed")
+    def test_low_ratio_and_short_speech(self):
+        self.assertEqual(
+            sg.evaluate(probe(), [{"start": 0, "end": 2}], "en", 0.9).reason, "speech_too_short")
+        self.assertEqual(
+            sg.evaluate(probe(duration=120), [{"start": 0, "end": 5}], "en", 0.9).reason,
+            "low_speech_ratio")
 
-    def test_malformed_segments_are_uncertain(self):
-        result = evaluate_speech_segments([
-            {"start": "bad", "end": 1, "text": "bad time"},
-            {"start": 1, "end": 0.5, "text": "negative duration"},
-        ])
-        self.assertEqual(result.decision, "uncertain")
-        self.assertEqual(result.reason_code, "segments_invalid")
-        self.assertEqual(result.rejected_segments, 2)
+    def test_language_checks(self):
+        segs = [{"start": 0, "end": 20}]
+        self.assertEqual(sg.evaluate(probe(), segs, "en", 0.3).reason, "low_language_confidence")
+        cfg = sg.GateConfig(allowed_languages=("en",))
+        self.assertEqual(sg.evaluate(probe(), segs, "ru", 0.9, cfg).reason, "language_not_allowed")
+        self.assertEqual(sg.evaluate(probe(), segs, "en", 0.9, cfg).decision, "subtitle")
 
-    def test_invalid_thresholds_are_rejected(self):
-        with self.assertRaises(ValueError):
-            evaluate_speech_segments([], maximum_no_speech_probability=1.5)
-        with self.assertRaises(ValueError):
-            evaluate_speech_segments([], media_duration_seconds=0)
+    def test_probe_args_and_duration_fallback(self):
+        self.assertEqual(sg.probe_args("a.mp4")[0], "ffprobe")
+        p = {"streams": [{"codec_type": "audio", "duration": "12.5"}], "format": {}}
+        self.assertEqual(sg.media_duration(p), 12.5)
 
 
 if __name__ == "__main__":
