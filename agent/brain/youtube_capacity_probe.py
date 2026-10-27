@@ -7,7 +7,6 @@ No production channel, AI provider, D1 API, or publishing queue is used.
 """
 from __future__ import annotations
 
-import hashlib
 import http.client
 import json
 import os
@@ -28,9 +27,13 @@ from urllib.request import urlopen
 
 import requests
 
+from agent.brain import test_channel
+
 API_BASE = "https://botapi.rubika.ir/v3"
-TEST_CHANNEL_SHA256 = "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8"
-PROBE_SIZES_MIB = (16, 32, 64, 128, 256, 512, 768, 1024, 1536, 2048)
+PROBE_SIZES_MIB = (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 768, 1024, 1536, 2048, 3072, 4096)
+YOUTUBE_SAMPLE_URL = "https://www.youtube.com/shorts/VN5KSQ4didU"
+MAX_YOUTUBE_METADATA_SECONDS = 60
+MAX_YOUTUBE_DOWNLOAD_SECONDS = 300
 MIB = 1024 * 1024
 GIB = 1024 * MIB
 MIN_FREE_RESERVE_BYTES = 2 * GIB
@@ -46,7 +49,7 @@ class ProbeError(RuntimeError):
 def test_channel_is_authorized(channel_guid: str) -> bool:
     """Accept only the exact registered test destination without logging it."""
     value = str(channel_guid or "").strip()
-    return bool(value) and hashlib.sha256(value.encode("utf-8")).hexdigest() == TEST_CHANNEL_SHA256
+    return test_channel.is_test_channel_guid(value)
 
 
 def probe_size_ladder_mib() -> tuple[int, ...]:
@@ -82,7 +85,7 @@ def _create_sized_mp4(destination: Path, target_bytes: int) -> None:
     a tiny 1280x720 clip; this is suitable for testing byte limits, not bitrate
     quality. Files are private temporary fixtures and are never committed.
     """
-    if type(target_bytes) is not int or target_bytes < 1 * MIB or target_bytes >= 2**32:
+    if type(target_bytes) is not int or target_bytes < 1 * MIB or target_bytes > 2**32:
         raise ProbeError("probe_target_size_invalid")
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
@@ -103,8 +106,8 @@ def _create_sized_mp4(destination: Path, target_bytes: int) -> None:
 
     base_size = destination.stat().st_size
     box_size = target_bytes - base_size
-    if box_size < 8:
-        raise ProbeError("synthetic_mp4_base_larger_than_target")
+    if box_size < 8 or box_size >= 2**32:
+        raise ProbeError("synthetic_mp4_padding_size_invalid")
     with destination.open("ab") as handle:
         handle.write(struct.pack(">I4s", box_size, b"free"))
         handle.truncate(target_bytes)
@@ -150,6 +153,143 @@ def _probe_mp4(path: Path) -> dict[str, Any]:
 class _QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+
+def _probe_youtube_download(root: Path) -> dict[str, Any]:
+    """Download one known public Short with yt-dlp; this is a smoke test, not a maximum."""
+    executable = shutil.which("yt-dlp")
+    ffprobe = shutil.which("ffprobe")
+    if not executable or not ffprobe:
+        return {"status": "yt_dlp_or_ffprobe_missing"}
+
+    try:
+        from agent.brain.youtube_pipeline import validate_youtube_video_url
+        url = validate_youtube_video_url(YOUTUBE_SAMPLE_URL)
+    except (ImportError, ValueError):
+        return {"status": "youtube_sample_url_invalid"}
+
+    metadata_command = [
+        executable,
+        "--ignore-config",
+        "--no-playlist",
+        "--no-warnings",
+        "--no-progress",
+        "--skip-download",
+        "--dump-single-json",
+        "--socket-timeout", "15",
+        "--retries", "1",
+        "--",
+        url,
+    ]
+    started = time.monotonic()
+    try:
+        meta = subprocess.run(
+            metadata_command,
+            capture_output=True,
+            text=True,
+            timeout=MAX_YOUTUBE_METADATA_SECONDS,
+            check=False,
+        )
+        if meta.returncode != 0:
+            return {
+                "status": "youtube_metadata_failed",
+                "seconds": round(time.monotonic() - started, 2),
+            }
+        payload = json.loads(meta.stdout)
+        width, height = payload.get("width"), payload.get("height")
+        if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+            return {"status": "youtube_dimensions_unavailable"}
+        if width == height:
+            maximum_width = maximum_height = 720
+        elif width > height:
+            maximum_width, maximum_height = 1280, 720
+        else:
+            maximum_width, maximum_height = 720, 1280
+        estimated_size = payload.get("filesize") or payload.get("filesize_approx")
+        if type(estimated_size) is not int or estimated_size <= 0:
+            estimated_size = None
+        estimated_duration = payload.get("duration")
+        if type(estimated_duration) not in (int, float) or estimated_duration <= 0:
+            estimated_duration = None
+    except subprocess.TimeoutExpired:
+        return {"status": "youtube_metadata_timeout"}
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {"status": "youtube_metadata_invalid"}
+
+    selector = (
+        f"bestvideo[width<={maximum_width}][height<={maximum_height}]+bestaudio/"
+        f"best[width<={maximum_width}][height<={maximum_height}]"
+    )
+    output_template = str(root / "youtube-source-smoke.%(ext)s")
+    command = [
+        executable,
+        "--ignore-config",
+        "--no-playlist",
+        "--no-progress",
+        "--no-warnings",
+        "--continue",
+        "--part",
+        "--socket-timeout", "20",
+        "--retries", "2",
+        "--fragment-retries", "2",
+        "--http-chunk-size", "10485760",
+        "--format", selector,
+        "--merge-output-format", "mp4",
+        "--output", output_template,
+        "--",
+        url,
+    ]
+    try:
+        download = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=MAX_YOUTUBE_DOWNLOAD_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "youtube_download_timeout",
+            "estimated_size_bytes": estimated_size,
+            "seconds": round(time.monotonic() - started, 2),
+        }
+    except OSError:
+        return {"status": "yt_dlp_start_failed"}
+
+    candidates = sorted(
+        path for path in root.glob("youtube-source-smoke.*")
+        if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".ts"}
+    )
+    if download.returncode != 0:
+        for path in candidates:
+            path.unlink(missing_ok=True)
+        return {
+            "status": "youtube_download_failed",
+            "estimated_size_bytes": estimated_size,
+            "seconds": round(time.monotonic() - started, 2),
+        }
+    if len(candidates) != 1:
+        return {"status": "youtube_download_output_ambiguous"}
+    output = candidates[0]
+    try:
+        media = _probe_mp4(output)
+        actual_bytes = output.stat().st_size
+    except (ProbeError, OSError):
+        output.unlink(missing_ok=True)
+        return {"status": "youtube_download_validation_failed"}
+    output.unlink(missing_ok=True)
+    if media["width"] > maximum_width or media["height"] > maximum_height:
+        return {"status": "youtube_download_exceeded_720p_profile"}
+    return {
+        "status": "ok",
+        "download_bytes": actual_bytes,
+        "estimated_size_bytes": estimated_size,
+        "duration_seconds": media["duration_seconds"],
+        "width": media["width"],
+        "height": media["height"],
+        "seconds": round(time.monotonic() - started, 2),
+        "notes": "One public Short only; this does not establish the maximum YouTube download size.",
+    }
 
 
 def _download_over_loopback(source: Path, destination: Path) -> dict[str, Any]:
@@ -366,6 +506,8 @@ def _write_report(report: dict[str, Any]) -> None:
     channel = report.get("channel_test", {})
     lines.extend([
         "",
+        f"- YouTube source-download smoke: {report.get('youtube_download', {}).get('status', 'not_run')}",
+        f"- YouTube smoke bytes: {report.get('youtube_download', {}).get('download_bytes', 'n/a')}",
         f"- Largest raw-upload success: {report.get('largest_upload_success_mib') or 'none'} MiB",
         f"- Largest size sent to test channel and deletion confirmed: {report.get('largest_channel_success_mib') or 'none'} MiB",
         f"- Last test-channel result: {channel.get('status', 'not_run')}",
@@ -407,6 +549,7 @@ def run_capacity_probe() -> dict[str, Any]:
         "sizes": [],
         "largest_upload_success_mib": None,
         "largest_channel_success_mib": None,
+        "youtube_download": {"status": "not_run"},
         "channel_test": {"status": "not_run", "cleanup_confirmed": None},
         "notes": [
             "Test sizes are exploratory rungs, not policy caps.",
@@ -415,6 +558,7 @@ def run_capacity_probe() -> dict[str, Any]:
     }
     with tempfile.TemporaryDirectory(prefix="rubika-agent-size-probe-") as folder:
         root = Path(folder)
+        report["youtube_download"] = _probe_youtube_download(root)
         for size_mib in PROBE_SIZES_MIB:
             target_bytes = size_mib * MIB
             free = shutil.disk_usage(root).free
@@ -494,6 +638,8 @@ def main() -> int:
     print(json.dumps({
         "ok": report.get("ok"),
         "status": report.get("status"),
+        "youtube_download_status": report.get("youtube_download", {}).get("status"),
+        "youtube_download_bytes": report.get("youtube_download", {}).get("download_bytes"),
         "largest_upload_success_mib": report.get("largest_upload_success_mib"),
         "largest_channel_success_mib": report.get("largest_channel_success_mib"),
         "channel_test_status": report.get("channel_test", {}).get("status"),

@@ -27,15 +27,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install existing HTTP dependency
-        run: python -m pip install --disable-pip-version-check "requests>=2.31,<3"
+      - name: Install pinned yt-dlp and existing HTTP dependency
+        run: python -m pip install --disable-pip-version-check "yt-dlp==2026.08.19" "requests>=2.31,<3"
       - name: Run isolated capacity-probe tests
         run: python -m unittest discover -s tests -p "test_youtube_capacity_probe.py" -v
 
   live-test-channel-capacity:
     if: github.event_name == 'push' && github.ref == 'refs/heads/youtube-capacity-probe-once-20261027'
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 360
     env:
       RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
       RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
@@ -54,16 +54,15 @@ jobs:
           sudo apt-get install --yes ffmpeg
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
-      - name: Install existing HTTP dependency
-        run: python -m pip install --disable-pip-version-check "requests>=2.31,<3"
-      - name: Check available runner disk without exposing environment values
+      - name: Install pinned yt-dlp and existing HTTP dependency
+        run: python -m pip install --disable-pip-version-check "yt-dlp==2026.08.19" "requests>=2.31,<3"
+      - name: Report available runner disk without imposing a fixed file-size cap
         run: |
           python - <<'PY'
           import shutil
           free = shutil.disk_usage(".").free
           print(f"Runner free disk: {free} bytes")
-          if free < 8 * 1024 * 1024 * 1024:
-              raise SystemExit("capacity_probe_runner_disk_below_8GiB")
+          print("Each test rung will decide whether its source plus downloaded copy and reserve fit.")
           PY
       - name: Run test-channel-only progressive probe
         run: python -m agent.brain.youtube_capacity_probe
