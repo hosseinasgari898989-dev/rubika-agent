@@ -42,6 +42,15 @@ class FakeStatement {
     return this;
   }
   async first() {
+    if (this.sql.includes("INSERT INTO ai_provider_calls") && this.sql.includes("'cloudflare', 'translate_official'")) {
+      const [callId,usageDay,runId,estimate,startedAt,totalDay,totalEstimate,totalLimit,bucketDay,kind,bucketEstimate,bucketLimit]=this.values;
+      const rows=[...this.db.aiProviderCalls.values()].filter(x=>x.usage_day===totalDay&&x.role==="translate_official");
+      const used=rows.reduce((n,x)=>n+Number(x.total_tokens||0),0);
+      const bucket=rows.filter(x=>(String(x.run_id||"").startsWith("mobsub_")?"subtitle":"caption")===kind).reduce((n,x)=>n+Number(x.total_tokens||0),0);
+      if(used+totalEstimate>totalLimit||bucket+bucketEstimate>bucketLimit||this.db.aiProviderCalls.has(callId))return null;
+      this.db.aiProviderCalls.set(callId,{call_id:callId,usage_day:usageDay,provider:"cloudflare",role:"translate_official",run_id:runId,status:"reserved",total_tokens:estimate,started_at:startedAt,error_code:null,finished_at:null});
+      return {call_id:callId};
+    }
     if (this.sql.includes("FROM owner_console_state WHERE id = 1")) {
       return this.db.ownerConsoleState ? { ...this.db.ownerConsoleState } : null;
     }
@@ -233,6 +242,10 @@ class FakeStatement {
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if(sql.startsWith("UPDATE ai_provider_calls SET status=?")&&sql.includes("provider='cloudflare'")){
+      const [status,errorCode,finishedAt,callId]=v;const row=this.db.aiProviderCalls.get(callId);
+      if(!row||row.status!=="reserved")return {meta:{changes:0}};Object.assign(row,{status,error_code:errorCode,finished_at:finishedAt});return {meta:{changes:1}};
+    }
     if (sql.startsWith("INSERT INTO sources (id, platform, source_key, display_name, enabled) VALUES")) {
       const [id, platform, source_key, display_name, enabled] = v;
       if ([...this.db.sources.values()].some(row => row.platform === platform && row.source_key === source_key)) {
@@ -527,6 +540,7 @@ class FakeDB {
     this.queueLimit = null;
     this.seenQuery = null;
     this.aiUsageDaily = new Map();
+    this.aiProviderCalls = new Map();
     this.ownerDigestState = null;
     this.ownerDigestEvents = [];
     this.ownerConsoleState = { id: 1, offset_id: null, updated_at: null };
@@ -1186,17 +1200,24 @@ function makeOmniAI(probability = 0.97) {
 
 
 {
-  const state = env();
-  let aiCalled = false;
-  state.AI = { run: async () => { aiCalled = true; throw new Error("translation inference must be disabled"); } };
-  const response = await read(await worker.fetch(request("/api/brain/translate-official", {
-    method: "POST",
-    body: { text: "Mob Entertainment published an official update." },
-  }), state));
-  assert.equal(response.status, 410);
-  assert.equal(response.body.error, "translation_route_retired");
-  assert.equal(aiCalled, false);
-  assert.equal(state.DB.aiUsageDaily.size, 0);
+  const state=env();let args=null;state.AI={run:async(model,options)=>{args={model,options};return {response:"ترجمه فارسی معتبر"};}};
+  const r=await read(await worker.fetch(request("/api/brain/translate-official",{method:"POST",body:{text:"A short official update.",kind:"caption",run_id:"mobcap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}),state));
+  assert.equal(r.status,200);assert.equal(r.body.ok,true);assert.equal(args.options.max_tokens,700);assert.equal([...state.DB.aiProviderCalls.values()][0].status,"succeeded");
+}
+{
+  const state=env();let called=false;state.AI={run:async()=>{called=true;return {response:"ترجمه فارسی"};}};
+  const r=await read(await worker.fetch(request("/api/brain/translate-official",{method:"POST",body:{text:"x".repeat(2101),kind:"caption",run_id:"mobcap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}),state));
+  assert.equal(r.status,413);assert.equal(r.body.error,"translation_text_too_long");assert.equal(called,false);assert.equal(state.DB.aiProviderCalls.size,0);
+}
+{
+  const state=env();let args=null;state.AI={run:async(model,options)=>{args={model,options};return {response:"0|در باز است.\\n1|وارد شوید."};}};
+  const r=await read(await worker.fetch(request("/api/brain/translate-official",{method:"POST",body:{text:"0|The door is open.\\n1|Go inside.",kind:"subtitle",run_id:"mobsub_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}),state));
+  assert.equal(r.status,200);assert.equal(args.options.max_tokens,1200);assert.equal(r.body.usage.kind,"subtitle");
+}
+{
+  const state=env();let called=false;state.AI={run:async()=>{called=true;return {response:"ترجمه فارسی"};}};
+  const r=await read(await worker.fetch(request("/api/brain/translate-official",{method:"POST",body:{text:"A short update",kind:"caption",run_id:"wrong_aaaaaaaaaaaaaaaaaaaaaaaa"}}),state));
+  assert.equal(r.status,400);assert.equal(called,false);
 }
 {
   const state = env();

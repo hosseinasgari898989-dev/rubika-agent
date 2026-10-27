@@ -114,7 +114,7 @@ class CodeAIUsageLedger:
             raise UsageLedgerError(code)
         return result
 
-    def reserve(self, *, provider: str, role: str, call_id: str | None = None, run_id: str | None = None) -> dict[str, Any]:
+    def reserve(self, *, provider: str, role: str, call_id: str | None = None, run_id: str | None = None, estimated_tokens: int | None = None) -> dict[str, Any]:
         if provider not in ALLOWED_PROVIDERS:
             raise UsageLedgerError("code_ai_provider_not_enabled")
         if role not in ALLOWED_ROLES:
@@ -124,15 +124,13 @@ class CodeAIUsageLedger:
             raise UsageLedgerError("code_ai_call_id_invalid")
         if run_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", run_id):
             raise UsageLedgerError("code_ai_run_id_invalid")
-        result = self._post(
-            "/api/brain/ai-provider/reserve",
-            {
-                "provider": provider,
-                "role": role,
-                "call_id": identifier,
-                **({"run_id": run_id} if run_id else {}),
-            },
-        )
+        if estimated_tokens is not None and (type(estimated_tokens) is not int or not 1 <= estimated_tokens <= 200_000):
+            raise UsageLedgerError("code_ai_estimated_tokens_invalid")
+        result = self._post("/api/brain/ai-provider/reserve", {
+            "provider":provider,"role":role,"call_id":identifier,
+            **({"run_id":run_id} if run_id else {}),
+            **({"estimated_tokens":estimated_tokens} if estimated_tokens is not None else {}),
+        })
         if result.get("reserved") is not True or result.get("call_id") != identifier:
             raise UsageLedgerError("usage_ledger_reservation_unconfirmed")
         return result
