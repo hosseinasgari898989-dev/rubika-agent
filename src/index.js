@@ -417,7 +417,7 @@ async function seenItems(env, url) {
   try {
     const sql = platform
       ? "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform = ? ORDER BY discovered_at DESC LIMIT ? OFFSET ?"
-      : "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items ORDER BY discovered_at DESC LIMIT ? OFFSET ?";
+      : "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform IN ('tiktok','mob_official') ORDER BY discovered_at DESC LIMIT ? OFFSET ?";
     const statement = env.DB.prepare(sql);
     const result = platform
       ? await statement.bind(platform, limit, offset).all()
