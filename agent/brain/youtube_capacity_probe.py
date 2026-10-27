@@ -30,7 +30,7 @@ import requests
 from agent.brain import test_channel
 
 API_BASE = "https://botapi.rubika.ir/v3"
-PROBE_SIZES_MIB = (49.995,)
+PROBE_SIZES_MIB = (49.999,)
 YOUTUBE_SAMPLE_URL = "https://www.youtube.com/shorts/VN5KSQ4didU"
 MAX_YOUTUBE_METADATA_SECONDS = 60
 MAX_YOUTUBE_DOWNLOAD_SECONDS = 300
