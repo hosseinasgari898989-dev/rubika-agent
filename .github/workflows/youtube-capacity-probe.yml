@@ -48,10 +48,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install ffmpeg for valid 720p test media
+      - name: Ensure ffmpeg is available for valid 720p test media
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes ffmpeg
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get               -o Acquire::Retries=1               -o Acquire::http::Timeout=20               -o Acquire::https::Timeout=20               update
+            sudo apt-get               -o Acquire::Retries=1               -o Acquire::http::Timeout=20               -o Acquire::https::Timeout=20               install --yes ffmpeg
+          fi
+          command -v ffmpeg
+          command -v ffprobe
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
       - name: Install pinned yt-dlp and existing HTTP dependency
