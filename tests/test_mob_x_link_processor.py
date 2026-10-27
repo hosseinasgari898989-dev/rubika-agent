@@ -284,6 +284,10 @@ class MobXSubtitleWiringTests(unittest.TestCase):
                     "missing": 0, "size": 20, "duration_ms": 12200}
 
         with ExitStack() as stack:
+            stack.enter_context(patch.dict("os.environ", {
+                "RUBIKA_TOKEN": "test-rubika-token",
+                "RUBIKA_OWNER_CHAT_ID": "test-owner-chat",
+            }))
             cloud_class = stack.enter_context(patch("agent.brain.mob_x_link_processor.CloudState"))
             cloud_class.return_value = cloud
             cloud_class.prepare_staged_payload.return_value = {}
