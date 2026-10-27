@@ -1408,7 +1408,7 @@ PAGES.items = function(root){
   const ss = el("select",{"aria-label":"وضعیت",onchange:e=>{st.status=e.target.value;st.offset=0;load()}});
   [["","همه"],["queued","در صف"],["sent","ارسال‌شده"],["failed","ناموفق"],["skipped","رد شده"]].forEach(([v,l])=>ss.appendChild(el("option",{value:v,selected:st.status===v,text:l})));
   const pp = el("select",{"aria-label":"پلتفرم",onchange:e=>{st.platform=e.target.value;st.offset=0;load()}});
-  [["","همه"],["x","X"],["tiktok","تیک‌تاک"]].forEach(([v,l])=>pp.appendChild(el("option",{value:v,selected:st.platform===v,text:l})));
+  [["","همه"],["mob_official","X"],["tiktok","تیک‌تاک"]].forEach(([v,l])=>pp.appendChild(el("option",{value:v,selected:st.platform===v,text:l})));
   f.appendChild(q); f.appendChild(ss); f.appendChild(pp);
   const editCard = el("div",{});
   const body = el("div",{});
