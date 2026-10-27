@@ -46,6 +46,33 @@ class ProbeError(RuntimeError):
     """Safe, non-sensitive capacity-probe error."""
 
 
+def _classify_ytdlp_failure(output: object) -> str:
+    """Return a fixed diagnostic category; never emit yt-dlp output or URLs."""
+    text = str(output or "").lower()
+    if any(term in text for term in (
+        "confirm you're not a bot", "confirm you are not a bot",
+        "sign in to confirm", "sign in to verify",
+    )):
+        return "youtube_bot_check"
+    if any(term in text for term in (
+        "video unavailable", "private video", "has been removed",
+        "this video is unavailable",
+    )):
+        return "youtube_video_unavailable"
+    if "429" in text or "too many requests" in text or "rate limit" in text:
+        return "youtube_rate_limited"
+    if "403" in text or "forbidden" in text:
+        return "youtube_http_403"
+    if "unsupported url" in text:
+        return "youtube_unsupported_url"
+    if any(term in text for term in (
+        "timed out", "timeout", "connection reset", "network is unreachable",
+        "unable to download webpage", "temporary failure in name resolution",
+    )):
+        return "youtube_network_failure"
+    return "youtube_unknown_failure"
+
+
 def test_channel_is_authorized(channel_guid: str) -> bool:
     """Accept only the exact registered test destination without logging it."""
     value = str(channel_guid or "").strip()
@@ -193,6 +220,7 @@ def _probe_youtube_download(root: Path) -> dict[str, Any]:
         if meta.returncode != 0:
             return {
                 "status": "youtube_metadata_failed",
+                "diagnostic_code": _classify_ytdlp_failure(meta.stderr),
                 "seconds": round(time.monotonic() - started, 2),
             }
         payload = json.loads(meta.stdout)
@@ -265,6 +293,7 @@ def _probe_youtube_download(root: Path) -> dict[str, Any]:
             path.unlink(missing_ok=True)
         return {
             "status": "youtube_download_failed",
+            "diagnostic_code": _classify_ytdlp_failure(download.stderr),
             "estimated_size_bytes": estimated_size,
             "seconds": round(time.monotonic() - started, 2),
         }
@@ -351,6 +380,45 @@ def _get_upload_url(token: str) -> str:
     return upload_url
 
 
+def _classify_upload_rejection(http_status: int, response_body: bytes) -> str:
+    """Map upload-server errors to fixed labels without logging raw response text."""
+    text = response_body[:4096].decode("utf-8", errors="ignore").lower()
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        payload = None
+    if isinstance(payload, dict):
+        values = []
+        for key in ("status", "status_det", "error", "error_code", "message", "detail"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                values.append(value.lower())
+        text += " " + " ".join(values)
+    text = re.sub(r"[_-]+", " ", text)
+
+    if any(term in text for term in (
+        "too large", "entity too large", "maximum size", "max size",
+        "file size limit", "size limit exceeded", "exceeds limit",
+    )):
+        return "rubika_upload_size_rejected"
+    if any(term in text for term in (
+        "unsupported media", "invalid media", "invalid file", "invalid mime",
+        "invalid content type", "format not supported", "corrupt mp4",
+    )):
+        return "rubika_upload_media_rejected"
+    if any(term in text for term in (
+        "multipart", "boundary", "content disposition", "missing file",
+        "no file", "file field", "form field",
+    )):
+        return "rubika_upload_multipart_rejected"
+    if any(term in text for term in ("unauthorized", "forbidden", "invalid token")):
+        return "rubika_upload_auth_rejected"
+    if "expired" in text or "invalid upload url" in text:
+        return "rubika_upload_url_rejected"
+    status = int(http_status)
+    return f"rubika_upload_http_{status}_rejected"
+
+
 def _stream_upload(upload_url: str, media_path: Path, filename: str) -> str:
     """Stream multipart bytes over HTTPS instead of buffering a large file in RAM."""
     parsed = urlsplit(upload_url)
@@ -393,7 +461,7 @@ def _stream_upload(upload_url: str, media_path: Path, filename: str) -> str:
         response = conn.getresponse()
         raw = response.read(1024 * 1024)
         if response.status != 200:
-            raise ProbeError("rubika_upload_http_" + str(response.status))
+            raise ProbeError(_classify_upload_rejection(response.status, raw))
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -507,6 +575,7 @@ def _write_report(report: dict[str, Any]) -> None:
     lines.extend([
         "",
         f"- YouTube source-download smoke: {report.get('youtube_download', {}).get('status', 'not_run')}",
+        f"- YouTube diagnostic code: {report.get('youtube_download', {}).get('diagnostic_code', 'n/a')}",
         f"- YouTube smoke bytes: {report.get('youtube_download', {}).get('download_bytes', 'n/a')}",
         f"- Largest raw-upload success: {report.get('largest_upload_success_mib') or 'none'} MiB",
         f"- Largest size sent to test channel and deletion confirmed: {report.get('largest_channel_success_mib') or 'none'} MiB",
@@ -639,6 +708,7 @@ def main() -> int:
         "ok": report.get("ok"),
         "status": report.get("status"),
         "youtube_download_status": report.get("youtube_download", {}).get("status"),
+        "youtube_download_diagnostic": report.get("youtube_download", {}).get("diagnostic_code"),
         "youtube_download_bytes": report.get("youtube_download", {}).get("download_bytes"),
         "largest_upload_success_mib": report.get("largest_upload_success_mib"),
         "largest_channel_success_mib": report.get("largest_channel_success_mib"),
