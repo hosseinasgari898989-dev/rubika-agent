@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import v7
 from .instagram import InstagramDiscovery, discover_official_hashtag_urls, discover_public_indexed_urls
 from .tavily import discover_social_urls
 from agent.brain.tiktok_urls import normalize_tiktok_url
@@ -19,8 +18,6 @@ from agent.source_policy import known_tiktok_profiles, resolve_source_policy
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_PATH = ROOT / "artifacts" / "discovery_report.json"
 TERMUX_REPORT_PATH = ROOT / "artifacts" / "termux_discovery.json"
-REQUIRED_CORE_COUNTS = {"youtube": 5}
-YOUTUBE_SHORT_URL_RE = re.compile(r"^https://(?:www\.)?youtube\.com/(?:shorts/|watch\?v=)([A-Za-z0-9_-]{11})/?$")
 INSTAGRAM_URL_RE = re.compile(r"^https://(?:www\.)?instagram\.com/(reel|p|tv)/([A-Za-z0-9_-]{5,20})/?$")
 
 
@@ -35,11 +32,11 @@ def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]
     """Load and strictly validate the phone's metadata report, if present."""
     report_path = Path(path)
     if not report_path.exists():
-        return {"tiktok": [], "youtube": [], "instagram": []}, None, "not_found"
+        return {"tiktok": [], "instagram": []}, None, "not_found"
     try:
         payload = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"tiktok": [], "youtube": [], "instagram": []}, None, "unreadable"
+        return {"tiktok": [], "instagram": []}, None, "unreadable"
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != 1
@@ -47,9 +44,9 @@ def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]
         or payload.get("mode") != "metadata_only_no_download_no_publish"
         or not isinstance(payload.get("candidates"), dict)
     ):
-        return {"tiktok": [], "youtube": [], "instagram": []}, None, "invalid_report"
+        return {"tiktok": [], "instagram": []}, None, "invalid_report"
 
-    accepted: dict[str, list[dict[str, Any]]] = {"tiktok": [], "youtube": [], "instagram": []}
+    accepted: dict[str, list[dict[str, Any]]] = {"tiktok": [], "instagram": []}
     for platform in accepted:
         raw_rows = payload["candidates"].get(platform, [])
         if not isinstance(raw_rows, list):
@@ -70,10 +67,6 @@ def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]
                 if identity is not None and identity[0].casefold() in selected:
                     canonical_id = identity[1]
                     match = None
-            elif platform == "youtube":
-                match = YOUTUBE_SHORT_URL_RE.fullmatch(url)
-                if match:
-                    canonical_id = match.group(1)
             else:
                 match = INSTAGRAM_URL_RE.fullmatch(url)
                 if match and str(row.get("media_type") or "").lower() == "video":
@@ -83,9 +76,7 @@ def _load_phone_report(path: str | Path) -> tuple[dict[str, list[dict[str, Any]]
             safe = dict(row)
             safe["platform"] = platform
             safe["id"] = canonical_id
-            if platform == "youtube":
-                safe["url"] = f"https://www.youtube.com/shorts/{canonical_id}"
-            elif platform == "tiktok":
+            if platform == "tiktok":
                 identity = normalize_tiktok_url(url)
                 if identity is None or identity[1] != canonical_id:
                     continue
@@ -112,16 +103,13 @@ def run_discovery(
     phone_report_path: str | Path = TERMUX_REPORT_PATH,
 ) -> dict[str, Any]:
     """Merge verified phone metadata with controlled fallbacks and write diagnostic evidence."""
-    v7.ATTEMPTS.clear()
-    ignored = v7.known_ids()
+    ignored = {"tiktok": set(), "instagram": set()}
     store: dict[str, dict[str, dict[str, Any]]] = {
         "tiktok": {},
-        "youtube": {},
         "instagram": {},
     }
     seen = {
         "tiktok": set(ignored.get("tiktok", set())),
-        "youtube": set(ignored.get("youtube", set())),
         "instagram": set(ignored.get("instagram", set())),
     }
 
@@ -148,12 +136,6 @@ def run_discovery(
         print(f"Discovery: TERMUX_ONLY is enabled but the phone report is {phone_status}; no hosted search will run.", flush=True)
     else:
         print("Discovery: no valid phone report; using the legacy metadata-only fallbacks.", flush=True)
-
-    if not phone_report_loaded and not termux_only and len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
-        print("YouTube fallback: yt-dlp metadata search only; download=False.", flush=True)
-        v7.discover_youtube_ytdlp(store, seen["youtube"])
-        if len(store["youtube"]) < REQUIRED_CORE_COUNTS["youtube"]:
-            v7.discover_youtube_html(store, seen["youtube"])
 
     # Do not repeatedly retry the known-unproductive public Instagram search-engine path.
     # Only use the optional official API when it is configured, unless explicitly opting in
@@ -231,13 +213,8 @@ def run_discovery(
     candidates = {key: _unique_sorted(values) for key, values in store.items()}
     summary = {
         "tiktok_candidates": len(candidates["tiktok"]),
-        "youtube_candidates": len(candidates["youtube"]),
         "instagram_candidates": len(candidates["instagram"]),
-        "required_core_counts": REQUIRED_CORE_COUNTS,
-        "core_search_target_met": all(
-            len(candidates[platform]) >= count
-            for platform, count in REQUIRED_CORE_COUNTS.items()
-        ),
+        "core_search_target_met": bool(candidates["tiktok"] or candidates["instagram"]),
         "termux_report_loaded": phone_report_loaded,
         "termux_report_status": phone_status,
         "termux_report_generated_at": phone_generated_at,
@@ -264,7 +241,6 @@ def run_discovery(
         "candidates": candidates,
         "attempts": (
             phone_attempts
-            + v7.ATTEMPTS
             + instagram_attempts
             + instagram_graph.report()["attempts"]
             + [attempt for result in tavily_reports.values() for attempt in result["attempts"]]
@@ -279,7 +255,6 @@ def run_discovery(
 
 
 def self_test() -> int:
-    v7.self_test()
     from .instagram import extract_instagram_urls
 
     reel = extract_instagram_urls(
