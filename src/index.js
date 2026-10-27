@@ -8,7 +8,7 @@ const MAX_AUDIO_DATA_URL_CHARS = 11_300_000;
 const MAX_AUDIO_DECODED_BYTES = 8 * 1024 * 1024;
 const VISION_MODEL = "@cf/cloudflare/clef-omni";
 const MAX_TEXT = 5000;
-const PLATFORMS = new Set(["tiktok", "youtube", "instagram", "mob_official"]);
+const PLATFORMS = new Set(["tiktok", "mob_official"]);
 const ITEM_STATUSES = new Set([
   "discovered", "filtered", "queued", "downloading", "ready",
   "sending", "sent", "failed", "uncertain"
@@ -114,8 +114,6 @@ function canonicalUrlFor(platform, value) {
   const host = parsed.hostname.toLowerCase();
   const hosts = {
     tiktok: ["tiktok.com"],
-    youtube: ["youtube.com", "youtu.be"],
-    instagram: ["instagram.com"],
     mob_official: ["mobentertainment.com", "poppyplaytime.com", "steamcommunity.com", "youtube.com", "youtu.be", "x.com"]
   };
   const allowed = hosts[platform] || [];
@@ -130,7 +128,7 @@ function canonicalUrlFor(platform, value) {
     return "https://x.com/mobgamesstudios/status/" + match[1];
   }
 
-  if (platform === "youtube" || (
+  if (
     platform === "mob_official" &&
     (host === "youtu.be" || host.endsWith(".youtu.be") || host === "youtube.com" || host.endsWith(".youtube.com"))
   )) {
@@ -501,7 +499,7 @@ async function moderateMusic(env, body) {
   }
 
   const platform = text(body.platform, 24);
-  if (!new Set(["youtube", "tiktok", "instagram"]).has(platform)) {
+  if (platform !== "tiktok") {
     return json({ ok: false, error: "moderation_platform_invalid" }, 400);
   }
 
@@ -1196,7 +1194,7 @@ async function finishCodeAiProviderCall(env, body) {
   }
 }
 
-const QUEUE_PLATFORMS = new Set(["tiktok", "youtube", "instagram"]);
+const QUEUE_PLATFORMS = new Set(["tiktok"]);
 const QUEUE_STATUSES = new Set(["queued", "processing", "sent", "failed", "uncertain", "skipped"]);
 
 async function automationQueueIngest(env, body) {
