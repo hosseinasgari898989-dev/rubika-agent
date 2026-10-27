@@ -30,7 +30,7 @@ import requests
 from agent.brain import test_channel
 
 API_BASE = "https://botapi.rubika.ir/v3"
-PROBE_SIZES_MIB = (40, 44, 46, 47, 48, 49, 50, 52, 56, 60)
+PROBE_SIZES_MIB = (49.25, 49.5, 49.75)
 YOUTUBE_SAMPLE_URL = "https://www.youtube.com/shorts/VN5KSQ4didU"
 MAX_YOUTUBE_METADATA_SECONDS = 60
 MAX_YOUTUBE_DOWNLOAD_SECONDS = 300
@@ -79,7 +79,7 @@ def test_channel_is_authorized(channel_guid: str) -> bool:
     return test_channel.is_test_channel_guid(value)
 
 
-def probe_size_ladder_mib() -> tuple[int, ...]:
+def probe_size_ladder_mib() -> tuple[int | float, ...]:
     """Progressive test sizes, not an upload/download policy or permanent cap."""
     return PROBE_SIZES_MIB
 
@@ -629,7 +629,7 @@ def run_capacity_probe() -> dict[str, Any]:
         root = Path(folder)
         report["youtube_download"] = _probe_youtube_download(root)
         for size_mib in PROBE_SIZES_MIB:
-            target_bytes = size_mib * MIB
+            target_bytes = int(size_mib * MIB)
             free = shutil.disk_usage(root).free
             row: dict[str, Any] = {"size_mib": size_mib, "target_bytes": target_bytes}
             if free < target_bytes * 2 + MIN_FREE_RESERVE_BYTES:
