@@ -66,7 +66,7 @@ def _api_post(token: str, method: str, payload: dict[str, Any]) -> dict[str, Any
         return {"transport_ok": False, "http_status": None, "payload": None}
     try:
         data = response.json()
-    except (ValueError, requests.JSONDecodeError):
+    except ValueError:
         data = None
     return {
         "transport_ok": True,
@@ -297,6 +297,13 @@ def _send_one_test_message(token: str, channel_guid: str, item: dict[str, Any]) 
             "size_mib": item["size_mib"],
             "cleanup_confirmed": False,
             "error": "send_response_invalid_do_not_retry",
+        }
+    if int(result.get("http_status") or 0) >= 500:
+        return {
+            "status": "uncertain",
+            "size_mib": item["size_mib"],
+            "cleanup_confirmed": False,
+            "error": "send_http_server_error_do_not_retry",
         }
     if payload.get("status") != "OK":
         detail = payload.get("status_det") or payload.get("error") or payload.get("error_code")
