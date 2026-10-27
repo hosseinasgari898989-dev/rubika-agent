@@ -735,7 +735,7 @@ const MOCK = (function(){
   const seedQueue = (function(){
     const out=[];
     for(let i=1;i<=62;i++){
-      const p=PLAT[i%3], st=ST[i%6];
+      const p=PLAT[i%PLAT.length], st=ST[i%ST.length];
       out.push({id:i, platform:p, external_id:"ext_"+(10000+i), canonical_url:"https://example.com/"+p+"/"+i,
         source_key:p==="x"?"@news_source"+(i%4):"channel_"+(i%5), title:"عنوان نمونه شمارهٔ "+i+" — "+p,
         caption:"کپشن آزمایشی برای آیتم "+i+" که می‌تواند طولانی باشد و شامل <script> هم باشد.",
