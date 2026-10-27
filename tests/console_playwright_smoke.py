@@ -62,9 +62,9 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
         }
     if path == "/api/console/items":
         return {"ok": True, "items": [{
-            "id": "fixture-item-1", "platform": "youtube", "title": "Fixture video",
+            "id": "fixture-item-1", "platform": "tiktok", "title": "Fixture video",
             "caption": "Fixture caption", "persian_translation": "ترجمهٔ آزمایشی",
-            "canonical_url": "https://youtube.com/watch?v=fixture000",
+            "canonical_url": "https://www.tiktok.com/@fixture/video/7616247520657771796",
             "status": "discovered", "review_state": "needs_review",
             "updated_at": NOW, "discovered_at": NOW,
         }], "total": 1}
@@ -74,13 +74,13 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
             return {
                 "ok": True,
                 "columns": ["id", "platform", "title", "status", "last_error_code", "attempt_count", "updated_at"],
-                "rows": [["fixture-queue-1", "youtube", "Fixture queued video", "queued", None, 0, NOW]],
+                "rows": [["fixture-queue-1", "tiktok", "Fixture queued video", "queued", None, 0, NOW]],
                 "duration_ms": 1,
             }
         if "from \"items\"" in sql or "from items" in sql:
             return {
                 "ok": True, "columns": ["id", "title", "platform"],
-                "rows": [["fixture-item-1", "Fixture video", "youtube"]], "duration_ms": 1,
+                "rows": [["fixture-item-1", "Fixture video", "tiktok"]], "duration_ms": 1,
             }
         return {"ok": True, "columns": ["id"], "rows": [], "duration_ms": 1}
     if path == "/api/console/runs":

@@ -730,12 +730,12 @@ const SENSITIVE_FILE = p => /(^|\/)\.env|\.key$|\.pem$|secrets?\.(json|ya?ml|txt
 
 /* ============================ MOCK ============================ */
 const MOCK = (function(){
-  const PLAT=["x","tiktok","youtube"], ST=["queued","processing","sent","failed","uncertain","skipped"];
+  const PLAT=["x","tiktok"], ST=["queued","processing","sent","failed","uncertain","skipped"];
   function rnd(a){ return a[Math.floor(Math.random()*a.length)] }
   const seedQueue = (function(){
     const out=[];
     for(let i=1;i<=62;i++){
-      const p=PLAT[i%3], st=ST[i%6];
+      const p=PLAT[i%PLAT.length], st=ST[i%ST.length];
       out.push({id:i, platform:p, external_id:"ext_"+(10000+i), canonical_url:"https://example.com/"+p+"/"+i,
         source_key:p==="x"?"@news_source"+(i%4):"channel_"+(i%5), title:"عنوان نمونه شمارهٔ "+i+" — "+p,
         caption:"کپشن آزمایشی برای آیتم "+i+" که می‌تواند طولانی باشد و شامل <script> هم باشد.",
@@ -763,7 +763,7 @@ const MOCK = (function(){
   let sources = [
     {id:1,platform:"x",source_key:"@BBCPersian",display_name:"بی‌بی‌سی فارسی",enabled:1,created_at:"2025-11-01T10:00:00Z",last_checked_at:new Date(Date.now()-600e3).toISOString(),last_seen_published_at:new Date(Date.now()-3600e3).toISOString()},
     {id:2,platform:"tiktok",source_key:"editsdaily",display_name:"Edits Daily",enabled:1,created_at:"2025-12-10T10:00:00Z",last_checked_at:new Date(Date.now()-900e3).toISOString(),last_seen_published_at:null},
-    {id:3,platform:"youtube",source_key:"UCxyz123",display_name:"Shorts Hub",enabled:0,created_at:"2025-12-20T10:00:00Z",last_checked_at:null,last_seen_published_at:null}];
+    ];
   let channels = [{id:1,label:"کانال آزمایشی",rubika_channel_id:"@test_channel",role:"test",enabled:1},
     {id:2,label:"کانال اصلی",rubika_channel_id:"@main_channel",role:"production",enabled:0}];
   let owners = [{id:1,chat_id:"b0Abc...",label:"مالک اصلی",role:"owner",claimed_at:"2025-10-01T08:00:00Z",enabled:1,last_seen_at:new Date(Date.now()-7200e3).toISOString()},
@@ -1207,7 +1207,7 @@ PAGES.queue = function(root){
   const search = el("input",{type:"text",placeholder:"جست‌وجو در عنوان/کپشن/لینک",value:st.q,"aria-label":"جست‌وجوی صف"});
   search.addEventListener("input", debounce(e=>{ st.q=e.target.value; st.offset=0; load() },350));
   const plat = el("select",{"aria-label":"پلتفرم",onchange:e=>{ st.platform=e.target.value; st.offset=0; load() }});
-  [["","همهٔ پلتفرم‌ها"],["x","X"],["tiktok","تیک‌تاک"],["youtube","یوتیوب"]].forEach(([v,l])=>plat.appendChild(el("option",{value:v,selected:st.platform===v,text:l})));
+  [["","همهٔ پلتفرم‌ها"],["x","X"],["tiktok","تیک‌تاک"]].forEach(([v,l])=>plat.appendChild(el("option",{value:v,selected:st.platform===v,text:l})));
   const sort = el("select",{"aria-label":"مرتب‌سازی",onchange:e=>{ st.sort=e.target.value; load() }});
   [["updated_desc","جدیدترین بروزرسانی"],["created_desc","جدیدترین ساخت"],["attempts_desc","بیشترین تلاش"],["id_asc","شناسه صعودی"]]
     .forEach(([v,l])=>sort.appendChild(el("option",{value:v,selected:st.sort===v,text:l})));
@@ -1408,7 +1408,7 @@ PAGES.items = function(root){
   const ss = el("select",{"aria-label":"وضعیت",onchange:e=>{st.status=e.target.value;st.offset=0;load()}});
   [["","همه"],["queued","در صف"],["sent","ارسال‌شده"],["failed","ناموفق"],["skipped","رد شده"]].forEach(([v,l])=>ss.appendChild(el("option",{value:v,selected:st.status===v,text:l})));
   const pp = el("select",{"aria-label":"پلتفرم",onchange:e=>{st.platform=e.target.value;st.offset=0;load()}});
-  [["","همه"],["x","X"],["tiktok","تیک‌تاک"],["youtube","یوتیوب"]].forEach(([v,l])=>pp.appendChild(el("option",{value:v,selected:st.platform===v,text:l})));
+  [["","همه"],["x","X"],["tiktok","تیک‌تاک"]].forEach(([v,l])=>pp.appendChild(el("option",{value:v,selected:st.platform===v,text:l})));
   f.appendChild(q); f.appendChild(ss); f.appendChild(pp);
   const editCard = el("div",{});
   const body = el("div",{});
@@ -1739,21 +1739,20 @@ PAGES.ai = function(root){
 /* ---------- PAGE: Sources & Channels ---------- */
 PAGES.sources = function(root){
   const sBox = el("div",{}), cBox = el("div",{});
-  root.appendChild(card("منابع (X / تیک‌تاک / یوتیوب)",[sBox]));
+  root.appendChild(card("منابع (X / تیک‌تاک)",[sBox]));
   root.appendChild(card("کانال‌های مقصد روبیکا",[cBox]));
   function validSource(platform, key){
     if(!key) return "شناسهٔ منبع خالی است";
     if(platform==="x" && !/^@?[A-Za-z0-9_]{2,20}$/.test(key)) return "هندل X نامعتبر است (مثل @BBCPersian)";
     if(platform==="tiktok" && !/^@?[A-Za-z0-9._]{2,30}$/.test(key)) return "نام کاربری تیک‌تاک نامعتبر است";
-    if(platform==="youtube" && !/^(UC[A-Za-z0-9_\-]{20,}|@[A-Za-z0-9._\-]{2,40})$/.test(key)) return "شناسهٔ یوتیوب نامعتبر است (UC... یا @handle)";
     return null;
   }
   function loadSources(){
     loadInto(sBox, ()=>api("GET","/api/console/sources"), d=>{
       const w = el("div",{});
       const pf = el("select",{"aria-label":"پلتفرم جدید",style:{width:"auto"}});
-      [["x","X"],["tiktok","تیک‌تاک"],["youtube","یوتیوب"]].forEach(([v,l])=>pf.appendChild(el("option",{value:v,text:l})));
-      const kf = el("input",{type:"text",placeholder:"شناسه (@handle یا UC...)","aria-label":"شناسهٔ منبع"});
+      [["x","X"],["tiktok","تیک‌تاک"]].forEach(([v,l])=>pf.appendChild(el("option",{value:v,text:l})));
+      const kf = el("input",{type:"text",placeholder:"شناسهٔ منبع (@handle)","aria-label":"شناسهٔ منبع"});
       const nf2 = el("input",{type:"text",placeholder:"نام نمایشی","aria-label":"نام نمایشی"});
       w.appendChild(el("div",{class:"row"},[pf,kf,nf2, el("button",{class:"btn primary",text:"افزودن منبع",onclick:async()=>{
         const err = validSource(pf.value, kf.value.trim()); if(err) return toast(err,"err");

@@ -5,7 +5,7 @@
 ## قسمت اول: کشف و انتشار ادیت‌های Poppy Playtime
 
 ### کشف محتوا
-- منابع ادیت در مسیر فعلی: TikTok و کشف metadata از YouTube Shorts؛ Instagram از مسیر فعال ادیت کنار گذاشته شده است. ارسال ویدئوهای YouTube فعلاً در config/tiktok_source_policy.json متوقف است.
+- منابع ادیت در مسیر فعلی فقط TikTok است؛ YouTube و Instagram در مسیر عمومی حذف شده‌اند. مسیر سازگاری قدیمی mob_official عمداً حفظ شده است.
 - برای کشف اولیه از کلیدواژه‌ها، هشتگ‌ها و راه‌های جست‌وجوی مناسب استفاده شود تا محتوای مرتبط با Poppy Playtime شناسایی شود؛ فقط پس از این غربال اولیه به مغز بررسی سپرده شود.
 - زمان‌بند فعال GitHub Actions است: .github/workflows/termux-docker-discovery.yml هر ۳۰ دقیقه gate را بررسی می‌کند و تنها پس از پنج ساعت از intake موفق D1 جمع‌آوری کامل metadata را در Termux Docker اجرا می‌کند. این مسیر به اجرای روزانهٔ فرمان Termux روی گوشی وابسته نیست.
 

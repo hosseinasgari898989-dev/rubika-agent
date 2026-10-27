@@ -23,13 +23,13 @@ export function withCors(response) {
 
 const CATEGORIES = new Set(["info", "success", "error", "ai_success", "ai_error"]);
 const LEVELS = new Set(["debug", "info", "warning", "error"]);
-const PLATFORMS = new Set(["tiktok", "youtube", "instagram", "mob_official"]);
+const PLATFORMS = new Set(["tiktok", "mob_official"]);
 const ITEM_STATUSES = new Set(["discovered", "filtered", "queued", "downloading", "ready", "sending", "sent", "failed", "uncertain"]);
 const AI_PROVIDERS = new Set(["groq", "openrouter"]);
 const AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch", "translate_official"]);
 const EDITABLE_REVIEW = new Set(["pending", "rejected", "needs_review"]); // "approved" is never set from the console
 const LOCKED_ITEM_STATUSES = new Set(["sending", "sent"]);
-const SOURCE_PLATFORMS = new Set(["tiktok", "youtube", "instagram", "x", "mob_official"]);
+const SOURCE_PLATFORMS = new Set(["tiktok", "x", "mob_official"]);
 const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
 
 export async function handleConsoleApi(request, env, h) {
@@ -765,7 +765,7 @@ export async function handleConsoleApi(request, env, h) {
       return json({ ok: true, removed: Number(r?.meta?.changes || 0) });
     }
 
-    // ---------- sources (X / TikTok / YouTube ...) ----------
+    // ---------- sources (X / TikTok / Mob official compatibility) ----------
     if (sub === "/sources" && m === "GET") {
       const items = await all("SELECT id, platform, source_key, display_name, enabled, created_at, last_checked_at, last_seen_published_at FROM sources ORDER BY platform, source_key LIMIT 500");
       return json({ ok: true, items });
