@@ -254,5 +254,22 @@ class OwnerNotifyTests(unittest.TestCase):
         self.assertNotIn("token=hidden", rendered)
 
 
+    def test_workflow_failed_notification_includes_sanitized_error_detail(self):
+        with (
+            patch("sys.argv", [
+                "owner_notify", "--event", "workflow_failed",
+                "--workflow", "Mob X link processor",
+                "--reason", "mob_x_speech_gate_failed",
+                "--detail", "RuntimeError: model download failed https://huggingface.co/model?token=hidden-value",
+            ]),
+            patch.object(owner_notify, "send_owner_notification", return_value={"sent": True}) as notify,
+        ):
+            self.assertEqual(owner_notify.main(), 0)
+        message = notify.call_args.args[0]
+        self.assertIn("error_detail: RuntimeError: model download failed", message)
+        self.assertNotIn("https://huggingface.co", message)
+        self.assertNotIn("token=hidden-value", message)
+
+
 if __name__ == "__main__":
     unittest.main()
