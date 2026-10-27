@@ -1,4 +1,4 @@
-"""Unified metadata discovery; never downloads or publishes media."""
+"""TikTok metadata discovery only; never downloads or publishes media."""
 from __future__ import annotations
 
 import argparse
@@ -93,7 +93,7 @@ def run_discovery(
     report_path: str | Path = REPORT_PATH,
     phone_report_path: str | Path = TERMUX_REPORT_PATH,
 ) -> dict[str, Any]:
-    """Merge verified phone metadata with controlled fallbacks and write diagnostic evidence."""
+    """Load selected-profile TikTok metadata and write a diagnostic report."""
     ignored = {"tiktok": set()}
     store: dict[str, dict[str, dict[str, Any]]] = {
         "tiktok": {},
@@ -161,6 +161,14 @@ def run_discovery(
 
 
 def self_test() -> int:
+    profiles = known_tiktok_profiles()
+    if not profiles:
+        raise RuntimeError("tiktok_source_policy_empty")
+    identity = normalize_tiktok_url(
+        f"https://www.tiktok.com/@{profiles[0]}/video/7616247520657771796"
+    )
+    if identity is None or identity[0].casefold() != profiles[0].casefold():
+        raise RuntimeError("tiktok_url_normalization_failed")
     return 0
 
 
