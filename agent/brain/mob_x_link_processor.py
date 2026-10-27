@@ -39,10 +39,38 @@ LINK_RE = re.compile(r"^https://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/mob
 MEDIA_HOSTS = {"pbs.twimg.com", "video.twimg.com"}
 
 
+def _safe_exception_message(exc: BaseException) -> str:
+    """Return a short exception message safe for logs and the owner's private notification."""
+    rendered = str(exc or "")
+    for name, value in os.environ.items():
+        upper_name = name.upper()
+        if value and len(value) >= 4 and any(
+            marker in upper_name for marker in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "COOKIE", "CREDENTIAL", "OWNER_CHAT_ID")
+        ):
+            rendered = rendered.replace(value, "[REDACTED]")
+    rendered = re.sub(r"https?://\S+", "[URL omitted]", rendered, flags=re.IGNORECASE)
+    rendered = re.sub(
+        r"(?i)\b(?:token|password|secret|authorization|cookie|api[_-]?key)\s*[:=]\s*\S+",
+        "[REDACTED]",
+        rendered,
+    )
+    rendered = re.sub(r"\b[A-Za-z0-9_-]{32,}\b", "[REDACTED]", rendered)
+    rendered = re.sub(r"[\x00-\x1f\x7f]+", " ", rendered)
+    return " ".join(rendered.split()).strip()[:150]
+
+
 class MobXLinkError(RuntimeError):
-    def __init__(self, code: str):
+    def __init__(
+        self, code: str, *, error_class: str | None = None, error_detail: str | None = None,
+    ):
         super().__init__(code)
         self.code = code if re.fullmatch(r"[a-z0-9_-]{1,80}", code) else "mob_x_processing_failed"
+        self.error_class = (
+            error_class[:80]
+            if isinstance(error_class, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,79}", error_class)
+            else None
+        )
+        self.error_detail = str(error_detail or "")[:150] if error_detail is not None else None
 
 
 def parse_official_link(value: str) -> tuple[str, str] | None:
@@ -120,8 +148,18 @@ def run_video_speech_gate(path: str | Path, inspection: Any) -> dict:
                 str(path), model_size="small",
             )
         result = speech_gate.evaluate(probe, segments, language, language_probability)
-    except Exception:
-        raise MobXLinkError("mob_x_speech_gate_failed") from None
+    except Exception as exc:
+        error_class = type(exc).__name__
+        error_detail = _safe_exception_message(exc)
+        print(json.dumps({
+            "event": "mob_x_speech_gate_failed",
+            "error_code": "mob_x_speech_gate_failed",
+            "error_class": error_class,
+            "error_detail": error_detail,
+        }, ensure_ascii=False, sort_keys=True))
+        raise MobXLinkError(
+            "mob_x_speech_gate_failed", error_class=error_class, error_detail=error_detail,
+        ) from None
     return {
         "decision": result.decision,
         "reason": result.reason,
@@ -678,6 +716,9 @@ def process_one(report_path: str | None = None) -> int:
         return _write_report(report, report_path, 0)
     except MobXLinkError as exc:
         code = exc.code
+        if exc.error_class:
+            report["error_class"] = exc.error_class
+            report["error_detail"] = exc.error_detail or ""
     except Exception:
         code = "mob_x_processor_internal_error"
     report.update(status="failed", error_code=code)
