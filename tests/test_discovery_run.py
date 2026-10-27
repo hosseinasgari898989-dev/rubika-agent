@@ -3,9 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 from agent.discovery import run as runner
-from agent.discovery import v7
 from agent.source_policy import known_tiktok_profiles
 
 
@@ -21,19 +19,13 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
                         "author":selected,"title":"Poppy Playtime edit","caption":"Poppy Playtime edit","media_type":"video"},
                        {"platform":"tiktok","id":"7557483116605033748",
                         "url":"https://www.tiktok.com/@unlisted_creator/video/7557483116605033748",
-                        "author":"unlisted_creator","title":"Poppy Playtime edit","caption":"Poppy Playtime edit","media_type":"video"}],
-                   "youtube":[{"platform":"youtube","id":i,"url":f"https://www.youtube.com/shorts/{i}",
-                               "title":"Poppy Playtime fan edit","duration_seconds":45,"media_type":"video"}
-                              for i in ("vkVFgmgLo1s","n38wy3o0DhY","AbcdefGhijk","LMNOPQRSTuv","aBcDeFgHiJk")],
-                   "instagram":[{"platform":"instagram","id":"AbCdEf_1234","url":"https://www.instagram.com/reel/AbCdEf_1234/",
+                        "author":"unlisted_creator","title":"Poppy Playtime edit","caption":"Poppy Playtime edit","media_type":"video"}],                   "instagram":[{"platform":"instagram","id":"AbCdEf_1234","url":"https://www.instagram.com/reel/AbCdEf_1234/",
                                  "title":"Poppy Playtime Instagram Reel","media_type":"video"}]},
                "attempts":[]}
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);report_path=root/"phone.json";report_path.write_text(json.dumps(phone),encoding="utf-8")
-            with patch.object(v7,"known_ids",return_value={"youtube":set()}):
-                report=runner.run_discovery(report_path=root/"out.json",phone_report_path=report_path)
+            report=runner.run_discovery(report_path=root/"out.json",phone_report_path=report_path)
         self.assertEqual(report["summary"]["tiktok_candidates"],1)
-        self.assertEqual(report["summary"]["youtube_candidates"],5)
         self.assertEqual(report["summary"]["instagram_candidates"],1)
         self.assertTrue(report["summary"]["core_search_target_met"])
         self.assertTrue(report["summary"]["termux_report_loaded"])
@@ -58,13 +50,14 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
             candidates,generated,status=runner._load_phone_report(path)
         self.assertEqual(status,"invalid_report");self.assertIsNone(generated);self.assertEqual(candidates["tiktok"],[])
 
-    def test_live_exit_code_fails_if_youtube_target_is_missing(self):
+    def test_live_exit_code_fails_when_no_candidates_are_found(self):
+        from unittest.mock import patch
         with patch.object(runner,"run_discovery",return_value={"summary":{"core_search_target_met":False}}):
             self.assertEqual(runner.main(["--live"]),2)
 
-    def test_live_exit_code_succeeds_if_youtube_target_is_met(self):
+    def test_live_exit_code_succeeds_when_candidates_are_found(self):
+        from unittest.mock import patch
         with patch.object(runner,"run_discovery",return_value={"summary":{"core_search_target_met":True}}):
             self.assertEqual(runner.main(["--live"]),0)
-
 
 if __name__=="__main__":unittest.main()
