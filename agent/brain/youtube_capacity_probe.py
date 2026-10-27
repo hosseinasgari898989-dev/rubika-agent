@@ -495,8 +495,18 @@ def main() -> int:
         "ok": report.get("ok"),
         "status": report.get("status"),
         "largest_upload_success_mib": report.get("largest_upload_success_mib"),
+        "largest_channel_success_mib": report.get("largest_channel_success_mib"),
         "channel_test_status": report.get("channel_test", {}).get("status"),
         "cleanup_confirmed": report.get("channel_test", {}).get("cleanup_confirmed"),
+        "sizes": [
+            {
+                "size_mib": row.get("size_mib"),
+                "download": row.get("download_status"),
+                "upload": row.get("upload_status"),
+                "channel": row.get("channel_status"),
+            }
+            for row in report.get("sizes", [])
+        ],
     }, ensure_ascii=False, sort_keys=True))
     if not report.get("ok"):
         return 1
