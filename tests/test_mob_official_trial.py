@@ -185,7 +185,8 @@ class MobOfficialTrialReportTests(unittest.TestCase):
         self.assertEqual(selected, [{"source_platform": "x", "external_id": "x-1"}])
         self.assertEqual(len(candidates), 4)
         self.assertEqual(filter_official_candidates_by_source(candidates), candidates)
-        self.assertEqual(filter_official_candidates_by_source(candidates, "youtube"), [candidates[1]])
+        with self.assertRaisesRegex(ValueError, "invalid_official_source_platform"):
+            filter_official_candidates_by_source(candidates, "youtube")
 
     def test_source_lane_filter_rejects_unknown_lane(self):
         with self.assertRaisesRegex(ValueError, "invalid_official_source_platform"):
