@@ -10,13 +10,7 @@ on:
         description: "One public TikTok video URL"
         required: false
         type: string
-        default: "https://www.tiktok.com/@dragonboyedits/video/7616247520657771796"
-      instagram_url:
-        description: "One public Instagram Reel URL"
-        required: false
-        type: string
-        default: "https://www.instagram.com/p/CmCVWoIr9OH/"
-permissions:
+        default: "https://www.tiktok.com/@dragonboyedits/video/7616247520657771796"permissions:
   contents: read
 
 jobs:
@@ -27,7 +21,7 @@ jobs:
       - name: Check out Rubika-Agent
         uses: actions/checkout@v4
 
-      - name: Check out Cobalt source (TikTok/Instagram downloader)
+      - name: Check out Cobalt source (TikTok downloader)
         uses: actions/checkout@v4
         with:
           repository: imputnet/cobalt
@@ -87,7 +81,6 @@ jobs:
         env:
           COBALT_API_URL: "http://127.0.0.1:9000/"
           TIKTOK_URL: ${{ inputs.tiktok_url || 'https://www.tiktok.com/@dragonboyedits/video/7616247520657771796' }}
-          INSTAGRAM_URL: ${{ inputs.instagram_url || 'https://www.instagram.com/p/CmCVWoIr9OH/' }}
         run: python -m unittest discover -s tests -v && python -m agent.media_smoke_test
 
       - name: Stop local Cobalt API
