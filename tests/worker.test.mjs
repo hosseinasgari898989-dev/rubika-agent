@@ -1980,8 +1980,15 @@ async function postPanelUpdate(state, update, secret) {
         text: "", aux_data: { button_id: "p_status" },
       } },
     };
-    await postPanelUpdate(state, update, secret);
-    await postPanelUpdate(state, update, secret);
+    // Keep this pair inside the implementation's four-second duplicate-event window.
+    const originalNow = Date.now;
+    Date.now = () => 1800000000000;
+    try {
+      await postPanelUpdate(state, update, secret);
+      await postPanelUpdate(state, update, secret);
+    } finally {
+      Date.now = originalNow;
+    }
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
     assert.equal(calls.some(call => call.method === "editMessageKeypad" || call.method === "editMessageText"), false);
