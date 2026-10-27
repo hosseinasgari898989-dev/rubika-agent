@@ -274,76 +274,67 @@ def _stream_upload(upload_url: str, media_path: Path, filename: str) -> str:
             conn.close()
 
 
-def _send_one_test_message(token: str, channel_guid: str, uploaded: list[dict[str, Any]]) -> dict[str, Any]:
-    """Attempt the largest accepted upload once; delete the one test post immediately."""
-    for item in reversed(uploaded):
-        result = _api_post(token, "sendFile", {
-            "chat_id": channel_guid,
-            "file_id": item["file_id"],
-            "text": f"🧪 آزمون موقت ظرفیت فایل ویدیویی ({item['size_mib']} MiB)؛ حذف خودکار پس از بررسی.",
-            "disable_notification": True,
-            "chat_keypad_type": "None",
-        })
-        payload = result.get("payload")
-        if result.get("transport_ok") is not True or result.get("http_status") is None:
-            return {
-                "status": "uncertain",
-                "size_mib": item["size_mib"],
-                "cleanup_confirmed": False,
-                "error": "send_response_uncertain_do_not_retry",
-            }
-        if not isinstance(payload, dict):
-            return {
-                "status": "uncertain",
-                "size_mib": item["size_mib"],
-                "cleanup_confirmed": False,
-                "error": "send_response_invalid_do_not_retry",
-            }
-        if payload.get("status") != "OK":
-            # A clear API rejection is safe to retry with the previous smaller upload.
-            if 200 <= int(result.get("http_status") or 0) < 300:
-                continue
-            return {
-                "status": "rejected",
-                "size_mib": item["size_mib"],
-                "cleanup_confirmed": False,
-                "error": "send_http_" + str(result.get("http_status")),
-            }
-
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        message_id = data.get("message_id") or payload.get("message_id")
-        if not isinstance(message_id, str) or not message_id.strip():
-            return {
-                "status": "uncertain",
-                "size_mib": item["size_mib"],
-                "cleanup_confirmed": False,
-                "error": "message_id_missing_do_not_retry",
-            }
-
-        deletion = _api_post(token, "deleteMessage", {
-            "chat_id": channel_guid,
-            "message_id": message_id,
-        })
-        delete_payload = deletion.get("payload")
-        deleted = (
-            deletion.get("transport_ok") is True
-            and deletion.get("http_status") == 200
-            and isinstance(delete_payload, dict)
-            and delete_payload.get("status") == "OK"
-        )
+def _send_one_test_message(token: str, channel_guid: str, item: dict[str, Any]) -> dict[str, Any]:
+    """Post one probe size, then delete it before the next size is attempted."""
+    result = _api_post(token, "sendFile", {
+        "chat_id": channel_guid,
+        "file_id": item["file_id"],
+        "text": f"🧪 آزمون موقت ظرفیت فایل ویدیویی ({item['size_mib']} MiB)؛ حذف خودکار پس از بررسی.",
+        "disable_notification": True,
+        "chat_keypad_type": "None",
+    })
+    payload = result.get("payload")
+    if result.get("transport_ok") is not True:
         return {
-            "status": "sent_and_deleted" if deleted else "sent_delete_unconfirmed",
+            "status": "uncertain",
             "size_mib": item["size_mib"],
-            "cleanup_confirmed": deleted,
-            "error": None if deleted else "test_message_delete_unconfirmed",
+            "cleanup_confirmed": False,
+            "error": "send_response_uncertain_do_not_retry",
         }
-    return {
-        "status": "no_test_post_accepted",
-        "size_mib": None,
-        "cleanup_confirmed": True,
-        "error": "all_test_send_sizes_rejected",
-    }
+    if not isinstance(payload, dict):
+        return {
+            "status": "uncertain",
+            "size_mib": item["size_mib"],
+            "cleanup_confirmed": False,
+            "error": "send_response_invalid_do_not_retry",
+        }
+    if payload.get("status") != "OK":
+        detail = payload.get("status_det") or payload.get("error") or payload.get("error_code")
+        safe_detail = re.sub(r"[^A-Za-z0-9_-]", "", str(detail or "api_rejected"))[:50].lower()
+        return {
+            "status": "rejected",
+            "size_mib": item["size_mib"],
+            "cleanup_confirmed": True,
+            "error": "send_api_rejected_" + safe_detail,
+        }
 
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    message_id = data.get("message_id") or payload.get("message_id")
+    if not isinstance(message_id, str) or not message_id.strip():
+        return {
+            "status": "uncertain",
+            "size_mib": item["size_mib"],
+            "cleanup_confirmed": False,
+            "error": "message_id_missing_do_not_retry",
+        }
+
+    deletion = _api_post(token, "deleteMessage", {
+        "chat_id": channel_guid,
+        "message_id": message_id,
+    })
+    delete_payload = deletion.get("payload")
+    deleted = (
+        deletion.get("transport_ok") is True
+        and deletion.get("http_status") == 200
+        and isinstance(delete_payload, dict)
+        and delete_payload.get("status") == "OK"
+    )
+    return {
+        "status": "sent_and_deleted" if deleted else "sent_delete_unconfirmed",
+        "size_mib": item["size_mib"],
+        "cleanup_confirmed": deleted,
+        "error": None if deleted else "test_message_delete_unconfirmed",
+    }
 
 def _write_report(report: dict[str, Any]) -> None:
     output = Path("artifacts/youtube_capacity_probe_report.json")
