@@ -261,7 +261,15 @@ def main() -> int:
         try:
             page.goto(CONSOLE_URL, wait_until="domcontentloaded", timeout=15000)
             page.wait_for_function("() => !!window.RC && !!window.RC.A && !!window.RC.V", timeout=10000)
-            page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && (v.innerText || '').trim().length > 0; }", timeout=10000)
+            page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && !!v.querySelector('.card') && (v.innerText || '').trim().length > 0; }", timeout=10000)
+
+            # Leave the auto-selected startup route so every page check exercises a real navigation event.
+            page.locator('#nav button[data-id="set"]').click()
+            page.wait_for_function(
+                "(expected) => document.querySelector('#ttl')?.textContent === expected",
+                arg="اتصال", timeout=5000,
+            )
+            page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && !!v.querySelector('.card') && (v.innerText || '').trim().length > 0; }", timeout=5000)
 
             for page_id, title in PAGES:
                 active_page[0] = page_id
@@ -275,7 +283,7 @@ def main() -> int:
                         "(expected) => document.querySelector('#ttl')?.textContent === expected",
                         arg=title, timeout=5000,
                     )
-                    page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && (v.innerText || '').trim().length > 0; }", timeout=5000)
+                    page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && !!v.querySelector('.card') && (v.innerText || '').trim().length > 0; }", timeout=5000)
                     page.wait_for_timeout(40)
 
                     text = page.locator("#view").inner_text().strip()
@@ -313,7 +321,7 @@ def main() -> int:
                         "(expected) => document.querySelector('#ttl')?.textContent === expected",
                         arg=dict(PAGES)[page_id], timeout=5000,
                     )
-                    page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && (v.innerText || '').trim().length > 0; }", timeout=5000)
+                    page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && !!v.querySelector('.card') && (v.innerText || '').trim().length > 0; }", timeout=5000)
                     action()
                 except Exception as exc:
                     failures.append(f"{page_id}: interaction failed: {exc}")
