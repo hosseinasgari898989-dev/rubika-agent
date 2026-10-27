@@ -633,6 +633,16 @@ const read = async response => ({ status: response.status, body: await response.
   }), state));
   assert.equal(response.status, 409);
   assert.equal(response.body.error, "source_already_exists");
+
+  for (const platform of ["youtube", "instagram", "mob_official"]) {
+    response = await read(await worker.fetch(request("/api/console/sources", {
+      method: "POST",
+      body: { platform, source_key: "legacy-source", display_name: "Retired source" },
+    }), state));
+    assert.equal(response.status, 400, platform);
+    assert.equal(response.body.error, "invalid_platform", platform);
+  }
+  assert.equal(state.DB.sources.size, 1);
 }
 
 // Console API rejects destructive SQL, unauthorized review approval, uncertain requeue without confirmation,
@@ -880,9 +890,9 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
-  const officialYoutubePost = {
+  const officialNonXPost = {
     platform: "mob_official",
-    external_id: "yt-abcdefghijk",
+    external_id: "legacy-video-id",
     canonical_url: "https://www.youtube.com/watch?v=abcdefghijk",
     source_key: "youtube.com",
     status: "discovered",
@@ -893,10 +903,11 @@ const read = async response => ({ status: response.status, body: await response.
     persian_translation: "کپشن رسمی",
   };
   const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
-    method: "POST", body: officialYoutubePost,
+    method: "POST", body: officialNonXPost,
   }), state));
-  assert.equal(response.status, 200);
-  assert.equal(response.body.item_id, "mob_official:yt-abcdefghijk");
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "invalid_canonical_url");
+  assert.equal(state.DB.items.size, 0);
 }
 {
   const state = env();
