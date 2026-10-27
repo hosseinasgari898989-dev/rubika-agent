@@ -98,7 +98,7 @@ def _ass_ts(ms: int) -> str:
     return f"{h}:{m:02d}:{s:02d}.{f // 10:02d}"
 
 
-def to_ass(cues: list, font: str = "Vazirmatn", size: int = 44, rtl: bool = True) -> str:
+def to_ass(cues: list, font: str = "Estedad", size: int = 44, rtl: bool = True) -> str:
     head = (
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\n"
         "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\n"
@@ -106,7 +106,7 @@ def to_ass(cues: list, font: str = "Vazirmatn", size: int = 44, rtl: bool = True
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-        "0,0,0,0,100,100,0,0,1,2,0,2,40,40,40,1\n\n[Events]\n"
+        "-1,0,0,0,100,100,0,0,1,2,0,2,40,40,40,1\n\n[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     lines = []
