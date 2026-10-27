@@ -15,6 +15,7 @@ import socket
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import requests
