@@ -36,7 +36,7 @@ class SubtitleToolsTest(unittest.TestCase):
 
     def test_ass_output(self):
         ass = st.to_ass([(1000, 2500, "سلام {دنیا}\nخط دوم")])
-        self.assertIn("Vazirmatn", ass)
+        self.assertIn("Estedad", ass)
         self.assertIn("Dialogue: 0,0:00:01.00,0:00:02.50", ass)
         self.assertIn("\\N", ass)
         self.assertNotIn("{", ass.split("[Events]")[1].split("Text\n", 1)[1])
