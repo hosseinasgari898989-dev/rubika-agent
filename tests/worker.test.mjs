@@ -1122,6 +1122,19 @@ function makeOmniAI(probability = 0.97) {
 }
 {
   const state = env();
+  state.AI = makeOmniAI();
+  for (const platform of ["youtube", "instagram"]) {
+    const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
+      method: "POST",
+      body: { audio: sampleAudioDataUrl(), platform },
+    }), state));
+    assert.equal(response.status, 400, platform);
+    assert.equal(response.body.error, "moderation_platform_invalid", platform);
+  }
+  assert.equal(state.DB.aiUsageDaily.size, 0);
+}
+{
+  const state = env();
   state.AI = makeOmniAI(0.55);
   const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
     method: "POST",
