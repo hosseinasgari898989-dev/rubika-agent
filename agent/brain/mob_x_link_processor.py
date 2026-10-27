@@ -28,7 +28,7 @@ from agent.brain.mob_translation import translate_to_persian
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import StagedMedia
 from agent.storage.mega import MegaStorage
-from agent.brain.mob_x_rubika import upload_preview_media, send_owner_preview
+from agent.brain.mob_x_rubika import upload_preview_media, send_owner_preview, send_owner_translation_failure
 
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_VIDEO_SECONDS = 600
@@ -594,6 +594,12 @@ def process_one(report_path: str | None = None) -> int:
             client.transition(job["id"], "failed", error_code=code)
         except Exception:
             report["transition_error"] = "mob_x_failure_transition_failed"
+        if code == "mob_x_translation_failed":
+            try:
+                send_owner_translation_failure(os.getenv("RUBIKA_TOKEN",""),os.getenv("RUBIKA_OWNER_CHAT_ID",""),job["id"])
+                report["owner_pv_notice"]="sent"
+            except Exception:
+                report["owner_pv_notice"]="failed"
     return _write_report(report, report_path, 1)
 
 

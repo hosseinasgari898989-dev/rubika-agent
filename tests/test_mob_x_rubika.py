@@ -137,6 +137,18 @@ class MobXRubikaTests(unittest.TestCase):
             send_test_channel_once("test-token", TEST_CHANNEL_FOR_TESTS, "rubika-file-001", "caption", bot_factory=factory)
         holder["bot"]._post.assert_called_once()
 
+    def test_translation_failure_notice_is_private_and_noninteractive(self):
+        from agent.brain.mob_x_rubika import send_owner_translation_failure
+        holder={}
+        def factory(**kwargs):
+            holder["bot"]=RubikaMediaMock(**kwargs);return holder["bot"]
+        send_owner_translation_failure("test-token","owner-chat","job_abcdef1234567890",bot_factory=factory)
+        holder["bot"]._post.assert_called_once()
+        method,payload=holder["bot"]._post.call_args.args
+        self.assertEqual(method,"sendMessage");self.assertEqual(payload["chat_id"],"owner-chat")
+        self.assertIn("mob_x_translation_failed",payload["text"]);self.assertNotIn("inline_keypad",payload)
+        with self.assertRaises(ValueError): send_owner_translation_failure("test-token","owner-chat","bad-job",bot_factory=factory)
+
     def test_uncertain_notice_has_manual_confirmation_not_retry(self):
         holder = {}
         def factory(**kwargs):
