@@ -19,6 +19,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+from agent.brain import speech_gate
 from agent.brain.cloud_state import CloudState
 from agent.brain.inspector import inspect_media
 from agent.brain.models import Candidate
@@ -57,6 +58,55 @@ def clean_caption(value: object, limit: int = 5000) -> str:
     text = re.sub(r"[*_~]{1,3}", "", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()[:max(0, limit)]
+
+
+def _safe_markdown_body(value: object, limit: int = 4000) -> str:
+    """Keep caption content plain so source markup cannot inject Rubika metadata."""
+    body = clean_caption(value, limit)
+    body = body.replace("$", "＄")
+    return re.sub(r"(?m)^>", "›", body)
+
+
+def build_mob_x_caption(original_caption: object, translation: object = None) -> str:
+    """Format a media-backed official X post for Rubika bold and quote metadata."""
+    source = _safe_markdown_body(original_caption, 5000)
+    if not source:
+        return "**ماب انترتینمنت در پیج X خود پستی منتشر کرد.**"
+
+    heading = "**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**"
+    translated = _safe_markdown_body(translation, 4000)
+    if not translated:
+        return f"{heading}\n\n**{source}**"
+    return f"{heading}\n\n**{source}**\n\n$**ترجمه متن:**\n**{translated}**$"
+
+
+def run_video_speech_gate(path: str | Path, inspection: Any) -> dict:
+    """Classify speech before a video can be staged; ASR failure never bypasses the gate."""
+    probe = {
+        "format": {"duration": float(inspection.duration_seconds or 0)},
+        "streams": [{"codec_type": "video"}],
+    }
+    segments = []
+    language = None
+    language_probability = 0.0
+    if inspection.has_audio:
+        probe["streams"].append({"codec_type": "audio"})
+    try:
+        if inspection.has_audio:
+            segments, language, language_probability = speech_gate.transcribe(
+                str(path), model_size="small",
+            )
+        result = speech_gate.evaluate(probe, segments, language, language_probability)
+    except Exception:
+        raise MobXLinkError("mob_x_speech_gate_failed") from None
+    return {
+        "decision": result.decision,
+        "reason": result.reason,
+        "speech_seconds": round(float(result.speech_seconds), 3),
+        "speech_ratio": round(float(result.speech_ratio), 4),
+        "language": result.language,
+        "language_prob": round(float(result.language_prob), 4),
+    }
 
 
 def author_is_official(value: object) -> bool:
@@ -405,28 +455,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
 
     post = fetch_public_post(external_id, session=session)
     original = str(post.get("text") or "").strip()[:5000]
-    translation_source = clean_caption(original, 5000)
-    if not translation_source:
-        raise MobXLinkError("mob_x_caption_missing")
-    rules = client.rules()
-    try:
-        caption_limit = max(1, min(4000, int(rules.get("caption_max_chars", 900))))
-    except (TypeError, ValueError):
-        caption_limit = 900
-    if rules.get("translate_enabled", True) is True:
-        try:
-            translation = clean_caption(translate_to_persian(translation_source), caption_limit)
-        except Exception:
-            translation = ""
-        if not translation:
-            raise MobXLinkError("mob_x_translation_failed")
-        caption = translation
-    else:
-        translation = None
-        caption = clean_caption(translation_source, caption_limit)
-        if not caption:
-            raise MobXLinkError("mob_x_caption_missing")
-
+    # Resolve media first: text-only posts must never enter the caption/translation path.
     media_type, media_url = select_media(post)
     with tempfile.TemporaryDirectory(prefix="rubika-agent-mob-x-") as temp:
         local_path = download_public_media(media_url, media_type, temp, session=session)
@@ -437,6 +466,26 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
             raise MobXLinkError("mob_x_media_validation_failed")
         if media_type == "video" and inspection.duration_seconds and inspection.duration_seconds > MAX_VIDEO_SECONDS:
             raise MobXLinkError("mob_x_video_duration_limit")
+
+        # All videos pass through the speech gate before translation, review, MEGA or preview.
+        speech_gate_result = run_video_speech_gate(local_path, inspection) if media_type == "video" else None
+
+        translation_source = clean_caption(original, 5000)
+        translation = None
+        if translation_source:
+            rules = client.rules()
+            try:
+                caption_limit = max(1, min(4000, int(rules.get("caption_max_chars", 900))))
+            except (TypeError, ValueError):
+                caption_limit = 900
+            if rules.get("translate_enabled", True) is True:
+                try:
+                    translation = clean_caption(translate_to_persian(translation_source), caption_limit)
+                except Exception:
+                    translation = ""
+                if not translation:
+                    raise MobXLinkError("mob_x_translation_failed")
+        caption = build_mob_x_caption(translation_source, translation)
         candidate = Candidate(
             platform="mob_official", canonical_url=canonical_url, external_id=external_id,
             title=clean_caption(post.get("title"), 500) or original[:500],
@@ -477,7 +526,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
             "media_url": media_url, "storage_key": storage_key,
             "source_tier": "official", "review_state": "pending",
             "rubika_file_id": rubika_file_id, "preview_sent": False,
-            "publishing_attempted": False,
+            "publishing_attempted": False, "speech_gate": speech_gate_result,
         }
         client.transition(job_id, "ready_for_review", result=result)
         try:
@@ -491,7 +540,11 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         except MobXLinkError:
             # The preview and controls were sent; preserve the durable reusable file_id.
             pass
-        return {"status": "ready_for_review", "job_id": job_id, "item_id": result["item_id"], "external_id": external_id}
+        return {
+            "status": "ready_for_review", "job_id": job_id,
+            "item_id": result["item_id"], "external_id": external_id,
+            "speech_gate": speech_gate_result,
+        }
 
 
 def _write_report(report: dict, path: str | None, exit_code: int) -> int:
