@@ -771,11 +771,11 @@ const read = async response => ({ status: response.status, body: await response.
   state.DB.automationQueue.set("tiktok:item-1", {
     id: "tiktok:item-1", status: "queued", sent_at: null,
   });
-  state.DB.automationQueue.set("youtube:item-2", {
-    id: "youtube:item-2", status: "processing", sent_at: null,
+  state.DB.automationQueue.set("tiktok:item-2", {
+    id: "tiktok:item-2", status: "processing", sent_at: null,
   });
-  state.DB.automationQueue.set("instagram:item-3", {
-    id: "instagram:item-3", status: "sent", sent_at: new Date().toISOString(),
+  state.DB.automationQueue.set("tiktok:item-3", {
+    id: "tiktok:item-3", status: "sent", sent_at: new Date().toISOString(),
   });
   const before = [...state.DB.automationQueue.values()].map(row => row.status);
   let response = await read(await worker.fetch(
@@ -849,21 +849,21 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
-  state.DB.items.set("youtube:vkVFgmgLo1s", {
-    id: "youtube:vkVFgmgLo1s",
-    platform: "youtube",
-    external_id: "vkVFgmgLo1s",
+  state.DB.items.set("tiktok:7616247520657771796", {
+    id: "tiktok:7616247520657771796",
+    platform: "tiktok",
+    external_id: "7616247520657771796",
     media_sha256: "c".repeat(64),
     status: "sent",
     review_state: "approved",
   });
   const response = await read(await worker.fetch(request(
-    "/api/brain/items/seen?limit=999&offset=-7&platform=youtube"
+    "/api/brain/items/seen?limit=999&offset=-7&platform=tiktok"
   ), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.items.length, 1);
-  assert.equal(response.body.items[0].external_id, "vkVFgmgLo1s");
-  assert.deepEqual(state.DB.seenQuery.values, ["youtube", 500, 0]);
+  assert.equal(response.body.items[0].external_id, "7616247520657771796");
+  assert.deepEqual(state.DB.seenQuery.values, ["tiktok", 500, 0]);
 }
 {
   const state = env();
@@ -880,7 +880,7 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
-  const officialYoutubePost = {
+  const officialNonXPost = {
     platform: "mob_official",
     external_id: "yt-abcdefghijk",
     canonical_url: "https://www.youtube.com/watch?v=abcdefghijk",
@@ -893,10 +893,10 @@ const read = async response => ({ status: response.status, body: await response.
     persian_translation: "کپشن رسمی",
   };
   const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
-    method: "POST", body: officialYoutubePost,
+    method: "POST", body: officialNonXPost,
   }), state));
-  assert.equal(response.status, 200);
-  assert.equal(response.body.item_id, "mob_official:yt-abcdefghijk");
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "invalid_canonical_url");
 }
 {
   const state = env();
@@ -966,9 +966,9 @@ const read = async response => ({ status: response.status, body: await response.
 {
   const state = env();
   const directSent = {
-    platform: "youtube", external_id: "vkVFgmgLo1s",
-    canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
-    source_key: "channel", status: "sent", review_state: "pending",
+    platform: "tiktok", external_id: "7616247520657771796",
+    canonical_url: "https://www.tiktok.com/@creator/video/7616247520657771796",
+    source_key: "@creator", status: "sent", review_state: "pending",
   };
   const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
     method: "POST", body: directSent,
@@ -979,9 +979,9 @@ const read = async response => ({ status: response.status, body: await response.
 {
   const state = env();
   const badApproval = {
-    platform: "youtube", external_id: "vkVFgmgLo1s",
-    canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
-    source_key: "channel", status: "ready", review_state: "approved",
+    platform: "tiktok", external_id: "7616247520657771796",
+    canonical_url: "https://www.tiktok.com/@creator/video/7616247520657771796",
+    source_key: "@creator", status: "ready", review_state: "approved",
     media_type: "video", source_tier: "unknown", media_sha256: "b".repeat(64),
     media_bytes: 500000, validation: { ok: true },
   };
@@ -1089,7 +1089,7 @@ function makeOmniAI(probability = 0.97) {
   state.AI = makeOmniAI();
   const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
     method: "POST",
-    body: { audio: sampleAudioDataUrl(), platform: "youtube", title: "Poppy Playtime edit", caption: "#edit" },
+    body: { audio: sampleAudioDataUrl(), platform: "tiktok", title: "Poppy Playtime edit", caption: "#edit" },
   }), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.model, "@cf/cloudflare/clef-omni");
@@ -1119,7 +1119,7 @@ function makeOmniAI(probability = 0.97) {
   state.AI = makeOmniAI();
   const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
     method: "POST",
-    body: { audio: "data:text/html;base64," + Buffer.from("x".repeat(1400)).toString("base64"), platform: "youtube" },
+    body: { audio: "data:text/html;base64," + Buffer.from("x".repeat(1400)).toString("base64"), platform: "tiktok" },
   }), state));
   assert.equal(response.status, 400);
   assert.equal(response.body.error, "moderation_audio_format_invalid");
@@ -1129,7 +1129,7 @@ function makeOmniAI(probability = 0.97) {
   const state = env();
   state.AI = { run: async () => { throw new Error("secret provider body"); } };
   const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
-    method: "POST", body: { audio: sampleAudioDataUrl(), platform: "youtube" },
+    method: "POST", body: { audio: sampleAudioDataUrl(), platform: "tiktok" },
   }), state));
   assert.equal(response.status, 502);
   assert.equal(response.body.error, "music_inference_failed");
@@ -1150,7 +1150,7 @@ function makeOmniAI(probability = 0.97) {
 }
 {
   const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
-    method: "POST", body: { audio: sampleAudioDataUrl(), platform: "youtube" }, token: null,
+    method: "POST", body: { audio: sampleAudioDataUrl(), platform: "tiktok" }, token: null,
   }), env()));
   assert.equal(response.status, 401);
 }
