@@ -133,7 +133,7 @@ export async function handleConsoleApi(request, env, h) {
       const q = text(url.searchParams.get("q"), 80);
       if (status && !ITEM_STATUSES.has(status)) return fail("invalid_status", 400);
       if (platform && !PLATFORMS.has(platform)) return fail("invalid_platform", 400);
-      const conds = [], args = [];
+      const conds = ["platform IN ('tiktok','mob_official')"], args = [];
       if (status) { conds.push("status = ?"); args.push(status); }
       if (platform) { conds.push("platform = ?"); args.push(platform); }
       if (q) { conds.push("(title LIKE ? ESCAPE '\\' OR canonical_url LIKE ? ESCAPE '\\' OR external_id LIKE ? ESCAPE '\\')"); args.push(like(q), like(q), like(q)); }
@@ -767,7 +767,7 @@ export async function handleConsoleApi(request, env, h) {
 
     // ---------- sources (X / TikTok only) ----------
     if (sub === "/sources" && m === "GET") {
-      const items = await all("SELECT id, platform, source_key, display_name, enabled, created_at, last_checked_at, last_seen_published_at FROM sources ORDER BY platform, source_key LIMIT 500");
+      const items = await all("SELECT id, platform, source_key, display_name, enabled, created_at, last_checked_at, last_seen_published_at FROM sources WHERE platform IN ('tiktok','mob_official') ORDER BY platform, source_key LIMIT 500");
       return json({ ok: true, items });
     }
     if (sub === "/sources" && m === "POST") {
