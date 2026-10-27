@@ -7,7 +7,6 @@ No production channel, AI provider, D1 API, or publishing queue is used.
 """
 from __future__ import annotations
 
-import hashlib
 import http.client
 import json
 import os
@@ -28,8 +27,9 @@ from urllib.request import urlopen
 
 import requests
 
+from agent.brain import test_channel
+
 API_BASE = "https://botapi.rubika.ir/v3"
-TEST_CHANNEL_SHA256 = "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8"
 PROBE_SIZES_MIB = (16, 32, 64, 128, 256, 512, 768, 1024, 1536, 2048, 3072, 4096)
 YOUTUBE_SAMPLE_URL = "https://www.youtube.com/shorts/VN5KSQ4didU"
 MAX_YOUTUBE_METADATA_SECONDS = 60
@@ -49,7 +49,7 @@ class ProbeError(RuntimeError):
 def test_channel_is_authorized(channel_guid: str) -> bool:
     """Accept only the exact registered test destination without logging it."""
     value = str(channel_guid or "").strip()
-    return bool(value) and hashlib.sha256(value.encode("utf-8")).hexdigest() == TEST_CHANNEL_SHA256
+    return test_channel.is_test_channel_guid(value)
 
 
 def probe_size_ladder_mib() -> tuple[int, ...]:
