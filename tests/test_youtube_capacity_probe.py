@@ -26,11 +26,14 @@ class YouTubeCapacityProbeTests(unittest.TestCase):
         self.assertFalse(probe.test_channel_is_authorized("not-the-test-channel"))
         self.assertFalse(probe.test_channel_is_authorized("main-channel-guid"))
 
-    def test_probe_guard_matches_existing_test_channel_guard(self):
-        self.assertEqual(
-            probe.TEST_CHANNEL_SHA256,
-            test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256,
-        )
+    def test_probe_guard_delegates_to_canonical_test_channel_guard(self):
+        with patch.object(
+            test_channel, "is_test_channel_guid",
+            side_effect=lambda value: str(value or "").strip() == "authorized-test-only",
+        ) as canonical:
+            self.assertTrue(probe.test_channel_is_authorized(" authorized-test-only "))
+            self.assertFalse(probe.test_channel_is_authorized("main-channel"))
+        self.assertEqual(canonical.call_count, 2)
 
     def test_api_transport_errors_are_reduced_to_safe_labels(self):
         token = "do-not-print-this-token"
