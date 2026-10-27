@@ -114,41 +114,17 @@ function canonicalUrlFor(platform, value) {
   const host = parsed.hostname.toLowerCase();
   const hosts = {
     tiktok: ["tiktok.com"],
-    mob_official: ["mobentertainment.com", "poppyplaytime.com", "steamcommunity.com", "youtube.com", "youtu.be", "x.com"]
+    mob_official: ["x.com"]
   };
   const allowed = hosts[platform] || [];
   if (!allowed.some(domain => host === domain || host.endsWith("." + domain))) return null;
 
-  if (platform === "mob_official" && (host === "x.com" || host.endsWith(".x.com"))) {
-    // Only canonical status URLs from Mob's exact official handle are accepted.
-    // Do not allow arbitrary X users, search parameters, or third-party subdomains.
+  if (platform === "mob_official") {
+    // Official Mob items are accepted only from the exact official X handle.
     if (!["x.com", "www.x.com"].includes(host) || parsed.search) return null;
     const match = /^\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/.exec(parsed.pathname);
     if (!match) return null;
     return "https://x.com/mobgamesstudios/status/" + match[1];
-  }
-
-  if (
-    platform === "mob_official" &&
-    (host === "youtu.be" || host.endsWith(".youtu.be") || host === "youtube.com" || host.endsWith(".youtube.com"))
-  ) {
-    // For official Mob YouTube posts, allow canonical public video URLs only.
-    // Temporary/signature parameters and all other query keys are rejected.
-    if (host === "youtu.be" || host.endsWith(".youtu.be")) {
-      if (parsed.search || !/^\/[A-Za-z0-9_-]{11}\/?$/.test(parsed.pathname)) return null;
-      const id = parsed.pathname.split("/").filter(Boolean)[0];
-      return "https://www.youtube.com/watch?v=" + id;
-    }
-    if (parsed.pathname === "/watch") {
-      if ([...parsed.searchParams.keys()].some(key => key !== "v") ||
-          [...parsed.searchParams.keys()].length !== 1) return null;
-      const id = parsed.searchParams.get("v") || "";
-      if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
-      return "https://www.youtube.com/watch?v=" + id;
-    }
-    const shorts = /^\/shorts\/([A-Za-z0-9_-]{11})\/?$/.exec(parsed.pathname);
-    if (shorts && !parsed.search) return "https://www.youtube.com/shorts/" + shorts[1];
-    return null;
   }
 
   if (parsed.search) return null;
@@ -441,7 +417,7 @@ async function seenItems(env, url) {
   try {
     const sql = platform
       ? "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform = ? ORDER BY discovered_at DESC LIMIT ? OFFSET ?"
-      : "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items ORDER BY discovered_at DESC LIMIT ? OFFSET ?";
+      : "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform IN ('tiktok','mob_official') ORDER BY discovered_at DESC LIMIT ? OFFSET ?";
     const statement = env.DB.prepare(sql);
     const result = platform
       ? await statement.bind(platform, limit, offset).all()
