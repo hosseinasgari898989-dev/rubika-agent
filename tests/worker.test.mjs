@@ -43,11 +43,11 @@ class FakeStatement {
   }
   async first() {
     if (this.sql.includes("INSERT INTO ai_provider_calls") && this.sql.includes("'cloudflare', 'translate_official'")) {
-      const [callId,usageDay,runId,estimate,startedAt,totalDay,totalEstimate,totalLimit,bucketDay,kind,bucketEstimate,bucketLimit]=this.values;
+      const [callId,usageDay,runId,estimate,startedAt,unknownDay,totalDay,totalEstimate,totalLimit,bucketDay,kind,bucketEstimate,bucketLimit]=this.values;
       const rows=[...this.db.aiProviderCalls.values()].filter(x=>x.usage_day===totalDay&&x.role==="translate_official");
       const used=rows.reduce((n,x)=>n+Number(x.total_tokens||0),0);
       const bucket=rows.filter(x=>(String(x.run_id||"").startsWith("mobsub_")?"subtitle":"caption")===kind).reduce((n,x)=>n+Number(x.total_tokens||0),0);
-      if(used+totalEstimate>totalLimit||bucket+bucketEstimate>bucketLimit||this.db.aiProviderCalls.has(callId))return null;
+      if(rows.some(x=>x.usage_day===unknownDay&&x.total_tokens==null)||used+totalEstimate>totalLimit||bucket+bucketEstimate>bucketLimit||this.db.aiProviderCalls.has(callId))return null;
       this.db.aiProviderCalls.set(callId,{call_id:callId,usage_day:usageDay,provider:"cloudflare",role:"translate_official",run_id:runId,status:"reserved",total_tokens:estimate,started_at:startedAt,error_code:null,finished_at:null});
       return {call_id:callId};
     }

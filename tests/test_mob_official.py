@@ -223,25 +223,22 @@ class MobTranslationTests(unittest.TestCase):
         self.assertEqual(call.call_args_list[0].kwargs["provider"], "groq")
         self.assertEqual(call.call_args_list[1].kwargs["provider"], "openrouter")
 
-    def test_long_official_caption_is_translated_in_bounded_chunks(self):
+    def test_caption_within_2100_characters_uses_one_request(self):
         calls = []
 
         class ChunkTranslator:
             def translate(self, value):
                 calls.append(value)
-                self.assert_short = len(value) <= 700
                 return "ترجمه " + value
 
         def factory(**kwargs):
             return ChunkTranslator()
 
-        source = (
-            "Mob Entertainment announced an official update. " * 24
-        ).strip()
+        source = ("Mob Entertainment announced an official update. " * 24).strip()
         translated = translate_to_persian(source, translator_factory=factory)
         self.assertIsInstance(translated, str)
-        self.assertGreater(len(calls), 1)
-        self.assertTrue(all(len(value) <= 700 for value in calls))
+        self.assertEqual(len(calls), 1)
+        self.assertLessEqual(len(calls[0]), 2100)
         self.assertTrue(translated.startswith("ترجمه "))
 
 

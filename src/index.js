@@ -950,8 +950,6 @@ async function ownerConsoleQueueSummary(env) {
 
 const CODE_AI_PROVIDER_LIMITS = Object.freeze({ groq: 18, openrouter: 18 });
 const CODE_AI_TOTAL_DAILY_LIMIT = 36;
-const GROQ_DAILY_TOKEN_LIMIT = 200000;
-const TRANSLATION_DAILY_TOKEN_LIMIT = 200000;
 const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch", "translate_official"]);
 const CODE_AI_MAX_COOLDOWN_SECONDS = 86400;
 const CODE_AI_DEFAULT_COOLDOWN_SECONDS = 300;
