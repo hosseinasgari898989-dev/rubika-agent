@@ -100,6 +100,13 @@ def _send_file_once(
         "disable_notification": False,
         "chat_keypad_type": "None",
     }
+    if caption:
+        # Track_parsed preserves native Rubika Bold/Quote metadata; ordinary captions stay plain.
+        from agent.brain.rubika_publisher import _parse_formatted_caption
+        formatted = _parse_formatted_caption(str(caption))
+        if formatted is not None:
+            payload["text"] = formatted["text"]
+            payload["metadata"] = formatted["metadata"]
     if inline_keypad is not None:
         payload["inline_keypad"] = inline_keypad
     response = _assert_ok(post("sendFile", payload), "rubika_send_file_response_invalid")

@@ -81,6 +81,29 @@ class MobXRubikaTests(unittest.TestCase):
         self.assertEqual(payload["text"], "کپشن ساده")
         self.assertIn("inline_keypad", payload)
 
+    def test_formatted_mob_x_caption_sends_native_bold_and_quote_metadata(self):
+        from agent.brain.mob_x_link_processor import build_mob_x_caption
+
+        caption = build_mob_x_caption("Official Mob update", "ترجمهٔ فارسی")
+        holder = {}
+
+        def factory(**kwargs):
+            holder["bot"] = RubikaMediaMock(**kwargs)
+            return holder["bot"]
+
+        send_test_channel_once(
+            "test-token", TEST_CHANNEL_FOR_TESTS, "rubika-file-001", caption,
+            bot_factory=factory,
+        )
+        _, payload = holder["bot"]._post.call_args.args
+        self.assertNotIn("**", payload["text"])
+        self.assertNotIn("$", payload["text"])
+        self.assertIn("ترجمه متن:", payload["text"])
+        kinds = {part["type"] for part in payload["metadata"]["meta_data_parts"]}
+        self.assertTrue({"Bold", "Quote"}.issubset(kinds))
+        quote_parts = [part for part in payload["metadata"]["meta_data_parts"] if part["type"] == "Quote"]
+        self.assertEqual(len(quote_parts), 1)
+
     def test_channel_delivery_is_exactly_one_send_and_has_no_owner_buttons(self):
         holder = {}
         def factory(**kwargs):
