@@ -82,6 +82,27 @@ def build_mob_x_caption(original_caption: object, translation: object = None) ->
     return f"{heading}\n\n**{source}**\n\n$**ترجمه متن:**\n**{translated}**$"
 
 
+def build_owner_preview_caption(
+    caption: str, media_type: str, subtitle_processing: dict[str, Any] | None,
+) -> str:
+    """Add video subtitle status to the private owner preview only."""
+    if media_type != "video":
+        return caption
+    state = subtitle_processing if isinstance(subtitle_processing, dict) else {}
+    if state.get("status") == "burned":
+        try:
+            cue_count = max(0, int(state.get("cues") or 0))
+        except (TypeError, ValueError):
+            cue_count = 0
+        status_line = f"زیرنویس فارسی: دارد ({cue_count} خط)"
+    elif state.get("status") == "skipped_no_detectable_speech":
+        status_line = "بدون زیرنویس: گفتار تشخیص داده نشد (no_cues)"
+    else:
+        status_line = "بدون زیرنویس: ویدیو گفتار ندارد"
+    base = str(caption or "").rstrip()
+    return f"{base}\n\n{status_line}" if base else status_line
+
+
 def run_video_speech_gate(path: str | Path, inspection: Any) -> dict:
     """Classify speech before a video can be staged; ASR failure never bypasses the gate."""
     probe = {
@@ -599,8 +620,11 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         }
         client.transition(job_id, "ready_for_review", result=result)
         try:
+            preview_caption = build_owner_preview_caption(
+                caption, media_type, subtitle_processing,
+            )
             preview_message_id = send_owner_preview(
-                rubika_token, owner_chat_id, rubika_file_id, caption, job_id,
+                rubika_token, owner_chat_id, rubika_file_id, preview_caption, job_id,
             )
         except Exception:
             raise MobXLinkError("mob_x_owner_preview_failed") from None
