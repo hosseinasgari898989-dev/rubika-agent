@@ -1,6 +1,6 @@
 """Temporary media-download smoke test; never publishes anything.
 
-Cobalt is used for TikTok and Instagram on a temporary GitHub Actions runner.
+Cobalt is used for TikTok on a temporary GitHub Actions runner.
 No credentials or browser profiles are supplied. Media is validated with ffprobe
 and deleted when the run ends.
 """
@@ -20,7 +20,6 @@ from urllib.request import Request, urlopen
 
 ALLOWED_HOSTS = {
     "tiktok": ("tiktok.com",),
-    "instagram": ("instagram.com",),
 }
 MAX_FILE_BYTES = 100 * 1024 * 1024
 MAX_API_SECONDS = 45
@@ -242,7 +241,7 @@ def _write_summary(results: list[dict[str, Any]]) -> None:
     lines = [
         "## Rubika-Agent media download smoke test",
         "",
-        "The test uses temporary Cobalt for TikTok/Instagram.",
+        "The test uses temporary Cobalt for TikTok.",
         "No credentials/cookies are used, no Rubika message is sent, and temporary media is deleted.",
         "",
         "| Platform | Result | Size | Duration | Details |",
@@ -282,7 +281,6 @@ def main() -> int:
 
     urls = {
         "tiktok": os.getenv("TIKTOK_URL", "").strip(),
-        "instagram": os.getenv("INSTAGRAM_URL", "").strip(),
     }
 
     configured = [(platform, url) for platform, url in urls.items() if url]

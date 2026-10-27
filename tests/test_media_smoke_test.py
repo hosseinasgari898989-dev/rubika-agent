@@ -10,7 +10,6 @@ from agent.media_smoke_test import (
 class MediaSmokeTests(unittest.TestCase):
     def test_accepts_https_domains_for_expected_platforms(self):
         self.assertTrue(validate_public_video_url("tiktok", "https://www.tiktok.com/@example/video/123")[0])
-        self.assertTrue(validate_public_video_url("instagram", "https://www.instagram.com/reel/ABC123/")[0])
 
     def test_rejects_cross_platform_and_untrusted_hosts(self):
         self.assertEqual(
@@ -18,7 +17,7 @@ class MediaSmokeTests(unittest.TestCase):
             "platform_host_mismatch",
         )
         self.assertEqual(
-            validate_public_video_url("instagram", "http://www.instagram.com/reel/ABC/")[1],
+            validate_public_video_url("tiktok", "http://www.tiktok.com/@example/video/123")[1],
             "invalid_url",
         )
 

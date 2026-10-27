@@ -197,8 +197,7 @@ jobs:
               python --version
               python -c "import requests, yt_dlp; print(requests.__version__, yt_dlp.version.__version__)"
               timeout 90s python -m unittest discover -s tests -p "test_termux_sources.py" -v
-              timeout 90s python -m unittest discover -s tests -p "test_termux_instagram.py" -v
-              timeout 90s python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
+                      timeout 90s python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
               timeout 90s python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
               timeout 12m python -
             ' < "$RUNNER_TEMP/termux_docker_discovery.py"
