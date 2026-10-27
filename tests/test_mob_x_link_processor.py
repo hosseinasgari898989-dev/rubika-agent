@@ -210,6 +210,31 @@ class MobXLinkParserTests(unittest.TestCase):
         self.assertEqual(result["decision"], "subtitle")
         self.assertEqual(result["reason"], "ok")
 
+    def test_video_without_audio_skips_asr_but_still_runs_the_gate(self):
+        inspection = Mock(duration_seconds=12.5, has_audio=False)
+        gate_result = Mock(
+            decision="skip", reason="no_audio_track", speech_seconds=0.0,
+            speech_ratio=0.0, language=None, language_prob=0.0,
+        )
+        with (
+            patch("agent.brain.mob_x_link_processor.speech_gate.transcribe") as transcribe,
+            patch("agent.brain.mob_x_link_processor.speech_gate.evaluate", return_value=gate_result) as evaluate,
+        ):
+            result = run_video_speech_gate("/tmp/silent-video.mp4", inspection)
+        transcribe.assert_not_called()
+        evaluate.assert_called_once()
+        self.assertEqual(result["decision"], "skip")
+        self.assertEqual(result["reason"], "no_audio_track")
+
+    def test_video_speech_gate_fails_closed_if_asr_raises(self):
+        inspection = Mock(duration_seconds=12.5, has_audio=True)
+        with patch(
+            "agent.brain.mob_x_link_processor.speech_gate.transcribe",
+            side_effect=RuntimeError("private ASR details"),
+        ):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_speech_gate_failed"):
+                run_video_speech_gate("/tmp/broken-video.mp4", inspection)
+
     def test_caption_is_plain_and_published_time_is_normalized(self):
         self.assertEqual(clean_caption(" **Hello**\n\nhttps://example.org/a "), "Hello")
         self.assertEqual(
