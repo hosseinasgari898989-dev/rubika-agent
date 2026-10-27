@@ -131,7 +131,7 @@ function canonicalUrlFor(platform, value) {
   if (
     platform === "mob_official" &&
     (host === "youtu.be" || host.endsWith(".youtu.be") || host === "youtube.com" || host.endsWith(".youtube.com"))
-  )) {
+  ) {
     // For official Mob YouTube posts, allow canonical public video URLs only.
     // Temporary/signature parameters and all other query keys are rejected.
     if (host === "youtu.be" || host.endsWith(".youtu.be")) {
