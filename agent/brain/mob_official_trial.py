@@ -529,10 +529,20 @@ def load_official_candidates_from_report(report_path: Path) -> tuple[list[dict[s
             continue
         canonical_host = (canonical.hostname or "").lower().rstrip(".")
         media_host = (media.hostname or "").lower().rstrip(".")
+        # Legacy Mob-official reports may still contain retired social-network URLs.
+        # Reject those canonical source URLs, while preserving website/Steam items
+        # that may embed an external video as their media asset.
+        if (
+            canonical_host == "youtu.be"
+            or _host_is_under(canonical_host, "youtube.com")
+            or _host_is_under(canonical_host, "instagram.com")
+        ):
+            continue
+
         if (
             row.get("platform") != "mob_official"
             or row.get("official_source") is not True
-            or source_platform not in {"x", "website", "youtube", "steam"}
+            or source_platform not in {"x", "website", "steam"}
             or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", external_id)
             or canonical.scheme != "https"
             or not canonical_host
@@ -564,16 +574,6 @@ def load_official_candidates_from_report(report_path: Path) -> tuple[list[dict[s
                     continue
             elif media_type == "image" and not _direct_media_host_allowed(media_host, media_type, "website"):
                 continue
-        elif source_platform == "youtube":
-            video_id = _youtube_video_id(canonical_url)
-            if (
-                not video_id
-                or external_id != "yt-" + video_id
-                or not (canonical_host == "youtu.be" or _host_is_under(canonical_host, "youtube.com"))
-                or media_type != "video"
-                or _youtube_video_id(media_url) != video_id
-            ):
-                continue
         elif source_platform == "steam":
             match = re.fullmatch(r"/games/1721470/announcements/detail/([0-9]{5,30})/?", canonical.path)
             if (
@@ -602,7 +602,7 @@ def load_x_candidates_from_report(report_path: Path) -> tuple[list[dict[str, Any
     return load_official_candidates_from_report(report_path)
 
 
-OFFICIAL_SOURCE_PLATFORMS = frozenset({"x", "website", "youtube", "steam"})
+OFFICIAL_SOURCE_PLATFORMS = frozenset({"x", "website", "steam"})
 
 
 def filter_official_candidates_by_source(
