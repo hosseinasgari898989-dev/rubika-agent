@@ -284,7 +284,6 @@ class MobXSubtitleWiringTests(unittest.TestCase):
                     "missing": 0, "size": 20, "duration_ms": 12200}
 
         with ExitStack() as stack:
-            stack.enter_context(patch("agent.brain.mob_x_link_processor.CloudState", return_value=cloud))
             cloud_class = stack.enter_context(patch("agent.brain.mob_x_link_processor.CloudState"))
             cloud_class.return_value = cloud
             cloud_class.prepare_staged_payload.return_value = {}
@@ -311,7 +310,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             stack.enter_context(patch("agent.brain.mob_x_link_processor.upload_preview_media",
                                       side_effect=lambda token, path, kind: events.append(("rubika_upload", path)) or "file-id"))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.send_owner_preview",
-                                      side_effect=lambda *args: events.append(("owner_preview", args[2]) or "preview-message"))
+                                      side_effect=lambda *args: events.append(("owner_preview", args[2]) or "preview-message")))
             result = process_job(self._job(), client, storage=storage)
         return result, events, pipeline_mock, storage
 
@@ -321,8 +320,11 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         )
         names = [event[0] for event in events]
         self.assertLess(names.index("speech_gate"), names.index("subtitle"))
-        self.assertLess(names.index("subtitle"), names.index("inspect"))
-        self.assertLess(names.index("inspect", names.index("subtitle")), names.index("mega"))
+        output_inspection_index = next(
+            i for i, event in enumerate(events) if event == ("inspect", "subtitled.mp4")
+        )
+        self.assertLess(names.index("subtitle"), output_inspection_index)
+        self.assertLess(output_inspection_index, names.index("mega"))
         self.assertLess(names.index("mega"), names.index("rubika_upload"))
         self.assertLess(names.index("rubika_upload"), names.index("owner_preview"))
         self.assertEqual(storage.upload.call_args.args, ("/tmp/subtitled.mp4", "official"))
