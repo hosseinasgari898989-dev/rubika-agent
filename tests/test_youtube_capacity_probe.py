@@ -45,6 +45,26 @@ class YouTubeCapacityProbeTests(unittest.TestCase):
         self.assertIsNone(result["http_status"])
 
 
+    def test_upload_error_is_reduced_to_a_safe_diagnostic_category(self):
+        raw = b'{"status":"ERROR","status_det":"FILE_TOO_LARGE","message":"private-token-value"}'
+        label = probe._classify_upload_rejection(400, raw)
+        self.assertEqual(label, "rubika_upload_size_rejected")
+        self.assertNotIn("private-token-value", label)
+        self.assertEqual(
+            probe._classify_upload_rejection(400, b"Bad Request"),
+            "rubika_upload_http_400_rejected",
+        )
+
+    def test_ytdlp_failure_classification_never_echoes_raw_output(self):
+        self.assertEqual(
+            probe._classify_ytdlp_failure("ERROR: Sign in to confirm you're not a bot"),
+            "youtube_bot_check",
+        )
+        self.assertEqual(
+            probe._classify_ytdlp_failure("unexpected output containing private-url"),
+            "youtube_unknown_failure",
+        )
+
     def test_ytdlp_smoke_download_selects_a_720_class_profile_for_portrait_video(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
