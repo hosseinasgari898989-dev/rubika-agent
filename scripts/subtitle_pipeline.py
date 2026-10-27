@@ -83,7 +83,8 @@ def build_prompt(numbered_lines: str, glossary: str = "") -> str:
 
 def translate_cues(cues: list, translate_fn, *, max_batches: int = MAX_BATCHES,
                    max_chars: int = MAX_BATCH_CHARS, max_cues: int = MAX_BATCH_CUES,
-                   max_tokens: int = MAX_OUT_TOKENS, glossary: str = "") -> tuple:
+                   max_tokens: int = MAX_OUT_TOKENS, glossary: str = "",
+                   max_missing_ratio: float = MAX_MISSING_RATIO) -> tuple:
     """Translate cues in capped batches. Returns (new_cues, stats). One call per batch, no retries."""
     batches = st.make_batches(cues, max_chars, max_cues)
     if len(batches) > max_batches:
@@ -94,7 +95,7 @@ def translate_cues(cues: list, translate_fn, *, max_batches: int = MAX_BATCHES,
         for i, tr in enumerate(st.parse_numbered(str(reply or ""), start, len(texts))):
             translations[start + i] = tr
     new_cues, missing = st.apply_translation(cues, translations)
-    if cues and missing / len(cues) > MAX_MISSING_RATIO:
+    if cues and missing / len(cues) > max_missing_ratio:
         raise SubtitleError("translation_incomplete", f"{missing}/{len(cues)} missing")
     return new_cues, {"batches": len(batches), "calls": len(batches), "missing": missing}
 
@@ -112,14 +113,20 @@ def probe_duration_ms(path: str, run=subprocess.run) -> int:
 
 def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: str = "assets/fonts",
                           font: str = "Estedad", glossary: str = "", transcribe_fn=transcribe,
-                          run=subprocess.run) -> dict:
+                          run=subprocess.run, max_missing_ratio: float = 0.0) -> dict:
     """Full pipeline. Returns {out, srt, ass, cues, missing, batches, size, duration_ms}."""
     wd = Path(workdir)
     wd.mkdir(parents=True, exist_ok=True)
     cues = clean_cues(transcribe_fn(str(video)))
     if not cues:
         raise SubtitleError("no_cues")
-    fa_cues, stats = translate_cues(cues, translate_fn, glossary=glossary)
+    # Leave space for numbered cue prefixes/newlines so the full prompt stays <= 3000 chars.
+    fa_cues, stats = translate_cues(
+        cues, translate_fn, max_batches=MAX_BATCHES,
+        max_chars=MAX_BATCH_CHARS - 8 * MAX_BATCH_CUES,
+        max_cues=MAX_BATCH_CUES, max_tokens=MAX_OUT_TOKENS,
+        glossary=glossary, max_missing_ratio=max_missing_ratio,
+    )
     srt, ass, out = wd / "fa.srt", wd / "fa.ass", wd / "subtitled.mp4"
     srt.write_text(st.format_srt(fa_cues), encoding="utf-8")
     ass.write_text(st.to_ass(fa_cues, font=font), encoding="utf-8")

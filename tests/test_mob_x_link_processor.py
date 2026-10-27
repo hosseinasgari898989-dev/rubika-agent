@@ -244,5 +244,116 @@ class MobXLinkParserTests(unittest.TestCase):
         self.assertIsNone(normalize_published_at("not-a-date"))
 
 
+
+
+class MobXSubtitleWiringTests(unittest.TestCase):
+    @staticmethod
+    def _job():
+        return {
+            "id": "job_abcdef1234567890",
+            "params": {"url": f"https://x.com/mobgamesstudios/status/{POST_ID}"},
+            "external_id": POST_ID,
+        }
+
+    def _run_video_job(self, gate, *, pipeline_error=None):
+        from contextlib import ExitStack
+
+        events = []
+        cloud = Mock()
+        cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.upsert_item.return_value = {"item_id": "mob_official:" + POST_ID}
+        client = Mock()
+        client.rules.return_value = {"translate_enabled": False, "caption_max_chars": 900}
+        storage = Mock()
+        storage.upload.side_effect = lambda path, tier: events.append(("mega", path)) or "storage-key"
+        source_inspection = Mock(ok=True, duration_seconds=12.0, has_audio=True)
+        output_inspection = Mock(ok=True, duration_seconds=12.2, has_audio=True)
+
+        def inspect(path, *args, **kwargs):
+            events.append(("inspect", Path(path).name))
+            return output_inspection if Path(path).name == "subtitled.mp4" else source_inspection
+
+        def build(video, workdir, translate_fn, **kwargs):
+            events.append(("subtitle", video))
+            translated = translate_fn("Rules\n\n0|Hello there", max_tokens=1200)
+            self.assertEqual(translated, "0|ترجمه 0")
+            kwargs["transcribe_fn"](video)
+            if pipeline_error:
+                raise pipeline_error
+            return {"out": "/tmp/subtitled.mp4", "cues": 1, "batches": 1,
+                    "missing": 0, "size": 20, "duration_ms": 12200}
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict("os.environ", {
+                "RUBIKA_TOKEN": "test-rubika-token",
+                "RUBIKA_OWNER_CHAT_ID": "test-owner-chat",
+            }))
+            cloud_class = stack.enter_context(patch("agent.brain.mob_x_link_processor.CloudState"))
+            cloud_class.return_value = cloud
+            cloud_class.prepare_staged_payload.return_value = {}
+            # Keep the factory patch above deterministic for the class static helper and instance.
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.fetch_public_post",
+                                      return_value={"text": "Official video update", "title": "Mob update"}))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.select_media",
+                                      return_value=("video", VIDEO_URL)))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.download_public_media",
+                                      return_value="/tmp/source.mp4"))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.inspect_media", side_effect=inspect))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.run_video_speech_gate",
+                                      side_effect=lambda *_: events.append(("speech_gate",)) or gate))
+            pipeline_mock = stack.enter_context(patch(
+                "agent.brain.mob_x_link_processor.subtitle_pipeline.build_subtitled_video",
+                side_effect=build,
+            ))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.subtitle_pipeline.transcribe",
+                                      return_value=[(0, 1000, "Hello there")]))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.translate_to_persian",
+                                      side_effect=lambda text, **kwargs: events.append(("translate", text)) or "0|ترجمه 0"))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.evaluate_official_media",
+                                      return_value=Mock(decision="eligible")))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.upload_preview_media",
+                                      side_effect=lambda token, path, kind: events.append(("rubika_upload", path)) or "file-id"))
+            stack.enter_context(patch("agent.brain.mob_x_link_processor.send_owner_preview",
+                                      side_effect=lambda *args: events.append(("owner_preview", args[2]) or "preview-message")))
+            result = process_job(self._job(), client, storage=storage)
+        return result, events, pipeline_mock, storage
+
+    def test_speech_video_is_subtitled_and_rechecked_before_mega_preview(self):
+        result, events, pipeline, storage = self._run_video_job(
+            {"decision": "subtitle", "reason": "ok", "language": "en"}
+        )
+        names = [event[0] for event in events]
+        self.assertLess(names.index("speech_gate"), names.index("subtitle"))
+        output_inspection_index = next(
+            i for i, event in enumerate(events) if event == ("inspect", "subtitled.mp4")
+        )
+        self.assertLess(names.index("subtitle"), output_inspection_index)
+        self.assertLess(output_inspection_index, names.index("mega"))
+        self.assertLess(names.index("mega"), names.index("rubika_upload"))
+        self.assertLess(names.index("rubika_upload"), names.index("owner_preview"))
+        self.assertEqual(storage.upload.call_args.args, ("/tmp/subtitled.mp4", "official"))
+        self.assertEqual(result["subtitle_processing"]["status"], "burned")
+        self.assertEqual(result["subtitle_processing"]["missing"], 0)
+        self.assertEqual(pipeline.call_args.kwargs["font"], "Estedad")
+        self.assertEqual(pipeline.call_args.kwargs["max_missing_ratio"], 0.0)
+
+    def test_video_without_recognizable_speech_skips_subtitles_and_uses_original(self):
+        result, events, pipeline, storage = self._run_video_job(
+            {"decision": "skip", "reason": "no_speech", "language": None}
+        )
+        pipeline.assert_not_called()
+        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        self.assertEqual(result["subtitle_processing"]["status"], "skipped_by_speech_gate")
+        self.assertNotIn("subtitle", [event[0] for event in events])
+
+    def test_failed_subtitle_translation_stops_before_mega_or_preview(self):
+        from scripts.subtitle_pipeline import SubtitleError
+        with self.assertRaisesRegex(MobXLinkError, "mob_x_translation_failed"):
+            self._run_video_job(
+                {"decision": "subtitle", "reason": "ok", "language": "en"},
+                pipeline_error=SubtitleError("translation_incomplete"),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

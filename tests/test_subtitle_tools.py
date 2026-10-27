@@ -25,6 +25,18 @@ class SubtitleToolsTest(unittest.TestCase):
         reply = st.numbered(["a", "b"], 5)
         self.assertEqual(st.parse_numbered(reply, 5, 3), ["a", "b", None])
 
+    def test_numbered_batch_respects_character_limit_including_ids(self):
+        cues = [(i * 1000, i * 1000 + 800, "x" * 48) for i in range(60)]
+        batches = st.make_batches(cues, max_chars=3000, max_cues=60)
+        self.assertGreaterEqual(len(batches), 1)
+        for start, texts in batches:
+            self.assertLessEqual(len(st.numbered(texts, start)), 3000)
+            self.assertLessEqual(len(texts), 60)
+
+    def test_single_oversized_cue_is_rejected_before_translation(self):
+        with self.assertRaisesRegex(ValueError, "subtitle_cue_too_long"):
+            st.make_batches([(0, 1000, "x" * 3000)], max_chars=3000)
+
     def test_apply_translation_fallback(self):
         cues = st.parse_srt(SRT)
         out, missing = st.apply_translation(cues, ["سلام", None])
