@@ -212,7 +212,9 @@ class CloudStateTests(unittest.TestCase):
             captured["auth"] = request.get_header("Authorization")
             captured["timeout"] = timeout
             captured["payload"] = json.loads(request.data.decode("utf-8"))
-            return io.BytesIO(b'{"ok":true,"translation":"ترجمه فارسی معتبر"}')
+            return io.BytesIO(json.dumps(
+                {"ok": True, "translation": "ترجمه فارسی معتبر"}, ensure_ascii=False
+            ).encode("utf-8"))
 
         with patch("urllib.request.urlopen", side_effect=fake_open) as opener:
             result = state.translate_official(

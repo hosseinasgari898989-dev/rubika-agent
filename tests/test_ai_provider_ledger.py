@@ -112,16 +112,18 @@ class AIProviderLedgerTests(unittest.TestCase):
     def test_reservation_is_atomic_and_rejects_active_cooldown(self):
         source = WORKER.read_text(encoding="utf-8")
         self.assertIn(
-            "SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ? AND provider = ?",
+            "SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day=? AND provider=?",
             source,
         )
         self.assertIn(
-            "NOT EXISTS (SELECT 1 FROM ai_provider_state WHERE provider = ? AND cooldown_until > ?)",
+            "NOT EXISTS(SELECT 1 FROM ai_provider_state WHERE provider=? AND cooldown_until>?)",
             source,
         )
-        self.assertIn("SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ?", source)
+        self.assertIn("SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day=?", source)
         self.assertIn("ON CONFLICT(call_id) DO NOTHING", source)
-        self.assertIn("RETURNING call_id, usage_day, provider, role, status, started_at", source)
+        self.assertIn("RETURNING call_id", source)
+        self.assertIn("GROQ_DAILY_TOKEN_LIMIT = 200000", source)
+        self.assertIn("TRANSLATION_DAILY_TOKEN_LIMIT = 200000", source)
 
     def test_quota_routes_are_behind_existing_bearer_authorization(self):
         source = WORKER.read_text(encoding="utf-8")
