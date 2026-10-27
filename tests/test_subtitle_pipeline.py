@@ -65,6 +65,19 @@ class Translate(unittest.TestCase):
             sp.translate_cues(CUES, lambda p, **k: "garbage")
         self.assertEqual(cm.exception.code, "translation_incomplete")
 
+    def test_burn_in_builder_rejects_any_missing_subtitle_translation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "source.mp4"
+            video.write_bytes(b"v")
+            with self.assertRaises(sp.SubtitleError) as caught:
+                sp.build_subtitled_video(
+                    str(video), str(Path(tmp) / "work"),
+                    lambda prompt, **kwargs: "0|ترجمه",
+                    transcribe_fn=lambda _path: list(CUES),
+                    run=make_run(),
+                )
+        self.assertEqual(caught.exception.code, "translation_incomplete")
+
     def test_too_long_raises_before_any_call(self):
         cues = [(i * 1000, i * 1000 + 800, "word " * 20) for i in range(200)]
         called = []

@@ -25,6 +25,7 @@ from agent.brain.cloud_state import CloudState
 from agent.brain.inspector import inspect_media
 from agent.brain.models import Candidate
 from agent.brain.mob_translation import translate_to_persian
+from scripts import subtitle_pipeline
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import StagedMedia
 from agent.storage.mega import MegaStorage
@@ -468,8 +469,74 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         if media_type == "video" and inspection.duration_seconds and inspection.duration_seconds > MAX_VIDEO_SECONDS:
             raise MobXLinkError("mob_x_video_duration_limit")
 
-        # All videos pass through the speech gate before translation, review, MEGA or preview.
+        # All videos pass the speech gate before any staging or owner preview.
         speech_gate_result = run_video_speech_gate(local_path, inspection) if media_type == "video" else None
+        publish_path = str(local_path)
+        subtitle_processing = {"status": "not_applicable"} if media_type != "video" else {
+            "status": "skipped_by_speech_gate",
+            "reason": str((speech_gate_result or {}).get("reason") or "speech_not_detected"),
+        }
+
+        if media_type == "video" and speech_gate_result and speech_gate_result.get("decision") == "subtitle":
+            language = str(speech_gate_result.get("language") or "")
+            if not re.fullmatch(r"[a-z]{2,3}", language):
+                language = "en"
+
+            def transcribe_subtitles(video_path: str) -> list:
+                # faster-whisper is pinned and installed only by the Mob X workflow.
+                return subtitle_pipeline.transcribe(video_path, model_size="small", language=language)
+
+            def translate_subtitle_batch(prompt: str, *, max_tokens: int) -> str:
+                if max_tokens != subtitle_pipeline.MAX_OUT_TOKENS:
+                    raise subtitle_pipeline.SubtitleError("token_limit_invalid")
+                numbered_lines = str(prompt).rsplit("\n\n", 1)[-1].strip()
+                translated = translate_to_persian(numbered_lines, kind="subtitle")
+                return translated or ""
+
+            try:
+                subtitle_result = subtitle_pipeline.build_subtitled_video(
+                    str(local_path), str(Path(temp) / "subtitle-work"), translate_subtitle_batch,
+                    fontsdir="assets/fonts", font="Estedad",
+                    transcribe_fn=transcribe_subtitles, max_missing_ratio=0.0,
+                )
+            except subtitle_pipeline.SubtitleError as exc:
+                if exc.code == "no_cues":
+                    # Repeated ASR found no usable speech cues; retain the original video.
+                    subtitle_processing = {"status": "skipped_no_detectable_speech"}
+                elif exc.code == "translation_incomplete":
+                    # Never burn or stage partially translated subtitles.
+                    raise MobXLinkError("mob_x_translation_failed") from None
+                else:
+                    raise MobXLinkError("mob_x_subtitle_" + exc.code) from None
+            except Exception:
+                raise MobXLinkError("mob_x_subtitle_processing_failed") from None
+            else:
+                processed_path = str(subtitle_result.get("out") or "")
+                if not processed_path:
+                    raise MobXLinkError("mob_x_subtitle_output_validation_failed")
+                processed_inspection = inspect_media(
+                    processed_path, "video", max_bytes=MAX_MEDIA_BYTES,
+                )
+                if not processed_inspection.ok or not processed_inspection.has_audio:
+                    raise MobXLinkError("mob_x_subtitle_output_validation_failed")
+                source_duration = float(inspection.duration_seconds or 0)
+                rendered_duration = float(processed_inspection.duration_seconds or 0)
+                if (
+                    source_duration <= 0 or rendered_duration <= 0
+                    or abs(source_duration - rendered_duration) >
+                    subtitle_pipeline.DURATION_TOLERANCE_MS / 1000
+                ):
+                    raise MobXLinkError("mob_x_subtitle_output_validation_failed")
+                publish_path = processed_path
+                inspection = processed_inspection
+                subtitle_processing = {
+                    "status": "burned",
+                    "cues": int(subtitle_result.get("cues") or 0),
+                    "batches": int(subtitle_result.get("batches") or 0),
+                    "missing": int(subtitle_result.get("missing") or 0),
+                    "size_bytes": int(subtitle_result.get("size") or 0),
+                    "duration_ms": int(subtitle_result.get("duration_ms") or 0),
+                }
 
         translation_source = clean_caption(original, 5000)
         translation = None
@@ -498,17 +565,17 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         if evaluation.decision != "eligible":
             raise MobXLinkError("mob_x_media_validation_failed")
         selected_storage = storage or MegaStorage()
-        storage_key = selected_storage.upload(local_path, "official")
+        storage_key = selected_storage.upload(publish_path, "official")
         rubika_token = os.getenv("RUBIKA_TOKEN", "")
         owner_chat_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "")
         if not rubika_token.strip() or not owner_chat_id.strip():
             raise MobXLinkError("mob_x_preview_credentials_missing")
         try:
-            rubika_file_id = upload_preview_media(rubika_token, local_path, media_type)
+            rubika_file_id = upload_preview_media(rubika_token, publish_path, media_type)
         except Exception:
             raise MobXLinkError("mob_x_preview_upload_failed") from None
         staged = StagedMedia(
-            candidate=candidate, original_path=str(local_path), publish_path=str(local_path),
+            candidate=candidate, original_path=str(local_path), publish_path=str(publish_path),
             inspection=inspection, evaluation=evaluation, storage_key=storage_key, caption=caption,
         )
         payload = CloudState.prepare_staged_payload(staged)
@@ -528,6 +595,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
             "source_tier": "official", "review_state": "pending",
             "rubika_file_id": rubika_file_id, "preview_sent": False,
             "publishing_attempted": False, "speech_gate": speech_gate_result,
+            "subtitle_processing": subtitle_processing,
         }
         client.transition(job_id, "ready_for_review", result=result)
         try:
@@ -544,7 +612,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         return {
             "status": "ready_for_review", "job_id": job_id,
             "item_id": result["item_id"], "external_id": external_id,
-            "speech_gate": speech_gate_result,
+            "speech_gate": speech_gate_result, "subtitle_processing": subtitle_processing,
         }
 
 
