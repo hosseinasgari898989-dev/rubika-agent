@@ -202,21 +202,44 @@ class CloudStateTests(unittest.TestCase):
 
 
 
-    def test_translate_official_is_retired_and_makes_no_network_request(self):
+    def test_translate_official_calls_authenticated_metered_route(self):
         state = CloudState("https://worker.example", TOKEN)
-        with patch("urllib.request.urlopen") as opener:
-            with self.assertRaises(CloudStateError) as caught:
-                state.translate_official("Mob Entertainment published a new official update.")
-        self.assertEqual(caught.exception.code, "translation_route_retired")
-        opener.assert_not_called()
+        captured = {}
 
-    def test_translate_official_retirement_does_not_reveal_source_or_token(self):
+        def fake_open(request, timeout):
+            captured["url"] = request.full_url
+            captured["method"] = request.method
+            captured["auth"] = request.get_header("Authorization")
+            captured["timeout"] = timeout
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            return io.BytesIO(b'{"ok":true,"translation":"ترجمه فارسی معتبر"}')
+
+        with patch("urllib.request.urlopen", side_effect=fake_open) as opener:
+            result = state.translate_official(
+                "Mob Entertainment published an update.",
+                kind="caption", run_id="mobcap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+        self.assertEqual(result, "ترجمه فارسی معتبر")
+        self.assertEqual(captured["url"], "https://worker.example/api/brain/translate-official")
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["auth"], "Bearer " + TOKEN)
+        self.assertEqual(captured["payload"]["kind"], "caption")
+        self.assertEqual(captured["payload"]["run_id"], "mobcap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        opener.assert_called_once()
+
+    def test_translate_official_failure_does_not_reveal_source_or_token(self):
         state = CloudState("https://worker.example", TOKEN)
-        with self.assertRaises(CloudStateError) as caught:
-            state.translate_official("secret source excerpt")
-        self.assertEqual(caught.exception.code, "translation_route_retired")
+        error = __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
+            "https://worker.example/api/brain/translate-official", 502, "Bad Gateway", {},
+            io.BytesIO(b'{"error":"official_translation_inference_failed","secret":"source must stay private"}'),
+        )
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(CloudStateError) as caught:
+                state.translate_official("secret source excerpt")
+        self.assertEqual(caught.exception.code, "control_api_http_502_official_translation_inference_failed")
         self.assertNotIn("secret source excerpt", str(caught.exception))
         self.assertNotIn(TOKEN, str(caught.exception))
+        self.assertNotIn("source must stay private", str(caught.exception))
 
     def test_upsert_staged_preserves_canonical_youtube_id_and_never_approves(self):
         state = CloudState("https://worker.example", TOKEN)
