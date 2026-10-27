@@ -978,6 +978,19 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
+  const unsupportedInstagram = {
+    platform: "instagram", external_id: "AbCdEf12345",
+    canonical_url: "https://www.instagram.com/reel/AbCdEf12345/",
+    source_key: "@poppy", status: "discovered",
+  };
+  const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST", body: unsupportedInstagram,
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "invalid_platform_or_external_id");
+}
+{
+  const state = env();
   const badApproval = {
     platform: "tiktok", external_id: "vkVFgmgLo1s",
     canonical_url: "https://www.tiktok.com/@creator/video/vkVFgmgLo1s",
