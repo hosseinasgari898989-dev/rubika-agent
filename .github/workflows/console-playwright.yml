@@ -3,6 +3,8 @@ name: Console Playwright smoke
 on:
   pull_request:
   push:
+    branches:
+      - main
 
 permissions:
   contents: read
