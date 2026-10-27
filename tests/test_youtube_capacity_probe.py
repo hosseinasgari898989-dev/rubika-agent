@@ -39,9 +39,9 @@ class YouTubeCapacityProbeTests(unittest.TestCase):
             with self.assertRaisesRegex(probe.ProbeError, "probe_target_size_invalid"):
                 probe._create_sized_mp4(target, 512)
 
-    def test_size_ladder_is_not_written_as_a_production_upload_cap(self):
-        self.assertNotIn("rubika_upload_limit_bytes", probe.PROBE_SIZES_MIB.__str__())
+    def test_disk_reserve_is_a_working_space_buffer_not_a_file_size_ceiling(self):
         self.assertEqual(probe.MIN_FREE_RESERVE_BYTES, 2 * probe.GIB)
+        self.assertGreater(probe.probe_size_ladder_mib()[-1] * probe.MIB, 1 * probe.GIB)
 
 
 if __name__ == "__main__":
