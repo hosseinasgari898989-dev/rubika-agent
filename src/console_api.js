@@ -775,9 +775,9 @@ export async function handleConsoleApi(request, env, h) {
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const b = parsed.value;
       const requestedPlatform = text(b.platform, 24);
+      if (!SOURCE_PLATFORMS.has(requestedPlatform)) return fail("invalid_platform", 400);
       const platform = requestedPlatform === "x" ? "mob_official" : requestedPlatform;
       const key = text(b.source_key, 200);
-      if (!SOURCE_PLATFORMS.has(platform)) return fail("invalid_platform", 400);
       if (!/^[A-Za-z0-9._@:/-]{1,200}$/.test(key)) return fail("invalid_source_key", 400);
       const id = platform + ":" + key.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
       const exists = await first("SELECT id FROM sources WHERE platform = ? AND source_key = ?", platform, key);
