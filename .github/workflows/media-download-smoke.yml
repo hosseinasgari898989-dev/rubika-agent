@@ -10,7 +10,9 @@ on:
         description: "One public TikTok video URL"
         required: false
         type: string
-        default: "https://www.tiktok.com/@dragonboyedits/video/7616247520657771796"permissions:
+        default: "https://www.tiktok.com/@dragonboyedits/video/7616247520657771796"
+
+permissions:
   contents: read
 
 jobs:
