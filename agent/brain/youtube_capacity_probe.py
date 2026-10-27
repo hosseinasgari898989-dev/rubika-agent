@@ -348,21 +348,22 @@ def _write_report(report: dict[str, Any]) -> None:
         "",
         "This is a temporary test-channel measurement, not a permanent size limit.",
         "",
-        "| Target size | Local download | Rubika upload |",
-        "|---:|---|---|",
+        "| Target size | Local download | Rubika upload | Test-channel post |",
+        "|---:|---|---|---|",
     ]
     for row in report.get("sizes", []):
         lines.append(
             f"| {row.get('size_mib')} MiB | {row.get('download_status', 'not_run')} "
-            f"| {row.get('upload_status', 'not_run')} |"
+            f"| {row.get('upload_status', 'not_run')} | {row.get('channel_status', 'not_run')} |"
         )
     channel = report.get("channel_test", {})
     lines.extend([
         "",
         f"- Largest raw-upload success: {report.get('largest_upload_success_mib') or 'none'} MiB",
-        f"- Test-channel message result: {channel.get('status', 'not_run')}",
-        f"- Test post size: {channel.get('size_mib') or 'n/a'} MiB",
-        f"- Test post deletion confirmed: {channel.get('cleanup_confirmed', 'n/a')}",
+        f"- Largest size sent to test channel and deletion confirmed: {report.get('largest_channel_success_mib') or 'none'} MiB",
+        f"- Last test-channel result: {channel.get('status', 'not_run')}",
+        f"- Last test post size: {channel.get('size_mib') or 'n/a'} MiB",
+        f"- Last test post deletion confirmed: {channel.get('cleanup_confirmed', 'n/a')}",
         f"- Test rung ceiling: {max(PROBE_SIZES_MIB)} MiB; this is the test plan ceiling, not a claimed API maximum.",
         "",
         "Raw failures are reduced to safe labels; tokens, channel IDs, upload URLs, and file IDs are omitted.",
@@ -398,13 +399,13 @@ def run_capacity_probe() -> dict[str, Any]:
         "test_sizes_mib": list(PROBE_SIZES_MIB),
         "sizes": [],
         "largest_upload_success_mib": None,
+        "largest_channel_success_mib": None,
         "channel_test": {"status": "not_run", "cleanup_confirmed": None},
         "notes": [
             "Test sizes are exploratory rungs, not policy caps.",
             "The local HTTP transfer checks runner download handling, not YouTube's own availability or limits.",
         ],
     }
-    uploaded: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="rubika-agent-size-probe-") as folder:
         root = Path(folder)
         for size_mib in PROBE_SIZES_MIB:
@@ -412,7 +413,11 @@ def run_capacity_probe() -> dict[str, Any]:
             free = shutil.disk_usage(root).free
             row: dict[str, Any] = {"size_mib": size_mib, "target_bytes": target_bytes}
             if free < target_bytes * 2 + MIN_FREE_RESERVE_BYTES:
-                row.update(download_status="skipped_insufficient_runner_disk", upload_status="not_run")
+                row.update(
+                    download_status="skipped_insufficient_runner_disk",
+                    upload_status="not_run",
+                    channel_status="not_run",
+                )
                 report["sizes"].append(row)
                 break
 
@@ -427,7 +432,7 @@ def run_capacity_probe() -> dict[str, Any]:
                     download_seconds=download_result["seconds"],
                 )
             except ProbeError as exc:
-                row.update(download_status=exc.args[0], upload_status="not_run")
+                row.update(download_status=exc.args[0], upload_status="not_run", channel_status="not_run")
                 report["sizes"].append(row)
                 source.unlink(missing_ok=True)
                 downloaded.unlink(missing_ok=True)
@@ -439,29 +444,35 @@ def run_capacity_probe() -> dict[str, Any]:
                 upload_url = _get_upload_url(token)
                 file_id = _stream_upload(upload_url, downloaded, f"capacity-probe-{size_mib}mib.mp4")
             except ProbeError as exc:
-                row.update(upload_status=exc.args[0])
+                row.update(upload_status=exc.args[0], channel_status="not_run")
                 report["sizes"].append(row)
                 downloaded.unlink(missing_ok=True)
                 break
             else:
-                row.update(upload_status="ok")
-                uploaded.append({"size_mib": size_mib, "file_id": file_id})
-                report["sizes"].append(row)
+                row["upload_status"] = "ok"
                 report["largest_upload_success_mib"] = size_mib
+                row["channel_status"] = "running"
+                channel_result = _send_one_test_message(
+                    token, channel_guid, {"size_mib": size_mib, "file_id": file_id}
+                )
+                row["channel_status"] = channel_result.get("status", "unknown")
+                row["channel_cleanup_confirmed"] = channel_result.get("cleanup_confirmed")
+                report["channel_test"] = channel_result
+                if channel_result.get("status") == "sent_and_deleted":
+                    report["largest_channel_success_mib"] = size_mib
+                report["sizes"].append(row)
                 downloaded.unlink(missing_ok=True)
+                if channel_result.get("status") != "sent_and_deleted":
+                    # Do not accumulate test posts or retry an ambiguous send.
+                    break
 
-    if uploaded:
-        report["channel_test"] = _send_one_test_message(token, channel_guid, uploaded)
-    else:
-        report["channel_test"] = {
-            "status": "not_run_no_upload_success",
-            "cleanup_confirmed": True,
-            "size_mib": None,
-        }
-    report["ok"] = bool(uploaded)
-    report["status"] = "completed" if uploaded else "no_upload_size_confirmed"
+    report["ok"] = report["largest_channel_success_mib"] is not None
     if report["channel_test"].get("status") == "sent_delete_unconfirmed":
         report["status"] = "completed_cleanup_unconfirmed"
+    elif report["ok"]:
+        report["status"] = "completed"
+    else:
+        report["status"] = "no_channel_size_confirmed"
     _write_report(report)
     return report
 
@@ -480,6 +491,10 @@ def main() -> int:
         "channel_test_status": report.get("channel_test", {}).get("status"),
         "cleanup_confirmed": report.get("channel_test", {}).get("cleanup_confirmed"),
     }, ensure_ascii=False, sort_keys=True))
+    if not report.get("ok"):
+        return 1
+    if report.get("status") == "completed_cleanup_unconfirmed":
+        return 2
     return 0
 
 
