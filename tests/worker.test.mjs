@@ -849,6 +849,24 @@ const read = async response => ({ status: response.status, body: await response.
 }
 {
   const state = env();
+  for (const platform of ["youtube", "instagram"]) {
+    const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+      method: "POST",
+      body: {
+        platform,
+        external_id: "legacy-" + platform,
+        canonical_url: platform === "youtube"
+          ? "https://www.youtube.com/watch?v=abcdefghijk"
+          : "https://www.instagram.com/reel/AbCdEf_1234/",
+        source_key: "legacy-source",
+      },
+    }), state));
+    assert.equal(response.status, 400, platform);
+    assert.equal(response.body.error, "invalid_platform_or_external_id", platform);
+  }
+}
+{
+  const state = env();
   state.DB.items.set("tiktok:7616247520657771796", {
     id: "tiktok:7616247520657771796",
     platform: "tiktok",
@@ -1142,7 +1160,7 @@ function makeOmniAI(probability = 0.97) {
   // More than the former 10-request custom cap should now be allowed.
   for (let index = 0; index < 12; index++) {
     const response = await read(await worker.fetch(request("/api/brain/moderate-music", {
-      method: "POST", body: { audio: sampleAudioDataUrl(), platform: "youtube" },
+      method: "POST", body: { audio: sampleAudioDataUrl(), platform: "tiktok" },
     }), state));
     assert.equal(response.status, 200);
   }
