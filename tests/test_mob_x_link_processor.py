@@ -314,12 +314,12 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             stack.enter_context(patch("agent.brain.mob_x_link_processor.upload_preview_media",
                                       side_effect=lambda token, path, kind: events.append(("rubika_upload", path)) or "file-id"))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.send_owner_preview",
-                                      side_effect=lambda *args: events.append(("owner_preview", args[2]) or "preview-message")))
+                                      side_effect=lambda *args: events.append(("owner_preview", args[3]) or "preview-message")))
             result = process_job(self._job(), client, storage=storage)
-        return result, events, pipeline_mock, storage
+        return result, events, pipeline_mock, storage, cloud
 
     def test_speech_video_is_subtitled_and_rechecked_before_mega_preview(self):
-        result, events, pipeline, storage = self._run_video_job(
+        result, events, pipeline, storage, cloud = self._run_video_job(
             {"decision": "subtitle", "reason": "ok", "language": "en"}
         )
         names = [event[0] for event in events]
@@ -334,17 +334,35 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(storage.upload.call_args.args, ("/tmp/subtitled.mp4", "official"))
         self.assertEqual(result["subtitle_processing"]["status"], "burned")
         self.assertEqual(result["subtitle_processing"]["missing"], 0)
+        preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
+        self.assertIn("زیرنویس فارسی: دارد (1 خط)", preview_caption)
+        self.assertNotIn("زیرنویس فارسی", cloud.upsert_item.call_args.args[0]["caption"])
         self.assertEqual(pipeline.call_args.kwargs["font"], "Estedad")
         self.assertEqual(pipeline.call_args.kwargs["max_missing_ratio"], 0.0)
 
     def test_video_without_recognizable_speech_skips_subtitles_and_uses_original(self):
-        result, events, pipeline, storage = self._run_video_job(
+        result, events, pipeline, storage, cloud = self._run_video_job(
             {"decision": "skip", "reason": "no_speech", "language": None}
         )
         pipeline.assert_not_called()
         self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
         self.assertEqual(result["subtitle_processing"]["status"], "skipped_by_speech_gate")
+        preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
+        self.assertIn("بدون زیرنویس: ویدیو گفتار ندارد", preview_caption)
+        self.assertNotIn("زیرنویس فارسی", cloud.upsert_item.call_args.args[0]["caption"])
         self.assertNotIn("subtitle", [event[0] for event in events])
+
+    def test_no_cues_preview_reports_no_cues_without_changing_staged_caption(self):
+        from scripts.subtitle_pipeline import SubtitleError
+        result, events, pipeline, storage, cloud = self._run_video_job(
+            {"decision": "subtitle", "reason": "ok", "language": "en"},
+            pipeline_error=SubtitleError("no_cues"),
+        )
+        self.assertEqual(result["subtitle_processing"]["status"], "skipped_no_detectable_speech")
+        preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
+        self.assertIn("بدون زیرنویس: گفتار تشخیص داده نشد (no_cues)", preview_caption)
+        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        self.assertNotIn("no_cues", cloud.upsert_item.call_args.args[0]["caption"])
 
     def test_failed_subtitle_translation_stops_before_mega_or_preview(self):
         from scripts.subtitle_pipeline import SubtitleError
