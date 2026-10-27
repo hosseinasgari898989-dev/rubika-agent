@@ -1,0 +1,38 @@
+name: Console Playwright smoke
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  console-browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Playwright
+        run: python -m pip install --disable-pip-version-check playwright==1.55.0
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Start local console and run mocked browser suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m http.server 8765 --bind 127.0.0.1 --directory . >/tmp/rubika-console-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8765/docs/console/v2.html >/dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          python tests/console_playwright_smoke.py
