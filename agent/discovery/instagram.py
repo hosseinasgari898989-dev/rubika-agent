@@ -16,7 +16,10 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
-from . import v7
+PUBLIC_SEARCH_ENGINES = (
+    ("google", "https://www.google.com/search"),
+    ("duckduckgo", "https://html.duckduckgo.com/html/"),
+)
 
 
 @dataclass(frozen=True)
@@ -101,12 +104,14 @@ def discover_public_indexed_urls(
     sleep_seconds: float = 0.25,
 ) -> InstagramDiscovery:
     """Search public indexes once per engine, keep honest status/errors, dedupe IDs."""
-    client = session or v7.session
+    client = session or requests.Session()
+    if session is None:
+        client.headers.update({"User-Agent": "Mozilla/5.0 (compatible; Rubika-Agent/1.0 metadata discovery)", "Accept-Language": "en-US,en;q=0.8"})
     query = "Poppy Playtime Huggy Wuggy CatNap edit site:instagram.com"
     candidates: dict[str, InstagramCandidate] = {}
     attempts: list[SearchAttempt] = []
 
-    for engine, endpoint in v7.ENGINES:
+    for engine, endpoint in PUBLIC_SEARCH_ENGINES:
         if len(candidates) >= max_results:
             break
         try:
