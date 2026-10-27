@@ -22,7 +22,7 @@ def load_source_policy_config() -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("version") != 1:
         return {
             "version": 1,
-            "delivery": {"youtube_to_rubika_enabled": False, "tiktok_to_rubika_enabled": False},
+            "delivery": {"tiktok_to_rubika_enabled": False},
             "discovery": {},
             "required_any_keywords": list(DEFAULT_REQUIRED_ANY_KEYWORDS),
             "download_quality_max": DEFAULT_DOWNLOAD_QUALITY_MAX,

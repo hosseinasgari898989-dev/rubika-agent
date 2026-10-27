@@ -16,12 +16,6 @@ on:
         required: false
         type: string
         default: "https://www.instagram.com/p/CmCVWoIr9OH/"
-      youtube_url:
-        description: "One public YouTube Short URL"
-        required: false
-        type: string
-        default: "https://www.youtube.com/shorts/VN5KSQ4didU"
-
 permissions:
   contents: read
 
@@ -68,9 +62,6 @@ jobs:
           fi
           ffprobe -version | head -n 1
 
-      - name: Install pinned yt-dlp for YouTube smoke test
-        run: python -m pip install --disable-pip-version-check yt-dlp==2026.08.19
-
       - name: Start local Cobalt API
         working-directory: cobalt-src
         env:
@@ -97,7 +88,6 @@ jobs:
           COBALT_API_URL: "http://127.0.0.1:9000/"
           TIKTOK_URL: ${{ inputs.tiktok_url || 'https://www.tiktok.com/@dragonboyedits/video/7616247520657771796' }}
           INSTAGRAM_URL: ${{ inputs.instagram_url || 'https://www.instagram.com/p/CmCVWoIr9OH/' }}
-          YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/shorts/r5FpeOJItbw' }}
         run: python -m unittest discover -s tests -v && python -m agent.media_smoke_test
 
       - name: Stop local Cobalt API

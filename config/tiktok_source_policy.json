@@ -1,8 +1,6 @@
 {
   "version": 1,
   "delivery": {
-    "youtube_to_rubika_enabled": false,
-    "note": "YouTube discovery is retained, but sending videos sourced from YouTube to Rubika is paused until the owner supplies the next-stage rules.",
     "tiktok_to_rubika_enabled": true
   },
   "discovery": {
