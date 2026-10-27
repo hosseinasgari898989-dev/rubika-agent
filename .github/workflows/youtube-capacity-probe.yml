@@ -36,9 +36,6 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/youtube-capacity-probe-once-20261027'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
-    env:
-      RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
-      RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -48,13 +45,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Ensure ffmpeg is available for valid 720p test media
-        timeout-minutes: 8
+      - name: Set up prebuilt FFmpeg and FFprobe
+        uses: FedericoCarboni/setup-ffmpeg@v3.1
+        with:
+          ffmpeg-version: release
+      - name: Verify FFmpeg and FFprobe
         run: |
-          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
-            sudo apt-get               -o Acquire::Retries=1               -o Acquire::http::Timeout=20               -o Acquire::https::Timeout=20               update
-            sudo apt-get               -o Acquire::Retries=1               -o Acquire::http::Timeout=20               -o Acquire::https::Timeout=20               install --yes ffmpeg
-          fi
           command -v ffmpeg
           command -v ffprobe
           ffmpeg -version | head -n 1
@@ -70,6 +66,9 @@ jobs:
           print("Each test rung will decide whether its source plus downloaded copy and reserve fit.")
           PY
       - name: Run test-channel-only progressive probe
+        env:
+          RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+          RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
         run: python -m agent.brain.youtube_capacity_probe
       - name: Upload sanitized capacity report
         if: always()
