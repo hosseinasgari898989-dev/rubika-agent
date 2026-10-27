@@ -8,6 +8,9 @@ from agent.source_policy import known_tiktok_profiles
 
 
 class DiscoveryOrchestratorTests(unittest.TestCase):
+    def test_tiktok_only_self_test(self):
+        self.assertEqual(runner.self_test(), 0)
+
     def test_phone_report_accepts_selected_tiktok_handles_and_other_metadata(self):
         selected=known_tiktok_profiles()[0]
         phone={"schema_version":1,"generated_at":"2026-10-13T12:00:00+00:00","source":"termux_phone",
