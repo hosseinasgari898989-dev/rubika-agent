@@ -1,111 +1,167 @@
-"""Speech gate: decide whether a video has recognizable speech worth subtitling.
+"""Conservative, dependency-free gate for speech segments returned by an ASR adapter.
 
-Pure decision logic. The heavy ASR step is injected (or lazily imported in
-transcribe()), so importing this module needs no model and no extra packages.
-Thresholds are only a starting point; tune them on real Mob X samples.
+This module never runs a model, opens media, stores transcripts, or logs transcript text.
+Callers must provide segment objects with start/end/text and at least one confidence signal.
 """
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
-class GateConfig:
-    min_media_s: float = 3.0
-    min_speech_s: float = 3.0
-    min_speech_ratio: float = 0.08
-    min_language_prob: float = 0.6
-    max_no_speech_prob: float = 0.6
-    allowed_languages: Optional[tuple] = None  # None = any language
+class SpeechGateResult:
+    decision: str
+    speech_seconds: float
+    accepted_segments: int
+    rejected_segments: int
+    reason_code: str
 
 
-@dataclass(frozen=True)
-class GateResult:
-    decision: str  # "subtitle" or "skip"
-    reason: str
-    speech_seconds: float = 0.0
-    speech_ratio: float = 0.0
-    language: Optional[str] = None
-    language_prob: float = 0.0
+def _field(segment: Any, name: str) -> Any:
+    if isinstance(segment, Mapping):
+        return segment.get(name)
+    return getattr(segment, name, None)
 
 
-def probe_args(path: str) -> list:
-    return ["ffprobe", "-v", "error", "-print_format", "json",
-            "-show_streams", "-show_format", path]
+def _finite_float(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
 
 
-def has_audio_stream(probe: dict) -> bool:
-    return any(s.get("codec_type") == "audio" for s in probe.get("streams", []))
+def evaluate_speech_segments(
+    segments: Iterable[Any] | None,
+    *,
+    media_duration_seconds: float | None = None,
+    transcription_succeeded: bool = True,
+    minimum_speech_seconds: float = 0.8,
+    maximum_no_speech_probability: float = 0.65,
+    minimum_average_log_probability: float = -1.25,
+) -> SpeechGateResult:
+    """Classify ASR segments without returning or retaining their text.
 
-
-def media_duration(probe: dict) -> float:
-    for raw in (probe.get("format", {}).get("duration"),
-                *[s.get("duration") for s in probe.get("streams", [])
-                  if s.get("codec_type") == "audio"]):
-        try:
-            value = float(raw)
-            if value > 0:
-                return value
-        except (TypeError, ValueError):
-            continue
-    return 0.0
-
-
-def _merged_seconds(spans: list) -> float:
-    total, cur_s, cur_e = 0.0, None, None
-    for s, e in sorted(spans):
-        if cur_e is None or s > cur_e:
-            if cur_e is not None:
-                total += cur_e - cur_s
-            cur_s, cur_e = s, e
-        else:
-            cur_e = max(cur_e, e)
-    if cur_e is not None:
-        total += cur_e - cur_s
-    return total
-
-
-def evaluate(probe: dict, segments: list, language: Optional[str],
-             language_prob: float, cfg: Optional[GateConfig] = None) -> GateResult:
-    """Return the gate decision from ffprobe JSON + ASR segments.
-
-    segments: dicts with start, end (seconds) and optional no_speech_prob.
+    Decisions are speech_detected, no_speech_detected or uncertain.
+    Missing/invalid confidence metrics fail closed to uncertain. An uncertain
+    result must not be treated as proof that the clip contains no speech.
     """
-    cfg = cfg or GateConfig()
-    if not has_audio_stream(probe):
-        return GateResult("skip", "no_audio_track")
-    duration = media_duration(probe)
-    if duration < cfg.min_media_s:
-        return GateResult("skip", "media_too_short")
-    spans = []
-    for seg in segments:
-        start, end = float(seg["start"]), float(seg["end"])
-        if end > start and float(seg.get("no_speech_prob", 0.0)) <= cfg.max_no_speech_prob:
-            spans.append((max(0.0, start), min(end, duration)))
-    speech = _merged_seconds([sp for sp in spans if sp[1] > sp[0]])
-    ratio = min(1.0, speech / duration)
-    base = dict(speech_seconds=round(speech, 2), speech_ratio=round(ratio, 3),
-                language=language, language_prob=float(language_prob or 0.0))
-    if speech <= 0:
-        return GateResult("skip", "no_speech", **base)
-    if speech < cfg.min_speech_s:
-        return GateResult("skip", "speech_too_short", **base)
-    if ratio < cfg.min_speech_ratio:
-        return GateResult("skip", "low_speech_ratio", **base)
-    if base["language_prob"] < cfg.min_language_prob:
-        return GateResult("skip", "low_language_confidence", **base)
-    if cfg.allowed_languages and language not in cfg.allowed_languages:
-        return GateResult("skip", "language_not_allowed", **base)
-    return GateResult("subtitle", "ok", **base)
+    min_speech = _finite_float(minimum_speech_seconds)
+    max_no_speech = _finite_float(maximum_no_speech_probability)
+    min_log_probability = _finite_float(minimum_average_log_probability)
+    duration = (
+        _finite_float(media_duration_seconds)
+        if media_duration_seconds is not None
+        else None
+    )
+    if (
+        min_speech is None or min_speech <= 0
+        or max_no_speech is None or not 0 <= max_no_speech <= 1
+        or min_log_probability is None
+        or (media_duration_seconds is not None and (duration is None or duration <= 0))
+    ):
+        raise ValueError("speech_gate_threshold_invalid")
 
+    if not transcription_succeeded:
+        return SpeechGateResult("uncertain", 0.0, 0, 0, "transcription_failed")
+    if segments is None:
+        return SpeechGateResult("uncertain", 0.0, 0, 0, "transcription_result_missing")
+    try:
+        rows = list(segments)
+    except (TypeError, ValueError):
+        return SpeechGateResult("uncertain", 0.0, 0, 0, "transcription_result_invalid")
+    if not rows:
+        return SpeechGateResult("no_speech_detected", 0.0, 0, 0, "no_speech_segments")
 
-def transcribe(path: str, model_size: str = "small"):
-    """Run faster-whisper (CPU, int8, VAD). Imported lazily: only needed on the runner."""
-    from faster_whisper import WhisperModel  # noqa: PLC0415
+    accepted = 0
+    rejected = 0
+    high_no_speech = 0
+    plausible = 0
+    unknown_confidence = 0
+    invalid = 0
+    speech_seconds = 0.0
 
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    segs, info = model.transcribe(path, vad_filter=True, beam_size=1)
-    segments = [{"start": s.start, "end": s.end, "text": s.text,
-                 "no_speech_prob": s.no_speech_prob} for s in segs]
-    return segments, info.language, info.language_probability
+    for row in rows:
+        start = _finite_float(_field(row, "start"))
+        end = _finite_float(_field(row, "end"))
+        segment_text = _field(row, "text")
+        if start is None or end is None or end <= start or not isinstance(segment_text, str):
+            rejected += 1
+            invalid += 1
+            continue
+        if not " ".join(segment_text.split()):
+            rejected += 1
+            invalid += 1
+            continue
+
+        start = max(0.0, start)
+        if duration is not None:
+            end = min(duration, end)
+        if end <= start:
+            rejected += 1
+            invalid += 1
+            continue
+
+        plausible += 1
+        no_speech_raw = _field(row, "no_speech_prob")
+        log_probability_raw = _field(row, "avg_logprob")
+        no_speech_probability = _finite_float(no_speech_raw)
+        average_log_probability = _finite_float(log_probability_raw)
+
+        if no_speech_raw is not None and (
+            no_speech_probability is None
+            or not 0.0 <= no_speech_probability <= 1.0
+        ):
+            rejected += 1
+            invalid += 1
+            continue
+        if log_probability_raw is not None and average_log_probability is None:
+            rejected += 1
+            invalid += 1
+            continue
+        if no_speech_probability is None and average_log_probability is None:
+            rejected += 1
+            unknown_confidence += 1
+            continue
+        if (
+            no_speech_probability is not None
+            and no_speech_probability > max_no_speech
+        ):
+            rejected += 1
+            high_no_speech += 1
+            continue
+        if (
+            average_log_probability is not None
+            and average_log_probability < min_log_probability
+        ):
+            rejected += 1
+            continue
+
+        accepted += 1
+        speech_seconds += end - start
+
+    rounded_seconds = round(speech_seconds, 3)
+    if accepted and speech_seconds >= min_speech:
+        return SpeechGateResult(
+            "speech_detected", rounded_seconds, accepted, rejected, "speech_confident"
+        )
+    if plausible and high_no_speech == plausible:
+        return SpeechGateResult(
+            "no_speech_detected", rounded_seconds, accepted, rejected,
+            "no_speech_probability_high",
+        )
+    if accepted:
+        return SpeechGateResult(
+            "uncertain", rounded_seconds, accepted, rejected,
+            "speech_below_duration_threshold",
+        )
+    if not plausible and invalid:
+        return SpeechGateResult("uncertain", 0.0, 0, rejected, "segments_invalid")
+    reason = (
+        "speech_confidence_missing"
+        if unknown_confidence
+        else "speech_confidence_insufficient"
+    )
+    return SpeechGateResult("uncertain", 0.0, accepted, rejected, reason)
