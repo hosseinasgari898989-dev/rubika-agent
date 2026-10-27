@@ -9,7 +9,7 @@ Status: OK = complete, PART = partial, NONE = no real API (UI must be disabled +
 | Queue list + requeue/skip/delete | d1/query + POST /queue/:id/action | yes | OK | retry_now = 501 (not shown) |
 | History (runs/events/brain/delivery/audit) | 5 GET endpoints | yes | OK | - |
 | AI calls | GET /ai/calls | yes | OK | - |
-| Sources CRUD | /sources | yes | OK | no start-date field (date engine) -> NONE |
+| Sources CRUD | /sources | yes | OK | only TikTok and X can be registered; X maps to mob_official |
 | X links add/clear | /links, /links/clear | yes | PART | confirm/cancel missing -> ext: Instant page |
 | Owners CRUD + invite | /owners, /owners/invite | yes | OK | - |
 | Rules (cap, edit count, quiet hours) | GET/PUT /rules | yes | PART | no UTC+Tehran view; save dropped quiet_hours.enabled -> ext |
@@ -20,7 +20,6 @@ Status: OK = complete, PART = partial, NONE = no real API (UI must be disabled +
 | Mob X job detail/preview state | GET /jobs/:id | no | PART | ext: read-only detail |
 | Owner approval of Mob X job | none in console API (PV only) | no | NONE | label: approve from PV |
 | Final publish | /mob-x/publish-claim (runner only) | no | NONE | runner-only; test channel only |
-| TikTok/YouTube direct link (instant) | none | no | NONE | disabled + labelled |
 | Video preview in web | none (no media stream endpoint) | no | NONE | PV preview only |
 | Daily-count scheduling across days (4 today -> 7, rest later) | only daily_success_cap | no | NONE | cap only |
 | Mega management / schedules / repo editor / feature requests | none | 'soon' page | NONE | already labelled |

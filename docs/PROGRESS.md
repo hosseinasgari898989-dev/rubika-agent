@@ -1,5 +1,12 @@
 # Rubika-Agent Progress
 
+## 2026-10-27 — current platform boundary
+
+- PR #97 removed the YouTube-only pipeline; PR #98 removed Instagram discovery and its tests; PR #101 tightened Worker intake so mob_official accepts only canonical x.com/mobgamesstudios/status/<id> URLs. PR #100 was closed as redundant after main advanced with overlapping console cleanup.
+- The normal edit lane is TikTok-only. The console lets owners register TikTok and X sources; X maps internally to mob_official. Historic non-X rows remain stored but are excluded from current console lists and the default seen-index response; no database migration or data deletion was performed.
+- Main 9fdd2b3145a71eec60687e3b7ab94e9c2b443b79: Cloud bootstrap run 40534301138, Playwright 40534300988, Worker deploy 40534300899, and deployed Worker health smoke 40534300971 all succeeded.
+- No Secrets, gates, quiet hours, migration or destination-channel settings changed. No workflow was manually dispatched and no Rubika content was published.
+
 ## 2026-10-23 - Phase 0 complete (PR #40 merged)
 
 - Starting main at 3db2d150104a802919f16a6425fe070e9fbef140; Phase 0 merged as aaa0ec50a385e3747e3c93f11d18932fc7a16f2b. Prior discovery branch remains at 3aaff9e783e458fe9d30bf5bf4d5c793cffe01f4.
@@ -28,7 +35,7 @@
 - Canonical TikTok URLs now strip tracking parameters and resolve supported short links once; numeric video IDs remain required.
 - Cobalt quality uses configured 1080 maximum. Upscaling is disabled; sources below 1080 short-side remain native. Downloaded source dimensions are included in the existing validation JSON payload without a D1 migration.
 - Removed bold-markup markers from edit captions. Confirmed-success delivery removes the local copy but retains the MEGA copy for the scheduled 24-hour cleanup policy.
-- Removed general YouTube and Instagram discovery/media paths; retained TikTok discovery and the legacy `mob_official` compatibility handlers.
+- Removed general YouTube and Instagram discovery/media paths; retained TikTok discovery and the mob_official item namespace, now restricted to canonical official X status links.
 - PR #41 merged as `97578088cebcdc58fa6cf520e07fb38c84410b8c`; PR #42 merged as `e3fc45cf190f7b592e9e545379e61395c13592b7`. Relevant GitHub Actions checks passed (PR #41 runs 40019377665/40019377673; PR #42 runs 40019699966/40019700005; main run 40019852168).
 - No Worker deploy, D1 write/migration, publishing workflow dispatch, media delivery, MEGA cleanup, or Rubika post was performed. Live Worker/Rubika credential checks were not part of this phase.
 

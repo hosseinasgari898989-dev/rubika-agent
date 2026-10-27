@@ -8,14 +8,14 @@ This file summarizes the active main-branch architecture. Older phone-only disco
 
 - Active discovery/intake is cloud-scheduled through GitHub Actions and Termux Docker, not a daily manual command on the user's phone. The workflow `.github/workflows/termux-docker-discovery.yml` checks its D1 intake gate every 30 minutes and runs the fuller metadata collection only after five hours since the last successful queue intake.
 - Metadata candidates are validated and enqueued in the D1 automation queue. The discovery workflow itself does not download video media or publish to Rubika.
-- Current delivery supports TikTok-to-Rubika only. General YouTube and Instagram discovery/delivery have been removed; legacy `mob_official` compatibility paths remain. The owner-selected TikTok creators and source-specific rules live in that policy file.
+- The regular edit lane supports TikTok only. General YouTube/Instagram discovery and delivery are removed. The separate mob_official lane accepts only canonical X status URLs from mobgamesstudios; other source platforms are rejected. The owner-selected TikTok creators and source-specific rules live in that policy file.
 - The daily queue processor `.github/workflows/daily-queue-processor.yml` runs at 07:00 UTC and targets at most four successful sends per run. Four is a cap, not a guarantee: each item must pass source, duplicate, media, policy and delivery checks.
 - Media output format is source-policy-dependent: selected profiles may use square 1080×1080, others preserve source aspect ratio. Do not assume all creators should be forced into the same aspect ratio.
 - Content relevance and edit-signal checks remain mandatory. A trusted creator identity cannot make every upload relevant. AI is not allowed to auto-approve uncertain content.
 
 ### Official Mob Entertainment news
 
-- This is a separate legacy content track. Active official-Mob discovery is X-only; inactive non-X source entries are removed from the source registry while existing `mob_official` handlers remain for compatibility.
+- This is a separate official-news track. Intake accepts only canonical X status URLs from the exact `mobgamesstudios` handle; non-X source lanes and direct `mob_official` source registration are rejected.
 - The X path checks the authoritative publication timestamp, author identity, canonical URL and actual attached media. For publication, the news item's verified published_at must fall inside the five-hour news-only window; GitHub commit time is not used as a proxy for publication time.
 - Captions preserve source text and require a valid Persian translation when the caption is available. Outgoing captions are checked to ensure they have no URL. Actual media must be downloaded and validated before sending.
 - Several eligible X posts in one five-hour window can be processed one at a time with deduplication. An ambiguous Rubika delivery stops the run to avoid duplicates.
