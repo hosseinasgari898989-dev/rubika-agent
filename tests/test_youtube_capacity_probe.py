@@ -16,7 +16,7 @@ class YouTubeCapacityProbeTests(unittest.TestCase):
     def test_probe_ladder_is_increasing_and_is_only_a_test_plan(self):
         values = probe.probe_size_ladder_mib()
         self.assertEqual(values, tuple(sorted(set(values))))
-        self.assertEqual(values[0], 16)
+        self.assertEqual(values[0], 1)
         self.assertGreaterEqual(values[-1], 1024)
         self.assertIn(2048, values)
         self.assertEqual(values[-1], 4096)
