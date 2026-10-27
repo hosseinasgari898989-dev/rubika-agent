@@ -8,10 +8,13 @@ from agent.brain.mob_x_link_processor import (
     MobXLinkError,
     _fxtwitter,
     _vxtwitter,
+    build_mob_x_caption,
     clean_caption,
     download_public_media,
     normalize_published_at,
     parse_official_link,
+    process_job,
+    run_video_speech_gate,
     probe_public_sources,
     select_media,
 )
@@ -146,6 +149,66 @@ class MobXLinkParserTests(unittest.TestCase):
                 download_public_media(VIDEO_URL, "video", "/tmp/rubika-agent-mob-x-test", session=session, max_bytes=1000)
         item.iter_content.assert_not_called()
         item.close.assert_called()
+
+    def test_text_only_post_is_rejected_before_translation_or_any_send(self):
+        cloud = Mock()
+        cloud.get_seen_index.return_value = {"ids": set()}
+        client = Mock()
+        job = {
+            "id": "job_abcdef1234567890",
+            "params": {"url": f"https://x.com/mobgamesstudios/status/{POST_ID}"},
+            "external_id": POST_ID,
+        }
+        with (
+            patch("agent.brain.mob_x_link_processor.CloudState", return_value=cloud),
+            patch("agent.brain.mob_x_link_processor.fetch_public_post", return_value={"text": "Text-only announcement"}),
+            patch("agent.brain.mob_x_link_processor.translate_to_persian") as translate,
+            patch("agent.brain.mob_x_link_processor.MegaStorage") as mega,
+            patch("agent.brain.mob_x_link_processor.upload_preview_media") as upload,
+            patch("agent.brain.mob_x_link_processor.send_owner_preview") as preview,
+        ):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_media_missing"):
+                process_job(job, client)
+        client.rules.assert_not_called()
+        translate.assert_not_called()
+        mega.assert_not_called()
+        upload.assert_not_called()
+        preview.assert_not_called()
+
+    def test_caption_template_bolds_heading_and_source_and_quotes_bold_translation(self):
+        empty_caption = build_mob_x_caption("   ", None)
+        self.assertEqual(
+            empty_caption,
+            "**ماب انترتینمنت در پیج X خود پستی منتشر کرد.**",
+        )
+        caption = build_mob_x_caption(
+            "Official update: $literal$\n> not markup",
+            "ترجمهٔ رسمی\nخط دوم",
+        )
+        self.assertEqual(
+            caption,
+            "**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**\n\n"
+            "**Official update: ＄literal＄\n› not markup**\n\n"
+            "$**ترجمه متن:**\n**ترجمهٔ رسمی\nخط دوم**$",
+        )
+
+    def test_video_speech_gate_transcribes_and_returns_gate_decision(self):
+        inspection = Mock(duration_seconds=12.5, has_audio=True)
+        gate_result = Mock(
+            decision="subtitle", reason="ok", speech_seconds=5.0,
+            speech_ratio=0.4, language="en", language_prob=0.91,
+        )
+        with (
+            patch("agent.brain.mob_x_link_processor.speech_gate.transcribe", return_value=([{"start": 0, "end": 5, "text": "speech"}], "en", 0.91)) as transcribe,
+            patch("agent.brain.mob_x_link_processor.speech_gate.evaluate", return_value=gate_result) as evaluate,
+        ):
+            result = run_video_speech_gate("/tmp/mock-video.mp4", inspection)
+        transcribe.assert_called_once_with("/tmp/mock-video.mp4", model_size="small")
+        probe = evaluate.call_args.args[0]
+        self.assertEqual(probe["format"]["duration"], 12.5)
+        self.assertIn({"codec_type": "audio"}, probe["streams"])
+        self.assertEqual(result["decision"], "subtitle")
+        self.assertEqual(result["reason"], "ok")
 
     def test_caption_is_plain_and_published_time_is_normalized(self):
         self.assertEqual(clean_caption(" **Hello**\n\nhttps://example.org/a "), "Hello")
