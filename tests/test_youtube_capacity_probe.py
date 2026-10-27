@@ -4,11 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import requests
 
-from agent.brain import youtube_capacity_probe as probe
+from agent.brain import test_channel, youtube_capacity_probe as probe
 
 
 class YouTubeCapacityProbeTests(unittest.TestCase):
@@ -18,11 +19,18 @@ class YouTubeCapacityProbeTests(unittest.TestCase):
         self.assertEqual(values[0], 16)
         self.assertGreaterEqual(values[-1], 1024)
         self.assertIn(2048, values)
+        self.assertEqual(values[-1], 4096)
 
     def test_probe_requires_the_registered_test_channel(self):
         self.assertFalse(probe.test_channel_is_authorized(""))
         self.assertFalse(probe.test_channel_is_authorized("not-the-test-channel"))
         self.assertFalse(probe.test_channel_is_authorized("main-channel-guid"))
+
+    def test_probe_guard_matches_existing_test_channel_guard(self):
+        self.assertEqual(
+            probe.TEST_CHANNEL_SHA256,
+            test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256,
+        )
 
     def test_api_transport_errors_are_reduced_to_safe_labels(self):
         token = "do-not-print-this-token"
@@ -32,6 +40,52 @@ class YouTubeCapacityProbeTests(unittest.TestCase):
         self.assertFalse(result["transport_ok"])
         self.assertNotIn(token, serialized)
         self.assertIsNone(result["http_status"])
+
+
+    def test_ytdlp_smoke_download_selects_a_720_class_profile_for_portrait_video(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            metadata = {
+                "width": 720,
+                "height": 1280,
+                "filesize": 12_345,
+                "duration": 10,
+            }
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+                if "--dump-single-json" in command:
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout=json.dumps(metadata),
+                        stderr="",
+                    )
+                output_template = command[command.index("--output") + 1]
+                Path(output_template.replace("%(ext)s", "mp4")).write_bytes(b"mock-mp4")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with (
+                patch.object(probe.shutil, "which", side_effect=lambda tool: "/usr/bin/" + tool),
+                patch.object(probe.subprocess, "run", side_effect=fake_run),
+                patch.object(probe, "_probe_mp4", return_value={
+                    "width": 720, "height": 1280, "duration_seconds": 10.0,
+                }),
+            ):
+                result = probe._probe_youtube_download(root)
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["width"], 720)
+            self.assertEqual(result["height"], 1280)
+            download_command = commands[1]
+            self.assertIn(
+                "bestvideo[width<=720][height<=1280]+bestaudio/best[width<=720][height<=1280]",
+                download_command,
+            )
+            self.assertIn("--http-chunk-size", download_command)
+            self.assertNotIn("--max-filesize", download_command)
+            self.assertTrue(all("--ignore-config" in command for command in commands))
+            self.assertFalse(list(root.glob("youtube-source-smoke.*")))
 
     def test_probe_rejects_a_size_below_the_minimum_before_running_ffmpeg(self):
         with tempfile.TemporaryDirectory() as folder:
