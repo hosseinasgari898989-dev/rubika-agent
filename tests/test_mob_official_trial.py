@@ -92,7 +92,7 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             self.assertEqual(load_x_candidates_from_report(invalid), ([], "termux_report_invalid"))
 
 
-    def test_accepts_verified_official_website_youtube_and_steam_media(self):
+    def test_rejects_youtube_and_instagram_source_urls_but_keeps_website_and_steam(self):
         website = self.row(
             id="pop-chapter-five",
             external_id="pop-chapter-five",
@@ -119,6 +119,18 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             media_type="video",
             media_url="https://www.youtube.com/watch?v=abcdefghijk",
         )
+        instagram = self.row(
+            id="ig-AbCdEf12345",
+            external_id="ig-AbCdEf12345",
+            url="https://www.instagram.com/reel/AbCdEf12345/",
+            canonical_url="https://www.instagram.com/reel/AbCdEf12345/",
+            source_platform="instagram",
+            source_name="Poppy Playtime Instagram",
+            source_key="instagram.com",
+            author="",
+            media_type="video",
+            media_url="https://www.instagram.com/reel/AbCdEf12345/",
+        )
         steam = self.row(
             id="steam-12345678901",
             external_id="steam-12345678901",
@@ -132,11 +144,14 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             media_url="https://clan.cloudflare.steamstatic.com/images/12345/update.jpg",
         )
         with tempfile.TemporaryDirectory() as folder:
-            path = self.report_file(folder, [website, youtube, steam])
+            path = self.report_file(folder, [website, youtube, instagram, steam])
             candidates, status = load_x_candidates_from_report(path)
 
         self.assertEqual(status, "ok")
-        self.assertEqual([row["source_platform"] for row in candidates], ["website", "youtube", "steam"])
+        self.assertEqual([row["source_platform"] for row in candidates], ["website", "steam"])
+        self.assertNotIn("youtube", mob_official_trial.OFFICIAL_SOURCE_PLATFORMS)
+        with self.assertRaisesRegex(ValueError, "invalid_official_source_platform"):
+            filter_official_candidates_by_source([], "youtube")
 
     def test_rejects_official_page_with_untrusted_media_host(self):
         forged_media = self.row(
