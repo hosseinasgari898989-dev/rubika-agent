@@ -85,7 +85,7 @@ def _create_sized_mp4(destination: Path, target_bytes: int) -> None:
     a tiny 1280x720 clip; this is suitable for testing byte limits, not bitrate
     quality. Files are private temporary fixtures and are never committed.
     """
-    if type(target_bytes) is not int or target_bytes < 1 * MIB or target_bytes >= 2**32:
+    if type(target_bytes) is not int or target_bytes < 1 * MIB or target_bytes > 2**32:
         raise ProbeError("probe_target_size_invalid")
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
@@ -106,8 +106,8 @@ def _create_sized_mp4(destination: Path, target_bytes: int) -> None:
 
     base_size = destination.stat().st_size
     box_size = target_bytes - base_size
-    if box_size < 8:
-        raise ProbeError("synthetic_mp4_base_larger_than_target")
+    if box_size < 8 or box_size >= 2**32:
+        raise ProbeError("synthetic_mp4_padding_size_invalid")
     with destination.open("ab") as handle:
         handle.write(struct.pack(">I4s", box_size, b"free"))
         handle.truncate(target_bytes)
