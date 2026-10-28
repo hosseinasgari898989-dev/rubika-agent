@@ -1370,6 +1370,10 @@ class PanelFakeStatement {
       const row = [...this.db.consoleJobs.values()].find(item => Number(item.panel_link_id) === Number(this.values[0]));
       return row ? { ...row } : null;
     }
+    if (this.sql.includes("FROM console_jobs WHERE id = ?")) {
+      const row = this.db.consoleJobs.get(this.values[0]);
+      return row ? { ...row } : null;
+    }
     if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
       const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
       if (!row || (this.sql.includes("AND enabled = 1") && Number(row.enabled) !== 1)) return null;
@@ -1390,6 +1394,26 @@ class PanelFakeStatement {
     return { results: [] };
   }
   async run() {
+    if (this.sql.startsWith("UPDATE console_jobs SET params_json = ?")) {
+      const [paramsJson, updatedAt, jobId] = this.values;
+      const row = this.db.consoleJobs.get(jobId);
+      if (!row) return { meta: { changes: 0 } };
+      const statusMatch = /status IN \(([^)]+)\)/.exec(this.sql);
+      if (statusMatch) {
+        const allowed = statusMatch[1].split(",").map(value => value.trim().replace(/^'|'$/g, ""));
+        if (!allowed.includes(row.status)) return { meta: { changes: 0 } };
+      }
+      const markerMatch = /json_extract\(params_json, '\$\.([a-z_]+)'\)/.exec(this.sql);
+      if (markerMatch) {
+        let params = {};
+        try { params = JSON.parse(row.params_json || "{}"); } catch {}
+        if (["dispatching", "dispatched"].includes(params[markerMatch[1]])) {
+          return { meta: { changes: 0 } };
+        }
+      }
+      Object.assign(row, { params_json: paramsJson, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
     if (this.sql.startsWith("UPDATE console_rules SET version = version + 1")) {
       if (this.db.conflictConsoleRulesUpdate) {
         this.db.conflictConsoleRulesUpdate = false;
