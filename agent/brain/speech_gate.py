@@ -102,9 +102,9 @@ def evaluate(probe: dict, segments: list, language: Optional[str],
 
 
 def audio_cmd(path: str) -> list:
-    """ffmpeg argv: 16 kHz mono float32 PCM on stdout (what faster-whisper expects)."""
-    return ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "16000",
-            "-f", "f32le", "-"]
+    """Decode normalized speech to 16 kHz mono float32 PCM."""
+    return ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-af", "highpass=f=80,loudnorm",
+            "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"]
 
 
 def decode_audio_16k(path: str, run=subprocess.run):

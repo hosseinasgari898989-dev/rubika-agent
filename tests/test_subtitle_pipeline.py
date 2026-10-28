@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import subtitle_pipeline as sp  # noqa: E402
@@ -145,10 +146,57 @@ class Build(unittest.TestCase):
 
 
 class Transcribe(unittest.TestCase):
-    def test_segments_to_cues(self):
+    def test_segments_to_cues_uses_beam_five_and_vad(self):
         seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
-        model = SimpleNamespace(transcribe=lambda *a, **k: ([seg(0.0, 1.2, " Hi  you "), seg(1.3, 2.0, "  ")], None))
-        self.assertEqual(sp.transcribe("x.mp4", model_factory=lambda: model), [(0, 1200, "Hi you")])
+        seen = []
+        def run_asr(*args, **kwargs):
+            seen.append(kwargs)
+            return [seg(0.0, 1.2, " Hi  you "), seg(1.3, 2.0, "  ")], None
+        model = SimpleNamespace(transcribe=run_asr)
+        result = sp.transcribe("x.mp4", model_factory=lambda: model)
+        self.assertEqual(result, [(0, 1200, "Hi you")])
+        self.assertEqual(seen[0]["beam_size"], 5)
+        self.assertTrue(seen[0]["vad_filter"])
+        self.assertEqual(result.report["asr_model"], "medium")
+        self.assertIsNone(result.report["asr_fallback_reason"])
+
+    def test_default_model_is_medium_cpu_int8(self):
+        seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
+        constructed, transcribed = [], []
+
+        class FakeWhisperModel:
+            def __init__(self, size, **kwargs):
+                constructed.append((size, kwargs))
+
+            def transcribe(self, audio, **kwargs):
+                transcribed.append((audio, kwargs))
+                return [seg(0.0, 1.0, "hello")], None
+
+        with patch.object(sp, "decode_audio_16k", return_value="mocked-pcm"):
+            with patch.dict(sys.modules, {"faster_whisper": SimpleNamespace(WhisperModel=FakeWhisperModel)}):
+                result = sp.transcribe("x.mp4")
+        self.assertEqual(constructed, [("medium", {"device": "cpu", "compute_type": "int8"})])
+        self.assertEqual(transcribed[0][0], "mocked-pcm")
+        self.assertEqual(transcribed[0][1]["beam_size"], 5)
+        self.assertTrue(transcribed[0][1]["vad_filter"])
+        self.assertEqual(result.report["asr_model"], "medium")
+
+    def test_medium_runtime_limit_falls_back_to_small_and_reports_reason(self):
+        seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
+        factories = []
+
+        def factory():
+            factories.append(len(factories))
+            text = "medium partial" if len(factories) == 1 else "small fallback"
+            segment = seg(0.0, 1.0, text)
+            return SimpleNamespace(transcribe=lambda *args, **kwargs: (iter([segment]), None))
+
+        result = sp.transcribe("x.mp4", model_factory=factory, runtime_limit_seconds=0)
+        self.assertEqual(result, [(0, 1000, "small fallback")])
+        self.assertEqual(len(factories), 2)
+        self.assertEqual(result.report["asr_initial_model"], "medium")
+        self.assertEqual(result.report["asr_model"], "small")
+        self.assertEqual(result.report["asr_fallback_reason"], "medium_runtime_exceeded_15m")
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ class AudioCmd(unittest.TestCase):
             self.assertIn("-nostdin", cmd)
             self.assertEqual(cmd[cmd.index("-ar") + 1], "16000")
             self.assertEqual(cmd[cmd.index("-ac") + 1], "1")
+            self.assertEqual(cmd[cmd.index("-af") + 1], "highpass=f=80,loudnorm")
             self.assertEqual(cmd[cmd.index("-f") + 1], "f32le")
             self.assertEqual(cmd[-1], "-")
 

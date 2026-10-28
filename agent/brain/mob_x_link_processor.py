@@ -129,6 +129,8 @@ def build_owner_preview_caption(
         except (TypeError, ValueError):
             cue_count = 0
         status_line = f"زیرنویس فارسی: دارد ({cue_count} خط)"
+        if state.get("asr_fallback_reason") == "medium_runtime_exceeded_15m":
+            status_line += "\nمدل زیرنویس به small برگشت؛ اجرای medium بیش از ۱۵ دقیقه طول کشید."
     elif state.get("status") == "skipped_no_detectable_speech":
         status_line = "بدون زیرنویس: گفتار تشخیص داده نشد (no_cues)"
     else:
@@ -610,7 +612,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
 
             def transcribe_subtitles(video_path: str) -> list:
                 # faster-whisper is pinned and installed only by the Mob X workflow.
-                return subtitle_pipeline.transcribe(video_path, model_size="small", language=language)
+                return subtitle_pipeline.transcribe(video_path, model_size="medium", language=language)
 
             def translate_subtitle_batch(prompt: str, *, max_tokens: int) -> str:
                 if max_tokens != subtitle_pipeline.MAX_OUT_TOKENS:
@@ -669,6 +671,12 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                     "missing": int(subtitle_result.get("missing") or 0),
                     "size_bytes": int(subtitle_result.get("size") or 0),
                     "duration_ms": int(subtitle_result.get("duration_ms") or 0),
+                    "asr_initial_model": str(subtitle_result.get("asr_initial_model") or "medium"),
+                    "asr_model": str(subtitle_result.get("asr_model") or "medium"),
+                    "asr_fallback_reason": subtitle_result.get("asr_fallback_reason"),
+                    "asr_elapsed_seconds": float(subtitle_result.get("asr_elapsed_seconds") or 0),
+                    "asr_medium_elapsed_seconds": float(subtitle_result.get("asr_medium_elapsed_seconds") or 0),
+                    "asr_fallback_elapsed_seconds": float(subtitle_result.get("asr_fallback_elapsed_seconds") or 0),
                 }
 
         translation_source = clean_caption(original, 5000)

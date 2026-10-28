@@ -395,7 +395,11 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             if pipeline_error:
                 raise pipeline_error
             return {"out": "/tmp/subtitled.mp4", "cues": 1, "batches": 1,
-                    "missing": 0, "size": 20, "duration_ms": 12200}
+                    "missing": 0, "size": 20, "duration_ms": 12200,
+                    "asr_initial_model": "medium", "asr_model": "small",
+                    "asr_fallback_reason": "medium_runtime_exceeded_15m",
+                    "asr_elapsed_seconds": 920, "asr_medium_elapsed_seconds": 901,
+                    "asr_fallback_elapsed_seconds": 19}
 
         with ExitStack() as stack:
             stack.enter_context(patch.dict("os.environ", {
@@ -419,8 +423,10 @@ class MobXSubtitleWiringTests(unittest.TestCase):
                 "agent.brain.mob_x_link_processor.subtitle_pipeline.build_subtitled_video",
                 side_effect=build,
             ))
-            stack.enter_context(patch("agent.brain.mob_x_link_processor.subtitle_pipeline.transcribe",
-                                      return_value=[(0, 1000, "Hello there")]))
+            transcribe_mock = stack.enter_context(patch(
+                "agent.brain.mob_x_link_processor.subtitle_pipeline.transcribe",
+                return_value=[(0, 1000, "Hello there")],
+            ))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.translate_to_persian",
                                       side_effect=lambda text, **kwargs: events.append(("translate", text)) or "0|ترجمه 0"))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.evaluate_official_media",
@@ -450,8 +456,12 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(storage.upload.call_args.args, ("/tmp/subtitled.mp4", "official"))
         self.assertEqual(result["subtitle_processing"]["status"], "burned")
         self.assertEqual(result["subtitle_processing"]["missing"], 0)
+        self.assertEqual(result["subtitle_processing"]["asr_model"], "small")
+        self.assertEqual(result["subtitle_processing"]["asr_fallback_reason"], "medium_runtime_exceeded_15m")
+        transcribe_mock.assert_called_once_with("/tmp/source.mp4", model_size="medium", language="en")
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertIn("زیرنویس فارسی: دارد (1 خط)", preview_caption)
+        self.assertIn("مدل زیرنویس به small برگشت", preview_caption)
         self.assertNotIn("زیرنویس فارسی", cloud.upsert_item.call_args.args[0]["caption"])
         self.assertEqual(pipeline.call_args.kwargs["font"], "Estedad")
         self.assertEqual(pipeline.call_args.kwargs["max_missing_ratio"], 0.0)
