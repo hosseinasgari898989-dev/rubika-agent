@@ -12,6 +12,9 @@ Cue = tuple  # (start_ms, end_ms, text)
 _TS = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9_./\-]+$")
 RLM = "\u200f"
+# Burned-in subtitle size (PlayResY 720). Medium-large; callers asking for less get this floor.
+DEFAULT_ASS_SIZE = 60
+MIN_ASS_SIZE = 60
 
 
 def _ms(m: re.Match) -> int:
@@ -105,7 +108,8 @@ def _ass_ts(ms: int) -> str:
     return f"{h}:{m:02d}:{s:02d}.{f // 10:02d}"
 
 
-def to_ass(cues: list, font: str = "Estedad", size: int = 44, rtl: bool = True) -> str:
+def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl: bool = True) -> str:
+    size = max(int(size), MIN_ASS_SIZE)
     head = (
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\n"
         "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\n"
@@ -113,7 +117,7 @@ def to_ass(cues: list, font: str = "Estedad", size: int = 44, rtl: bool = True) 
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-        "-1,0,0,0,100,100,0,0,1,2,0,2,40,40,40,1\n\n[Events]\n"
+        "-1,0,0,0,100,100,0,0,1,3,0,2,40,40,40,1\n\n[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     lines = []

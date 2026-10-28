@@ -53,6 +53,13 @@ class SubtitleToolsTest(unittest.TestCase):
         self.assertIn("\\N", ass)
         self.assertNotIn("{", ass.split("[Events]")[1].split("Text\n", 1)[1])
 
+    def test_ass_font_size_is_medium_large_with_floor(self):
+        cue = [(1000, 2500, "سلام")]
+        self.assertIn("Style: Default,Estedad,60,", st.to_ass(cue))
+        # A caller that still passes the old small size must not shrink the subtitles.
+        self.assertIn("Style: Default,Estedad,60,", st.to_ass(cue, size=44))
+        self.assertIn("Style: Default,Estedad,72,", st.to_ass(cue, size=72))
+
     def test_burn_cmd(self):
         cmd = st.burn_cmd("in.mp4", "subs.ass", "assets/fonts", "out.mp4")
         self.assertEqual(cmd[0], "ffmpeg")
