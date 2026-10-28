@@ -413,6 +413,21 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
         self.assertNotIn("no_cues", cloud.upsert_item.call_args.args[0]["caption"])
 
+    def test_audio_decode_failed_stops_and_preserves_detail_for_owner_pv(self):
+        from scripts.subtitle_pipeline import SubtitleError
+
+        with self.assertRaises(MobXLinkError) as caught:
+            self._run_video_job(
+                {"decision": "subtitle", "reason": "ok", "language": "en"},
+                pipeline_error=SubtitleError(
+                    "audio_decode_failed", "ffmpeg could not decode source audio",
+                ),
+            )
+
+        self.assertEqual(caught.exception.code, "mob_x_subtitle_audio_decode_failed")
+        self.assertEqual(caught.exception.error_class, "SubtitleError")
+        self.assertEqual(caught.exception.error_detail, "ffmpeg could not decode source audio")
+
     def test_failed_subtitle_translation_stops_before_mega_or_preview(self):
         from scripts.subtitle_pipeline import SubtitleError
         with self.assertRaisesRegex(MobXLinkError, "mob_x_translation_failed"):
