@@ -1927,7 +1927,7 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(dispatchCalls.length, 1);
     assert.equal(dispatchCalls[0].method, "dispatches");
     assert.equal(dispatchCalls[0].payload.ref, "main");
-    assert.deepEqual(dispatchCalls[0].payload.inputs, { panel_link_id: "1" });
+    assert.deepEqual(dispatchCalls[0].payload, { ref: "main" });
   }, async ({ url }) =>
     String(url).startsWith("https://api.github.com/") ? new Response(null, { status: 204 }) : null);
 }
