@@ -151,23 +151,23 @@ def send_owner_worker_request_failure(
     if not str(owner_chat_id or "").strip():
         raise RuntimeError("rubika_owner_chat_missing")
     safe_detail = str(error_detail or "جزئیات در دسترس نیست")
-    safe_detail = re.sub(r"https?://\S+, "[URL omitted]", safe_detail, flags=re.IGNORECASE)
+    safe_detail = re.sub(r"https?://\S+", "[URL omitted]", safe_detail, flags=re.IGNORECASE)
     safe_detail = re.sub(
-        r"(?i)\b(?:token|password|secret|authorization|cookie|api[_-]?key)\s*[:=]\s*\S+,
+        r"(?i)\b(?:token|password|secret|authorization|cookie|api[_-]?key)\s*[:=]\s*\S+",
         "[REDACTED]", safe_detail,
     )
-    safe_detail = re.sub(r"\b[A-Za-z0-9_-]{32,}\b, "[REDACTED]", safe_detail)
+    safe_detail = re.sub(r"\b[A-Za-z0-9_-]{32,}\b", "[REDACTED]", safe_detail)
     safe_detail = re.sub(r"[\x00-\x1f\x7f]+", " ", safe_detail)
     safe_detail = " ".join(safe_detail.split())[:240]
     safe_job_id = str(job_id or "")
-    job_line = f"\nشناسهٔ کار: {safe_job_id} if re.fullmatch(r"job_[A-Fa-f0-9]{8,80}", safe_job_id) else ""
+    job_line = f"\nشناسهٔ کار: {safe_job_id}" if re.fullmatch(r"job_[A-Fa-f0-9]{8,80}", safe_job_id) else ""
     bot = _bot(token, bot_factory)
     post = getattr(bot, "_post", None)
     if not callable(post):
         raise RuntimeError("rubika_send_message_api_unavailable")
     message = (
         "⚠️ ارتباط پردازش Mob X با Worker ناموفق شد؛ این کار متوقف شد و انتشار انجام نشد."
-        + job_line + f"\nجزئیات: {safe_detail}
+        + job_line + f"\nجزئیات: {safe_detail}"
     )
     response = _assert_ok(post("sendMessage", {
         "chat_id": str(owner_chat_id).strip(),
