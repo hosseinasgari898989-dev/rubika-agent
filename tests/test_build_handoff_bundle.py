@@ -31,6 +31,17 @@ class HandoffBundleSecurityTests(unittest.TestCase):
         self.assertNotIn("gsk_", output)
         self.assertFalse(suspicious_text(output))
 
+    def test_full_pem_key_block_is_redacted_but_header_in_source_code_is_allowed(self):
+        sample = (
+            "private_key = '''-----BEGIN PRIVATE KEY-----\\n"
+            "QUJDREVGR0hJSktMTU5PUA==\\n-----END PRIVATE KEY-----'''"
+        )
+        output = scrub_text(sample, set())
+        self.assertNotIn("QUJDREVGR0hJSktMTU5PUA==", output)
+        self.assertIn("[REDACTED_PRIVATE_KEY]", output)
+        source_marker = 're.compile(r"-----BEGIN PRIVATE KEY-----")'
+        self.assertFalse(suspicious_text(scrub_text(source_marker, set())))
+
 
 if __name__ == "__main__":
     unittest.main()
