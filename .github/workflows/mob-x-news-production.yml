@@ -197,7 +197,7 @@ jobs:
           retention-days: 7
 
   publish-owner-approved-test-channel-link:
-    if: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.panel_link_job_id != '')) }}
+    if: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 == 'approved' && github.event_name == 'workflow_dispatch' && inputs.panel_link_job_id != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:

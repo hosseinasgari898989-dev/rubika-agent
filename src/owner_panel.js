@@ -176,11 +176,11 @@ export async function dispatchMobXWorkflow(env, workflow, inputs) {
   return { ok: false, error: lastError };
 }
 
-export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, inputs, allowedStatuses, knownRow = null) {
+export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, inputs, allowedStatuses) {
   if (!["link_dispatch_state", "publish_dispatch_state"].includes(markerKey)) return { ok: false, error: "mob_x_dispatch_marker_invalid" };
   const allowed = Array.isArray(allowedStatuses) ? allowedStatuses.filter(status => ["confirmed", "queued", "approved"].includes(status)) : [];
   if (!allowed.length) return { ok: false, error: "mob_x_dispatch_status_invalid" };
-  const row = knownRow || await env.DB.prepare("SELECT id, status, params_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link'").bind(jobId).first();
+  const row = await env.DB.prepare("SELECT id, status, params_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link'").bind(jobId).first();
   if (!row || !allowed.includes(row.status)) return { ok: true, skipped: true };
   const rawParams = typeof row.params_json === "string" && row.params_json ? row.params_json : "{}";
   let params = {};
@@ -667,7 +667,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       if (row.status === "approved") {
         const dispatchResult = await dispatchMobXJobOnce(
           env, jobId, "publish_dispatch_state", "mob-x-news-production.yml",
-          { panel_link_job_id: jobId }, ["approved"], row,
+          { panel_link_job_id: jobId }, ["approved"],
         );
         if (!dispatchResult.ok && !dispatchResult.skipped) {
           await send(env, chat, "⚠️ تأیید قبلاً ثبت شده، اما اجرای خودکار شروع نشد (" +
@@ -706,7 +706,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       } catch {}
       const dispatchResult = await dispatchMobXJobOnce(
         env, jobId, "publish_dispatch_state", "mob-x-news-production.yml",
-        { panel_link_job_id: jobId }, ["approved"], { ...row, status: "approved" },
+        { panel_link_job_id: jobId }, ["approved"],
       );
       if (!dispatchResult.ok && !dispatchResult.skipped) {
         await send(env, chat, "✅ تأیید مالک ثبت شد؛ اما اجرای خودکار شروع نشد (" +
@@ -792,7 +792,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     }
     const dispatchResult = await dispatchMobXJobOnce(
       env, job.id, "link_dispatch_state", "mob-x-link-processor.yml",
-      { panel_link_id: linkId }, ["confirmed", "queued"], job,
+      { panel_link_id: linkId }, ["confirmed", "queued"],
     );
     await setState(env, "panel_mob_pending_link_id", "");
     if (!dispatchResult.ok && !dispatchResult.skipped) {
