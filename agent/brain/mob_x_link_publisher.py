@@ -45,8 +45,12 @@ def publish_one(
     sender: Any = None,
     notifier: Any = None,
     report_path: str | Path | None = None,
+    job_id: str | None = None,
 ) -> dict:
     report: dict[str, Any] = {"mode": "publish_one", "publishing_attempted": False, "channel": "test"}
+    if job_id is not None and not JOB_ID_RE.fullmatch(str(job_id)):
+        report.update(status="blocked", error_code="mob_x_publish_job_id_invalid")
+        return _write_report(report, report_path, 2)
     if str(os.getenv("RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014", "")).strip().lower() != "approved":
         report.update(status="idle", reason="mob_x_owner_publish_gate_not_approved")
         return _write_report(report, report_path, 0)
@@ -101,7 +105,10 @@ def publish_one(
             report.update(status="blocked", error_code="console_test_channel_guard_not_enabled")
             return _write_report(report, report_path, 2)
 
-        claim = worker.request("POST", "/api/console/mob-x/publish-claim", {})
+        claim = worker.request(
+            "POST", "/api/console/mob-x/publish-claim",
+            {"job_id": job_id} if job_id is not None else {},
+        )
         if claim.get("claimed") is not True:
             report.update(status="idle", reason=_safe_code(claim.get("reason"), "no_owner_approved_mob_x_job"))
             return _write_report(report, report_path, 0)
@@ -210,11 +217,14 @@ def _write_report(report: dict, path: str | Path | None, exit_code: int) -> dict
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--publish-one", action="store_true")
+    parser.add_argument("--job-id", default="")
     parser.add_argument("--report", default="")
     args = parser.parse_args(argv)
     if not args.publish_one:
         parser.error("choose --publish-one")
-    report = publish_one(report_path=args.report or None)
+    if args.job_id and not JOB_ID_RE.fullmatch(args.job_id):
+        parser.error("--job-id must be a Mob X job ID")
+    report = publish_one(report_path=args.report or None, job_id=args.job_id or None)
     return 0 if report.get("status") in {"idle", "sent", "uncertain", "sent_status_write_unknown"} else 1
 
 

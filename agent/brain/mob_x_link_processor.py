@@ -523,8 +523,9 @@ class WorkerClient:
             error_detail=failure_detail(WORKER_REQUEST_ATTEMPTS, exception_name="RequestError"),
         )
 
-    def claim(self) -> dict | None:
-        result = self.request("POST", "/api/console/mob-x/claim", {})
+    def claim(self, panel_link_id: int | None = None) -> dict | None:
+        payload = {} if panel_link_id is None else {"panel_link_id": int(panel_link_id)}
+        result = self.request("POST", "/api/console/mob-x/claim", payload)
         job = result.get("job")
         if result.get("claimed") is not True:
             return None
@@ -770,7 +771,7 @@ def _write_report(report: dict, path: str | None, exit_code: int) -> int:
     return exit_code
 
 
-def process_one(report_path: str | None = None) -> int:
+def process_one(report_path: str | None = None, panel_link_id: int | None = None) -> int:
     report = {"mode": "process_one", "publishing_attempted": False}
     client = None
     job = None
@@ -781,7 +782,7 @@ def process_one(report_path: str | None = None) -> int:
             os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
             os.getenv("AGENT_API_TOKEN", ""),
         )
-        job = client.claim()
+        job = client.claim(panel_link_id)
         if job is None:
             report.update(status="idle", reason="no_queued_mob_x_link")
             return _write_report(report, report_path, 0)
@@ -841,8 +842,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("--process-one", action="store_true")
     parser.add_argument("--external-id", default="2107878755079213476")
+    parser.add_argument("--panel-link-id", default="")
     parser.add_argument("--report", default="")
     args = parser.parse_args(argv)
+    if args.panel_link_id and not re.fullmatch(r"[1-9][0-9]{0,8}", args.panel_link_id):
+        parser.error("--panel-link-id must be a positive numeric link ID")
     if args.probe == args.process_one:
         parser.error("choose exactly one of --probe or --process-one")
     try:
@@ -861,7 +865,10 @@ def main(argv: list[str] | None = None) -> int:
                             f"{row['id_verified']} | {row['media_count']} | {row['error_code'] or '-'} |\n"
                         )
             return 0
-        return process_one(args.report or None)
+        return process_one(
+            args.report or None,
+            panel_link_id=int(args.panel_link_id) if args.panel_link_id else None,
+        )
     except MobXLinkError as exc:
         print(json.dumps({"status": "failed", "error_code": exc.code}, ensure_ascii=False))
         return 1

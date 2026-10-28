@@ -87,6 +87,13 @@ class WorkerClientRetryTests(unittest.TestCase):
         self.assertEqual(session.request.call_count, 1)
         sleep.assert_not_called()
 
+    def test_claim_scopes_worker_request_to_requested_panel_link(self):
+        session = Mock()
+        session.request.return_value = response(payload={"ok": True, "claimed": False})
+        client = self._client(session)
+        self.assertIsNone(client.claim(17))
+        self.assertEqual(session.request.call_args.kwargs["json"], {"panel_link_id": 17})
+
 
 class MobXLinkParserTests(unittest.TestCase):
 
@@ -100,6 +107,14 @@ class MobXLinkParserTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request'", probe_job)
         self.assertIn("github.event_name == 'workflow_dispatch'", probe_job)
         self.assertNotIn("github.event_name == 'schedule'", probe_job)
+
+    def test_dispatch_input_scopes_to_exact_confirmed_link_and_keeps_cron_fallback(self):
+        workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mob-x-link-processor.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        self.assertIn("panel_link_id:", workflow)
+        self.assertIn("MOB_X_PANEL_LINK_ID: ${{ inputs.panel_link_id }}", workflow)
+        self.assertIn("--panel-link-id \"$MOB_X_PANEL_LINK_ID\"", workflow)
+        self.assertIn('    - cron: "*/5 * * * *"', workflow)
 
     def test_link_parser_requires_https_exact_official_handle_and_numeric_post_id(self):
         expected = f"https://x.com/mobgamesstudios/status/{POST_ID}"

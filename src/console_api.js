@@ -434,12 +434,23 @@ export async function handleConsoleApi(request, env, h) {
 
     // ---------- official Mob X job processor contract (no publication endpoint) ----------
     if (sub === "/mob-x/claim" && m === "POST") {
-      const candidate = await first(
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const requestedLinkId = parsed.value.panel_link_id;
+      if (requestedLinkId !== undefined &&
+          (!Number.isSafeInteger(requestedLinkId) || requestedLinkId < 1)) {
+        return fail("invalid_panel_link_id", 400);
+      }
+      const claimSql =
         "SELECT j.id, j.panel_link_id, p.url, p.external_id FROM console_jobs j " +
         "JOIN panel_links p ON p.id = j.panel_link_id " +
         "WHERE j.type = 'mob_x_link' AND j.status IN ('confirmed', 'queued') " +
-        "AND p.status IN ('confirmed', 'queued') ORDER BY j.created_at ASC LIMIT 1"
-      );
+        "AND p.status IN ('confirmed', 'queued') " +
+        (requestedLinkId === undefined ? "" : "AND j.panel_link_id = ? ") +
+        "ORDER BY j.created_at ASC LIMIT 1";
+      const candidate = requestedLinkId === undefined
+        ? await first(claimSql)
+        : await first(claimSql, requestedLinkId);
       if (!candidate) return json({ ok: true, claimed: false, reason: "no_queued_mob_x_link" });
 
       const claimedAt = new Date().toISOString();
@@ -618,6 +629,13 @@ export async function handleConsoleApi(request, env, h) {
     }
 
     if (sub === "/mob-x/publish-claim" && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const requestedJobId = parsed.value.job_id;
+      if (requestedJobId !== undefined &&
+          (typeof requestedJobId !== "string" || !/^job_[A-Fa-f0-9]{8,80}$/.test(requestedJobId))) {
+        return fail("invalid_mob_x_job_id", 400);
+      }
       const row = await first("SELECT rules_json FROM console_rules WHERE id = 1");
       if (!row) return fail("rules_not_initialized", 503);
       let rules = {};
@@ -643,13 +661,19 @@ export async function handleConsoleApi(request, env, h) {
         return json({ ok: true, claimed: false, reason: "daily_success_cap_reached", sent_today: Number(sentToday?.count || 0), cap });
       }
 
-      const candidate = await first(
+      const candidateSql =
         "SELECT j.id, j.panel_link_id, j.result_json FROM console_jobs j " +
         "JOIN panel_links p ON p.id = j.panel_link_id " +
         "WHERE j.type = 'mob_x_link' AND j.status = 'approved' AND p.status = 'approved' " +
-        "ORDER BY j.updated_at ASC LIMIT 1"
-      );
-      if (!candidate) return json({ ok: true, claimed: false, reason: "no_owner_approved_mob_x_job" });
+        (requestedJobId ? "AND j.id = ? " : "") +
+        "ORDER BY j.updated_at ASC LIMIT 1";
+      const candidate = requestedJobId
+        ? await first(candidateSql, requestedJobId)
+        : await first(candidateSql);
+      if (!candidate) return json({
+        ok: true, claimed: false,
+        reason: requestedJobId ? "requested_approved_mob_x_job_unavailable" : "no_owner_approved_mob_x_job",
+      });
       let result = {};
       try { result = candidate.result_json ? JSON.parse(candidate.result_json) : {}; } catch {}
       if (!isRecord(result) || !result.rubika_file_id || !result.caption || !result.item_id) {
