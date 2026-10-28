@@ -179,7 +179,7 @@ export async function dispatchMobXWorkflow(env, workflow, inputs) {
     try { responseBody = await response.text(); } catch { /* keep HTTP status diagnostic if body is unreadable */ }
     responseBody = String(responseBody)
       .replaceAll(token, "[REDACTED]")
-      .replace(/Bearer\\s+[^\\s"'\\)]+/gi, "Bearer [REDACTED]")
+      .replace(/Bearer\s+[^\s"')]+/gi, "Bearer [REDACTED]")
       .slice(0, 200);
     lastErrorDetail = "status=" + status + " body=" + responseBody;
     if (status !== 429 && status < 500) return { ok: false, error: lastError, error_detail: lastErrorDetail };
