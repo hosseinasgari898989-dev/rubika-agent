@@ -120,7 +120,12 @@ def main() -> int:
         if attempts > 1 and error is None:
             print(json.dumps({"endpoint": endpoint, "recovered_after_attempt": attempts}, sort_keys=True))
 
-    if jobs_error or links_error:
+    links_unavailable = bool(links_error) and not jobs_error
+    if links_unavailable:
+        # The claim endpoint re-checks the link status atomically, so a confirmed job is enough here.
+        print(json.dumps({"endpoint": "links", "degraded": True, "error_detail": links_error}, sort_keys=True))
+        links = []
+    if jobs_error or (links_error and not links_unavailable):
         detail = jobs_error or links_error or "endpoint=unknown attempts=1 status=none error=WorkerApiUnavailable"
         _append_output("error_detail", detail)
         _append_output("has_job", "false")
@@ -131,9 +136,12 @@ def main() -> int:
     has_job = any(
         job.get("type") == "mob_x_link"
         and job.get("status") == "confirmed"
-        and str(job.get("panel_link_id")) in links_by_id
+        and job.get("panel_link_id") is not None
         and (not requested_link_id or str(job.get("panel_link_id")) == requested_link_id)
-        and links_by_id[str(job.get("panel_link_id"))].get("status") in {"confirmed", "queued"}
+        and (links_unavailable or (
+            str(job.get("panel_link_id")) in links_by_id
+            and links_by_id[str(job.get("panel_link_id"))].get("status") in {"confirmed", "queued"}
+        ))
         for job in jobs
     )
     _append_output("has_job", "true" if has_job else "false")
