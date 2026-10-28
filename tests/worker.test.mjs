@@ -1782,7 +1782,9 @@ async function withDispatchFetch(responder, fn) {
       { GITHUB_DISPATCH_TOKEN: "mock-github-dispatch-token-never-log" },
       "mob-x-link-processor.yml", { panel_link_id: 25 },
     );
-    assert.deepEqual(result, { ok: false, error: "github_dispatch_http_503" });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "github_dispatch_http_503");
+    assert.equal(result.error_detail, "status=503 body=");
     assert.equal(calls.length, 3);
   });
 }
