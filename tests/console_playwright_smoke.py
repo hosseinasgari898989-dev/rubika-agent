@@ -368,9 +368,17 @@ def main() -> int:
             try:
                 page.locator('#nav button[data-id="jobs"]').click()
                 page.locator('#view button[data-a="jView"]').first.click()
-                page.wait_for_timeout(80)
-                if page.locator("#modal").is_visible():
-                    click_action(page, '#modal button[data-a="close"]', "close job details")
+                # The detail request is async: wait for its modal instead of a fixed short sleep,
+                # otherwise the modal can open after the next navigation click and intercept it.
+                page.wait_for_function(
+                    "() => document.querySelector('#modal')?.classList.contains('on')",
+                    timeout=5000,
+                )
+                click_action(page, '#modal button[data-a="close"]', "close job details")
+                page.wait_for_function(
+                    "() => !document.querySelector('#modal')?.classList.contains('on')",
+                    timeout=3000,
+                )
                 page.locator('#nav button[data-id="jobs"]').click()
                 page.locator('#view button[data-a="jAdd"]').click()
                 page.wait_for_timeout(120)

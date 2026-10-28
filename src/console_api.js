@@ -641,17 +641,6 @@ export async function handleConsoleApi(request, env, h) {
       let rules = {};
       try { rules = JSON.parse(row.rules_json || "{}"); } catch { return fail("rules_invalid_json", 503); }
 
-      const quiet = isRecord(rules.quiet_hours) ? rules.quiet_hours : null;
-      if (quiet && quiet.enabled !== false && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.start || "")) &&
-          /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.end || ""))) {
-        const now = new Date();
-        const current = now.getUTCHours() * 60 + now.getUTCMinutes();
-        const parseMinutes = (value) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
-        const start = parseMinutes(quiet.start), end = parseMinutes(quiet.end);
-        const inQuiet = start === end ? true : (start < end ? current >= start && current < end : current >= start || current < end);
-        if (inQuiet) return json({ ok: true, claimed: false, reason: "quiet_hours" });
-      }
-
       const capRaw = Number(rules.daily_success_cap ?? 4);
       const cap = Number.isFinite(capRaw) ? Math.max(0, Math.min(50, Math.trunc(capRaw))) : 4;
       const dayStart = new Date();
