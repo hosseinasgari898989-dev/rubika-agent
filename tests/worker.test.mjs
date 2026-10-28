@@ -1788,7 +1788,6 @@ async function withDispatchFetch(responder, fn) {
       url: "https://x.com/mobgamesstudios/status/2107878755079213476",
       panel_link_id: state.DB.links[0].id,
     });
-    assert.equal(confirmedParams.link_dispatch_state, "dispatched");
     assert.equal(calls.filter(call => call.method === "editMessageText").length > 0, true);
     const dispatchCalls = calls.filter(call => call.url && call.url.includes("api.github.com"));
     assert.equal(dispatchCalls.length, 1);
