@@ -148,32 +148,44 @@ export async function dispatchMobXWorkflow(env, workflow, inputs) {
   }
   const endpoint = "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/workflows/" + workflow + "/dispatches";
   let lastError = "github_dispatch_network";
+  let lastErrorDetail = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     let response;
     try {
       response = await fetch(endpoint, {
         method: "POST",
         headers: {
-          authorization: "Bearer " + token,
-          accept: "application/vnd.github+json",
-          "x-github-api-version": "2022-11-28",
-          "content-type": "application/json",
+          "User-Agent": "rubika-agent-worker",
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ref: "main", inputs: cleanInputs }),
+        body: JSON.stringify(workflow === "mob-x-link-processor.yml"
+          ? { ref: "main" }
+          : { ref: "main", inputs: cleanInputs }),
         signal: AbortSignal.timeout(2500),
       });
     } catch (error) {
       lastError = error && (error.name === "TimeoutError" || error.name === "AbortError") ? "github_dispatch_timeout" : "github_dispatch_network";
+      lastErrorDetail = null;
       if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 120));
       continue;
     }
     if (response.ok) return { ok: true };
     const status = Number(response.status) || 0;
     lastError = status ? "github_dispatch_http_" + status : "github_dispatch_http_unknown";
-    if (status !== 429 && status < 500) return { ok: false, error: lastError };
+    let responseBody = "";
+    try { responseBody = await response.text(); } catch { /* keep HTTP status diagnostic if body is unreadable */ }
+    responseBody = String(responseBody)
+      .replaceAll(token, "[REDACTED]")
+      .replace(/Bearer\s+[^\s"')]+/gi, "Bearer [REDACTED]")
+      .slice(0, 200);
+    lastErrorDetail = "status=" + status + " body=" + responseBody;
+    if (status !== 429 && status < 500) return { ok: false, error: lastError, error_detail: lastErrorDetail };
     if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 120));
   }
-  return { ok: false, error: lastError };
+  return { ok: false, error: lastError, ...(lastErrorDetail ? { error_detail: lastErrorDetail } : {}) };
 }
 
 export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, inputs, allowedStatuses) {
@@ -189,6 +201,7 @@ export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, input
   if (params[markerKey] === "dispatched" || params[markerKey] === "dispatching") return { ok: true, skipped: true };
   const reservedParams = { ...params, [markerKey]: "dispatching" };
   delete reservedParams[markerKey + "_error"];
+  delete reservedParams[markerKey + "_error_detail"];
   const reservedJson = JSON.stringify(reservedParams);
   const statusSql = allowed.map(status => "'" + status + "'").join(",");
   const reserved = await env.DB.prepare(
@@ -199,7 +212,10 @@ export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, input
   if (Number(reserved && reserved.meta && reserved.meta.changes || 0) !== 1) return { ok: true, skipped: true };
   const result = await dispatchMobXWorkflow(env, workflow, inputs);
   const finalParams = { ...reservedParams, [markerKey]: result.ok ? "dispatched" : "failed" };
-  if (!result.ok) finalParams[markerKey + "_error"] = result.error;
+  if (!result.ok) {
+    finalParams[markerKey + "_error"] = result.error;
+    if (result.error_detail) finalParams[markerKey + "_error_detail"] = result.error_detail;
+  }
   try {
     await env.DB.prepare("UPDATE console_jobs SET params_json = ?, updated_at = ? WHERE id = ?")
       .bind(JSON.stringify(finalParams), new Date().toISOString(), jobId).run();
@@ -673,7 +689,9 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         );
         if (!dispatchResult.ok && !dispatchResult.skipped) {
           await send(env, chat, "⚠️ تأیید قبلاً ثبت شده، اما اجرای خودکار شروع نشد (" +
-            dispatchResult.error + "). مقصد همچنان فقط کانال تست است.", HOME_KB);
+            dispatchResult.error + ")." +
+            (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
+            " مقصد همچنان فقط کانال تست است.", HOME_KB);
         } else {
           await send(env, chat, "✅ تأیید قبلاً ثبت شده است؛ اجرای خودکار برای کانال تست " +
             (dispatchResult.skipped ? "قبلاً آغاز یا ثبت شده." : "راه‌اندازی شد."), HOME_KB);
@@ -712,7 +730,9 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       );
       if (!dispatchResult.ok && !dispatchResult.skipped) {
         await send(env, chat, "✅ تأیید مالک ثبت شد؛ اما اجرای خودکار شروع نشد (" +
-          dispatchResult.error + "). مقصد فقط کانال تست است؛ ارسال زمان‌بندی‌شده همچنان فعال می‌ماند.", HOME_KB);
+          dispatchResult.error + ")." +
+          (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
+          " مقصد فقط کانال تست است؛ ارسال زمان‌بندی‌شده همچنان فعال می‌ماند.", HOME_KB);
         return;
       }
       await send(
@@ -799,7 +819,8 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     await setState(env, "panel_mob_pending_link_id", "");
     if (!dispatchResult.ok && !dispatchResult.skipped) {
       await send(env, chat, "⚠️ راه‌اندازی خودکار پردازش انجام نشد (" + dispatchResult.error +
-        "). پردازش زمان‌بندی‌شده همچنان فعال است.", HOME_KB);
+        ")." + (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
+        " پردازش زمان‌بندی‌شده همچنان فعال است.", HOME_KB);
       return;
     }
     return render(ui, "p_links", { clickedMid });

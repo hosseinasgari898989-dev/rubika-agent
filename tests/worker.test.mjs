@@ -1694,8 +1694,11 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/workflows/mob-x-link-processor.yml/dispatches");
     assert.equal(calls[0].init.method, "POST");
-    assert.equal(calls[0].init.headers.authorization, "Bearer " + fakeToken);
-    assert.deepEqual(JSON.parse(calls[0].init.body), { ref: "main", inputs: { panel_link_id: "23" } });
+    assert.equal(calls[0].init.headers["User-Agent"], "rubika-agent-worker");
+    assert.equal(calls[0].init.headers.Accept, "application/vnd.github+json");
+    assert.equal(calls[0].init.headers["X-GitHub-Api-Version"], "2022-11-28");
+    assert.equal(calls[0].init.headers.Authorization, "Bearer " + fakeToken);
+    assert.deepEqual(JSON.parse(calls[0].init.body), { ref: "main" });
     assert.ok(calls[0].init.signal);
   });
 }
@@ -1708,11 +1711,40 @@ async function withDispatchFetch(responder, fn) {
         { GITHUB_DISPATCH_TOKEN: "mock-github-dispatch-token-never-log" },
         "mob-x-link-processor.yml", { panel_link_id: 23 },
       );
-      assert.deepEqual(result, { ok: false, error: "github_dispatch_http_" + status });
+      assert.equal(result.ok, false);
+      assert.equal(result.error, "github_dispatch_http_" + status);
+      assert.equal(result.error_detail, "status=" + status + " body=");
       assert.equal(calls.length, 1);
       assert.equal(JSON.stringify(result).includes("mock-github-dispatch-token"), false);
     });
   }
+}
+
+// GitHub's 403 message is surfaced as a bounded, token-redacted error_detail.
+{
+  const fakeToken = "mock-github-dispatch-token-never-log";
+  const responseBody = JSON.stringify({
+    message: "Resource not accessible by integration",
+    detail: "This mock body is intentionally longer than two hundred characters to prove truncation works. ".repeat(4),
+    echoed: fakeToken,
+  });
+  await withDispatchFetch(async () => new Response(responseBody, { status: 403 }), async calls => {
+    const result = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: fakeToken },
+      "mob-x-link-processor.yml", { panel_link_id: 23 },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "github_dispatch_http_403");
+    assert.equal(result.error_detail, "status=403 body=" + responseBody.replaceAll(fakeToken, "[REDACTED]").slice(0, 200));
+    assert.equal(result.error_detail.length, ("status=403 body=").length + 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.headers["User-Agent"], "rubika-agent-worker");
+    assert.equal(calls[0].init.headers.Accept, "application/vnd.github+json");
+    assert.equal(calls[0].init.headers["X-GitHub-Api-Version"], "2022-11-28");
+    assert.equal(calls[0].init.headers.Authorization, "Bearer " + fakeToken);
+    assert.deepEqual(JSON.parse(calls[0].init.body), { ref: "main" });
+    assert.equal(JSON.stringify(result).includes(fakeToken), false);
+  });
 }
 
 // Rate limits, server failures and timeouts receive bounded retries.
@@ -1750,7 +1782,9 @@ async function withDispatchFetch(responder, fn) {
       { GITHUB_DISPATCH_TOKEN: "mock-github-dispatch-token-never-log" },
       "mob-x-link-processor.yml", { panel_link_id: 25 },
     );
-    assert.deepEqual(result, { ok: false, error: "github_dispatch_http_503" });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "github_dispatch_http_503");
+    assert.equal(result.error_detail, "status=503 body=");
     assert.equal(calls.length, 3);
   });
 }
@@ -1893,7 +1927,7 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(dispatchCalls.length, 1);
     assert.equal(dispatchCalls[0].method, "dispatches");
     assert.equal(dispatchCalls[0].payload.ref, "main");
-    assert.deepEqual(dispatchCalls[0].payload.inputs, { panel_link_id: "1" });
+    assert.deepEqual(dispatchCalls[0].payload, { ref: "main" });
   }, async ({ url }) =>
     String(url).startsWith("https://api.github.com/") ? new Response(null, { status: 204 }) : null);
 }
