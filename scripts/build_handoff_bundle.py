@@ -77,7 +77,7 @@ def scrub_text(body: str, secret_names: set[str]) -> str:
     assign = re.compile(
         r"(?i)(\b(?:" + joined + r")\b[\"']?\s*[:=]\s*)([\"']?)(?!\$\{\{|\{\{)([^\s,;\"'#}]+)([\"']?)"
     )
-    body = assign.sub(r"\1[REDACTED_VALUE]", body)
+    body = assign.sub(lambda m: m.group(1) + m.group(2) + "[REDACTED_VALUE]" + m.group(4), body)
     return GUID_RE.sub(r"\1[REDACTED_GUID]\2", body)
 
 
@@ -151,7 +151,7 @@ def failed_steps(run_id: int, token: str) -> str:
                  if isinstance(s, dict) and s.get("conclusion") in {"failure", "cancelled", "timed_out"}]
         if job.get("conclusion") not in {"success", "skipped"} or steps:
             name = cell(job.get("name") or "job", 90)
-            failed.append(f"{name}: " + (", ".join(steps[:5]) if steps else cell(job.get("conclusion")))
+            failed.append(f"{name}: " + (", ".join(steps[:5]) if steps else cell(job.get("conclusion"))))
     return "; ".join(failed)[:500] if failed else "گامی با نتیجهٔ شکست ثبت نشده است."
 
 
