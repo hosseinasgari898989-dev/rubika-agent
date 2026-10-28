@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 try:
@@ -40,9 +41,9 @@ class SubtitleError(Exception):
 
 
 def audio_cmd(path: str) -> list:
-    """ffmpeg argv: 16 kHz mono float32 PCM on stdout (what faster-whisper expects)."""
-    return ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "16000",
-            "-f", "f32le", "-"]
+    """Decode normalized speech to 16 kHz mono float32 PCM."""
+    return ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-af", "highpass=f=80,loudnorm",
+            "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"]
 
 
 def decode_audio_16k(path: str, run=subprocess.run):
@@ -58,25 +59,82 @@ def decode_audio_16k(path: str, run=subprocess.run):
     return np.frombuffer(raw[: len(raw) // 4 * 4], dtype=np.float32)
 
 
-def transcribe(video: str, model_size: str = "small", language: str = "en",
-               model_factory=None) -> list:
-    """Return raw cues [(start_ms, end_ms, text)] using faster-whisper (CPU, int8)."""
+class TranscriptionResult(list):
+    """Cue list carrying safe model/runtime metadata for the pipeline report."""
+
+    def __init__(self, cues: list, report: dict):
+        super().__init__(cues)
+        self.report = dict(report)
+
+
+def transcribe(video: str, model_size: str = "medium", language: str = "en",
+               model_factory=None, runtime_limit_seconds: float = 900.0) -> list:
+    """Transcribe with CPU/int8 faster-whisper, falling back to small after 15 minutes."""
+    started = time.monotonic()
     audio = video
     if model_factory is None:
         from faster_whisper import WhisperModel  # lazy: only the Mob X workflow installs it
 
-        def model_factory():
-            return WhisperModel(model_size, device="cpu", compute_type="int8")
+        def create_model(size: str):
+            return WhisperModel(size, device="cpu", compute_type="int8")
 
         audio = decode_audio_16k(video)
-    model = model_factory()
-    segments, _info = model.transcribe(audio, language=language, vad_filter=True, beam_size=1)
-    cues = []
-    for seg in segments:
-        text = " ".join(str(seg.text).split())
-        if text:
-            cues.append((int(seg.start * 1000), int(seg.end * 1000), text))
-    return cues
+    else:
+        # Keep the no-argument factory interface used by the existing unit tests.
+        def create_model(size: str):
+            return model_factory()
+
+    runtime_limit_seconds = max(0.0, float(runtime_limit_seconds))
+
+    def run_model(size: str, *, watch_runtime: bool) -> tuple[list, float, float, bool]:
+        model_started = time.monotonic()
+        model = create_model(size)
+        segments, _info = model.transcribe(
+            audio, language=language, vad_filter=True, beam_size=5,
+        )
+        iterator = iter(segments)
+        cues = []
+        exceeded = False
+        while True:
+            if watch_runtime and size == "medium" and time.monotonic() - started >= runtime_limit_seconds:
+                exceeded = True
+                close = getattr(iterator, "close", None)
+                if callable(close):
+                    close()
+                break
+            try:
+                seg = next(iterator)
+            except StopIteration:
+                break
+            text = " ".join(str(seg.text).split())
+            if text:
+                cues.append((int(seg.start * 1000), int(seg.end * 1000), text))
+        model_elapsed = max(0.0, time.monotonic() - model_started)
+        total_elapsed = max(0.0, time.monotonic() - started)
+        if watch_runtime and size == "medium" and total_elapsed >= runtime_limit_seconds:
+            exceeded = True
+        return cues, model_elapsed, total_elapsed, exceeded
+
+    cues, model_elapsed, total_elapsed, exceeded = run_model(model_size, watch_runtime=True)
+    if model_size == "medium" and exceeded:
+        # Discard partial medium output; never mix cues from two ASR models.
+        cues, small_elapsed, total_elapsed, _ = run_model("small", watch_runtime=False)
+        report = {
+            "asr_initial_model": "medium",
+            "asr_model": "small",
+            "asr_fallback_reason": "medium_runtime_exceeded_15m",
+            "asr_medium_elapsed_seconds": round(model_elapsed, 1),
+            "asr_fallback_elapsed_seconds": round(small_elapsed, 1),
+            "asr_elapsed_seconds": round(total_elapsed, 1),
+        }
+    else:
+        report = {
+            "asr_initial_model": model_size,
+            "asr_model": model_size,
+            "asr_fallback_reason": None,
+            "asr_elapsed_seconds": round(total_elapsed, 1),
+        }
+    return TranscriptionResult(cues, report)
 
 
 def clean_cues(cues: list) -> list:
@@ -139,7 +197,11 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
     """Full pipeline. Returns {out, srt, ass, cues, missing, batches, size, duration_ms}."""
     wd = Path(workdir)
     wd.mkdir(parents=True, exist_ok=True)
-    cues = clean_cues(transcribe_fn(str(video)))
+    raw_cues = transcribe_fn(str(video))
+    asr_report = getattr(raw_cues, "report", {})
+    if not isinstance(asr_report, dict):
+        asr_report = {}
+    cues = clean_cues(raw_cues)
     if not cues:
         raise SubtitleError("no_cues")
     # Leave space for numbered cue prefixes/newlines so the full prompt stays <= 3000 chars.
@@ -169,4 +231,4 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
         raise SubtitleError("duration_mismatch", f"{d_in} vs {d_out} ms")
     return {"out": str(out), "srt": str(srt), "ass": str(ass), "cues": len(fa_cues),
             "missing": stats["missing"], "batches": stats["batches"], "size": size,
-            "duration_ms": d_out}
+            "duration_ms": d_out, **asr_report}
