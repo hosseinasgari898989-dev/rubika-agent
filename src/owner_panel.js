@@ -130,6 +130,83 @@ export function parseXLink(text) {
   return m ? "https://x.com/mobgamesstudios/status/" + m[1] : null;
 }
 
+const GITHUB_DISPATCH_WORKFLOWS = new Set(["mob-x-link-processor.yml", "mob-x-news-production.yml"]);
+
+export async function dispatchMobXWorkflow(env, workflow, inputs) {
+  if (!GITHUB_DISPATCH_WORKFLOWS.has(String(workflow || ""))) return { ok: false, error: "github_dispatch_workflow_not_allowed" };
+  const token = typeof env?.GITHUB_DISPATCH_TOKEN === "string" ? env.GITHUB_DISPATCH_TOKEN.trim() : "";
+  if (!token) return { ok: false, error: "github_dispatch_not_configured" };
+  let cleanInputs;
+  if (workflow === "mob-x-link-processor.yml") {
+    const panelLinkId = Number(inputs && inputs.panel_link_id);
+    if (!Number.isSafeInteger(panelLinkId) || panelLinkId < 1) return { ok: false, error: "github_dispatch_input_invalid" };
+    cleanInputs = { panel_link_id: String(panelLinkId) };
+  } else {
+    const jobId = String(inputs && inputs.panel_link_job_id || "").trim();
+    if (!/^job_[A-Fa-f0-9]{8,80}$/.test(jobId)) return { ok: false, error: "github_dispatch_input_invalid" };
+    cleanInputs = { panel_link_job_id: jobId };
+  }
+  const endpoint = "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/workflows/" + workflow + "/dispatches";
+  let lastError = "github_dispatch_network";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          accept: "application/vnd.github+json",
+          "x-github-api-version": "2022-11-28",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ ref: "main", inputs: cleanInputs }),
+        signal: AbortSignal.timeout(2500),
+      });
+    } catch (error) {
+      lastError = error && (error.name === "TimeoutError" || error.name === "AbortError") ? "github_dispatch_timeout" : "github_dispatch_network";
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 120));
+      continue;
+    }
+    if (response.ok) return { ok: true };
+    const status = Number(response.status) || 0;
+    lastError = status ? "github_dispatch_http_" + status : "github_dispatch_http_unknown";
+    if (status !== 429 && status < 500) return { ok: false, error: lastError };
+    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 120));
+  }
+  return { ok: false, error: lastError };
+}
+
+export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, inputs, allowedStatuses) {
+  if (!["link_dispatch_state", "publish_dispatch_state"].includes(markerKey)) return { ok: false, error: "mob_x_dispatch_marker_invalid" };
+  const allowed = Array.isArray(allowedStatuses) ? allowedStatuses.filter(status => ["confirmed", "queued", "approved"].includes(status)) : [];
+  if (!allowed.length) return { ok: false, error: "mob_x_dispatch_status_invalid" };
+  const row = await env.DB.prepare("SELECT id, status, params_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link'").bind(jobId).first();
+  if (!row || !allowed.includes(row.status)) return { ok: true, skipped: true };
+  const rawParams = typeof row.params_json === "string" && row.params_json ? row.params_json : "{}";
+  let params = {};
+  try { params = JSON.parse(rawParams); } catch {}
+  if (!params || typeof params !== "object" || Array.isArray(params)) params = {};
+  if (params[markerKey] === "dispatched" || params[markerKey] === "dispatching") return { ok: true, skipped: true };
+  const reservedParams = { ...params, [markerKey]: "dispatching" };
+  delete reservedParams[markerKey + "_error"];
+  const reservedJson = JSON.stringify(reservedParams);
+  const statusSql = allowed.map(status => "'" + status + "'").join(",");
+  const reserved = await env.DB.prepare(
+    "UPDATE console_jobs SET params_json = ?, updated_at = ? WHERE id = ? AND status IN (" + statusSql +
+      ") AND (CASE WHEN json_valid(params_json) THEN COALESCE(json_extract(params_json, '$." + markerKey +
+      "'), '') ELSE '' END) NOT IN ('dispatching','dispatched')"
+  ).bind(reservedJson, new Date().toISOString(), jobId).run();
+  if (Number(reserved && reserved.meta && reserved.meta.changes || 0) !== 1) return { ok: true, skipped: true };
+  const result = await dispatchMobXWorkflow(env, workflow, inputs);
+  const finalParams = { ...reservedParams, [markerKey]: result.ok ? "dispatched" : "failed" };
+  if (!result.ok) finalParams[markerKey + "_error"] = result.error;
+  try {
+    await env.DB.prepare("UPDATE console_jobs SET params_json = ?, updated_at = ? WHERE id = ?")
+      .bind(JSON.stringify(finalParams), new Date().toISOString(), jobId).run();
+  } catch { /* keep errors sanitized; scheduled fallback remains available */ }
+  return { ...result, skipped: false };
+}
+
 // ---------- Rubika Bot API (token never appears in errors/logs)
 async function rubika(env, method, payload) {
   const methodName = String(method || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "unknown";
@@ -548,7 +625,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     const action = mobAction[1];
     const jobId = mobAction[2];
     const row = await env.DB.prepare(
-      "SELECT id, type, status, panel_link_id, result_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link'"
+      "SELECT id, type, status, panel_link_id, params_json, result_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link'"
     ).bind(jobId).first();
     if (!row) {
       await send(env, chat, "کار خبر Mob پیدا نشد.", HOME_KB);
@@ -590,7 +667,17 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
 
     if (action === "publish") {
       if (row.status === "approved") {
-        await send(env, chat, "✅ تأیید قبلاً ثبت شده است؛ منتظر مجوز جداگانهٔ GitHub Actions بمان و دکمه را دوباره نزن.", HOME_KB);
+        const dispatchResult = await dispatchMobXJobOnce(
+          env, jobId, "publish_dispatch_state", "mob-x-news-production.yml",
+          { panel_link_job_id: jobId }, ["approved"],
+        );
+        if (!dispatchResult.ok && !dispatchResult.skipped) {
+          await send(env, chat, "⚠️ تأیید قبلاً ثبت شده، اما اجرای خودکار شروع نشد (" +
+            dispatchResult.error + "). مقصد همچنان فقط کانال تست است.", HOME_KB);
+        } else {
+          await send(env, chat, "✅ تأیید قبلاً ثبت شده است؛ اجرای خودکار برای کانال تست " +
+            (dispatchResult.skipped ? "قبلاً آغاز یا ثبت شده." : "راه‌اندازی شد."), HOME_KB);
+        }
         return;
       }
       if (row.status !== "ready_for_review" || !result.rubika_file_id || result.preview_sent !== true) {
@@ -619,9 +706,20 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
           result.item_id, JSON.stringify({ job_id: jobId, test_channel_only: true, owner_clicked: true }),
         ).run();
       } catch {}
+      const dispatchResult = await dispatchMobXJobOnce(
+        env, jobId, "publish_dispatch_state", "mob-x-news-production.yml",
+        { panel_link_job_id: jobId }, ["approved"],
+      );
+      if (!dispatchResult.ok && !dispatchResult.skipped) {
+        await send(env, chat, "✅ تأیید مالک ثبت شد؛ اما اجرای خودکار شروع نشد (" +
+          dispatchResult.error + "). مقصد فقط کانال تست است؛ ارسال زمان‌بندی‌شده همچنان فعال می‌ماند.", HOME_KB);
+        return;
+      }
       await send(
         env, chat,
-        "✅ تأیید مالک ثبت شد. مقصد فقط کانال تست است. ارسال تا فعال شدن مجوز جداگانهٔ GitHub Actions انجام نمی‌شود؛ اگر ارسال نامشخص شود، ارسال خودکار تکرار نخواهد شد.",
+        "✅ تأیید مالک ثبت شد و اجرای خودکار " +
+          (dispatchResult.skipped ? "قبلاً راه‌اندازی شده است." : "درخواست شد.") +
+          " مقصد فقط کانال تست است؛ اگر نتیجهٔ ارسال نامشخص شود، ارسال دوباره انجام نمی‌شود.",
         HOME_KB,
       );
       return;
@@ -687,12 +785,23 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         env.DB.prepare("INSERT INTO console_jobs (id, type, status, progress, params_json, result_json, error, panel_link_id) SELECT ?, 'mob_x_link', 'confirmed', 0, ?, NULL, NULL, ? WHERE EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'confirmed') ON CONFLICT(panel_link_id) WHERE type = 'mob_x_link' AND panel_link_id IS NOT NULL DO NOTHING").bind(jobId, JSON.stringify({ url: link.url, panel_link_id: linkId }), linkId, linkId),
       ]);
     }
-    const job = await env.DB.prepare("SELECT id FROM console_jobs WHERE panel_link_id = ?").bind(linkId).first();
+    const job = await env.DB.prepare(
+      "SELECT id, status, params_json FROM console_jobs WHERE panel_link_id = ? AND type = 'mob_x_link'"
+    ).bind(linkId).first();
     if (!job) {
       await send(env, chat, "ثبت کار انجام نشد؛ خطا: mob_x_link_job_create_failed", HOME_KB);
       return;
     }
+    const dispatchResult = await dispatchMobXJobOnce(
+      env, job.id, "link_dispatch_state", "mob-x-link-processor.yml",
+      { panel_link_id: linkId }, ["confirmed", "queued"],
+    );
     await setState(env, "panel_mob_pending_link_id", "");
+    if (!dispatchResult.ok && !dispatchResult.skipped) {
+      await send(env, chat, "⚠️ راه‌اندازی خودکار پردازش انجام نشد (" + dispatchResult.error +
+        "). پردازش زمان‌بندی‌شده همچنان فعال است.", HOME_KB);
+      return;
+    }
     return render(ui, "p_links", { clickedMid });
   }
   if (id !== "p_links_clear" && id !== "p_links_clear_yes") {

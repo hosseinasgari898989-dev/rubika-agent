@@ -150,8 +150,10 @@ class FakeStatement {
       return row ? { ...row } : null;
     }
     if (this.sql.includes("JOIN panel_links p ON p.id = j.panel_link_id")) {
+      const requestedLinkId = this.sql.includes("AND j.panel_link_id = ?") ? Number(this.values[0]) : null;
       const pair = [...this.db.consoleJobs.values()]
-        .filter(job => job.type === "mob_x_link" && ["confirmed", "queued"].includes(job.status))
+        .filter(job => job.type === "mob_x_link" && ["confirmed", "queued"].includes(job.status) &&
+          (requestedLinkId === null || Number(job.panel_link_id) === requestedLinkId))
         .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
         .map(job => ({ job, link: this.db.panelLinks.get(Number(job.panel_link_id)) }))
         .find(value => value.link && ["confirmed", "queued"].includes(value.link.status));
@@ -242,6 +244,29 @@ class FakeStatement {
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("UPDATE console_jobs SET params_json = ?")) {
+      const [paramsJson, updatedAt, jobId, expectedParams] = v;
+      const job = this.db.consoleJobs.get(jobId);
+      if (!job) return { meta: { changes: 0 } };
+      if (expectedParams !== undefined && String(job.params_json ?? "{}") !== String(expectedParams)) {
+        return { meta: { changes: 0 } };
+      }
+      const statusMatch = /status IN \(([^)]+)\)/.exec(sql);
+      if (statusMatch) {
+        const allowed = statusMatch[1].split(",").map(value => value.trim().replace(/^'|'$/g, ""));
+        if (!allowed.includes(job.status)) return { meta: { changes: 0 } };
+      }
+      const markerMatch = /json_extract\(params_json, '\$\.([a-z_]+)'\)/.exec(sql);
+      if (markerMatch) {
+        let existingParams = {};
+        try { existingParams = JSON.parse(job.params_json || "{}"); } catch {}
+        if (["dispatching", "dispatched"].includes(existingParams[markerMatch[1]])) {
+          return { meta: { changes: 0 } };
+        }
+      }
+      Object.assign(job, { params_json: paramsJson, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
     if(sql.startsWith("UPDATE ai_provider_calls SET status=?")&&sql.includes("provider='cloudflare'")){
       const [status,errorCode,finishedAt,callId]=v;const row=this.db.aiProviderCalls.get(callId);
       if(!row||row.status!=="reserved")return {meta:{changes:0}};Object.assign(row,{status,error_code:errorCode,finished_at:finishedAt});return {meta:{changes:1}};
@@ -1345,6 +1370,10 @@ class PanelFakeStatement {
       const row = [...this.db.consoleJobs.values()].find(item => Number(item.panel_link_id) === Number(this.values[0]));
       return row ? { ...row } : null;
     }
+    if (this.sql.includes("FROM console_jobs WHERE id = ?")) {
+      const row = this.db.consoleJobs.get(this.values[0]);
+      return row ? { ...row } : null;
+    }
     if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
       const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
       if (!row || (this.sql.includes("AND enabled = 1") && Number(row.enabled) !== 1)) return null;
@@ -1365,6 +1394,26 @@ class PanelFakeStatement {
     return { results: [] };
   }
   async run() {
+    if (this.sql.startsWith("UPDATE console_jobs SET params_json = ?")) {
+      const [paramsJson, updatedAt, jobId] = this.values;
+      const row = this.db.consoleJobs.get(jobId);
+      if (!row) return { meta: { changes: 0 } };
+      const statusMatch = /status IN \(([^)]+)\)/.exec(this.sql);
+      if (statusMatch) {
+        const allowed = statusMatch[1].split(",").map(value => value.trim().replace(/^'|'$/g, ""));
+        if (!allowed.includes(row.status)) return { meta: { changes: 0 } };
+      }
+      const markerMatch = /json_extract\(params_json, '\$\.([a-z_]+)'\)/.exec(this.sql);
+      if (markerMatch) {
+        let params = {};
+        try { params = JSON.parse(row.params_json || "{}"); } catch {}
+        if (["dispatching", "dispatched"].includes(params[markerMatch[1]])) {
+          return { meta: { changes: 0 } };
+        }
+      }
+      Object.assign(row, { params_json: paramsJson, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
     if (this.sql.startsWith("UPDATE console_rules SET version = version + 1")) {
       if (this.db.conflictConsoleRulesUpdate) {
         this.db.conflictConsoleRulesUpdate = false;
@@ -1525,7 +1574,7 @@ async function withMockRubikaFetch(fn, responder = null) {
     const method = String(url).split("/").at(-1);
     let payload = {};
     try { payload = JSON.parse(init.body || "{}"); } catch {}
-    calls.push({ method, payload });
+    calls.push({ url: String(url), method, payload });
     const custom = responder ? await responder({ url, init, method, payload, calls }) : null;
     if (custom instanceof Response) return custom;
     const messageCount = calls.filter(call => call.method === "sendMessage").length;
@@ -1546,6 +1595,118 @@ async function postPanelUpdate(state, update, secret) {
   return response;
 }
 
+
+async function withDispatchFetch(responder, fn) {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    return responder({ url: String(url), init, calls });
+  };
+  try { return await fn(calls); } finally { globalThis.fetch = originalFetch; }
+}
+
+// Worker dispatch is pinned to the approved workflow/main ref and never exposes token-bearing errors.
+{
+  const fakeToken = "mock-github-dispatch-token-never-log";
+  await withDispatchFetch(async () => new Response(null, { status: 204 }), async calls => {
+    const result = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: fakeToken },
+      "mob-x-link-processor.yml", { panel_link_id: 23 },
+    );
+    assert.deepEqual(result, { ok: true });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/workflows/mob-x-link-processor.yml/dispatches");
+    assert.equal(calls[0].init.method, "POST");
+    assert.equal(calls[0].init.headers.authorization, "Bearer " + fakeToken);
+    assert.deepEqual(JSON.parse(calls[0].init.body), { ref: "main", inputs: { panel_link_id: "23" } });
+    assert.ok(calls[0].init.signal);
+  });
+}
+
+// Permanent GitHub HTTP errors are sanitized and never retried.
+{
+  for (const status of [401, 403, 404, 422]) {
+    await withDispatchFetch(async () => new Response(null, { status }), async calls => {
+      const result = await panel.dispatchMobXWorkflow(
+        { GITHUB_DISPATCH_TOKEN: "mock-github-dispatch-token-never-log" },
+        "mob-x-link-processor.yml", { panel_link_id: 23 },
+      );
+      assert.deepEqual(result, { ok: false, error: "github_dispatch_http_" + status });
+      assert.equal(calls.length, 1);
+      assert.equal(JSON.stringify(result).includes("mock-github-dispatch-token"), false);
+    });
+  }
+}
+
+// Rate limits, server failures and timeouts receive bounded retries.
+{
+  for (const status of [429, 503]) {
+    await withDispatchFetch(async ({ calls }) =>
+      calls.length === 1 ? new Response(null, { status }) : new Response(null, { status: 204 }),
+    async calls => {
+      const result = await panel.dispatchMobXWorkflow(
+        { GITHUB_DISPATCH_TOKEN: "mock-github-dispatch-token-never-log" },
+        "mob-x-link-processor.yml", { panel_link_id: 24 },
+      );
+      assert.deepEqual(result, { ok: true });
+      assert.equal(calls.length, 2);
+    });
+  }
+  await withDispatchFetch(async ({ calls }) => {
+    if (calls.length === 1) {
+      const error = new Error("private token/header detail must not be returned");
+      error.name = "TimeoutError";
+      throw error;
+    }
+    return new Response(null, { status: 204 });
+  }, async calls => {
+    const result = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "mock-github-dispatch-token-never-log" },
+      "mob-x-news-production.yml", { panel_link_job_id: "job_abcdef1234567890" },
+    );
+    assert.deepEqual(result, { ok: true });
+    assert.equal(calls.length, 2);
+    assert.equal(JSON.stringify(result).includes("private token"), false);
+  });
+  await withDispatchFetch(async () => new Response(null, { status: 503 }), async calls => {
+    const result = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "mock-github-dispatch-token-never-log" },
+      "mob-x-link-processor.yml", { panel_link_id: 25 },
+    );
+    assert.deepEqual(result, { ok: false, error: "github_dispatch_http_503" });
+    assert.equal(calls.length, 3);
+  });
+}
+
+// A duplicate event for a previously dispatched link cannot dispatch a second workflow.
+{
+  const state = env();
+  state.GITHUB_DISPATCH_TOKEN = "mock-github-dispatch-token-never-log";
+  const panelLinkId = 3;
+  const jobId = "job_abcdef1234567890";
+  state.DB.panelLinks.set(panelLinkId, {
+    id: panelLinkId, url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+    external_id: "2107878755079213476", status: "confirmed", created_at: new Date().toISOString(),
+  });
+  state.DB.consoleJobs.set(jobId, {
+    id: jobId, type: "mob_x_link", status: "confirmed", panel_link_id: panelLinkId,
+    params_json: JSON.stringify({ url: "https://x.com/mobgamesstudios/status/2107878755079213476", panel_link_id: panelLinkId }),
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  });
+  await withDispatchFetch(async () => new Response(null, { status: 204 }), async calls => {
+    const first = await panel.dispatchMobXJobOnce(state, jobId, "link_dispatch_state",
+      "mob-x-link-processor.yml", { panel_link_id: panelLinkId }, ["confirmed", "queued"]);
+    const second = await panel.dispatchMobXJobOnce(state, jobId, "link_dispatch_state",
+      "mob-x-link-processor.yml", { panel_link_id: panelLinkId }, ["confirmed", "queued"]);
+    assert.equal(first.ok, true);
+    assert.equal(first.skipped, false);
+    assert.equal(second.ok, true);
+    assert.equal(second.skipped, true);
+    assert.equal(calls.length, 1);
+    assert.equal(JSON.parse(state.DB.consoleJobs.get(jobId).params_json).link_dispatch_state, "dispatched");
+  });
+}
 // md() reports Rubika metadata offsets in JavaScript UTF-16 code units, including astral emoji.
 {
   const formatted = panel.md("😀**سلام🌟**");
@@ -1614,6 +1775,7 @@ async function postPanelUpdate(state, update, secret) {
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
+    state.GITHUB_DISPATCH_TOKEN = "mock-github-dispatch-token-never-log";
     state.DB.ownerChat = "b0actualowner";
     state.DB.state.set("panel_mid", "mob-link-confirm-panel");
     const secret = await panel.hookSecret(state);
@@ -1642,12 +1804,22 @@ async function postPanelUpdate(state, update, secret) {
     const job = [...state.DB.consoleJobs.values()][0];
     assert.equal(job.type, "mob_x_link");
     assert.equal(job.status, "confirmed");
-    assert.deepEqual(JSON.parse(job.params_json), {
+    const confirmedParams = JSON.parse(job.params_json);
+    assert.deepEqual({
+      url: confirmedParams.url,
+      panel_link_id: confirmedParams.panel_link_id,
+    }, {
       url: "https://x.com/mobgamesstudios/status/2107878755079213476",
       panel_link_id: state.DB.links[0].id,
     });
     assert.equal(calls.filter(call => call.method === "editMessageText").length > 0, true);
-  });
+    const dispatchCalls = calls.filter(call => call.url && call.url.includes("api.github.com"));
+    assert.equal(dispatchCalls.length, 1);
+    assert.equal(dispatchCalls[0].method, "dispatches");
+    assert.equal(dispatchCalls[0].payload.ref, "main");
+    assert.deepEqual(dispatchCalls[0].payload.inputs, { panel_link_id: "1" });
+  }, async ({ url }) =>
+    String(url).startsWith("https://api.github.com/") ? new Response(null, { status: 204 }) : null);
 }
 
 // safeEqual compares values without treating differing lengths or Unicode values as equal.

@@ -114,6 +114,16 @@ class MobXPublisherTests(unittest.TestCase):
         self.assertEqual(sum(path == "/api/console/mob-x/publish-claim" for _, path, _ in client.calls), 0)
         sender.assert_not_called()
 
+    def test_explicit_job_id_is_forwarded_for_idempotent_claim(self):
+        client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": True}})
+        sender = Mock(return_value="rubika-message-002")
+        report = publish_one(client=client, sender=sender, notifier=Mock(), job_id=JOB_ID)
+        self.assertEqual(report["status"], "sent")
+        claim_calls = [call for call in client.calls if call[1] == "/api/console/mob-x/publish-claim"]
+        self.assertEqual(len(claim_calls), 1)
+        self.assertEqual(claim_calls[0][2], {"job_id": JOB_ID})
+        sender.assert_called_once()
+
     def test_successful_owner_approved_test_send_occurs_once(self):
         client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": True}})
         sender = Mock(return_value="rubika-message-001")

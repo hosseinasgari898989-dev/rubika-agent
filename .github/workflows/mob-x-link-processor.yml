@@ -21,6 +21,11 @@ on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      panel_link_id:
+        description: "Exact confirmed Mob X link ID; empty uses the scheduled queue fallback"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -74,11 +79,13 @@ jobs:
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          MOB_X_PANEL_LINK_ID: ${{ inputs.panel_link_id }}
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
           import os
+          import re
           import urllib.error
           import urllib.request
 
@@ -148,6 +155,10 @@ jobs:
               }, sort_keys=True))
               return ([item for item in items if isinstance(item, dict)] if valid else []), valid
 
+          requested_link_id = os.environ.get("MOB_X_PANEL_LINK_ID", "").strip()
+          if requested_link_id and not re.fullmatch(r"[1-9][0-9]{0,8}", requested_link_id):
+              raise SystemExit("mob_x_panel_link_id_invalid")
+
           try:
               jobs, jobs_ok = rows("jobs", "/api/console/jobs?limit=100")
               links, links_ok = rows("links", "/api/console/links?limit=100")
@@ -162,6 +173,7 @@ jobs:
               job.get("type") == "mob_x_link"
               and job.get("status") in {"queued", "confirmed"}
               and str(job.get("panel_link_id")) in links_by_id
+              and (not requested_link_id or str(job.get("panel_link_id")) == requested_link_id)
               and links_by_id[str(job.get("panel_link_id"))].get("status") in {"confirmed", "queued"}
               for job in jobs
           )
@@ -221,7 +233,7 @@ jobs:
           mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
           mega-whoami >/dev/null
           echo "MEGA login verified; account details are not printed."
-      - name: Claim and process at most one owner link
+      - name: Claim and process the exact owner link
         if: ${{ steps.preflight.outputs.has_job == 'true' }}
         id: process
         env:
@@ -231,9 +243,14 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
           RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
+          MOB_X_PANEL_LINK_ID: ${{ inputs.panel_link_id }}
         run: |
           set -euo pipefail
-          python -m agent.brain.mob_x_link_processor --process-one --report "$RUNNER_TEMP/mob-x-link-report.json"
+          if [ -n "${MOB_X_PANEL_LINK_ID:-}" ]; then
+            python -m agent.brain.mob_x_link_processor --process-one --panel-link-id "$MOB_X_PANEL_LINK_ID" --report "$RUNNER_TEMP/mob-x-link-report.json"
+          else
+            python -m agent.brain.mob_x_link_processor --process-one --report "$RUNNER_TEMP/mob-x-link-report.json"
+          fi
       - name: Notify owner once when a claimed job fails
         if: ${{ failure() && steps.preflight.outputs.has_job == 'true' }}
         continue-on-error: true
