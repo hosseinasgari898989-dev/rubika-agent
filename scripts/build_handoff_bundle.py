@@ -45,8 +45,8 @@ def is_excluded_path(rel: str) -> bool:
 
 
 def discover_secret_var_names(source: Path) -> tuple[set[str], set[str]]:
-    secrets = set(KNOWN_SENSITIVE_NAMES)
-    variables = {"RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014", "PUBLISHING_ENABLED"}
+    secrets: set[str] = set()
+    variables: set[str] = {"RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014", "PUBLISHING_ENABLED"}
     secret_rx = re.compile(r"\$\{\{\s*secrets\.([A-Z][A-Z0-9_]*)\s*\}\}", re.I)
     vars_rx = re.compile(r"\$\{\{\s*vars\.([A-Z][A-Z0-9_]*)\s*\}\}", re.I)
     for path in source.rglob("*"):
@@ -69,7 +69,7 @@ def scrub_text(body: str, secret_names: set[str]) -> str:
         raise RuntimeError("private_key_detected")
     for pattern in TOKEN_PATTERNS:
         body = pattern.sub("[REDACTED_SECRET]", body)
-    names = set(secret_names)
+    names = set(secret_names) | set(KNOWN_SENSITIVE_NAMES)
     names.update(n for n in re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", body)
                  if n.endswith(("_TOKEN", "_API_KEY", "_SECRET", "_PASSWORD", "_COOKIE", "_PRIVATE_KEY")))
     names.update({"RUBIKA_CHANNEL_GUID", "RUBIKA_OWNER_CHAT_ID", "MEGA_EMAIL"})
