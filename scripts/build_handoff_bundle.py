@@ -88,13 +88,16 @@ def suspicious_text(body: str) -> list[str]:
     if any(pattern.search(body) for pattern in TOKEN_PATTERNS):
         findings.append("provider_or_bearer_token")
     for line in body.splitlines():
-        if re.search(r"(?i)\bRUBIKA_CHANNEL_GUID\b", line):
-            rhs = re.split(r"[:=]", line, maxsplit=1)[-1].strip()
-            templated = "$" + "{{"
-            if rhs and not rhs.startswith((templated, '"' + templated, "'" + templated, "[REDACTED")):
-                if "[REDACTED_VALUE]" not in rhs and "[REDACTED_GUID]" not in rhs:
-                    findings.append("literal_channel_guid_assignment")
-                    break
+        if chr(36) + chr(123) in line or "$RUBIKA_CHANNEL_GUID" in line:
+            continue
+        assignment = re.search(r"""(?i)\bRUBIKA_CHANNEL_GUID\b["']?\s*[:=]\s*(.*)$""", line)
+        if not assignment:
+            continue
+        rhs = assignment.group(1).strip()
+        if rhs and not rhs.startswith("[REDACTED"):
+            if "[REDACTED_VALUE]" not in rhs and "[REDACTED_GUID]" not in rhs:
+                findings.append("literal_channel_guid_assignment")
+                break
     return sorted(set(findings))
 
 
