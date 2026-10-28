@@ -26,8 +26,8 @@ TOKEN_PATTERNS = [
 ]
 PRIVATE_KEY_RE = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
 PRIVATE_KEY_BLOCK_RE = re.compile(
-    r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[ \\t]*\\r?\\n"
-    r"[A-Za-z0-9+/=\\r\\n]+?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
+    r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[ \t]*\r?\n"
+    r"[A-Za-z0-9+/=\r\n]+?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
 )
 AUTO_SECTIONS = {
     "secrets": ("<!-- AUTO:SECRETS:START -->", "<!-- AUTO:SECRETS:END -->"),
