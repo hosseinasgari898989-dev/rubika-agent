@@ -3304,8 +3304,8 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     id: "job_mob_queued_2", type: "mob_x_link", status: "queued",
     progress: 0, panel_link_id: 24, created_at: "2026-01-02T00:00:00.000Z",
   });
-  response = await read(await worker.fetch(request(
-    "/api/console/jobs?type=mob_x_link&status=confirmed&limit=5", state
+  response = await read(await worker.fetch(
+    request("/api/console/jobs?type=mob_x_link&status=confirmed&limit=5"), state
   ));
   assert.equal(response.status, 200);
   assert.deepEqual(response.body.items.map(item => item.id), ["job_mob_confirmed_1"]);
