@@ -90,7 +90,10 @@ def suspicious_text(body: str) -> list[str]:
     for line in body.splitlines():
         if chr(36) + chr(123) in line or "$RUBIKA_CHANNEL_GUID" in line:
             continue
-        assignment = re.search(r"""(?i)\bRUBIKA_CHANNEL_GUID\b["']?\s*[:=]\s*(.*)$""", line)
+        assignment = re.search(
+            r"""(?i)(?:^\s*(?:(?:const|let|var|export\s+const)\s+)?["']?RUBIKA_CHANNEL_GUID["']?\s*[:=]\s*|[,{]\s*["']?RUBIKA_CHANNEL_GUID["']?\s*:\s*)(.*)$""",
+            line,
+        )
         if not assignment:
             continue
         rhs = assignment.group(1).strip()
