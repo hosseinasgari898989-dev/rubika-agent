@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import requests
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -21,6 +22,7 @@ from agent.brain.mob_x_link_processor import (
     run_video_speech_gate,
     probe_public_sources,
     select_media,
+    WorkerClient,
 )
 
 
@@ -38,6 +40,52 @@ def response(status=200, payload=None, headers=None, url=None):
     item.close = Mock()
     item.iter_content.return_value = iter([])
     return item
+
+
+class WorkerClientRetryTests(unittest.TestCase):
+
+    def _client(self, session):
+        return WorkerClient("https://worker.example", "t" * 40, session=session)
+
+    def test_timeout_then_success_retries_with_twenty_second_timeout(self):
+        session = Mock()
+        session.request.side_effect = [
+            requests.Timeout("simulated timeout"),
+            response(payload={"ok": True, "rules": {}}),
+        ]
+        with patch("agent.brain.mob_x_link_processor.time.sleep") as sleep:
+            result = self._client(session).request("GET", "/api/console/rules")
+        self.assertEqual(result, {"ok": True, "rules": {}})
+        self.assertEqual(session.request.call_count, 2)
+        self.assertEqual([call.kwargs["timeout"] for call in session.request.call_args_list], [20, 20])
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2])
+
+    def test_503_retries_three_attempts_then_reports_sanitized_diagnostics(self):
+        session = Mock()
+        session.request.side_effect = [response(status=503) for _ in range(3)]
+        with patch("agent.brain.mob_x_link_processor.time.sleep") as sleep:
+            with self.assertRaises(MobXLinkError) as caught:
+                self._client(session).request("GET", "/api/console/rules")
+        self.assertEqual(caught.exception.code, "worker_request_failed")
+        self.assertEqual(caught.exception.error_class, "HTTPStatusError")
+        self.assertEqual(session.request.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 5])
+        self.assertIn("path=/api/console/rules", caught.exception.error_detail)
+        self.assertIn("attempts=3", caught.exception.error_detail)
+        self.assertIn("status=503", caught.exception.error_detail)
+        self.assertIn("elapsed_ms=", caught.exception.error_detail)
+        self.assertNotIn("https://worker.example", caught.exception.error_detail)
+        self.assertNotIn("t" * 40, caught.exception.error_detail)
+
+    def test_401_does_not_retry(self):
+        session = Mock()
+        session.request.return_value = response(status=401, payload={"error": "unauthorized"})
+        with patch("agent.brain.mob_x_link_processor.time.sleep") as sleep:
+            with self.assertRaises(MobXLinkError) as caught:
+                self._client(session).request("GET", "/api/console/rules")
+        self.assertEqual(caught.exception.code, "unauthorized")
+        self.assertEqual(session.request.call_count, 1)
+        sleep.assert_not_called()
 
 
 class MobXLinkParserTests(unittest.TestCase):
@@ -312,7 +360,9 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         cloud.get_seen_index.return_value = {"ids": set()}
         cloud.upsert_item.return_value = {"item_id": "mob_official:" + POST_ID}
         client = Mock()
-        client.rules.return_value = {"translate_enabled": False, "caption_max_chars": 900}
+        client.rules.side_effect = lambda: events.append(("rules",)) or {
+            "translate_enabled": False, "caption_max_chars": 900,
+        }
         storage = Mock()
         storage.upload.side_effect = lambda path, tier: events.append(("mega", path)) or "storage-key"
         source_inspection = Mock(ok=True, duration_seconds=12.0, has_audio=True)
@@ -372,6 +422,8 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             {"decision": "subtitle", "reason": "ok", "language": "en"}
         )
         names = [event[0] for event in events]
+        self.assertEqual(names.count("rules"), 1)
+        self.assertLess(names.index("rules"), names.index("inspect"))
         self.assertLess(names.index("speech_gate"), names.index("subtitle"))
         output_inspection_index = next(
             i for i, event in enumerate(events) if event == ("inspect", "subtitled.mp4")
