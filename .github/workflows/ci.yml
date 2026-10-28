@@ -64,6 +64,8 @@ jobs:
         run: python tests/test_subtitle_tools.py
       - name: Run Mob X subtitle pipeline tests
         run: python tests/test_subtitle_pipeline.py
+      - name: Run audio decode tests
+        run: python tests/test_audio_decode.py
       - name: Run speech gate tests
         run: python tests/test_speech_gate.py
       - name: Run Cloudflare Worker unit tests
