@@ -436,10 +436,10 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             stack.enter_context(patch("agent.brain.mob_x_link_processor.send_owner_preview",
                                       side_effect=lambda *args: events.append(("owner_preview", args[3]) or "preview-message")))
             result = process_job(self._job(), client, storage=storage)
-        return result, events, pipeline_mock, storage, cloud
+        return result, events, pipeline_mock, storage, cloud, transcribe_mock
 
     def test_speech_video_is_subtitled_and_rechecked_before_mega_preview(self):
-        result, events, pipeline, storage, cloud = self._run_video_job(
+        result, events, pipeline, storage, cloud, transcribe_mock = self._run_video_job(
             {"decision": "subtitle", "reason": "ok", "language": "en"}
         )
         names = [event[0] for event in events]
@@ -467,7 +467,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(pipeline.call_args.kwargs["max_missing_ratio"], 0.0)
 
     def test_video_without_recognizable_speech_skips_subtitles_and_uses_original(self):
-        result, events, pipeline, storage, cloud = self._run_video_job(
+        result, events, pipeline, storage, cloud, _transcribe_mock = self._run_video_job(
             {"decision": "skip", "reason": "no_speech", "language": None}
         )
         pipeline.assert_not_called()
@@ -480,7 +480,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
 
     def test_no_cues_preview_reports_no_cues_without_changing_staged_caption(self):
         from scripts.subtitle_pipeline import SubtitleError
-        result, events, pipeline, storage, cloud = self._run_video_job(
+        result, events, pipeline, storage, cloud, _transcribe_mock = self._run_video_job(
             {"decision": "subtitle", "reason": "ok", "language": "en"},
             pipeline_error=SubtitleError("no_cues"),
         )
