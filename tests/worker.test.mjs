@@ -1982,12 +1982,15 @@ async function postPanelUpdate(state, update, secret) {
     };
     // Keep this pair inside the implementation's four-second duplicate-event window.
     const originalNow = Date.now;
+    const originalRandom = Math.random;
     Date.now = () => 1800000000000;
+    Math.random = () => 0.99;
     try {
       await postPanelUpdate(state, update, secret);
       await postPanelUpdate(state, update, secret);
     } finally {
       Date.now = originalNow;
+      Math.random = originalRandom;
     }
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
