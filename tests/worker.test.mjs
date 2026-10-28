@@ -252,8 +252,19 @@ class FakeStatement {
     if (this.sql.includes("FROM panel_links ORDER BY id DESC")) {
       return { results: [...this.db.panelLinks.values()].sort((a, b) => b.id - a.id).slice(0, this.values.at(-1) || 100).map(row => ({ ...row })) };
     }
-    if (this.sql.includes("FROM console_jobs ORDER BY created_at DESC LIMIT ?")) {
-      return { results: [...this.db.consoleJobs.values()].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, this.values[0]).map(row => ({ ...row })) };
+    if (this.sql.includes("FROM console_jobs") && this.sql.includes("ORDER BY created_at DESC LIMIT ?")) {
+      let rows = [...this.db.consoleJobs.values()];
+      let valueIndex = 0;
+      if (this.sql.includes("type = ?")) {
+        const type = this.values[valueIndex++];
+        rows = rows.filter(row => row.type === type);
+      }
+      if (this.sql.includes("status = ?")) {
+        const status = this.values[valueIndex++];
+        rows = rows.filter(row => row.status === status);
+      }
+      const limit = this.values[valueIndex];
+      return { results: rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, limit).map(row => ({ ...row })) };
     }
     return { results: [] };
   }
@@ -3277,6 +3288,31 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   response = await read(await worker.fetch(request("/api/console/jobs?limit=5"), state));
   assert.equal(response.status, 200);
   assert.equal(response.body.items.length, 1);
+
+  // Worker-side type/status filters constrain rows before applying the limit.
+  for (let i = 0; i < 9; i += 1) {
+    state.DB.consoleJobs.set("job_irrelevant_" + i, {
+      id: "job_irrelevant_" + i, type: "ai_health_check", status: "queued",
+      progress: 0, created_at: new Date(Date.now() + i * 1000).toISOString(),
+    });
+  }
+  state.DB.consoleJobs.set("job_mob_confirmed_1", {
+    id: "job_mob_confirmed_1", type: "mob_x_link", status: "confirmed",
+    progress: 0, panel_link_id: 23, created_at: "2026-01-01T00:00:00.000Z",
+  });
+  state.DB.consoleJobs.set("job_mob_queued_2", {
+    id: "job_mob_queued_2", type: "mob_x_link", status: "queued",
+    progress: 0, panel_link_id: 24, created_at: "2026-01-02T00:00:00.000Z",
+  });
+  response = await read(await worker.fetch(request(
+    "/api/console/jobs?type=mob_x_link&status=confirmed&limit=5", state
+  ));
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.items.map(item => item.id), ["job_mob_confirmed_1"]);
+  assert.equal(response.body.items.every(item => item.type === "mob_x_link" && item.status === "confirmed"), true);
+  response = await read(await worker.fetch(request("/api/console/jobs?type=not_allowed&limit=5"), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "invalid_job_type");
 
   response = await read(await worker.fetch(request("/api/console/jobs", {
     method: "POST", body: { type: "run_arbitrary_workflow", params: {} },
