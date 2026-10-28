@@ -26,7 +26,7 @@ def _safe_detail(endpoint: str, attempt: int, status: int | None, error_class: s
         f"endpoint={endpoint} attempts={attempt} "
         f"status={status if status is not None else 'none'} error={error_class}"
     )
-    return re.sub(r"[^A-Za-z0-9_.=-]", "_", raw)[:200]
+    return re.sub(r"[^A-Za-z0-9 _.=-]", "_", raw)[:200]
 
 
 def _append_output(key: str, value: str) -> None:
