@@ -1,0 +1,63 @@
+name: Build sanitized full handoff bundle
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-handoff-bundle.yml"
+      - "scripts/build_handoff_bundle.py"
+      - "docs/HANDOFF_FULL.md"
+      - "tests/test_build_handoff_bundle.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: handoff-bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-sanitized-bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout main snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the pinned rubka library package
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rubka-site" "$RUNNER_TEMP/handoff-output"
+          python -m pip install --no-deps --target "$RUNNER_TEMP/rubka-site" "rubka==8.1.7"
+          test -d "$RUNNER_TEMP/rubka-site/rubka"
+
+      - name: Build handoff bundle and check for secrets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/build_handoff_bundle.py \
+            --source "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/handoff-output/rubika-agent-full-handoff-main" \
+            --rubka-path "$RUNNER_TEMP/rubka-site/rubka" \
+            --source-sha "$GITHUB_SHA"
+
+      - name: Upload full ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rubika-agent-full-handoff-main
+          path: ${{ runner.temp }}/handoff-output/rubika-agent-full-handoff-main/
+          if-no-files-found: error
+          retention-days: 14
