@@ -119,9 +119,12 @@ def translate_to_persian(text: str, *, kind: str = "caption", run_id: str | None
         try:
             result=call_provider_with_ledger(provider=provider,role="translate_official",prompt=prompt,run_id=active,max_output_tokens=tokens,timeout_seconds=45)
         except UsageLedgerError as exc:
-            if exc.code in {"code_ai_daily_budget_exhausted","code_ai_provider_cooldown_active","code_ai_groq_token_budget_exhausted","code_ai_translation_daily_budget_exhausted"}: continue
+            # Budget/cooldown/policy refusals (code_ai_*) fall through to the next provider, then Worker AI.
+            # Ledger infrastructure failures (usage_ledger_*) stay fail-closed: usage cannot be accounted.
+            if str(getattr(exc, "code", "")).startswith("code_ai_"): continue
             return None
         except ProviderClientError: continue
+        except Exception: continue
         translated=_valid_persian_translation(result.text,source,max_chars=out_limit)
         if translated and (kind!="subtitle" or _numbered_subtitles_valid(source,translated)): return translated
     try:
