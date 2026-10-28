@@ -247,7 +247,10 @@ class FakeStatement {
     if (sql.startsWith("UPDATE console_jobs SET params_json = ?")) {
       const [paramsJson, updatedAt, jobId, expectedParams] = v;
       const job = this.db.consoleJobs.get(jobId);
-      if (!job || String(job.params_json ?? "{}") !== String(expectedParams ?? "{}")) return { meta: { changes: 0 } };
+      if (!job) return { meta: { changes: 0 } };
+      if (expectedParams !== undefined && String(job.params_json ?? "{}") !== String(expectedParams)) {
+        return { meta: { changes: 0 } };
+      }
       const statusMatch = /status IN \(([^)]+)\)/.exec(sql);
       if (statusMatch) {
         const allowed = statusMatch[1].split(",").map(value => value.trim().replace(/^'|'$/g, ""));

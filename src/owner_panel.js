@@ -199,8 +199,8 @@ export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, input
   const finalParams = { ...reservedParams, [markerKey]: result.ok ? "dispatched" : "failed" };
   if (!result.ok) finalParams[markerKey + "_error"] = result.error;
   try {
-    await env.DB.prepare("UPDATE console_jobs SET params_json = ?, updated_at = ? WHERE id = ? AND params_json = ?")
-      .bind(JSON.stringify(finalParams), new Date().toISOString(), jobId, reservedJson).run();
+    await env.DB.prepare("UPDATE console_jobs SET params_json = ?, updated_at = ? WHERE id = ?")
+      .bind(JSON.stringify(finalParams), new Date().toISOString(), jobId).run();
   } catch { /* keep errors sanitized; scheduled fallback remains available */ }
   return { ...result, skipped: false };
 }
