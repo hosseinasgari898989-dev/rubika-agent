@@ -1,0 +1,78 @@
+name: Worker test flake diagnosis
+
+on:
+  push:
+    branches:
+      - diagnose/worker-test-flake-20261028
+
+permissions:
+  contents: read
+
+jobs:
+  repeat-worker-test:
+    name: Run worker.test.mjs 20 times on main and PR branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main baseline
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Run worker.test.mjs 20 times on main
+        id: main
+        shell: bash
+        run: |
+          set +e
+          failures=0
+          for n in $(seq 1 20); do
+            log="$RUNNER_TEMP/main-worker-test-$n.log"
+            if node tests/worker.test.mjs >"$log" 2>&1; then
+              echo "main run $n: PASS"
+            else
+              rc=$?
+              failures=$((failures + 1))
+              echo "main run $n: FAIL (exit $rc)"
+              grep -E 'AssertionError|Expected values|actual:|expected:|at file:|worker\.test\.mjs:' "$log" | tail -n 8 || tail -n 8 "$log"
+            fi
+          done
+          echo "failures=$failures" >> "$GITHUB_OUTPUT"
+          echo "## Worker test baseline: main" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Runs: 20" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Failures: $failures" >> "$GITHUB_STEP_SUMMARY"
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/audio-decode-20261028
+          persist-credentials: false
+      - name: Run worker.test.mjs 20 times on PR branch
+        id: pr
+        shell: bash
+        run: |
+          set +e
+          failures=0
+          for n in $(seq 1 20); do
+            log="$RUNNER_TEMP/pr-worker-test-$n.log"
+            if node tests/worker.test.mjs >"$log" 2>&1; then
+              echo "PR run $n: PASS"
+            else
+              rc=$?
+              failures=$((failures + 1))
+              echo "PR run $n: FAIL (exit $rc)"
+              grep -E 'AssertionError|Expected values|actual:|expected:|at file:|worker\.test\.mjs:' "$log" | tail -n 8 || tail -n 8 "$log"
+            fi
+          done
+          echo "failures=$failures" >> "$GITHUB_OUTPUT"
+          echo "## Worker test comparison: PR #112 branch" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Runs: 20" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Failures: $failures" >> "$GITHUB_STEP_SUMMARY"
+      - name: Summarize comparison
+        if: always()
+        run: |
+          {
+            echo "## Flake diagnosis result"
+            echo "- main failures: ${{ steps.main.outputs.failures || 'not completed' }} / 20"
+            echo "- PR branch failures: ${{ steps.pr.outputs.failures || 'not completed' }} / 20"
+            echo "- Tests were executed unchanged; no failure was hidden or ignored in the test assertions."
+            echo "- This workflow is diagnostic only; it does not publish or access secrets."
+          } >> "$GITHUB_STEP_SUMMARY"
