@@ -131,6 +131,12 @@ def build_owner_preview_caption(
         status_line = f"زیرنویس فارسی: دارد ({cue_count} خط)"
         if state.get("asr_fallback_reason") == "medium_runtime_exceeded_15m":
             status_line += "\nمدل زیرنویس به small برگشت؛ اجرای medium بیش از ۱۵ دقیقه طول کشید."
+    elif state.get("status") == "failed":
+        reason = re.sub(r"[^a-z0-9_]", "", str(state.get("reason") or "unknown").lower())[:60] or "unknown"
+        status_line = (
+            f"⚠️ زیرنویس ناموفق ({reason}): ویدیوی اصلی بدون زیرنویس آماده است؛ "
+            "انتشار با تصمیم شما."
+        )
     elif state.get("status") == "skipped_no_detectable_speech":
         status_line = "بدون زیرنویس: گفتار تشخیص داده نشد (no_cues)"
     else:
@@ -619,6 +625,8 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                     raise subtitle_pipeline.SubtitleError("token_limit_invalid")
                 numbered_lines = str(prompt).rsplit("\n\n", 1)[-1].strip()
                 translated = translate_to_persian(numbered_lines, kind="subtitle")
+                if not translated:  # one retry per failed batch
+                    translated = translate_to_persian(numbered_lines, kind="subtitle")
                 return translated or ""
 
             try:
@@ -631,9 +639,6 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                 if exc.code == "no_cues":
                     # Repeated ASR found no usable speech cues; retain the original video.
                     subtitle_processing = {"status": "skipped_no_detectable_speech"}
-                elif exc.code == "translation_incomplete":
-                    # Never burn or stage partially translated subtitles.
-                    raise MobXLinkError("mob_x_translation_failed") from None
                 elif exc.code == "audio_decode_failed":
                     # Fail closed and preserve sanitized decoder details for the owner PV alert.
                     raise MobXLinkError(
@@ -642,42 +647,46 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                         error_detail=_safe_exception_message(exc.detail or exc),
                     ) from None
                 else:
-                    raise MobXLinkError("mob_x_subtitle_" + exc.code) from None
+                    # Degrade: keep the original video, never burn partial subtitles.
+                    subtitle_processing = {"status": "failed", "reason": str(exc.code)}
             except Exception:
-                raise MobXLinkError("mob_x_subtitle_processing_failed") from None
+                subtitle_processing = {"status": "failed", "reason": "processing_error"}
             else:
                 processed_path = str(subtitle_result.get("out") or "")
-                if not processed_path:
-                    raise MobXLinkError("mob_x_subtitle_output_validation_failed")
-                processed_inspection = inspect_media(
-                    processed_path, "video", max_bytes=MAX_MEDIA_BYTES,
-                )
-                if not processed_inspection.ok or not processed_inspection.has_audio:
-                    raise MobXLinkError("mob_x_subtitle_output_validation_failed")
+                processed_inspection = None
+                if processed_path:
+                    processed_inspection = inspect_media(
+                        processed_path, "video", max_bytes=MAX_MEDIA_BYTES,
+                    )
                 source_duration = float(inspection.duration_seconds or 0)
-                rendered_duration = float(processed_inspection.duration_seconds or 0)
+                rendered_duration = float(
+                    (processed_inspection.duration_seconds if processed_inspection else 0) or 0
+                )
                 if (
-                    source_duration <= 0 or rendered_duration <= 0
+                    not processed_path or not processed_inspection
+                    or not processed_inspection.ok or not processed_inspection.has_audio
+                    or source_duration <= 0 or rendered_duration <= 0
                     or abs(source_duration - rendered_duration) >
                     subtitle_pipeline.DURATION_TOLERANCE_MS / 1000
                 ):
-                    raise MobXLinkError("mob_x_subtitle_output_validation_failed")
-                publish_path = processed_path
-                inspection = processed_inspection
-                subtitle_processing = {
-                    "status": "burned",
-                    "cues": int(subtitle_result.get("cues") or 0),
-                    "batches": int(subtitle_result.get("batches") or 0),
-                    "missing": int(subtitle_result.get("missing") or 0),
-                    "size_bytes": int(subtitle_result.get("size") or 0),
-                    "duration_ms": int(subtitle_result.get("duration_ms") or 0),
-                    "asr_initial_model": str(subtitle_result.get("asr_initial_model") or "medium"),
-                    "asr_model": str(subtitle_result.get("asr_model") or "medium"),
-                    "asr_fallback_reason": subtitle_result.get("asr_fallback_reason"),
-                    "asr_elapsed_seconds": float(subtitle_result.get("asr_elapsed_seconds") or 0),
-                    "asr_medium_elapsed_seconds": float(subtitle_result.get("asr_medium_elapsed_seconds") or 0),
-                    "asr_fallback_elapsed_seconds": float(subtitle_result.get("asr_fallback_elapsed_seconds") or 0),
-                }
+                    subtitle_processing = {"status": "failed", "reason": "output_validation_failed"}
+                else:
+                    publish_path = processed_path
+                    inspection = processed_inspection
+                    subtitle_processing = {
+                        "status": "burned",
+                        "cues": int(subtitle_result.get("cues") or 0),
+                        "batches": int(subtitle_result.get("batches") or 0),
+                        "missing": int(subtitle_result.get("missing") or 0),
+                        "size_bytes": int(subtitle_result.get("size") or 0),
+                        "duration_ms": int(subtitle_result.get("duration_ms") or 0),
+                        "asr_initial_model": str(subtitle_result.get("asr_initial_model") or "medium"),
+                        "asr_model": str(subtitle_result.get("asr_model") or "medium"),
+                        "asr_fallback_reason": subtitle_result.get("asr_fallback_reason"),
+                        "asr_elapsed_seconds": float(subtitle_result.get("asr_elapsed_seconds") or 0),
+                        "asr_medium_elapsed_seconds": float(subtitle_result.get("asr_medium_elapsed_seconds") or 0),
+                        "asr_fallback_elapsed_seconds": float(subtitle_result.get("asr_fallback_elapsed_seconds") or 0),
+                    }
 
         translation_source = clean_caption(original, 5000)
         translation = None
