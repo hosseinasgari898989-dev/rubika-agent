@@ -505,13 +505,39 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(caught.exception.error_class, "SubtitleError")
         self.assertEqual(caught.exception.error_detail, "ffmpeg could not decode source audio")
 
-    def test_failed_subtitle_translation_stops_before_mega_or_preview(self):
+    def test_failed_subtitle_translation_degrades_to_original_video_with_owner_label(self):
         from scripts.subtitle_pipeline import SubtitleError
-        with self.assertRaisesRegex(MobXLinkError, "mob_x_translation_failed"):
-            self._run_video_job(
-                {"decision": "subtitle", "reason": "ok", "language": "en"},
-                pipeline_error=SubtitleError("translation_incomplete"),
-            )
+        result, events, _pipeline, storage, cloud, _t = self._run_video_job(
+            {"decision": "subtitle", "reason": "ok", "language": "en"},
+            pipeline_error=SubtitleError("translation_incomplete"),
+        )
+        self.assertEqual(result["status"], "ready_for_review")
+        self.assertEqual(result["subtitle_processing"],
+                         {"status": "failed", "reason": "translation_incomplete"})
+        # Original (unsubtitled) video is what gets stored and previewed.
+        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
+        self.assertIn("زیرنویس ناموفق (translation_incomplete)", preview_caption)
+        self.assertNotIn("زیرنویس ناموفق", cloud.upsert_item.call_args.args[0]["caption"])
+
+    def test_unexpected_subtitle_exception_degrades_instead_of_failing_post(self):
+        result, events, _pipeline, storage, _cloud, _t = self._run_video_job(
+            {"decision": "subtitle", "reason": "ok", "language": "en"},
+            pipeline_error=RuntimeError("boom"),
+        )
+        self.assertEqual(result["subtitle_processing"],
+                         {"status": "failed", "reason": "processing_error"})
+        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
+        self.assertIn("زیرنویس ناموفق (processing_error)", preview_caption)
+
+    def test_preview_caption_failed_subtitle_label_is_sanitized(self):
+        from agent.brain.mob_x_link_processor import build_owner_preview_caption
+        text = build_owner_preview_caption(
+            "cap", "video", {"status": "failed", "reason": "Bad Reason!<x>"},
+        )
+        self.assertIn("زیرنویس ناموفق (badreasonx)", text)
+        self.assertTrue(text.startswith("cap\n\n"))
 
 
 if __name__ == "__main__":
