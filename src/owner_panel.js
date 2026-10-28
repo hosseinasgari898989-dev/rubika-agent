@@ -192,8 +192,10 @@ export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, input
   const reservedJson = JSON.stringify(reservedParams);
   const statusSql = allowed.map(status => "'" + status + "'").join(",");
   const reserved = await env.DB.prepare(
-    "UPDATE console_jobs SET params_json = ?, updated_at = ? WHERE id = ? AND status IN (" + statusSql + ") AND params_json = ?"
-  ).bind(reservedJson, new Date().toISOString(), jobId, rawParams).run();
+    "UPDATE console_jobs SET params_json = ?, updated_at = ? WHERE id = ? AND status IN (" + statusSql +
+      ") AND (CASE WHEN json_valid(params_json) THEN COALESCE(json_extract(params_json, '$." + markerKey +
+      "'), '') ELSE '' END) NOT IN ('dispatching','dispatched')"
+  ).bind(reservedJson, new Date().toISOString(), jobId).run();
   if (Number(reserved && reserved.meta && reserved.meta.changes || 0) !== 1) return { ok: true, skipped: true };
   const result = await dispatchMobXWorkflow(env, workflow, inputs);
   const finalParams = { ...reservedParams, [markerKey]: result.ok ? "dispatched" : "failed" };

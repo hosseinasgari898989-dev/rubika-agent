@@ -256,6 +256,14 @@ class FakeStatement {
         const allowed = statusMatch[1].split(",").map(value => value.trim().replace(/^'|'$/g, ""));
         if (!allowed.includes(job.status)) return { meta: { changes: 0 } };
       }
+      const markerMatch = /json_extract\(params_json, '\$\.([a-z_]+)'\)/.exec(sql);
+      if (markerMatch) {
+        let existingParams = {};
+        try { existingParams = JSON.parse(job.params_json || "{}"); } catch {}
+        if (["dispatching", "dispatched"].includes(existingParams[markerMatch[1]])) {
+          return { meta: { changes: 0 } };
+        }
+      }
       Object.assign(job, { params_json: paramsJson, updated_at: updatedAt });
       return { meta: { changes: 1 } };
     }
