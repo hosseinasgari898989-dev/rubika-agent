@@ -39,16 +39,38 @@ class SubtitleError(Exception):
         self.detail = detail
 
 
+def audio_cmd(path: str) -> list:
+    """ffmpeg argv: 16 kHz mono float32 PCM on stdout (what faster-whisper expects)."""
+    return ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "16000",
+            "-f", "f32le", "-"]
+
+
+def decode_audio_16k(path: str, run=subprocess.run):
+    """Decode with ffmpeg to a float32 numpy array. Bypasses PyAV (av.open metadata_errors bug)."""
+    r = run(audio_cmd(path), capture_output=True, timeout=600)
+    if r.returncode != 0:
+        tail = r.stderr or b""
+        tail = tail.decode("utf-8", "replace") if isinstance(tail, bytes) else str(tail)
+        raise SubtitleError("audio_decode_failed", tail[-200:])
+    import numpy as np  # lazy: installed together with faster-whisper
+
+    raw = r.stdout or b""
+    return np.frombuffer(raw[: len(raw) // 4 * 4], dtype=np.float32)
+
+
 def transcribe(video: str, model_size: str = "small", language: str = "en",
                model_factory=None) -> list:
     """Return raw cues [(start_ms, end_ms, text)] using faster-whisper (CPU, int8)."""
+    audio = video
     if model_factory is None:
         from faster_whisper import WhisperModel  # lazy: only the Mob X workflow installs it
 
         def model_factory():
             return WhisperModel(model_size, device="cpu", compute_type="int8")
+
+        audio = decode_audio_16k(video)
     model = model_factory()
-    segments, _info = model.transcribe(video, language=language, vad_filter=True, beam_size=1)
+    segments, _info = model.transcribe(audio, language=language, vad_filter=True, beam_size=1)
     cues = []
     for seg in segments:
         text = " ".join(str(seg.text).split())
