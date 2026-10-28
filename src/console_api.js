@@ -543,6 +543,33 @@ export async function handleConsoleApi(request, env, h) {
       )) return fail("mob_x_review_result_incomplete", 400);
 
       const jobId = mobTransition[1];
+      const rawErrorDetail = body.status === "failed" && typeof body.error_detail === "string"
+        ? body.error_detail : "";
+      const errorDetail = rawErrorDetail
+        ? rawErrorDetail
+          .replace(/https?:\/\/\S+/gi, "[URL omitted]")
+          .replace(/\b(?:token|password|secret|authorization|cookie|api[_-]?key)\s*[:=]\s*\S+/gi, "[REDACTED]")
+          .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[REDACTED]")
+          .replace(/[\u0000-\u001F\u007F]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim().slice(0, 300) || null
+        : null;
+      if (body.status === "failed" && errorDetail) {
+        const existing = await first(
+          "SELECT result_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link'", jobId,
+        );
+        let storedResult = {};
+        try {
+          const oldResult = JSON.parse(existing?.result_json || "null");
+          if (isRecord(oldResult)) storedResult = { ...oldResult };
+        } catch {}
+        if (resultValue && isRecord(resultValue)) storedResult = { ...storedResult, ...resultValue };
+        storedResult.error_detail = errorDetail;
+        resultJson = JSON.stringify(storedResult);
+        if (new TextEncoder().encode(resultJson).byteLength > 30000) {
+          return fail("mob_x_result_too_large", 400);
+        }
+      }
       const now = new Date().toISOString();
       const statements = [
         env.DB.prepare(
@@ -562,7 +589,7 @@ export async function handleConsoleApi(request, env, h) {
         resultValue?.item_id || null,
         { job_id: jobId, error_code: errorCode, external_id_tail: String(resultValue?.external_id || "").slice(-6) }
       );
-      return json({ ok: true, job_id: jobId, status: body.status, progress });
+      return json({ ok: true, job_id: jobId, status: body.status, progress, error_detail: errorDetail });
     }
 
     const mobPreview = /^\/mob-x\/jobs\/([A-Za-z0-9_-]{1,100})\/preview$/.exec(sub);
