@@ -454,7 +454,7 @@ class WorkerClient:
         started = time.monotonic()
         safe_path = urlparse(str(path or "")).path or "/"
         safe_path = re.sub(r"[^A-Za-z0-9_./-]", "_", safe_path)
-        safe_path = re.sub(r"\b[A-Za-z0-9_-]{32,}\b, "[redacted]", safe_path)
+        safe_path = re.sub(r"\b[A-Za-z0-9_-]{32,}\b", "[redacted]", safe_path)
         if not safe_path.startswith("/"):
             safe_path = "/" + safe_path
 
