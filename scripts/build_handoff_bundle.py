@@ -25,6 +25,10 @@ TOKEN_PATTERNS = [
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{24,}"),
 ]
 PRIVATE_KEY_RE = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
+PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[ \t]*\r?\n"
+    r"[A-Za-z0-9+/=\r\n]+?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
+)
 AUTO_SECTIONS = {
     "secrets": ("<!-- AUTO:SECRETS:START -->", "<!-- AUTO:SECRETS:END -->"),
     "vars": ("<!-- AUTO:VARS:START -->", "<!-- AUTO:VARS:END -->"),
@@ -65,8 +69,8 @@ def discover_secret_var_names(source: Path) -> tuple[set[str], set[str]]:
 
 
 def scrub_text(body: str, secret_names: set[str]) -> str:
-    if PRIVATE_KEY_RE.search(body):
-        raise RuntimeError("private_key_detected")
+    # Remove full PEM key blocks; a bare header regex in source code is not a key.
+    body = PRIVATE_KEY_BLOCK_RE.sub("[REDACTED_PRIVATE_KEY]", body)
     for pattern in TOKEN_PATTERNS:
         body = pattern.sub("[REDACTED_SECRET]", body)
     names = set(secret_names) | set(KNOWN_SENSITIVE_NAMES)
@@ -83,7 +87,7 @@ def scrub_text(body: str, secret_names: set[str]) -> str:
 
 def suspicious_text(body: str) -> list[str]:
     findings = []
-    if PRIVATE_KEY_RE.search(body):
+    if PRIVATE_KEY_BLOCK_RE.search(body):
         findings.append("private_key")
     if any(pattern.search(body) for pattern in TOKEN_PATTERNS):
         findings.append("provider_or_bearer_token")
@@ -285,7 +289,7 @@ def main() -> int:
                 dest.write_text(cleaned, encoding="utf-8", newline="")
             else:
                 binary = raw.decode("latin-1", errors="ignore")
-                if PRIVATE_KEY_RE.search(binary) or any(p.search(binary) for p in TOKEN_PATTERNS):
+                if PRIVATE_KEY_BLOCK_RE.search(binary) or any(p.search(binary) for p in TOKEN_PATTERNS):
                     excluded += 1
                     continue
                 shutil.copyfile(path, dest)
