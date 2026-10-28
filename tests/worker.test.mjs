@@ -85,6 +85,22 @@ class FakeStatement {
           .filter(row => row.status === "sent" && row.sent_at && row.sent_at >= dayStart).length,
       };
     }
+    if (this.sql.includes("SELECT COUNT(*) AS count FROM items WHERE status = 'sent' AND sent_at >= ?")) {
+      const dayStart = this.values[0];
+      return { count: [...this.db.items.values()].filter(row =>
+        row.status === "sent" && row.sent_at && row.sent_at >= dayStart).length };
+    }
+    if (this.sql.includes("FROM console_jobs j") && this.sql.includes("j.status = 'approved'")) {
+      const requestedJobId = this.sql.includes("AND j.id = ?") ? this.values[0] : null;
+      const pair = [...this.db.consoleJobs.values()]
+        .filter(job => job.type === "mob_x_link" && job.status === "approved" &&
+          (requestedJobId === null || job.id === requestedJobId))
+        .map(job => ({ job, link: this.db.panelLinks.get(Number(job.panel_link_id)) }))
+        .find(value => value.link && value.link.status === "approved");
+      return pair ? {
+        id: pair.job.id, panel_link_id: pair.job.panel_link_id, result_json: pair.job.result_json,
+      } : null;
+    }
     if (this.sql.includes("FROM owner_digest_state WHERE id = 1")) {
       return this.db.ownerDigestState ? { ...this.db.ownerDigestState } : null;
     }
@@ -1105,6 +1121,9 @@ for (const [label, canonicalUrl] of [
   assert.equal(response.body.items.length, 1);
   assert.equal(response.body.items[0].id, "tiktok:7616247520657771796");
 
+  const regularRules = JSON.parse(state.DB.consoleRules.rules_json);
+  regularRules.quiet_hours = { start: "00:00", end: "00:00", enabled: false };
+  state.DB.consoleRules.rules_json = JSON.stringify(regularRules);
   response = await read(await worker.fetch(request("/api/brain/automation-queue/tiktok%3A7616247520657771796/state", {
     method: "POST", body: { status: "processing" },
   }), state));
@@ -1122,6 +1141,63 @@ for (const [label, canonicalUrl] of [
   assert.equal(response.body.counts.sent, 1);
   assert.equal(response.body.counts.queued || 0, 0);
 }
+{
+  const state = env();
+  state.DB.consoleRules.rules_json = JSON.stringify({
+    quiet_hours: { start: "00:00", end: "00:00" },
+    daily_success_cap: 4,
+  });
+  const item = {
+    platform: "tiktok", external_id: "7616247520657771999",
+    canonical_url: "https://www.tiktok.com/@creator/video/7616247520657771999",
+    source_key: "@creator", title: "Quiet-hours TikTok edit", caption: "Test caption",
+    media_type: "video", freshness_verified: true, method: "termux_phone",
+  };
+  let response = await read(await worker.fetch(request("/api/brain/automation-queue", {
+    method: "POST", body: { items: [item] },
+  }), state));
+  assert.equal(response.status, 200);
+  const queueId = "tiktok:7616247520657771999";
+  response = await read(await worker.fetch(request("/api/brain/automation-queue/" + encodeURIComponent(queueId) + "/state", {
+    method: "POST", body: { status: "processing" },
+  }), state));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "quiet_hours");
+  assert.equal(state.DB.automationQueue.get(queueId).status, "queued");
+  assert.equal(state.DB.automationQueue.get(queueId).attempt_count, 0);
+}
+
+// During the same all-day quiet window, an owner-approved Mob X item may still be claimed;
+// the existing daily success cap remains the only cap on this route.
+{
+  const state = env();
+  state.DB.consoleRules.rules_json = JSON.stringify({
+    quiet_hours: { start: "00:00", end: "00:00" },
+    daily_success_cap: 4,
+  });
+  const linkId = 7;
+  const jobId = "job_abcdef1234567890";
+  const itemId = "mob_official:2107878755079213476";
+  state.DB.panelLinks.set(linkId, {
+    id: linkId, url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+    external_id: "2107878755079213476", status: "approved",
+  });
+  state.DB.consoleJobs.set(jobId, {
+    id: jobId, type: "mob_x_link", status: "approved", panel_link_id: linkId,
+    result_json: JSON.stringify({ item_id: itemId, rubika_file_id: "mock-file-id", caption: "approved caption" }),
+  });
+  state.DB.items.set(itemId, {
+    id: itemId, platform: "mob_official", status: "ready", review_state: "approved",
+  });
+  const response = await read(await worker.fetch(request("/api/console/mob-x/publish-claim", {
+    method: "POST", body: { job_id: jobId },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.claimed, true);
+  assert.equal(response.body.job.id, jobId);
+  assert.equal(response.body.channel_policy, "test_channel_only");
+}
+
 {
   const response = await read(await worker.fetch(request("/api/brain/automation-queue", {
     method: "POST", body: { items: [] }, token: null,
