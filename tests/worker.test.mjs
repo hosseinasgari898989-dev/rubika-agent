@@ -347,7 +347,10 @@ class FakeStatement {
     if (sql.startsWith("UPDATE console_jobs SET status = ?, progress = ?, result_json = COALESCE")) {
       const [status, progress, resultJson, error, updatedAt, jobId] = v;
       const job = this.db.consoleJobs.get(jobId);
-      if (!job || job.type !== "mob_x_link" || job.status !== "processing") return { meta: { changes: 0 } };
+      const transitionAllowed = status === "failed"
+        ? ["processing", "ready_for_review"].includes(job?.status)
+        : job?.status === "processing";
+      if (!job || job.type !== "mob_x_link" || !transitionAllowed) return { meta: { changes: 0 } };
       Object.assign(job, { status, progress, result_json: resultJson == null ? job.result_json : resultJson, error, updated_at: updatedAt });
       return { meta: { changes: 1 } };
     }
@@ -2899,6 +2902,22 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.consoleJobs.get("job_abcdef1234567890").status, "ready_for_review");
   assert.equal(state.DB.panelLinks.get(linkId).status, "ready_for_review");
   assert.equal(JSON.parse(state.DB.consoleJobs.get("job_abcdef1234567890").result_json).publishing_attempted, false);
+
+  response = await read(await worker.fetch(request("/api/console/mob-x/jobs/job_abcdef1234567890/transition", {
+    method: "POST", body: {
+      status: "failed", error_code: "worker_request_failed",
+      error_detail: "path=/api/console/rules attempts=3 status=503 elapsed_ms=7021",
+    },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "failed");
+  assert.equal(response.body.error_detail, "path=/api/console/rules attempts=3 status=503 elapsed_ms=7021");
+  const failedJob = state.DB.consoleJobs.get("job_abcdef1234567890");
+  assert.equal(failedJob.status, "failed");
+  assert.equal(failedJob.error, "worker_request_failed");
+  assert.equal(JSON.parse(failedJob.result_json).publishing_attempted, false);
+  assert.equal(JSON.parse(failedJob.result_json).error_detail, "path=/api/console/rules attempts=3 status=503 elapsed_ms=7021");
+  assert.equal(state.DB.panelLinks.get(linkId).status, "failed");
 
   response = await read(await worker.fetch(request("/api/console/mob-x/jobs/job_abcdef1234567890/transition", {
     method: "POST", body: { status: "sent" },
