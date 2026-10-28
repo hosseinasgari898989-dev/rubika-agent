@@ -1769,10 +1769,15 @@ async function withDispatchFetch(responder, fn) {
     const job = [...state.DB.consoleJobs.values()][0];
     assert.equal(job.type, "mob_x_link");
     assert.equal(job.status, "confirmed");
-    assert.deepEqual(JSON.parse(job.params_json), {
+    const confirmedParams = JSON.parse(job.params_json);
+    assert.deepEqual({
+      url: confirmedParams.url,
+      panel_link_id: confirmedParams.panel_link_id,
+    }, {
       url: "https://x.com/mobgamesstudios/status/2107878755079213476",
       panel_link_id: state.DB.links[0].id,
     });
+    assert.equal(confirmedParams.link_dispatch_state, "dispatched");
     assert.equal(calls.filter(call => call.method === "editMessageText").length > 0, true);
     const dispatchCalls = calls.filter(call => call.url && call.url.includes("api.github.com"));
     assert.equal(dispatchCalls.length, 1);
