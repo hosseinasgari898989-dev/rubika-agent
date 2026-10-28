@@ -565,6 +565,13 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                 elif exc.code == "translation_incomplete":
                     # Never burn or stage partially translated subtitles.
                     raise MobXLinkError("mob_x_translation_failed") from None
+                elif exc.code == "audio_decode_failed":
+                    # Fail closed and preserve sanitized decoder details for the owner PV alert.
+                    raise MobXLinkError(
+                        "mob_x_subtitle_audio_decode_failed",
+                        error_class=type(exc).__name__,
+                        error_detail=_safe_exception_message(exc.detail or exc),
+                    ) from None
                 else:
                     raise MobXLinkError("mob_x_subtitle_" + exc.code) from None
             except Exception:

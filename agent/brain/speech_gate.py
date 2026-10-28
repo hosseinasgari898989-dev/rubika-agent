@@ -6,6 +6,7 @@ Thresholds are only a starting point; tune them on real Mob X samples.
 """
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
@@ -100,12 +101,31 @@ def evaluate(probe: dict, segments: list, language: Optional[str],
     return GateResult("subtitle", "ok", **base)
 
 
+def audio_cmd(path: str) -> list:
+    """ffmpeg argv: 16 kHz mono float32 PCM on stdout (what faster-whisper expects)."""
+    return ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "16000",
+            "-f", "f32le", "-"]
+
+
+def decode_audio_16k(path: str, run=subprocess.run):
+    """Decode with ffmpeg to a float32 numpy array. Bypasses PyAV (av.open metadata_errors bug)."""
+    r = run(audio_cmd(path), capture_output=True, timeout=600)
+    if r.returncode != 0:
+        tail = r.stderr or b""
+        tail = tail.decode("utf-8", "replace") if isinstance(tail, bytes) else str(tail)
+        raise RuntimeError("audio_decode_failed: " + tail[-200:])
+    import numpy as np  # noqa: PLC0415  (installed together with faster-whisper)
+
+    raw = r.stdout or b""
+    return np.frombuffer(raw[: len(raw) // 4 * 4], dtype=np.float32)
+
+
 def transcribe(path: str, model_size: str = "small"):
     """Run faster-whisper (CPU, int8, VAD). Imported lazily: only needed on the runner."""
     from faster_whisper import WhisperModel  # noqa: PLC0415
 
     model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    segs, info = model.transcribe(path, vad_filter=True, beam_size=1)
+    segs, info = model.transcribe(decode_audio_16k(path), vad_filter=True, beam_size=1)
     segments = [{"start": s.start, "end": s.end, "text": s.text,
                  "no_speech_prob": s.no_speech_prob} for s in segs]
     return segments, info.language, info.language_probability
