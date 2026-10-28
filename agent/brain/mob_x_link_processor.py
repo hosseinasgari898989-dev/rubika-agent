@@ -13,6 +13,7 @@ import os
 import re
 import socket
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,11 +30,16 @@ from scripts import subtitle_pipeline
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import StagedMedia
 from agent.storage.mega import MegaStorage
-from agent.brain.mob_x_rubika import upload_preview_media, send_owner_preview, send_owner_translation_failure
+from agent.brain.mob_x_rubika import (
+    upload_preview_media, send_owner_preview, send_owner_translation_failure,
+    send_owner_worker_request_failure,
+)
 
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_VIDEO_SECONDS = 600
 TIMEOUT = 20
+WORKER_REQUEST_ATTEMPTS = 3
+WORKER_RETRY_BACKOFF_SECONDS = (2, 5)
 HANDLE = "mobgamesstudios"
 LINK_RE = re.compile(r"^https://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/mobgamesstudios/status/([0-9]{15,22})/?$", re.I)
 MEDIA_HOSTS = {"pbs.twimg.com", "video.twimg.com"}
@@ -445,24 +451,77 @@ class WorkerClient:
         self.session = session or requests.Session()
 
     def request(self, method: str, path: str, payload: dict | None = None) -> dict:
-        try:
-            response = self.session.request(
-                method, self.base_url + path,
-                headers={"Authorization": "Bearer " + self.token, "Accept": "application/json"},
-                json=payload, timeout=TIMEOUT,
-            )
-            value = response.json()
-            if response.status_code >= 400:
+        started = time.monotonic()
+        safe_path = urlparse(str(path or "")).path or "/"
+        safe_path = re.sub(r"[^A-Za-z0-9_./-]", "_", safe_path)
+        safe_path = re.sub(r"\\b[A-Za-z0-9_-]{32,}\\b", "[redacted]", safe_path)
+        if not safe_path.startswith("/"):
+            safe_path = "/" + safe_path
+
+        def failure_detail(attempts: int, *, exception_name: str | None = None,
+                           status: int | None = None) -> str:
+            parts = [f"path={safe_path}", f"attempts={attempts}"]
+            if status is not None:
+                parts.append(f"status={status}")
+            elif exception_name:
+                parts.append(f"exception={exception_name}")
+            parts.append(f"elapsed_ms={max(0, int((time.monotonic() - started) * 1000))}")
+            return " ".join(parts)[:150]
+
+        for attempt in range(1, WORKER_REQUEST_ATTEMPTS + 1):
+            try:
+                response = self.session.request(
+                    method, self.base_url + path,
+                    headers={"Authorization": "Bearer " + self.token, "Accept": "application/json"},
+                    json=payload, timeout=TIMEOUT,
+                )
+            except requests.RequestException as exc:
+                if attempt < WORKER_REQUEST_ATTEMPTS:
+                    time.sleep(WORKER_RETRY_BACKOFF_SECONDS[attempt - 1])
+                    continue
+                name = type(exc).__name__
+                raise MobXLinkError(
+                    "worker_request_failed", error_class=name,
+                    error_detail=failure_detail(attempt, exception_name=name),
+                ) from None
+
+            status = int(response.status_code)
+            if status == 429 or status >= 500:
+                if attempt < WORKER_REQUEST_ATTEMPTS:
+                    time.sleep(WORKER_RETRY_BACKOFF_SECONDS[attempt - 1])
+                    continue
+                raise MobXLinkError(
+                    "worker_request_failed", error_class="HTTPStatusError",
+                    error_detail=failure_detail(attempt, status=status),
+                )
+
+            if status >= 400:
+                try:
+                    value = response.json()
+                except (ValueError, TypeError):
+                    value = None
                 code = value.get("error") if isinstance(value, dict) else None
                 code = str(code or "worker_http_error")
-                raise MobXLinkError(code if re.fullmatch(r"[a-z0-9_-]{1,80}", code) else "worker_http_error")
+                raise MobXLinkError(
+                    code if re.fullmatch(r"[a-z0-9_-]{1,80}", code) else "worker_http_error"
+                )
+
+            try:
+                value = response.json()
+            except (ValueError, TypeError) as exc:
+                name = type(exc).__name__
+                raise MobXLinkError(
+                    "worker_request_failed", error_class=name,
+                    error_detail=failure_detail(attempt, exception_name=name),
+                ) from None
             if not isinstance(value, dict) or value.get("ok") is not True:
                 raise MobXLinkError("worker_response_invalid")
             return value
-        except MobXLinkError:
-            raise
-        except (requests.RequestException, ValueError, TypeError):
-            raise MobXLinkError("worker_request_failed") from None
+
+        raise MobXLinkError(
+            "worker_request_failed",
+            error_detail=failure_detail(WORKER_REQUEST_ATTEMPTS, exception_name="RequestError"),
+        )
 
     def claim(self) -> dict | None:
         result = self.request("POST", "/api/console/mob-x/claim", {})
@@ -479,12 +538,17 @@ class WorkerClient:
             raise MobXLinkError("console_rules_invalid")
         return rules
 
-    def transition(self, job_id: str, status: str, *, result: dict | None = None, error_code: str | None = None):
+    def transition(
+        self, job_id: str, status: str, *, result: dict | None = None,
+        error_code: str | None = None, error_detail: str | None = None,
+    ):
         payload = {"status": status}
         if result is not None:
             payload["result"] = result
         if error_code is not None:
             payload["error_code"] = error_code
+        if error_detail is not None and status == "failed":
+            payload["error_detail"] = str(error_detail)[:150]
         self.request("POST", f"/api/console/mob-x/jobs/{job_id}/transition", payload)
 
     def record_preview(self, job_id: str, message_id: str | None) -> None:
@@ -518,6 +582,8 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
     original = str(post.get("text") or "").strip()[:5000]
     # Resolve media first: text-only posts must never enter the caption/translation path.
     media_type, media_url = select_media(post)
+    # Load worker-controlled caption rules once before ffprobe, Whisper or translation.
+    rules = client.rules()
     with tempfile.TemporaryDirectory(prefix="rubika-agent-mob-x-") as temp:
         local_path = download_public_media(media_url, media_type, temp, session=session)
         inspection = inspect_media(local_path, media_type, max_bytes=MAX_MEDIA_BYTES)
@@ -607,7 +673,6 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         translation_source = clean_caption(original, 5000)
         translation = None
         if translation_source:
-            rules = client.rules()
             try:
                 caption_limit = max(1, min(4000, int(rules.get("caption_max_chars", 900))))
             except (TypeError, ValueError):
@@ -709,6 +774,8 @@ def process_one(report_path: str | None = None) -> int:
     report = {"mode": "process_one", "publishing_attempted": False}
     client = None
     job = None
+    failure_detail = None
+    failure_class = None
     try:
         client = WorkerClient(
             os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
@@ -723,23 +790,49 @@ def process_one(report_path: str | None = None) -> int:
         return _write_report(report, report_path, 0)
     except MobXLinkError as exc:
         code = exc.code
-        if exc.error_class:
-            report["error_class"] = exc.error_class
-            report["error_detail"] = exc.error_detail or ""
+        failure_detail = exc.error_detail
+        failure_class = exc.error_class
+        if failure_class:
+            report["error_class"] = failure_class
+        if failure_detail:
+            report["error_detail"] = failure_detail
     except Exception:
         code = "mob_x_processor_internal_error"
     report.update(status="failed", error_code=code)
+    worker_failure_detail = failure_detail if code == "worker_request_failed" else None
     if client is not None and job and isinstance(job.get("id"), str):
         try:
-            client.transition(job["id"], "failed", error_code=code)
+            client.transition(
+                job["id"], "failed", error_code=code,
+                error_detail=failure_detail if code == "worker_request_failed" else None,
+            )
+        except MobXLinkError as transition_exc:
+            report["transition_error"] = transition_exc.code
+            if transition_exc.error_detail:
+                report["transition_error_detail"] = transition_exc.error_detail
+            if transition_exc.code == "worker_request_failed":
+                worker_failure_detail = transition_exc.error_detail or worker_failure_detail
         except Exception:
             report["transition_error"] = "mob_x_failure_transition_failed"
         if code == "mob_x_translation_failed":
             try:
-                send_owner_translation_failure(os.getenv("RUBIKA_TOKEN",""),os.getenv("RUBIKA_OWNER_CHAT_ID",""),job["id"])
-                report["owner_pv_notice"]="sent"
+                send_owner_translation_failure(
+                    os.getenv("RUBIKA_TOKEN", ""), os.getenv("RUBIKA_OWNER_CHAT_ID", ""), job["id"],
+                )
+                report["owner_pv_notice"] = "sent"
             except Exception:
-                report["owner_pv_notice"]="failed"
+                report["owner_pv_notice"] = "failed"
+    if worker_failure_detail:
+        try:
+            send_owner_worker_request_failure(
+                os.getenv("RUBIKA_TOKEN", ""), os.getenv("RUBIKA_OWNER_CHAT_ID", ""),
+                str(job.get("id") or "") if isinstance(job, dict) else "",
+                worker_failure_detail,
+            )
+            report["owner_pv_notice"] = "sent"
+        except Exception:
+            report["owner_pv_notice"] = "failed"
+        report["error_detail"] = worker_failure_detail
     return _write_report(report, report_path, 1)
 
 
