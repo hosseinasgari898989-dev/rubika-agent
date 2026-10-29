@@ -90,11 +90,12 @@ class PreflightDegradedTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("has_job=false", out)
 
-    def test_jobs_failure_still_aborts(self):
-        with self.assertRaises(SystemExit) as ctx:
-            self._main(([], "endpoint=jobs attempts=3 status=none error=TimeoutError", 3),
-                       ([], None, 1))
-        self.assertEqual(ctx.exception.code, "mob_x_preflight_worker_api_unavailable")
+    def test_jobs_failure_degrades_without_abort(self):
+        code, out = self._main(([], "endpoint=jobs attempts=3 status=none error=TimeoutError", 3),
+                               ([], None, 1))
+        self.assertEqual(code, 0)
+        self.assertIn("has_job=false", out)
+        self.assertIn('"degraded": true', out)
 
     def test_healthy_links_path_unchanged(self):
         links = ([{"id": 7, "status": "confirmed"}], None, 1)
