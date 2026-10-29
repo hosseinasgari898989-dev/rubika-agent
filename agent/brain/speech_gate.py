@@ -10,6 +10,9 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
+# Same VAD sensitivity as scripts/subtitle_pipeline.py so the gate and the subtitle step agree.
+ASR_VAD_PARAMETERS = {"threshold": 0.35, "min_silence_duration_ms": 400, "speech_pad_ms": 300}
+
 
 @dataclass(frozen=True)
 class GateConfig:
@@ -125,7 +128,10 @@ def transcribe(path: str, model_size: str = "small"):
     from faster_whisper import WhisperModel  # noqa: PLC0415
 
     model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    segs, info = model.transcribe(decode_audio_16k(path), vad_filter=True, beam_size=1)
+    segs, info = model.transcribe(
+        decode_audio_16k(path), vad_filter=True, vad_parameters=ASR_VAD_PARAMETERS,
+        beam_size=1, condition_on_previous_text=False,
+    )
     segments = [{"start": s.start, "end": s.end, "text": s.text,
                  "no_speech_prob": s.no_speech_prob} for s in segs]
     return segments, info.language, info.language_probability
