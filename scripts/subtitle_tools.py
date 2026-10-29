@@ -129,12 +129,31 @@ def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl:
     return head + "\n".join(lines) + "\n"
 
 
-def burn_cmd(video: str, ass: str, fontsdir: str, out: str) -> list:
-    """ffmpeg argv that burns an ASS file using the in-repo font directory."""
+# Blurred, darkened strip behind the subtitles so the text stays readable on any footage.
+BLUR_BAND_FRACTION = 0.28   # share of frame height, anchored to the bottom edge
+BLUR_SIGMA = 18
+BLUR_TINT = "black@0.45"
+
+
+def burn_cmd(video: str, ass: str, fontsdir: str, out: str, blur: bool = True) -> list:
+    """ffmpeg argv that burns an ASS file using the in-repo font directory.
+
+    With blur=True a blurred, tinted band covers the bottom of the frame and the
+    subtitles are drawn on top of it (only that band is blurred, the rest is untouched).
+    """
     for p in (video, ass, fontsdir, out):
         if not _SAFE_PATH.match(p):
             raise ValueError(f"unsafe path for ffmpeg filter: {p!r}")
-    return [
-        "ffmpeg", "-y", "-i", video, "-vf", f"ass={ass}:fontsdir={fontsdir}",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "copy", out,
-    ]
+    ass_filter = f"ass={ass}:fontsdir={fontsdir}"
+    enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+           "-c:a", "copy", out]
+    if not blur:
+        return ["ffmpeg", "-y", "-i", video, "-vf", ass_filter] + enc
+    graph = (
+        f"[0:v]split[base][strip];"
+        f"[strip]crop=iw:trunc(ih*{BLUR_BAND_FRACTION}/2)*2:0:ih-trunc(ih*{BLUR_BAND_FRACTION}/2)*2,"
+        f"gblur=sigma={BLUR_SIGMA},drawbox=x=0:y=0:w=iw:h=ih:color={BLUR_TINT}:t=fill[band];"
+        f"[base][band]overlay=x=0:y=H-h,{ass_filter}[out]"
+    )
+    return ["ffmpeg", "-y", "-i", video, "-filter_complex", graph,
+            "-map", "[out]", "-map", "0:a?"] + enc
