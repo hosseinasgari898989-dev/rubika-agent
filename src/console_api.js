@@ -654,14 +654,7 @@ export async function handleConsoleApi(request, env, h) {
       let rules = {};
       try { rules = JSON.parse(row.rules_json || "{}"); } catch { return fail("rules_invalid_json", 503); }
 
-      const capRaw = Number(rules.daily_success_cap ?? 4);
-      const cap = Number.isFinite(capRaw) ? Math.max(0, Math.min(50, Math.trunc(capRaw))) : 4;
-      const dayStart = new Date();
-      dayStart.setUTCHours(0, 0, 0, 0);
-      const sentToday = await first("SELECT COUNT(*) AS count FROM items WHERE status = 'sent' AND sent_at >= ?", dayStart.toISOString());
-      if (Number(sentToday?.count || 0) >= cap) {
-        return json({ ok: true, claimed: false, reason: "daily_success_cap_reached", sent_today: Number(sentToday?.count || 0), cap });
-      }
+      // Mob X news is exempt from daily_success_cap and quiet_hours (owner decision 2026-10-30)
 
       const candidateSql =
         "SELECT j.id, j.panel_link_id, j.result_json FROM console_jobs j " +
@@ -813,9 +806,11 @@ export async function handleConsoleApi(request, env, h) {
       const parsed = await readJson(request);
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       if (parsed.value.confirm !== true) return fail("confirm_true_required", 400);
-      const r = await env.DB.prepare("DELETE FROM panel_links").run();
-      await audit("console_links_clear", null, { removed: Number(r?.meta?.changes || 0) });
-      return json({ ok: true, removed: Number(r?.meta?.changes || 0) });
+      const r = await env.DB.prepare("DELETE FROM panel_links WHERE status NOT IN ('confirmed','queued','processing','ready_for_review','approved','sending')").run();
+      const removed = Number(r?.meta?.changes || 0);
+      const kept = Number((await first("SELECT COUNT(*) AS c FROM panel_links"))?.c || 0);
+      await audit("console_links_clear", null, { removed, kept });
+      return json({ ok: true, removed, kept });
     }
 
     // ---------- sources (X / TikTok / Mob official compatibility) ----------

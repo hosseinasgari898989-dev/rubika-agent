@@ -142,9 +142,10 @@ const shortLink = (u) => {
 };
 async function links(env) {
   const total = num((await one(env, "SELECT COUNT(*) AS c FROM panel_links"))?.c);
+  const inactive = num((await one(env, "SELECT COUNT(*) AS c FROM panel_links WHERE status NOT IN ('confirmed','queued','processing','ready_for_review','approved','sending')"))?.c);
   const r = await all(env, "SELECT url, status, created_at, external_id FROM panel_links ORDER BY id DESC LIMIT 8");
   const lines = r.map((x) => `• ${when(x.created_at)} ${shortLink(x.url)} (${tag(x.status, 20)})`);
-  return { text: [`🔗 **لینک‌های X** — ${total} مورد`, ...(lines.length ? lines : ["لینکی ذخیره نشده."])].join("\n"), rows: [...(total ? [[["🗑 پاک‌کردن همه", "p_links_clear"]]] : []), ...nav("p_links")] };
+  return { text: [`🔗 **لینک‌های X** — ${total} مورد`, ...(lines.length ? lines : ["لینکی ذخیره نشده."])].join("\n"), rows: [...(inactive > 0 ? [[[ `🗑 پاک‌کردن غیرفعال‌ها (${inactive})`, "p_links_clear" ]]] : []), ...nav("p_links")] };
 }
 async function jobs(env) {
   const r = await all(env, "SELECT id, type, status, progress, error, created_at, updated_at FROM console_jobs ORDER BY created_at DESC LIMIT 8");
@@ -152,14 +153,18 @@ async function jobs(env) {
   return { text: ["🧰 **کارهای کنسول**", ...(lines.length ? lines : ["کاری ثبت نشده."])].join("\n"), rows: nav("p_jobs") };
 }
 async function linksClear(env) {
-  const total = num((await one(env, "SELECT COUNT(*) AS c FROM panel_links"))?.c);
-  return { text: `🗑 همهٔ ${total} لینک ذخیره‌شده پاک شود؟`, rows: [[["✅ بله، پاک شود", "p_links_clear_yes"], ["✖️ نه", "p_links"]]] };
+  const inactive = num((await one(env, "SELECT COUNT(*) AS c FROM panel_links WHERE status NOT IN ('confirmed','queued','processing','ready_for_review','approved','sending')"))?.c);
+  if (inactive === 0) {
+    return { text: "لینک غیرفعالی برای پاک‌کردن نیست.", rows: [[["🔗 لینک‌ها", "p_links"], ["🏠 منوی اصلی", "p_home"]]] };
+  }
+  return { text: `🗑 ${inactive} لینک غیرفعال پاک شود؟ (لینک‌های تأییدشده/در حال پردازش/آمادهٔ بازبینی/ارسال حفظ می‌شوند)`, rows: [[["✅ بله، پاک شود", "p_links_clear_yes"], ["✖️ نه", "p_links"]]] };
 }
 async function linksClearYes(env) {
-  await env.DB.prepare("DELETE FROM panel_links").run();
-  return { text: "✅ لینک‌های ذخیره‌شده پاک شدند.", rows: [[["🔗 لینک‌ها", "p_links"], ["🏠 منوی اصلی", "p_home"]]] };
+  const r = await env.DB.prepare("DELETE FROM panel_links WHERE status NOT IN ('confirmed','queued','processing','ready_for_review','approved','sending')").run();
+  const removed = Number(r?.meta?.changes || 0);
+  const kept = num((await one(env, "SELECT COUNT(*) AS c FROM panel_links"))?.c);
+  return { text: `✅ ${removed} لینک غیرفعال پاک شد؛ ${kept} لینک فعال حفظ شد.`, rows: [[["🔗 لینک‌ها", "p_links"], ["🏠 منوی اصلی", "p_home"]]] };
 }
-
 function withNavigation(id, screen) {
   const rows = Array.isArray(screen?.rows)
     ? screen.rows.filter((row) => Array.isArray(row) && row.some((button) =>

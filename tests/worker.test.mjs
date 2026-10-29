@@ -175,6 +175,11 @@ class FakeStatement {
         .find(value => value.link && ["confirmed", "queued"].includes(value.link.status));
       return pair ? { id: pair.job.id, panel_link_id: pair.job.panel_link_id, url: pair.link.url, external_id: pair.link.external_id } : null;
     }
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links WHERE status NOT IN")) {
+      const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
+      return { c: [...this.db.panelLinks.values()].filter(row => !active.has(row.status)).length };
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) return { c: this.db.panelLinks.size };
     if (this.sql.includes("FROM panel_links WHERE external_id = ?")) {
       const row = [...this.db.panelLinks.values()].find(item => item.external_id === String(this.values[0]));
       return row ? { ...row } : null;
@@ -365,6 +370,14 @@ class FakeStatement {
     }
     if (sql.startsWith("DELETE FROM console_channels WHERE id = ?")) {
       return { meta: { changes: this.db.consoleChannels.delete(Number(v[0])) ? 1 : 0 } };
+    }
+    if (sql.startsWith("DELETE FROM panel_links WHERE status NOT IN")) {
+      const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
+      const before = this.db.panelLinks.size;
+      for (const [id, row] of this.db.panelLinks) if (!active.has(row.status)) this.db.panelLinks.delete(id);
+      const changes = before - this.db.panelLinks.size;
+      this.db.lastChanges = changes;
+      return { meta: { changes } };
     }
     if (sql.startsWith("INSERT INTO panel_links (url, external_id, status)")) {
       const [url, externalId] = v;
@@ -752,6 +765,20 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.status, 400);
   assert.equal(response.body.error, "confirm_true_required");
   assert.equal(prepared.some(sql => sql.startsWith("DELETE FROM panel_links")), false);
+
+  const activeStatusesForClear = ["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"];
+  const seededStatuses = [...activeStatusesForClear, "pending", "rejected", "sent"];
+  state.DB.panelLinks = new Map(seededStatuses.map((status, index) => [index + 1, {
+    id: index + 1, status, url: `https://x.com/mobgamesstudios/status/${2107878755079213476 + index}`,
+    external_id: String(2107878755079213476 + index),
+  }]));
+  response = await read(await worker.fetch(request("/api/console/links/clear", {
+    method: "POST", body: { confirm: true },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.deepEqual({ removed: response.body.removed, kept: response.body.kept }, { removed: 3, kept: 6 });
+  assert.deepEqual([...state.DB.panelLinks.values()].map(row => row.status).sort(), activeStatusesForClear.slice().sort(),
+    "clear must preserve all active statuses and delete inactive statuses");
 }
 
 {
@@ -1178,8 +1205,7 @@ for (const [label, canonicalUrl] of [
   assert.equal(state.DB.automationQueue.get(queueId).attempt_count, 0);
 }
 
-// During the same all-day quiet window, an owner-approved Mob X item may still be claimed;
-// the existing daily success cap remains the only cap on this route.
+// Mob X news is exempt from daily_success_cap and quiet_hours (owner decision 2026-10-30).
 {
   const state = env();
   state.DB.consoleRules.rules_json = JSON.stringify({
@@ -1200,6 +1226,11 @@ for (const [label, canonicalUrl] of [
   state.DB.items.set(itemId, {
     id: itemId, platform: "mob_official", status: "ready", review_state: "approved",
   });
+  const sentAtToday = new Date().toISOString();
+  for (let i = 0; i < 4; i += 1) {
+    const sentItemId = `mob_official:already-sent-today-${i}`;
+    state.DB.items.set(sentItemId, { id: sentItemId, platform: "mob_official", status: "sent", sent_at: sentAtToday });
+  }
   const response = await read(await worker.fetch(request("/api/console/mob-x/publish-claim", {
     method: "POST", body: { job_id: jobId },
   }), state));
@@ -1442,6 +1473,10 @@ class PanelFakeStatement {
     if (this.sql.includes("SELECT COUNT(*) AS c FROM items WHERE status = 'sent' AND sent_at >= ?")) {
       return { c: this.db.itemsSentToday };
     }
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links WHERE status NOT IN")) {
+      const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
+      return { c: this.db.links.filter(row => !active.has(row.status)).length };
+    }
     if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) {
       return { c: this.db.links.length };
     }
@@ -1516,9 +1551,11 @@ class PanelFakeStatement {
       this.db.consoleRules.updated_at = updatedAt;
       return { meta: { changes: 1 } };
     }
-    if (this.sql.startsWith("DELETE FROM panel_links")) {
-      const count = this.db.links.length;
-      this.db.links = [];
+    if (this.sql.startsWith("DELETE FROM panel_links WHERE status NOT IN")) {
+      const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
+      const before = this.db.links.length;
+      this.db.links = this.db.links.filter(row => active.has(row.status));
+      const count = before - this.db.links.length;
       this.db.linkDeleteCalls += 1;
       return { meta: { changes: count } };
     }
@@ -2592,6 +2629,10 @@ class ScreenFakeStatement {
     if (this.sql.includes("SELECT COUNT(*) AS c FROM automation_queue WHERE status=?")) {
       return { c: this.db.queue.filter(row => row.status === this.values[0]).length };
     }
+    if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links WHERE status NOT IN")) {
+      const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
+      return { c: this.db.links.filter(row => !active.has(row.status)).length };
+    }
     if (this.sql.includes("SELECT COUNT(*) AS c FROM panel_links")) return { c: this.db.links.length };
     return null;
   }
@@ -2641,10 +2682,11 @@ class ScreenFakeStatement {
   }
   async run() {
     this.check();
-    if (this.sql.startsWith("DELETE FROM panel_links")) {
-      const count = this.db.links.length;
-      this.db.links = [];
-      return { meta: { changes: count } };
+    if (this.sql.startsWith("DELETE FROM panel_links WHERE status NOT IN")) {
+      const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
+      const before = this.db.links.length;
+      this.db.links = this.db.links.filter(row => active.has(row.status));
+      return { meta: { changes: before - this.db.links.length } };
     }
     return { meta: { changes: 1 } };
   }
@@ -2675,7 +2717,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   const emptyPages = [
     ["p_digest", "خلاصهٔ ۲۴ ساعت"], ["p_errors", "خطاها"], ["p_runs", "آخرین اجراها"],
     ["p_qs", "صف انتشار"], ["p_ailog", "تاریخچهٔ تماس‌های AI"], ["p_links", "لینک‌های X"],
-    ["p_jobs", "کارهای کنسول"], ["p_links_clear", "همهٔ 0 لینک"],
+    ["p_jobs", "کارهای کنسول"], ["p_links_clear", "لینک غیرفعالی برای پاک‌کردن نیست."],
   ];
   for (const [id, phrase] of emptyPages) {
     const result = await screens.buildScreen(screenEnv(), id);
@@ -2696,18 +2738,32 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     runs: [{ trigger_type: "daily", status: "success", started_at: "2026-10-24T03:00:00Z", found_count: 4, eligible_count: 3, sent_count: 2, skipped_count: 1, failed_count: 0 }],
     queue: screenStatuses.map((status, i) => ({ status, platform: "rubika", title: "Queue_" + status, last_error_code: status === "failed" ? "network_error" : null, updated_at: "2026-10-24T0" + i + ":00:00Z", sent_at: status === "sent" ? today + "T09:00:00Z" : null })),
     aiCalls: [{ provider: "groq", role: "code_repair", status: "failed", error_code: "http_5xx", started_at: "2026-10-24T04:00:00Z" }],
-    links: [{ id: 1, url: "https://x.com/mobgamesstudios/status/2107878755079213476", external_id: "2107878755079213476", status: "confirmed", created_at: "2026-10-24T05:00:00Z" }],
+    links: [
+      { id: 1, url: "https://x.com/mobgamesstudios/status/2107878755079213476", external_id: "2107878755079213476", status: "confirmed", created_at: "2026-10-24T05:00:00Z" },
+      { id: 2, url: "https://x.com/mobgamesstudios/status/2107878755079213477", external_id: "2107878755079213477", status: "pending", created_at: "2026-10-24T06:00:00Z" },
+    ],
   };
   const seeded = screenEnv(seed);
   for (const [id, phrase] of [
     ["p_digest", "Digest title"], ["p_errors", "Digest title"], ["p_runs", "success"],
     ["p_qs", "در انتظار: 1"], ["p_ailog", "groq/code_repair"], ["p_links", "mobgamesstudios"],
-    ["p_links_clear", "همهٔ 1 لینک"],
+    ["p_links_clear", "🗑 1 لینک غیرفعال پاک شود؟"],
   ]) {
     const result = await screens.buildScreen(seeded, id);
     assert.equal(result.text.includes(phrase), true, id + " should show seeded data");
     assert.equal(result.text.includes("d1_error"), false, id + " should not fail with seeded data");
   }
+  const linksScreen = await screens.buildScreen(seeded, "p_links");
+  assert.equal(linksScreen.rows.flat().some(button => button[1] === "p_links_clear" && button[0] === "🗑 پاک‌کردن غیرفعال‌ها (1)"), true,
+    "clear button must count inactive links only");
+  const activeOnly = screenEnv({ links: [{ id: 10, status: "queued" }, { id: 11, status: "ready_for_review" }] });
+  const activeOnlyScreen = await screens.buildScreen(activeOnly, "p_links");
+  assert.equal(activeOnlyScreen.rows.flat().some(button => button[1] === "p_links_clear"), false,
+    "clear button is hidden when every link is active");
+  const clearScreenEnv = screenEnv({ links: [{ id: 20, status: "queued" }, { id: 21, status: "pending" }, { id: 22, status: "approved" }] });
+  const clearedScreen = await screens.buildScreen(clearScreenEnv, "p_links_clear_yes");
+  assert.equal(clearedScreen.text, "✅ 1 لینک غیرفعال پاک شد؛ 2 لینک فعال حفظ شد.");
+  assert.deepEqual(clearScreenEnv.DB.links.map(row => row.status).sort(), ["approved", "queued"]);
   const aiLogWithCode = await screens.buildScreen(seeded, "p_ailog");
   assert.equal(aiLogWithCode.text.includes("http_5xx"), true, "AI history should show the precise error code");
 
@@ -2783,7 +2839,12 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
-    state.DB.links = [{ url: "https://x.com/Test/status/2107878755079213476", status: "queued", created_at: "2026-10-24T05:00:00Z" }];
+    state.DB.links = [
+      { id: 1, url: "https://x.com/Test/status/2107878755079213476", status: "queued", created_at: "2026-10-24T05:00:00Z" },
+      { id: 2, url: "https://x.com/Test/status/2107878755079213477", status: "pending", created_at: "2026-10-24T05:01:00Z" },
+      { id: 3, url: "https://x.com/Test/status/2107878755079213478", status: "sent", created_at: "2026-10-24T05:02:00Z" },
+      { id: 4, url: "https://x.com/Test/status/2107878755079213479", status: "ready_for_review", created_at: "2026-10-24T05:03:00Z" },
+    ];
     state.DB.state.set("panel_sync_mode", "atomic");
     state.DB.state.set("panel_mid", "link-confirmation-panel");
     const secret = await panel.hookSecret(state);
@@ -2793,17 +2854,18 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
       } },
     }, secret);
     await click("p_links_clear_yes", "link-confirmation-panel");
-    assert.equal(state.DB.links.length, 1, "direct confirmation ID must not delete links");
+    assert.equal(state.DB.links.length, 4, "direct confirmation ID must not delete links");
     assert.equal(state.DB.linkDeleteCalls, 0);
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
     await click("p_links_clear", "mock-reply-1");
-    assert.equal(state.DB.links.length, 1, "opening confirmation must not delete links");
-    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("پاک شود؟"), true);
+    assert.equal(state.DB.links.length, 4, "opening confirmation must not delete links");
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("🗑 2 لینک غیرفعال پاک شود؟"), true);
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-2");
     await click("p_links_clear_yes", "mock-reply-2");
-    assert.equal(state.DB.links.length, 0, "confirmed action should clear links");
+    assert.equal(state.DB.links.length, 2, "confirmed action should remove inactive links and preserve active links");
+    assert.deepEqual(state.DB.links.map(row => row.status).sort(), ["queued", "ready_for_review"]);
     assert.equal(state.DB.linkDeleteCalls, 1);
-    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("پاک شدند"), true);
+    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("✅ 2 لینک غیرفعال پاک شد؛ 2 لینک فعال حفظ شد."), true);
     assert.equal(calls.some(call => call.method === "editMessageKeypad"), false);
   });
 }
