@@ -120,17 +120,23 @@ def main() -> int:
         if attempts > 1 and error is None:
             print(json.dumps({"endpoint": endpoint, "recovered_after_attempt": attempts}, sort_keys=True))
 
-    links_unavailable = bool(links_error) and not jobs_error
+    if jobs_error:
+        # Degrade instead of failing the whole run. The claim endpoint re-checks the job
+        # and link status atomically, so an explicit dispatch can safely continue; a
+        # scheduled run just skips and the next cron/dispatch retries.
+        proceed = bool(requested_link_id)
+        print(json.dumps({"endpoint": "jobs", "degraded": True, "error_detail": jobs_error,
+                          "proceed": proceed}, sort_keys=True))
+        _append_output("has_job", "true" if proceed else "false")
+        print("has_job=true — jobs unavailable; explicit link, claim will re-check" if proceed else
+              "has_job=false — jobs unavailable; skipping this run, next run retries")
+        return 0
+
+    links_unavailable = bool(links_error)
     if links_unavailable:
         # The claim endpoint re-checks the link status atomically, so a confirmed job is enough here.
         print(json.dumps({"endpoint": "links", "degraded": True, "error_detail": links_error}, sort_keys=True))
         links = []
-    if jobs_error or (links_error and not links_unavailable):
-        detail = jobs_error or links_error or "endpoint=unknown attempts=1 status=none error=WorkerApiUnavailable"
-        _append_output("error_detail", detail)
-        _append_output("has_job", "false")
-        print(json.dumps({"error_detail": detail}, sort_keys=True))
-        raise SystemExit("mob_x_preflight_worker_api_unavailable")
 
     links_by_id = {str(link.get("id")): link for link in links}
     has_job = any(
