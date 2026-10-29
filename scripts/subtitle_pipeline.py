@@ -31,6 +31,13 @@ MAX_MISSING_RATIO = 0.3
 MAX_OUT_BYTES = 49 * 1024 * 1024  # Rubika upload ladder is OK only below ~50 MiB
 DURATION_TOLERANCE_MS = 1500
 MIN_CUE_MS = 400
+MAX_CUE_CHARS = 80  # longer Persian cues are split in two or more timed pieces
+
+# ASR tuning: more sensitive VAD (catches quiet/unclear speech) and no context carry-over
+# between segments (prevents hallucination loops on music/noise).
+ASR_VAD_PARAMETERS = {"threshold": 0.35, "min_silence_duration_ms": 400, "speech_pad_ms": 300}
+ASR_OPTIONS = {"vad_filter": True, "vad_parameters": ASR_VAD_PARAMETERS,
+               "condition_on_previous_text": False}
 
 
 class SubtitleError(Exception):
@@ -90,7 +97,7 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
         model_started = time.monotonic()
         model = create_model(size)
         segments, _info = model.transcribe(
-            audio, language=language, vad_filter=True, beam_size=5,
+            audio, language=language, beam_size=5, **ASR_OPTIONS,
         )
         iterator = iter(segments)
         cues = []
@@ -148,6 +155,50 @@ def clean_cues(cues: list) -> list:
             ps, _pe, pt = out[-1]
             out[-1] = (ps, max(ps + MIN_CUE_MS, s), pt)
         out.append((s, max(e, s + MIN_CUE_MS), t))
+    return out
+
+
+def _split_text(text: str, max_chars: int) -> list:
+    """Split text at the space nearest the middle until every piece fits max_chars."""
+    if len(text) <= max_chars or " " not in text:
+        return [text]
+    mid = len(text) // 2
+    best = None
+    for i, ch in enumerate(text):
+        if ch == " " and 0 < i < len(text) - 1:
+            if best is None or abs(i - mid) < abs(best - mid):
+                best = i
+    if best is None:
+        return [text]
+    left, right = text[:best].strip(), text[best + 1:].strip()
+    if not left or not right:
+        return [text]
+    return _split_text(left, max_chars) + _split_text(right, max_chars)
+
+
+def split_long_cues(cues: list, max_chars: int = MAX_CUE_CHARS) -> list:
+    """Split over-long cues into consecutive pieces; time is shared by text length.
+
+    A cue too short to give every piece MIN_CUE_MS is left unchanged.
+    """
+    out = []
+    for s, e, t in cues:
+        parts = _split_text(t, max_chars)
+        n = len(parts)
+        dur = e - s
+        if n < 2 or dur < MIN_CUE_MS * n:
+            out.append((s, e, t))
+            continue
+        total = sum(len(p) for p in parts) or 1
+        cur = s
+        for i, p in enumerate(parts):
+            if i == n - 1:
+                end = e
+            else:
+                end = cur + max(MIN_CUE_MS, round(dur * len(p) / total))
+                end = min(end, e - MIN_CUE_MS * (n - 1 - i))
+            out.append((cur, end, p))
+            cur = end
     return out
 
 
@@ -211,6 +262,7 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
         max_cues=MAX_BATCH_CUES, max_tokens=MAX_OUT_TOKENS,
         glossary=glossary, max_missing_ratio=max_missing_ratio,
     )
+    fa_cues = split_long_cues(fa_cues)
     srt, ass, out = wd / "fa.srt", wd / "fa.ass", wd / "subtitled.mp4"
     srt.write_text(st.format_srt(fa_cues), encoding="utf-8")
     ass.write_text(st.to_ass(fa_cues, font=font), encoding="utf-8")
