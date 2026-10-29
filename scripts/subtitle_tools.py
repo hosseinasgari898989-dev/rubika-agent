@@ -116,8 +116,8 @@ def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl:
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-        "-1,0,0,0,100,100,0,0,1,3,0,2,40,40,40,1\n\n[Events]\n"
+        f"Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H66000000,&H80000000,"
+        "-1,0,0,0,100,100,0,0,3,6,0,2,40,40,40,1\n\n[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     lines = []
@@ -129,13 +129,13 @@ def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl:
     return head + "\n".join(lines) + "\n"
 
 
-# Blurred, darkened strip behind the subtitles so the text stays readable on any footage.
+# Legacy blur-band settings, off by default; use burn_cmd(..., blur=True) to opt in.
 BLUR_BAND_FRACTION = 0.28   # share of frame height, anchored to the bottom edge
 BLUR_SIGMA = 18
 BLUR_TINT = "black@0.45"
 
 
-def burn_cmd(video: str, ass: str, fontsdir: str, out: str, blur: bool = True) -> list:
+def burn_cmd(video: str, ass: str, fontsdir: str, out: str, blur: bool = False) -> list:
     """ffmpeg argv that burns an ASS file using the in-repo font directory.
 
     With blur=True a blurred, tinted band covers the bottom of the frame and the
