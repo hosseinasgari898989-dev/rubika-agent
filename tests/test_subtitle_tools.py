@@ -63,9 +63,23 @@ class SubtitleToolsTest(unittest.TestCase):
     def test_burn_cmd(self):
         cmd = st.burn_cmd("in.mp4", "subs.ass", "assets/fonts", "out.mp4")
         self.assertEqual(cmd[0], "ffmpeg")
-        self.assertIn("ass=subs.ass:fontsdir=assets/fonts", cmd)
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("ass=subs.ass:fontsdir=assets/fonts", graph)
+        # Blurred, tinted band behind the subtitles; only the bottom strip is blurred.
+        self.assertIn("gblur=", graph)
+        self.assertIn("drawbox=", graph)
+        self.assertIn("overlay=x=0:y=H-h", graph)
+        self.assertLess(graph.index("overlay="), graph.index("ass="))
+        self.assertIn("[out]", cmd)
+        self.assertIn("0:a?", cmd)
+        self.assertEqual(cmd[-3:-1], ["-c:a", "copy"])
         with self.assertRaises(ValueError):
             st.burn_cmd("in.mp4", "a'b.ass", "assets/fonts", "out.mp4")
+
+    def test_burn_cmd_without_blur_keeps_plain_filter(self):
+        cmd = st.burn_cmd("in.mp4", "subs.ass", "assets/fonts", "out.mp4", blur=False)
+        self.assertIn("ass=subs.ass:fontsdir=assets/fonts", cmd)
+        self.assertNotIn("-filter_complex", cmd)
 
 
 if __name__ == "__main__":
