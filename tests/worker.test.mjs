@@ -6,18 +6,30 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const dataModuleUrl = source => "data:text/javascript;base64," + Buffer.from(source).toString("base64");
 const screensSource = fs.readFileSync(path.join(root, "src/panel_screens.js"), "utf8");
-const screensModuleUrl = "data:text/javascript;base64," + Buffer.from(screensSource).toString("base64");
+const screensModuleUrl = dataModuleUrl(screensSource);
 const settingsSource = fs.readFileSync(path.join(root, "src/panel_settings.js"), "utf8");
-const settingsModuleUrl = "data:text/javascript;base64," + Buffer.from(settingsSource).toString("base64");
+const settingsModuleUrl = dataModuleUrl(settingsSource);
+const consoleRetrySource = fs.readFileSync(path.join(root, "src/console_retry.js"), "utf8");
+const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
+const retryScreensSource = fs.readFileSync(path.join(root, "src/panel_retry_screens.js"), "utf8")
+  .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
+const retryScreensModuleUrl = dataModuleUrl(retryScreensSource);
+const screensExtSource = fs.readFileSync(path.join(root, "src/panel_screens_ext.js"), "utf8")
+  .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
+  .replace('from "./panel_retry_screens.js";', 'from "' + retryScreensModuleUrl + '";');
+const screensExtModuleUrl = dataModuleUrl(screensExtSource);
 const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8")
   .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
+  .replace('from "./panel_screens_ext.js";', 'from "' + screensExtModuleUrl + '";')
   .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";');
-const panelModuleUrl = "data:text/javascript;base64," + Buffer.from(panelSource).toString("base64");
+const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
 const screens = await import(screensModuleUrl);
-const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), "utf8");
-const consoleApiModuleUrl = "data:text/javascript;base64," + Buffer.from(consoleApiSource).toString("base64");
+const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), "utf8")
+  .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
+const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
 const workerImport = 'import { handleOwnerPanel } from "./owner_panel.js";';
 const consoleApiImport = 'import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";';

@@ -1,6 +1,7 @@
 // Owner panel on Cloudflare (stage 1): instant Rubika webhook, owner claim, menu, live screens.
 // Heavy work (video, edits, YouTube) stays on GitHub Actions; this module never runs shell or publishes.
-import { HOME_ROWS, isScreenId, buildScreen, homeSummary } from "./panel_screens.js";
+import { homeSummary } from "./panel_screens.js";
+import { isScreenIdExt as isScreenId, buildScreenExt as buildScreen, HOME_ROWS_EXT as HOME_ROWS } from "./panel_screens_ext.js";
 import { isSettingsId, applySettingsAction, settingsScreen } from "./panel_settings.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
