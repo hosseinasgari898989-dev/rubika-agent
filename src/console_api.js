@@ -2,6 +2,8 @@
 // Auth (Bearer AGENT_API_TOKEN) is enforced by the caller in index.js BEFORE handleConsoleApi() is reached.
 // Endpoints not implemented here fall through to 404 {ok:false,error:"not_found"}; the console shows them as "not active yet".
 
+import { handleConsoleRetry } from "./console_retry.js";
+
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -76,6 +78,8 @@ export async function handleConsoleApi(request, env, h) {
   const like = (q) => "%" + q.replace(/[\\%_]/g, (c) => "\\" + c) + "%";
 
   try {
+    const retryRes = await handleConsoleRetry(request, env, h, sub, m);
+    if (retryRes) return retryRes;
     // ---------- read-only history ----------
     if (m === "GET" && sub === "/events") {
       const { limit, offset } = page();

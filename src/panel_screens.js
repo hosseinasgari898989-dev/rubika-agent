@@ -1,5 +1,6 @@
 // Owner panel stage 2: read-only report screens read straight from D1 (same Worker, no HTTP hop).
 // Only panel_links is ever written (list/clear of the owner's own saved X links). Nothing here publishes, queues or edits pipeline rows.
+import { isRetryScreenId, buildRetryScreen, RETRY_HOME_ROW } from "./panel_retry_screens.js";
 const PAGE = 5;
 const QUEUE_STATUSES = ["queued", "processing", "sent", "failed", "uncertain", "skipped"];
 const QUEUE_LABEL = { queued: "در انتظار", processing: "در حال پردازش", sent: "ارسال‌شده", failed: "ناموفق", uncertain: "نامشخص", skipped: "ردشده" };
@@ -12,13 +13,14 @@ export const HOME_ROWS = [
   [["🤖 هوش مصنوعی", "p_ai"], ["🧾 گزارش کامل", "p_report"]],
   [["📰 خبر Mob از لینک X", "p_mob"], ["🔗 لینک‌های X", "p_links"]],
   [["🧰 کارها", "p_jobs"]],
+  RETRY_HOME_ROW,
   [["⚙️ تنظیمات", "p_set"]],
   [["❓ راهنما", "p_help"]],
   [["🏠 منوی اصلی", "p_home"]],
 ];
 
 const SCREEN_ID = /^p_(digest|errors|runs|qs|ailog|links|jobs|links_clear|links_clear_yes|ql_[a-z]+_\d{1,3})$/;
-export const isScreenId = (id) => SCREEN_ID.test(String(id || ""));
+export const isScreenId = (id) => SCREEN_ID.test(String(id || "")) || isRetryScreenId(id);
 
 // ---- safe text helpers (values from D1 never carry rich-text markers into the message)
 export const clean = (v, max = 40) => String(v ?? "").replace(/\*\*|__|--|~~|\|\||`|\[|\]/g, "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -196,6 +198,7 @@ export async function buildScreen(env, id) {
     else if (id === "p_links_clear") screen = await linksClear(env);
     else if (id === "p_links_clear_yes") screen = await linksClearYes(env);
     else if (/^p_ql_/.test(id)) screen = await queueList(env, id);
+    else if (isRetryScreenId(id)) screen = await buildRetryScreen(env, id);
     else return { text: "گزینهٔ نامعتبر.", rows: HOME_ONLY };
     return withNavigation(id, screen);
   } catch {
