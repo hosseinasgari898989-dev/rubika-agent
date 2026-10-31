@@ -29,6 +29,7 @@ class FailedMediaHookTests(unittest.TestCase):
             inspect_media=mock.Mock(return_value=mock.Mock(ok=True, errors=[], duration_seconds=0, has_audio=False)),
             evaluate_official_media=mock.Mock(return_value=mock.Mock(decision="eligible")),
             upload_preview_media=mock.Mock(side_effect=preview_side_effect),
+            send_owner_preview=mock.Mock(return_value="msg_1"),
             preserve_failed_media=mock.Mock(return_value={"ok": True}),
         )
         env = mock.patch.dict("os.environ", {"RUBIKA_TOKEN": "t" * 40, "RUBIKA_OWNER_CHAT_ID": "c1"})
@@ -52,7 +53,8 @@ class FailedMediaHookTests(unittest.TestCase):
         self.assertEqual(kwargs.get("job_id"), "job_abcdef1234")
 
     def test_preserve_not_called_when_upload_succeeds(self):
-        _, p, _ = self.run_job(lambda *a, **k: "file_id_1")
+        err, p, _ = self.run_job(lambda *a, **k: "file_id_1")
+        self.assertIsNone(err)
         p["preserve_failed_media"].assert_not_called()
 
 
