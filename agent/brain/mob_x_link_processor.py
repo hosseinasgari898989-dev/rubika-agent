@@ -30,6 +30,7 @@ from scripts import subtitle_pipeline
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import StagedMedia
 from agent.storage.mega import MegaStorage
+from agent.brain.failed_media import preserve_failed_media
 from agent.brain.mob_x_rubika import (
     upload_preview_media, send_owner_preview, send_owner_translation_failure,
     send_owner_worker_request_failure,
@@ -722,6 +723,10 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         try:
             rubika_file_id = upload_preview_media(rubika_token, publish_path, media_type)
         except Exception:
+            preserve_failed_media(
+                client, selected_storage, "mob_x", media_type, publish_path, caption,
+                "mob_x_preview_upload_failed", job_id=job_id, item_id="mob_official:" + external_id,
+            )
             raise MobXLinkError("mob_x_preview_upload_failed") from None
         staged = StagedMedia(
             candidate=candidate, original_path=str(local_path), publish_path=str(publish_path),

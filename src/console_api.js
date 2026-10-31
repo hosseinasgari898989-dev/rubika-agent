@@ -3,6 +3,7 @@
 // Endpoints not implemented here fall through to 404 {ok:false,error:"not_found"}; the console shows them as "not active yet".
 
 import { handleConsoleRetry } from "./console_retry.js";
+import { handleFailedMedia } from "./console_failed_media.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -80,6 +81,8 @@ export async function handleConsoleApi(request, env, h) {
   try {
     const retryRes = await handleConsoleRetry(request, env, h, sub, m);
     if (retryRes) return retryRes;
+    const failedMediaRes = await handleFailedMedia(request, env, h, sub, m);
+    if (failedMediaRes) return failedMediaRes;
     // ---------- read-only history ----------
     if (m === "GET" && sub === "/events") {
       const { limit, offset } = page();

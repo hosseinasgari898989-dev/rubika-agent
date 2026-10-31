@@ -13,6 +13,8 @@ const settingsSource = fs.readFileSync(path.join(root, "src/panel_settings.js"),
 const settingsModuleUrl = dataModuleUrl(settingsSource);
 const consoleRetrySource = fs.readFileSync(path.join(root, "src/console_retry.js"), "utf8");
 const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
+const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
+const consoleFailedMediaModuleUrl = dataModuleUrl(consoleFailedMediaSource);
 const retryScreensSource = fs.readFileSync(path.join(root, "src/panel_retry_screens.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
 const retryScreensModuleUrl = dataModuleUrl(retryScreensSource);
@@ -28,7 +30,8 @@ const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
 const screens = await import(screensModuleUrl);
 const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), "utf8")
-  .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
+  .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";')
+  .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";');
 const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
 const workerImport = 'import { handleOwnerPanel } from "./owner_panel.js";';
