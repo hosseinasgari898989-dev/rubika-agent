@@ -20,8 +20,8 @@ class FailedMediaHookTests(unittest.TestCase):
         client.rules.return_value = {"translate_enabled": False}
         storage = mock.Mock()
         storage.upload.return_value = "/Rubika-Agent/official/x.jpg"
-        patches = mock.patch.multiple(
-            proc,
+        # patch.multiple() with explicit values does not return the mocks, so keep them here.
+        mocks = dict(
             CloudState=mock.Mock(return_value=cloud),
             fetch_public_post=mock.Mock(return_value={"text": "", "title": "", "published_at": None}),
             select_media=mock.Mock(return_value=("image", "https://pbs.twimg.com/x.jpg")),
@@ -33,13 +33,13 @@ class FailedMediaHookTests(unittest.TestCase):
             preserve_failed_media=mock.Mock(return_value={"ok": True}),
         )
         env = mock.patch.dict("os.environ", {"RUBIKA_TOKEN": "t" * 40, "RUBIKA_OWNER_CHAT_ID": "c1"})
-        with patches as p, env:
-            err = None
+        err = None
+        with mock.patch.multiple(proc, **mocks), env:
             try:
                 proc.process_job(JOB, client, storage=storage)
             except proc.MobXLinkError as exc:
                 err = exc
-            return err, p, client
+        return err, mocks, client
 
     def test_preview_upload_failure_preserves_original_then_raises_same_error(self):
         err, p, client = self.run_job(RuntimeError("rubika 5xx"))
