@@ -69,7 +69,11 @@ jobs:
       - name: Run speech gate tests
         run: python tests/test_speech_gate.py
       - name: Run Cloudflare Worker unit tests
-        run: node tests/worker.test.mjs
+        run: |
+          node tests/worker.test.mjs
+          node tests/failed_media_api.test.mjs
+          node tests/failed_media_list_api.test.mjs
+          node tests/failed_media_delete_api.test.mjs
       - name: Run self-test
         if: github.event_name != 'workflow_dispatch' || inputs.mode == 'self-test'
         run: python -m agent.preflight self-test
