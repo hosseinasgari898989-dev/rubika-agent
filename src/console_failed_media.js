@@ -1,9 +1,12 @@
 // Failed-media console routes (auth is enforced by index.js before handleConsoleApi). All POST:
-//   /failed-media/record          worker/runner records a preserved original (upsert on storage_key)
+//   /failed-media/record          runner records a preserved original (upsert on storage_key)
 //   /failed-media/list            owner console lists items {limit?, offset?}
-//   /failed-media/delete-request  marks items 'delete_requested' {ids:[...]} or {all:true, confirm:"DELETE_ALL"}
-// Returns a Response, or null when the route is not one of these. DB state only: this module never
-// deletes a Mega file or a row; the actual deletion (mega-rm first, then the row) is a later step.
+//   /failed-media/delete-request  marks items 'delete_requested' {ids:[...]} or {all:true, confirm:"DELETE_ALL"},
+//                                 then dispatches the delete workflow (best effort)
+//   /failed-media/pending-delete  delete runner reads rows waiting for deletion
+//   /failed-media/delete-result   delete runner reports {id, ok}: ok removes the row (only AFTER mega-rm succeeded),
+//                                 failure sets status 'delete_failed'
+// Returns a Response, or null when the route is not one of these. This Worker never touches Mega.
 const SOURCES = new Set(["tiktok", "mob_x"]);
 const MEDIA_TYPES = new Set(["video", "image"]);
 const KEY_RE = /^\/Rubika-Agent\/failed\/[A-Za-z0-9._-]+$/;
@@ -13,6 +16,8 @@ const REF_RE = /^[A-Za-z0-9_.:@-]{1,160}$/;
 const ID_RE = /^fm_[0-9a-f]{24}$/;
 const MAX_IDS = 100;
 const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+const REPO = "hosseinasgari898989-dev/rubika-agent";
+const DELETE_WORKFLOW = "failed-media-delete.yml";
 
 const randomHex = (size = 12) =>
   Array.from(crypto.getRandomValues(new Uint8Array(size)), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -22,6 +27,29 @@ async function audit(env, code, details) {
     await env.DB.prepare("INSERT INTO brain_events (item_id, level, code, details_json) VALUES (NULL, 'info', ?, ?)")
       .bind(code, JSON.stringify(details).slice(0, 900)).run();
   } catch { /* audit must never break the action */ }
+}
+
+// Starts the delete workflow through the existing GITHUB_DISPATCH_TOKEN. Never throws; a failed dispatch leaves
+// the rows in 'delete_requested' and the next request dispatches again.
+async function dispatchDelete(env) {
+  const token = env.GITHUB_DISPATCH_TOKEN;
+  if (!token) return false;
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${REPO}/actions/workflows/${DELETE_WORKFLOW}/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "rubika-agent-worker",
+        },
+        body: JSON.stringify({ ref: "main" }),
+      }
+    );
+    return res.status === 204;
+  } catch {
+    return false;
+  }
 }
 
 async function readBody(request, h, fail) {
@@ -124,7 +152,37 @@ async function deleteRequest(request, env, h, fail) {
     const out = await env.DB.prepare(sql).bind(...args).run();
     const requested = out?.meta?.changes ?? 0;
     await audit(env, "console_failed_media_delete_request", { all: b.all === true, requested });
-    return h.json({ ok: true, requested });
+    const dispatched = requested > 0 ? await dispatchDelete(env) : false;
+    return h.json({ ok: true, requested, dispatched });
+  } catch {
+    return fail("console_db_error", 503);
+  }
+}
+
+async function pendingDelete(request, env, h, fail) {
+  try {
+    const rows = await env.DB.prepare(
+      "SELECT id, storage_key FROM failed_media WHERE status = 'delete_requested' ORDER BY updated_at, id LIMIT 50"
+    ).bind().all();
+    return h.json({ ok: true, items: rows?.results || [] });
+  } catch {
+    return fail("console_db_error", 503);
+  }
+}
+
+async function deleteResult(request, env, h, fail) {
+  const { b, res } = await readBody(request, h, fail);
+  if (res) return res;
+  if (typeof b.id !== "string" || !ID_RE.test(b.id)) return fail("invalid_id");
+  if (typeof b.ok !== "boolean") return fail("invalid_ok");
+  try {
+    // The row is removed only when the runner confirms the Mega file is gone; failures stay visible.
+    const sql = b.ok
+      ? "DELETE FROM failed_media WHERE id = ? AND status = 'delete_requested'"
+      : `UPDATE failed_media SET status = 'delete_failed', updated_at = ${NOW_SQL} WHERE id = ? AND status = 'delete_requested'`;
+    const out = await env.DB.prepare(sql).bind(b.id).run();
+    await audit(env, "console_failed_media_delete_result", { ok: b.ok });
+    return h.json({ ok: true, changed: out?.meta?.changes ?? 0 });
   } catch {
     return fail("console_db_error", 503);
   }
@@ -134,6 +192,8 @@ const ROUTES = {
   "/failed-media/record": record,
   "/failed-media/list": list,
   "/failed-media/delete-request": deleteRequest,
+  "/failed-media/pending-delete": pendingDelete,
+  "/failed-media/delete-result": deleteResult,
 };
 
 export async function handleFailedMedia(request, env, h, sub, m) {

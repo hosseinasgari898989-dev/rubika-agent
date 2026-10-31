@@ -64,7 +64,7 @@ test("delete-request by ids only marks eligible rows and never deletes", async (
   const q = env.calls[0];
   assert.match(q.sql, /^UPDATE failed_media SET status = 'delete_requested'/);
   assert.match(q.sql, /status IN \('stored','delete_failed'\)/);
-  assert.doesNotMatch(q.sql, /DELETE/i);
+  assert.doesNotMatch(q.sql, /DELETE FROM/i);
   assert.deepEqual(q.args, [ID1, ID2]);
   assert.ok(env.calls.some((c) => c.args.includes("console_failed_media_delete_request")));
 });
