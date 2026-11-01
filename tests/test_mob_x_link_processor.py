@@ -399,7 +399,14 @@ class MobXSubtitleWiringTests(unittest.TestCase):
                     "asr_initial_model": "medium", "asr_model": "small",
                     "asr_fallback_reason": "medium_runtime_exceeded_15m",
                     "asr_elapsed_seconds": 920, "asr_medium_elapsed_seconds": 901,
-                    "asr_fallback_elapsed_seconds": 19}
+                    "asr_fallback_elapsed_seconds": 19,
+                    "asr_raw_cues": 3, "asr_clean_cues": 3,
+                    "asr_dropped_duplicates": 0, "asr_max_cue_ms": 47000,
+                    "asr_first_start_ms": 0, "asr_last_end_ms": 64000,
+                    "asr_cue_coverage_ratio": 62000 / 85000,
+                    "asr_timeline": [[0, 47000, 5], [48000, 55000, 6], [56000, 64000, 5]],
+                    "asr_quality_warning": "long_cue_duration",
+                    "asr_unapproved_transcript": "must not enter the sanitized report"}
 
         with ExitStack() as stack:
             stack.enter_context(patch.dict("os.environ", {
@@ -458,6 +465,14 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(result["subtitle_processing"]["missing"], 0)
         self.assertEqual(result["subtitle_processing"]["asr_model"], "small")
         self.assertEqual(result["subtitle_processing"]["asr_fallback_reason"], "medium_runtime_exceeded_15m")
+        diagnostics = result["subtitle_processing"]
+        for key in ("asr_raw_cues", "asr_clean_cues", "asr_dropped_duplicates",
+                    "asr_max_cue_ms", "asr_first_start_ms", "asr_last_end_ms",
+                    "asr_cue_coverage_ratio", "asr_timeline", "asr_quality_warning"):
+            self.assertIn(key, diagnostics)
+        self.assertEqual(diagnostics["asr_timeline"], [[0, 47000, 5], [48000, 55000, 6], [56000, 64000, 5]])
+        self.assertEqual(diagnostics["asr_quality_warning"], "long_cue_duration")
+        self.assertNotIn("asr_unapproved_transcript", diagnostics)
         transcribe_mock.assert_called_once_with("/tmp/source.mp4", model_size="medium", language="en")
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertIn("زیرنویس فارسی: دارد (1 خط)", preview_caption)
