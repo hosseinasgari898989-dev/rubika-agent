@@ -158,6 +158,22 @@ def clean_cues(cues: list) -> list:
     return out
 
 
+def count_dropped_duplicates(cues: list) -> int:
+    """Count consecutive duplicate cues that clean_cues would discard."""
+    previous_text = None
+    dropped = 0
+    for _start, _end, text in sorted(cues, key=lambda cue: cue[0]):
+        normalized = " ".join(str(text).split())
+        if not normalized:
+            continue
+        normalized_key = normalized.lower()
+        if previous_text == normalized_key:
+            dropped += 1
+            continue
+        previous_text = normalized_key
+    return dropped
+
+
 def _split_text(text: str, max_chars: int) -> list:
     """Split text at the space nearest the middle until every piece fits max_chars."""
     if len(text) <= max_chars or " " not in text:
@@ -252,6 +268,7 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
     asr_report = getattr(raw_cues, "report", {})
     if not isinstance(asr_report, dict):
         asr_report = {}
+    dropped_duplicates = count_dropped_duplicates(raw_cues)
     cues = clean_cues(raw_cues)
     if not cues:
         raise SubtitleError("no_cues")
@@ -281,6 +298,23 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
     d_in, d_out = probe_duration_ms(str(video), run), probe_duration_ms(str(out), run)
     if abs(d_in - d_out) > DURATION_TOLERANCE_MS:
         raise SubtitleError("duration_mismatch", f"{d_in} vs {d_out} ms")
+    cue_durations_ms = [max(0, int(e) - int(s)) for s, e, _text in cues]
+    total_cue_ms = sum(cue_durations_ms)
+    max_cue_ms = max(cue_durations_ms, default=0)
+    coverage_ratio = total_cue_ms / d_in if d_in > 0 else 0.0
+    quality_warnings = []
+    if coverage_ratio < 0.5:
+        quality_warnings.append("low_cue_coverage")
+    if max_cue_ms > 20000:
+        quality_warnings.append("long_cue_duration")
+    quality_warning = "_and_".join(quality_warnings) if quality_warnings else None
+    timeline = [[int(s), int(e), len(str(text))] for s, e, text in cues[:200]]
     return {"out": str(out), "srt": str(srt), "ass": str(ass), "cues": len(fa_cues),
             "missing": stats["missing"], "batches": stats["batches"], "size": size,
-            "duration_ms": d_out, **asr_report}
+            "duration_ms": d_out, **asr_report,
+            "asr_raw_cues": len(raw_cues), "asr_clean_cues": len(cues),
+            "asr_dropped_duplicates": dropped_duplicates, "asr_max_cue_ms": max_cue_ms,
+            "asr_first_start_ms": min(int(s) for s, _e, _text in cues),
+            "asr_last_end_ms": max(int(e) for _s, e, _text in cues),
+            "asr_cue_coverage_ratio": round(coverage_ratio, 4),
+            "asr_timeline": timeline, "asr_quality_warning": quality_warning}
