@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import math
 import json
 import mimetypes
 import os
@@ -64,6 +65,58 @@ def _safe_exception_message(exc: BaseException) -> str:
     rendered = re.sub(r"\b[A-Za-z0-9_-]{32,}\b", "[REDACTED]", rendered)
     rendered = re.sub(r"[\x00-\x1f\x7f]+", " ", rendered)
     return " ".join(rendered.split()).strip()[:150]
+
+
+ASR_QUALITY_WARNING_CODES = {
+    "low_cue_coverage", "long_cue_duration",
+    "low_cue_coverage_and_long_cue_duration",
+}
+
+
+def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
+    """Whitelist bounded numeric ASR diagnostics; never pass through cue text."""
+    source = value if isinstance(value, dict) else {}
+
+    def nonnegative_int(key: str) -> int:
+        try:
+            return max(0, int(source.get(key) or 0))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    try:
+        coverage = float(source.get("asr_cue_coverage_ratio") or 0.0)
+        if not math.isfinite(coverage):
+            coverage = 0.0
+    except (TypeError, ValueError, OverflowError):
+        coverage = 0.0
+
+    timeline = []
+    raw_timeline = source.get("asr_timeline")
+    if isinstance(raw_timeline, list):
+        for entry in raw_timeline[:200]:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 3:
+                continue
+            try:
+                start_ms, end_ms, char_count = (int(item) for item in entry)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            timeline.append([max(0, start_ms), max(0, end_ms), max(0, char_count)])
+
+    warning = source.get("asr_quality_warning")
+    if not isinstance(warning, str) or warning not in ASR_QUALITY_WARNING_CODES:
+        warning = None
+
+    return {
+        "asr_raw_cues": nonnegative_int("asr_raw_cues"),
+        "asr_clean_cues": nonnegative_int("asr_clean_cues"),
+        "asr_dropped_duplicates": nonnegative_int("asr_dropped_duplicates"),
+        "asr_max_cue_ms": nonnegative_int("asr_max_cue_ms"),
+        "asr_first_start_ms": nonnegative_int("asr_first_start_ms"),
+        "asr_last_end_ms": nonnegative_int("asr_last_end_ms"),
+        "asr_cue_coverage_ratio": round(max(0.0, coverage), 4),
+        "asr_timeline": timeline,
+        "asr_quality_warning": warning,
+    }
 
 
 class MobXLinkError(RuntimeError):
@@ -687,6 +740,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                         "asr_elapsed_seconds": float(subtitle_result.get("asr_elapsed_seconds") or 0),
                         "asr_medium_elapsed_seconds": float(subtitle_result.get("asr_medium_elapsed_seconds") or 0),
                         "asr_fallback_elapsed_seconds": float(subtitle_result.get("asr_fallback_elapsed_seconds") or 0),
+                        **_safe_asr_diagnostics(subtitle_result),
                     }
 
         translation_source = clean_caption(original, 5000)

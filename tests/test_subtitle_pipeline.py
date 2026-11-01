@@ -41,6 +41,12 @@ class CleanCues(unittest.TestCase):
         self.assertEqual(out[0][1], 1000)
         self.assertGreaterEqual(out[1][1] - out[1][0], sp.MIN_CUE_MS)
 
+    def test_duplicate_count_helper_matches_clean_cues_without_changing_output(self):
+        raw = [(0, 2000, "Echo"), (2000, 4000, "echo"),
+               (4000, 6000, " ECHO "), (7000, 9000, "Return")]
+        self.assertEqual(sp.clean_cues(raw), [(0, 2000, "Echo"), (7000, 9000, "Return")])
+        self.assertEqual(sp.count_dropped_duplicates(raw), 2)
+
 
 class Translate(unittest.TestCase):
     def test_happy_path_and_cap(self):
@@ -118,6 +124,40 @@ class Build(unittest.TestCase):
         self.assertIn("Estedad", Path(res["ass"]).read_text(encoding="utf-8"))
         burn = next(c for c in run.calls if c[0] == "ffmpeg")
         self.assertIn("-c:a", burn)
+        self.assertIsNone(res["asr_quality_warning"])
+
+    def test_sparse_real_case_reports_timeline_and_long_cue_warning(self):
+        raw = [(0, 47000, "first"), (48000, 55000, "second"), (56000, 64000, "third")]
+        result = sp.build_subtitled_video(
+            self.video, self.wd, fake_translate, transcribe_fn=lambda _path: raw,
+            run=make_run(dur_in=85000, dur_out=85000),
+        )
+        self.assertEqual(result["asr_raw_cues"], 3)
+        self.assertEqual(result["asr_clean_cues"], 3)
+        self.assertEqual(result["asr_dropped_duplicates"], 0)
+        self.assertEqual(result["asr_max_cue_ms"], 47000)
+        self.assertEqual(result["asr_first_start_ms"], 0)
+        self.assertEqual(result["asr_last_end_ms"], 64000)
+        self.assertAlmostEqual(result["asr_cue_coverage_ratio"], 62000 / 85000, places=4)
+        self.assertEqual(result["asr_timeline"], [[0, 47000, 5], [48000, 55000, 6], [56000, 64000, 5]])
+        self.assertLessEqual(len(result["asr_timeline"]), 200)
+        self.assertNotIn("first", repr(result["asr_timeline"]))
+        self.assertEqual(result["asr_quality_warning"], "long_cue_duration")
+
+    def test_duplicate_loop_is_counted_and_low_coverage_warns_without_long_cue(self):
+        raw = [(0, 2000, "Echo"), (2000, 4000, "echo"),
+               (4000, 6000, " ECHO "), (7000, 9000, "Return")]
+        result = sp.build_subtitled_video(
+            self.video, self.wd, fake_translate, transcribe_fn=lambda _path: raw,
+            run=make_run(dur_in=15000, dur_out=15000),
+        )
+        self.assertEqual(result["asr_raw_cues"], 4)
+        self.assertEqual(result["asr_clean_cues"], 2)
+        self.assertEqual(result["asr_dropped_duplicates"], 2)
+        self.assertEqual(result["asr_max_cue_ms"], 2000)
+        self.assertAlmostEqual(result["asr_cue_coverage_ratio"], 4000 / 15000, places=4)
+        self.assertEqual(result["asr_timeline"], [[0, 2000, 4], [7000, 9000, 6]])
+        self.assertEqual(result["asr_quality_warning"], "low_cue_coverage")
 
     def test_no_cues(self):
         with self.assertRaises(sp.SubtitleError) as cm:
