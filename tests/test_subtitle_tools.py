@@ -154,7 +154,7 @@ class SubtitleBidiTest(unittest.TestCase):
 
         ass = st.to_ass(cues)
         dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
-        body = dialogue.split(",,", 1)[1].removeprefix(r"{\\ybord4}")
+        body = dialogue.rsplit(",,", 1)[1].removeprefix(r"{\\ybord4}")
 
         self.assertEqual(
             body.split(r"\\N"),
@@ -170,7 +170,7 @@ class SubtitleBidiTest(unittest.TestCase):
     def test_latin_only_display_lines_are_not_wrapped(self):
         ass = st.to_ass([(0, 1000, "English 123!")])
         dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
-        body = dialogue.split(",,", 1)[1].removeprefix(r"{\\ybord4}")
+        body = dialogue.rsplit(",,", 1)[1].removeprefix(r"{\\ybord4}")
         self.assertEqual(body, "English 123!")
 
 
