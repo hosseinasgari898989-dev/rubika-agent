@@ -83,6 +83,46 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
         except (TypeError, ValueError, OverflowError):
             return 0
 
+    def safe_ranges(value: object, width: int = 2) -> list[list[int | None]]:
+        ranges = []
+        if not isinstance(value, list):
+            return ranges
+        for entry in value[:200]:
+            if not isinstance(entry, (list, tuple)) or len(entry) != width:
+                continue
+            row = []
+            valid = True
+            for item in entry:
+                if item is None and width == 2:
+                    row.append(None)
+                    continue
+                try:
+                    number = int(item)
+                except (TypeError, ValueError, OverflowError):
+                    valid = False
+                    break
+                row.append(max(0, number))
+            if valid:
+                ranges.append(row)
+        return ranges
+
+    def safe_gaps(value: object) -> list[list[int]]:
+        gaps = []
+        if not isinstance(value, list):
+            return gaps
+        for entry in value[:200]:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 3:
+                continue
+            try:
+                start_ms, end_ms, gap_ms = (int(item) for item in entry)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            start_ms, end_ms = max(0, start_ms), max(0, end_ms)
+            actual_gap = end_ms - start_ms
+            if actual_gap > 3000 and gap_ms >= 0:
+                gaps.append([start_ms, end_ms, actual_gap])
+        return gaps
+
     try:
         coverage = float(source.get("asr_cue_coverage_ratio") or 0.0)
         if not math.isfinite(coverage):
@@ -106,6 +146,9 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
     if not isinstance(warning, str) or warning not in ASR_QUALITY_WARNING_CODES:
         warning = None
 
+    allowed_drop_reasons = {
+        "empty_segment_text", "missing_word_timing", "invalid_word_timing",
+    }
     passes = []
     raw_passes = source.get("asr_passes")
     if isinstance(raw_passes, list):
@@ -113,7 +156,8 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
             if not isinstance(item, dict) or item.get("name") not in {"A", "B", "C"}:
                 continue
             row = {"name": item["name"]}
-            for key in ("raw_cues", "chars", "max_cue_ms", "dropped_duplicates"):
+            for key in ("raw_cues", "chars", "max_cue_ms", "dropped_duplicates",
+                        "segments_before_word_timing_count", "segments_after_word_timing_count"):
                 try:
                     row[key] = max(0, int(item.get(key) or 0))
                 except (TypeError, ValueError, OverflowError):
@@ -124,6 +168,39 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
                     row[key] = round(number, 4 if key == "coverage" else 1) if math.isfinite(number) and number >= 0 else 0.0
                 except (TypeError, ValueError, OverflowError):
                     row[key] = 0.0
+
+            for key in (
+                "segments_before_word_timing_ranges_ms",
+                "segments_after_word_timing_ranges_ms",
+            ):
+                row[key] = safe_ranges(item.get(key))
+            for key in (
+                "segments_before_word_timing_ranges_truncated",
+                "segments_after_word_timing_ranges_truncated",
+            ):
+                row[key] = item.get(key) is True
+
+            dropped_rows = []
+            raw_dropped = item.get("segments_dropped_word_timing")
+            if isinstance(raw_dropped, list):
+                for dropped in raw_dropped[:3]:
+                    if not isinstance(dropped, dict):
+                        continue
+                    reason = dropped.get("reason")
+                    if reason not in allowed_drop_reasons:
+                        continue
+                    try:
+                        count = max(0, int(dropped.get("count") or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        count = 0
+                    dropped_rows.append({
+                        "reason": reason,
+                        "count": count,
+                        "ranges_ms": safe_ranges(dropped.get("ranges_ms")),
+                        "ranges_truncated": dropped.get("ranges_truncated") is True,
+                    })
+            row["segments_dropped_word_timing"] = dropped_rows
+            row["cue_free_gaps_over_3s"] = safe_gaps(item.get("cue_free_gaps_over_3s"))
             passes.append(row)
 
     safe = {
@@ -148,7 +225,6 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
     except (TypeError, ValueError, OverflowError):
         pass
     return safe
-
 
 def _safe_subtitle_error_diagnostics(exc: BaseException) -> dict[str, Any]:
     """Whitelist ASR model metadata and numeric cue diagnostics from SubtitleError."""
