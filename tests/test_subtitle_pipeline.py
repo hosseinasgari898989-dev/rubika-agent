@@ -182,7 +182,7 @@ class Build(unittest.TestCase):
 
     def test_translation_error_keeps_numeric_asr_diagnostics_without_cue_text(self):
         raw = sp.TranscriptionResult(
-            [(0, 1000, "hello"), (1000, 2000, "HELLO"), (3000, 4000, "last")],
+            [(0, 1000, "hello"), (1000, 2000, "HELLO"), (3000, 4000, "private-transcript-marker")],
             {
                 "asr_initial_model": "medium",
                 "asr_model": "small",
@@ -216,7 +216,7 @@ class Build(unittest.TestCase):
         self.assertEqual(diagnostics["asr_timeline"], [[0, 1000, 5], [3000, 4000, 4]])
         self.assertEqual(diagnostics["asr_quality_warning"], "low_cue_coverage")
         self.assertNotIn("hello", repr(diagnostics))
-        self.assertNotIn("last", repr(diagnostics))
+        self.assertNotIn("private-transcript-marker", repr(diagnostics))
 
     def test_no_cues(self):
         with self.assertRaises(sp.SubtitleError) as cm:
