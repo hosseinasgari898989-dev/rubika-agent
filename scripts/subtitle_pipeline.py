@@ -14,6 +14,7 @@ video without subtitles, or stop and report to the owner); this module never pub
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import time
 from pathlib import Path
@@ -55,9 +56,10 @@ def audio_cmd(path: str, *, normalize: bool = True) -> list:
             "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"]
 
 
-def decode_audio_16k(path: str, run=subprocess.run, *, normalize: bool = True):
+def decode_audio_16k(path: str, run=subprocess.run, *, normalize: bool = True,
+                      timeout: float = 600.0):
     """Decode with ffmpeg to float32 PCM; optionally omit loudness normalization."""
-    r = run(audio_cmd(path, normalize=normalize), capture_output=True, timeout=600)
+    r = run(audio_cmd(path, normalize=normalize), capture_output=True, timeout=timeout)
     if r.returncode != 0:
         tail = r.stderr or b""
         tail = tail.decode("utf-8", "replace") if isinstance(tail, bytes) else str(tail)
@@ -159,17 +161,6 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
     medium_elapsed = 0.0
     fallback_elapsed = 0.0
     pass_a_elapsed = elapsed_a
-    if model_size == "medium" and exceeded:
-        # Preserve the established small-model fallback if the original 15-minute run expires.
-        # No low-density retry is started after the shared time budget has been consumed.
-        cues_a, fallback_elapsed, total_elapsed, _ = run_model(
-            "small", audio, ASR_OPTIONS, watch_runtime=False,
-        )
-        model_used = "small"
-        fallback_reason = "medium_runtime_exceeded_15m"
-        medium_elapsed = elapsed_a
-        pass_a_elapsed += fallback_elapsed
-
     summary_a, cleaned_a, diagnostics_a, duplicates_a = summarize_pass(
         "A", cues_a, pass_a_elapsed,
     )
@@ -204,10 +195,15 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             if time.monotonic() - started >= runtime_limit_seconds:
                 break
             if name == "C":
+                remaining_seconds = runtime_limit_seconds - (time.monotonic() - started)
+                if remaining_seconds <= 0:
+                    break
                 try:
                     # C deliberately omits loudnorm; only the high-pass filter is applied.
-                    pass_audio = decode_audio_16k(video, normalize=False)
-                except SubtitleError:
+                    pass_audio = decode_audio_16k(
+                        video, normalize=False, timeout=min(600.0, remaining_seconds),
+                    )
+                except (SubtitleError, subprocess.TimeoutExpired):
                     break
                 if time.monotonic() - started >= runtime_limit_seconds:
                     break
@@ -234,10 +230,8 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             "A", cues_a, summary_a, diagnostics_a,
         )
 
-    chars_per_speech_second = (
-        selected_summary["chars"] / speech_seconds_value
-        if speech_seconds_value > 0 else None
-    )
+    # This rate describes the original A pass that triggered (or avoided) retries.
+    chars_per_speech_second = chars_per_speech_second_a
     total_elapsed = max(total_elapsed, time.monotonic() - started)
     report = {
         "asr_initial_model": model_size,

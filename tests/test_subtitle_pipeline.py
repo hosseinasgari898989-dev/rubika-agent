@@ -310,7 +310,7 @@ class Transcribe(unittest.TestCase):
         self.assertEqual(result.report["asr_passes"][0]["raw_cues"], 2)
         self.assertEqual(result.report["asr_passes"][0]["chars"], 149)
         self.assertEqual(result.report["asr_selected_pass"], "B")
-        self.assertEqual(result.report["chars_per_speech_second"], round(300 / 63.6, 3))
+        self.assertEqual(result.report["chars_per_speech_second"], round(149 / 63.6, 3))
         self.assertEqual([row["name"] for row in result.report["asr_passes"]], ["A", "B", "C"])
         self.assertEqual(result.report["asr_passes"][1]["chars"], 300)
         self.assertEqual(result.report["asr_passes"][2]["chars"], 120)
@@ -322,7 +322,10 @@ class Transcribe(unittest.TestCase):
         self.assertEqual(calls[0]["audio"], "input.mp4")
         self.assertEqual(calls[1]["audio"], "input.mp4")
         self.assertEqual(calls[2]["audio"], "highpass-only-pcm")
-        decode.assert_called_once_with("input.mp4", normalize=False)
+        decode.assert_called_once()
+        self.assertFalse(decode.call_args.kwargs["normalize"])
+        self.assertGreater(decode.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(decode.call_args.kwargs["timeout"], 600)
 
     def test_healthy_asr_does_not_run_extra_passes(self):
         calls = []
@@ -393,22 +396,39 @@ class Transcribe(unittest.TestCase):
         decode.assert_not_called()
         self.assertEqual(result[0][2], "A" * 30)
 
-    def test_medium_runtime_limit_falls_back_to_small_and_reports_reason(self):
+    def test_medium_runtime_limit_keeps_pass_a_without_starting_small_fallback(self):
         seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
-        factories = []
+        clock = SimpleNamespace(now=0.0)
+        calls = []
+
+        def monotonic():
+            return clock.now
 
         def factory():
-            factories.append(len(factories))
-            text = "medium partial" if len(factories) == 1 else "small fallback"
-            segment = seg(0.0, 1.0, text)
-            return SimpleNamespace(transcribe=lambda *args, **kwargs: (iter([segment]), None))
+            def transcribe(audio, **kwargs):
+                calls.append(kwargs)
 
-        result = sp.transcribe("x.mp4", model_factory=factory, runtime_limit_seconds=0)
-        self.assertEqual(result, [(0, 1000, "small fallback")])
-        self.assertEqual(len(factories), 2)
+                def slow_medium():
+                    yield seg(0.0, 1.0, "medium first")
+                    clock.now = 6.0
+                    yield seg(1.0, 2.0, "medium second")
+
+                return slow_medium(), None
+
+            return SimpleNamespace(transcribe=transcribe)
+
+        with patch.object(sp.time, "monotonic", side_effect=monotonic):
+            result = sp.transcribe(
+                "x.mp4", model_factory=factory, runtime_limit_seconds=5,
+            )
+
+        self.assertEqual(result, [(0, 1000, "medium first"), (1000, 2000, "medium second")])
+        self.assertEqual(len(calls), 1)
         self.assertEqual(result.report["asr_initial_model"], "medium")
-        self.assertEqual(result.report["asr_model"], "small")
-        self.assertEqual(result.report["asr_fallback_reason"], "medium_runtime_exceeded_15m")
+        self.assertEqual(result.report["asr_model"], "medium")
+        self.assertIsNone(result.report["asr_fallback_reason"])
+        self.assertEqual(result.report["asr_selected_pass"], "A")
+        self.assertEqual([row["name"] for row in result.report["asr_passes"]], ["A"])
 
 
 if __name__ == "__main__":
