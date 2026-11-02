@@ -22,7 +22,6 @@ const on=bs.some(b=>!b.checked);bs.forEach(b=>{b.checked=on;if(on)SEL.add(b.data
 const mb=n=>n==null?'—':(Number(n)/1048576).toFixed(1)+' MB';
 const link=x=>x.share_url&&/^https:\/\/mega\.(nz|io)\//.test(x.share_url)
 ?`<a href="${E(x.share_url)}" target="_blank" rel="noopener noreferrer">دانلود</a>`:'<span class="s">بدون لینک</span>';
-?`<a href="${E(x.share_url)}" target="_blank" rel="noopener noreferrer">دانلود</a>`:'<span class="s">بدون لینک</span>';
 
 let ITEMS_BY_ID=new Map();
 const previewButton=x=>{
@@ -37,7 +36,7 @@ const shareUrl=item.share_url;
 R.modal('<h3 style="margin-bottom:10px">پیش‌نمایش رسانهٔ ذخیره‌شده</h3>'+
 '<div class="s" style="margin-bottom:10px">اگر ویدیو در این پنجره بارگذاری نشد، لینک ثابت Mega را باز کن.</div>'+
 '<iframe class="fm-preview-frame" title="پیش‌نمایش فایل Mega" src="'+E(embedUrl)+'" sandbox="allow-scripts allow-same-origin" allowfullscreen allow="fullscreen" referrerpolicy="no-referrer" style="display:block;width:100%;aspect-ratio:16/9;min-height:220px;border:0;border-radius:14px;background:#000"></iframe>'+
-'<div class="row" style="margin-top:14px"><a class="btn g sm" href="'+E(shareUrl)+'" target="_blank" rel="noopener noreferrer">باز کردن در Mega</a><button class="btn sm" data-a="fmPreviewClose">بستن</button></div>');
+'<div class="row" style="margin-top:14px"><a class="btn g sm" data-a="fmOpenMega" href="'+E(shareUrl)+'" target="_blank" rel="noopener noreferrer">باز کردن در Mega</a><button class="btn sm" data-a="fmPreviewClose">بستن</button></div>');
 };
 A.fmPreviewClose=()=>{
 R.closeModal();
