@@ -7,7 +7,10 @@ This module only does text/command work; it never touches the network.
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 import unicodedata
+from pathlib import Path
 
 Cue = tuple  # (start_ms, end_ms, text)
 _TS = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")
@@ -18,8 +21,16 @@ PDF = "\u202c"
 # Burned-in subtitle size (PlayResY 720). Medium-large; callers asking for less get this floor.
 DEFAULT_ASS_SIZE = 60
 MIN_ASS_SIZE = 60
-# BorderStyle 3 keeps the opaque box; reduce its vertical border only, symmetrically.
-ASS_VERTICAL_OUTLINE = 4
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 720
+GLYPH_BOX_PADDING = 12
+GLYPH_BOX_RADIUS = 8
+GLYPH_BOX_ALPHA = "80"  # 50% transparent black
+DEFAULT_ASS_MARGIN_V = 40
+# Existing BorderStyle=3 rendering placed the opaque box's last pixel at row 686.
+# Keep that exact lower edge while allocating 12 pixels below the rendered glyphs.
+GLYPH_BOX_BOTTOM_EXCLUSIVE = 687
+GLYPH_BOTTOM_TARGET_EXCLUSIVE = GLYPH_BOX_BOTTOM_EXCLUSIVE - GLYPH_BOX_PADDING
 
 
 def _ms(m: re.Match) -> int:
@@ -122,35 +133,174 @@ def _has_arabic_letter(text: str) -> bool:
     return False
 
 
-def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl: bool = True) -> str:
-    size = max(int(size), MIN_ASS_SIZE)
-    head = (
+def _ass_display_text(text: str, rtl: bool = True) -> str:
+    clean = str(text).replace("{", "(").replace("}", ")").replace("\n", r"\N")
+    if not rtl:
+        return clean
+    display_lines = []
+    for display_line in clean.split(r"\N"):
+        if _has_arabic_letter(display_line):
+            display_lines.append(RLE + display_line + PDF)
+        else:
+            display_lines.append(RLM + display_line)
+    return r"\N".join(display_lines)
+
+
+def _ass_header(font: str, size: int) -> str:
+    return (
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\n"
         "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H66000000,&H80000000,"
-        "-1,0,0,0,100,100,0,0,3,6,0,2,40,40,40,1\n\n[Events]\n"
+        "-1,0,0,0,100,100,0,0,1,0,0,2,40,40,40,1\n\n[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
+
+
+def _rounded_rectangle_path(box: tuple, radius: int = GLYPH_BOX_RADIUS) -> str:
+    left, top, right, bottom = (int(value) for value in box)
+    width, height = right - left, bottom - top
+    if width <= 0 or height <= 0:
+        raise ValueError("invalid_subtitle_glyph_box")
+    r = max(1, min(int(radius), width // 2, height // 2))
+    k = int(round(r * 0.55228475))
+    return (
+        f"m {left + r} {top} "
+        f"l {right - r} {top} "
+        f"b {right - r + k} {top} {right} {top + r - k} {right} {top + r} "
+        f"l {right} {bottom - r} "
+        f"b {right} {bottom - r + k} {right - r + k} {bottom} {right - r} {bottom} "
+        f"l {left + r} {bottom} "
+        f"b {left + r - k} {bottom} {left} {bottom - r + k} {left} {bottom - r} "
+        f"l {left} {top + r} "
+        f"b {left} {top + r - k} {left + r - k} {top} {left + r} {top} c"
+    )
+
+
+def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl: bool = True,
+           *, margin_vs: list | None = None, glyph_boxes: list | None = None) -> str:
+    """Build ASS with text-only glyphs, optionally adding separate layer-0 drawing boxes."""
+    size = max(int(size), MIN_ASS_SIZE)
+    if margin_vs is not None and len(margin_vs) != len(cues):
+        raise ValueError("subtitle_margin_count_mismatch")
+    if glyph_boxes is not None and len(glyph_boxes) != len(cues):
+        raise ValueError("subtitle_glyph_box_count_mismatch")
+
     lines = []
-    for s, e, t in cues:
-        clean = t.replace("{", "(").replace("}", ")").replace("\n", "\\N")
-        if rtl:
-            display_lines = []
-            for display_line in clean.split(r"\N"):
-                if _has_arabic_letter(display_line):
-                    display_lines.append(RLE + display_line + PDF)
-                else:
-                    # Preserve the old directional hint for lines without Arabic letters.
-                    display_lines.append(RLM + display_line)
-            clean = r"\N".join(display_lines)
-        lines.append(
-            f"Dialogue: 0,{_ass_ts(s)},{_ass_ts(e)},Default,,0,0,0,,"
-            f"{{\\ybord{ASS_VERTICAL_OUTLINE}}}{clean}"
+    for index, (start_ms, end_ms, text) in enumerate(cues):
+        start, end = _ass_ts(start_ms), _ass_ts(end_ms)
+        if glyph_boxes is not None:
+            path = _rounded_rectangle_path(glyph_boxes[index])
+            drawing = (
+                r"{\an7\pos(0,0)\p1\bord0\shad0\1c&H000000&\1a&H"
+                + GLYPH_BOX_ALPHA + "&}"
+                + path + r"{\p0}"
+            )
+            lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{drawing}")
+
+        margin_v = DEFAULT_ASS_MARGIN_V if margin_vs is None else int(margin_vs[index])
+        clean = _ass_display_text(text, rtl=rtl)
+        lines.append(f"Dialogue: 1,{start},{end},Default,,0,0,{margin_v},,{clean}")
+    return _ass_header(font, size) + "\n".join(lines) + "\n"
+
+
+def _render_glyph_bounds(cues: list, fontsdir: str, margin_vs: list,
+                         font: str = "Estedad", size: int = DEFAULT_ASS_SIZE,
+                         ffmpeg: str = "ffmpeg") -> list:
+    """Render each cue with real libass/Estedad pixels and return its visible glyph bbox."""
+    from PIL import Image
+
+    if not _SAFE_PATH.fullmatch(str(fontsdir)) or not _SAFE_PATH.fullmatch(str(ffmpeg)):
+        raise ValueError("unsafe_subtitle_render_path")
+    if not cues:
+        return []
+
+    probe_cues = [
+        (index * 1000, (index + 1) * 1000, cue[2])
+        for index, cue in enumerate(cues)
+    ]
+    with tempfile.TemporaryDirectory(prefix="subtitle-glyph-bbox-") as temp:
+        workdir = Path(temp)
+        ass_path = workdir / "glyph-mask.ass"
+        frame_pattern = workdir / "glyph-%04d.png"
+        ass_path.write_text(
+            to_ass(probe_cues, font=font, size=size, margin_vs=margin_vs),
+            encoding="utf-8",
         )
-    return head + "\n".join(lines) + "\n"
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i",
+            f"color=c=black:s={FRAME_WIDTH}x{FRAME_HEIGHT}:r=1:d={len(cues)}",
+            "-vf", f"ass={ass_path}:fontsdir={fontsdir}",
+            "-frames:v", str(len(cues)), "-vsync", "0", str(frame_pattern),
+        ]
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False, timeout=180,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("subtitle_glyph_render_failed")
+        bounds = []
+        for index in range(1, len(cues) + 1):
+            frame = workdir / f"glyph-{index:04d}.png"
+            if not frame.is_file():
+                raise RuntimeError("subtitle_glyph_render_missing_frame")
+            image = Image.open(frame).convert("RGB")
+            bbox = image.getbbox()
+            if bbox is None:
+                raise RuntimeError("subtitle_glyph_bbox_empty")
+            bounds.append(tuple(int(value) for value in bbox))
+        return bounds
+
+
+def to_ass_with_glyph_boxes(cues: list, fontsdir: str = "assets/fonts",
+                            font: str = "Estedad", size: int = DEFAULT_ASS_SIZE,
+                            rtl: bool = True, ffmpeg: str = "ffmpeg") -> tuple:
+    """Draw one rounded translucent rectangle per cue, from its rendered glyph bbox."""
+    if not cues:
+        return to_ass(cues, font=font, size=size, rtl=rtl), []
+
+    margins = [DEFAULT_ASS_MARGIN_V] * len(cues)
+    bounds = _render_glyph_bounds(
+        cues, fontsdir, margins, font=font, size=size, ffmpeg=ffmpeg,
+    )
+    for _ in range(4):
+        corrections = [
+            bound[3] - GLYPH_BOTTOM_TARGET_EXCLUSIVE for bound in bounds
+        ]
+        if all(abs(value) <= 1 for value in corrections):
+            break
+        updated = [
+            max(0, min(200, margins[index] + correction))
+            for index, correction in enumerate(corrections)
+        ]
+        if updated == margins:
+            raise RuntimeError("subtitle_glyph_baseline_could_not_be_aligned")
+        margins = updated
+        bounds = _render_glyph_bounds(
+        cues, fontsdir, margins, font=font, size=size, ffmpeg=ffmpeg,
+    )
+
+    if any(abs(bound[3] - GLYPH_BOTTOM_TARGET_EXCLUSIVE) > 1 for bound in bounds):
+        raise RuntimeError("subtitle_glyph_baseline_out_of_tolerance")
+
+    rectangles = []
+    for left, top, right, _bottom in bounds:
+        box = (
+            left - GLYPH_BOX_PADDING,
+            top - GLYPH_BOX_PADDING,
+            right + GLYPH_BOX_PADDING,
+            GLYPH_BOX_BOTTOM_EXCLUSIVE,
+        )
+        if box[0] < 0 or box[1] < 0 or box[2] > FRAME_WIDTH or box[3] > FRAME_HEIGHT:
+            raise RuntimeError("subtitle_glyph_box_out_of_frame")
+        rectangles.append(box)
+
+    return (
+        to_ass(cues, font=font, size=size, rtl=rtl, margin_vs=margins, glyph_boxes=rectangles),
+        bounds,
+    )
 
 
 # Legacy blur-band settings, off by default; use burn_cmd(..., blur=True) to opt in.
