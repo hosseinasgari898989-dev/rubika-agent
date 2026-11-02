@@ -119,6 +119,35 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
     }
 
 
+def _safe_subtitle_error_diagnostics(exc: BaseException) -> dict[str, Any]:
+    """Whitelist ASR model metadata and numeric cue diagnostics from SubtitleError."""
+    source = getattr(exc, "diagnostics", None)
+    if not isinstance(source, dict):
+        return {}
+    diagnostic_keys = {
+        "asr_raw_cues", "asr_clean_cues", "asr_dropped_duplicates",
+        "asr_max_cue_ms", "asr_first_start_ms", "asr_last_end_ms",
+        "asr_cue_coverage_ratio", "asr_timeline", "asr_quality_warning",
+    }
+    if not any(key in source for key in diagnostic_keys):
+        return {}
+    safe = _safe_asr_diagnostics(source)
+    for key in ("asr_initial_model", "asr_model"):
+        value = source.get(key)
+        if value in {"medium", "small"}:
+            safe[key] = value
+    if source.get("asr_fallback_reason") == "medium_runtime_exceeded_15m":
+        safe["asr_fallback_reason"] = "medium_runtime_exceeded_15m"
+    for key in ("asr_elapsed_seconds", "asr_medium_elapsed_seconds", "asr_fallback_elapsed_seconds"):
+        try:
+            value = float(source.get(key) or 0)
+            if math.isfinite(value) and 0 <= value <= 86400:
+                safe[key] = round(value, 1)
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return safe
+
+
 class MobXTestForcePreviewUploadFailure(RuntimeError):
     """Raised only when the owner explicitly enables the preview-failure test flag."""
 
@@ -696,7 +725,10 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
             except subtitle_pipeline.SubtitleError as exc:
                 if exc.code == "no_cues":
                     # Repeated ASR found no usable speech cues; retain the original video.
-                    subtitle_processing = {"status": "skipped_no_detectable_speech"}
+                    subtitle_processing = {
+                        "status": "skipped_no_detectable_speech",
+                        **_safe_subtitle_error_diagnostics(exc),
+                    }
                 elif exc.code == "audio_decode_failed":
                     # Fail closed and preserve sanitized decoder details for the owner PV alert.
                     raise MobXLinkError(
@@ -706,7 +738,10 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                     ) from None
                 else:
                     # Degrade: keep the original video, never burn partial subtitles.
-                    subtitle_processing = {"status": "failed", "reason": str(exc.code)}
+                    subtitle_processing = {
+                        "status": "failed", "reason": str(exc.code),
+                        **_safe_subtitle_error_diagnostics(exc),
+                    }
             except Exception:
                 subtitle_processing = {"status": "failed", "reason": "processing_error"}
             else:

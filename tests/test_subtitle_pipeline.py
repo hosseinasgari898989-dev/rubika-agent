@@ -72,6 +72,27 @@ class Translate(unittest.TestCase):
             sp.translate_cues(CUES, lambda p, **k: "garbage")
         self.assertEqual(cm.exception.code, "translation_incomplete")
 
+    def test_truncated_60_cue_batch_fails_with_one_missing_translation(self):
+        cues = [(i * 1000, i * 1000 + 800, f"Line {i}") for i in range(60)]
+        prompts = []
+
+        def truncated(prompt, *, max_tokens):
+            prompts.append((prompt, max_tokens))
+            numbered = [
+                line.split("|", 1)[0]
+                for line in prompt.splitlines()
+                if "|" in line and line.split("|", 1)[0].isdigit()
+            ]
+            return "\n".join(f"{number}|ترجمه" for number in numbered[:-1])
+
+        with self.assertRaises(sp.SubtitleError) as caught:
+            sp.translate_cues(cues, truncated, max_missing_ratio=0.0)
+        self.assertEqual(sp.MAX_OUT_TOKENS, 8192)
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0][1], 8192)
+        self.assertEqual(caught.exception.code, "translation_incomplete")
+        self.assertEqual(caught.exception.detail, "1/60 missing")
+
     def test_burn_in_builder_rejects_any_missing_subtitle_translation(self):
         with tempfile.TemporaryDirectory() as tmp:
             video = Path(tmp) / "source.mp4"
@@ -158,6 +179,44 @@ class Build(unittest.TestCase):
         self.assertAlmostEqual(result["asr_cue_coverage_ratio"], 4000 / 15000, places=4)
         self.assertEqual(result["asr_timeline"], [[0, 2000, 4], [7000, 9000, 6]])
         self.assertEqual(result["asr_quality_warning"], "low_cue_coverage")
+
+    def test_translation_error_keeps_numeric_asr_diagnostics_without_cue_text(self):
+        raw = sp.TranscriptionResult(
+            [(0, 1000, "hello"), (1000, 2000, "HELLO"), (3000, 4000, "last")],
+            {
+                "asr_initial_model": "medium",
+                "asr_model": "small",
+                "asr_fallback_reason": "medium_runtime_exceeded_15m",
+                "asr_elapsed_seconds": 19.5,
+            },
+        )
+
+        def truncated(prompt, *, max_tokens):
+            return "0|ترجمه"
+
+        with self.assertRaises(sp.SubtitleError) as caught:
+            sp.build_subtitled_video(
+                self.video, self.wd, truncated, transcribe_fn=lambda _path: raw,
+                run=make_run(dur_in=8000), max_missing_ratio=0.0,
+            )
+
+        diagnostics = caught.exception.diagnostics
+        self.assertEqual(caught.exception.code, "translation_incomplete")
+        self.assertEqual(caught.exception.detail, "1/2 missing")
+        self.assertEqual(diagnostics["asr_initial_model"], "medium")
+        self.assertEqual(diagnostics["asr_model"], "small")
+        self.assertEqual(diagnostics["asr_elapsed_seconds"], 19.5)
+        self.assertEqual(diagnostics["asr_raw_cues"], 3)
+        self.assertEqual(diagnostics["asr_clean_cues"], 2)
+        self.assertEqual(diagnostics["asr_dropped_duplicates"], 1)
+        self.assertEqual(diagnostics["asr_max_cue_ms"], 1000)
+        self.assertEqual(diagnostics["asr_first_start_ms"], 0)
+        self.assertEqual(diagnostics["asr_last_end_ms"], 4000)
+        self.assertEqual(diagnostics["asr_cue_coverage_ratio"], 0.25)
+        self.assertEqual(diagnostics["asr_timeline"], [[0, 1000, 5], [3000, 4000, 4]])
+        self.assertEqual(diagnostics["asr_quality_warning"], "low_cue_coverage")
+        self.assertNotIn("hello", repr(diagnostics))
+        self.assertNotIn("last", repr(diagnostics))
 
     def test_no_cues(self):
         with self.assertRaises(sp.SubtitleError) as cm:
