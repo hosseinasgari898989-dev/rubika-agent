@@ -15,10 +15,11 @@ const ID1 = "fm_" + "a".repeat(24);
 const ID2 = "fm_" + "b".repeat(24);
 
 let env;
-function makeEnv({ fail = false, changes = 2 } = {}) {
+function makeEnv({ fail = false, changes = 2, token } = {}) {
   const calls = [];
   return {
     calls,
+    GITHUB_DISPATCH_TOKEN: token,
     DB: {
       prepare(sql) {
         return {
@@ -62,11 +63,34 @@ test("delete-request by ids only marks eligible rows and never deletes", async (
   assert.equal(res.status, 200);
   assert.equal((await res.json()).requested, 2);
   const q = env.calls[0];
-  assert.match(q.sql, /^UPDATE failed_media SET status = 'delete_requested'/);
-  assert.match(q.sql, /status IN \('stored','delete_failed'\)/);
+  assert.match(q.sql, /^UPDATE failed_media SET status = 'delete_requested'.* AND status IN \('stored','delete_failed','delete_requested'\)$/);
+  assert.match(q.sql, /status IN \('stored','delete_failed','delete_requested'\)/);
   assert.doesNotMatch(q.sql, /DELETE FROM/i);
   assert.deepEqual(q.args, [ID1, ID2]);
   assert.ok(env.calls.some((c) => c.args.includes("console_failed_media_delete_request")));
+});
+
+test("delete-request redispatches delete_requested rows but excludes in-progress and deleted states", async () => {
+  const realFetch = globalThis.fetch;
+  const dispatched = [];
+  globalThis.fetch = async (url, init) => {
+    dispatched.push({ url, init });
+    return new Response(null, { status: 204 });
+  };
+  try {
+    env = makeEnv({ changes: 1, token: "test-dispatch-token" });
+    const res = await post("/failed-media/delete-request", { ids: [ID1] });
+    const body = await res.json();
+    assert.deepEqual([body.requested, body.dispatched], [1, true]);
+    const sql = env.calls[0].sql;
+    assert.match(sql, /status IN \('stored','delete_failed','delete_requested'\)/);
+    assert.doesNotMatch(sql, /'(?:deleting|in_progress|deleted)'/i);
+    assert.doesNotMatch(sql, /DELETE FROM/i);
+    assert.equal(dispatched.length, 1);
+    assert.match(dispatched[0].url, /failed-media-delete\.yml\/dispatches$/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("delete-request rejects bad ids and unconfirmed delete-all", async () => {
