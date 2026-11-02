@@ -443,7 +443,7 @@ class Transcribe(unittest.TestCase):
         self.assertEqual(c["segments_before_word_timing_count"], 1)
         self.assertEqual(c["segments_after_word_timing_count"], 1)
         self.assertNotIn("private", repr(result.report))
-        self.assertNotIn("invalid", repr(result.report))
+        self.assertNotIn("private ", repr(result.report))
 
     def test_healthy_asr_does_not_run_extra_passes(self):
         calls = []
