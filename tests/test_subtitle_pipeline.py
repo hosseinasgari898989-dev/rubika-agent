@@ -280,22 +280,182 @@ class Transcribe(unittest.TestCase):
         self.assertTrue(transcribed[0][1]["vad_filter"])
         self.assertEqual(result.report["asr_model"], "medium")
 
-    def test_medium_runtime_limit_falls_back_to_small_and_reports_reason(self):
-        seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
-        factories = []
+    @staticmethod
+    def _segments(rows):
+        return [
+            SimpleNamespace(start=start_ms / 1000, end=end_ms / 1000, text=text)
+            for start_ms, end_ms, text in rows
+        ]
+
+    def test_low_density_85_second_case_runs_b_and_c_and_selects_most_characters(self):
+        rounds = [
+            [(180, 47480, "a" * 74), (47480, 63780, "b" * 75)],
+            [(0, 10000, "B" * 100), (10000, 20000, "C" * 100),
+             (20000, 30000, "D" * 100)],
+            [(0, 10000, "E" * 60), (10000, 20000, "F" * 60)],
+        ]
+        calls = []
+        def factory():
+            rows = rounds[len(calls)]
+            model = SimpleNamespace(transcribe=lambda audio, **kwargs: (
+                calls.append({"audio": audio, **kwargs}) or iter(self._segments(rows)), None
+            ))
+            return model
+
+        with patch.object(sp, "decode_audio_16k", return_value="highpass-only-pcm") as decode:
+            result = sp.transcribe(
+                "input.mp4", model_factory=factory, speech_seconds=63.6, duration_ms=85000,
+            )
+
+        self.assertEqual(result.report["asr_passes"][0]["raw_cues"], 2)
+        self.assertEqual(result.report["asr_passes"][0]["chars"], 149)
+        self.assertEqual(result.report["asr_selected_pass"], "B")
+        self.assertEqual(result.report["chars_per_speech_second"], round(149 / 63.6, 3))
+        self.assertEqual([row["name"] for row in result.report["asr_passes"]], ["A", "B", "C"])
+        self.assertEqual(result.report["asr_passes"][1]["chars"], 300)
+        self.assertEqual(result.report["asr_passes"][2]["chars"], 120)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(calls[0]["vad_filter"])
+        self.assertFalse(calls[1]["vad_filter"])
+        self.assertTrue(calls[2]["vad_filter"])
+        self.assertEqual(calls[2]["vad_parameters"]["threshold"], 0.2)
+        self.assertEqual(calls[0]["audio"], "input.mp4")
+        self.assertEqual(calls[1]["audio"], "input.mp4")
+        self.assertEqual(calls[2]["audio"], "highpass-only-pcm")
+        decode.assert_called_once()
+        self.assertFalse(decode.call_args.kwargs["normalize"])
+        self.assertGreater(decode.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(decode.call_args.kwargs["timeout"], 600)
+
+    def test_healthy_asr_does_not_run_extra_passes(self):
+        calls = []
+        def factory():
+            return SimpleNamespace(transcribe=lambda audio, **kwargs: (
+                calls.append(kwargs) or iter(self._segments([(0, 9000, "x" * 450)])), None
+            ))
+
+        with patch.object(sp, "decode_audio_16k") as decode:
+            result = sp.transcribe(
+                "input.mp4", model_factory=factory, speech_seconds=10, duration_ms=10000,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result.report["asr_passes"][0]["name"], "A")
+        self.assertEqual(result.report["asr_selected_pass"], "A")
+        decode.assert_not_called()
+
+    def test_duplicate_loop_pass_is_never_selected_over_a_clean_pass(self):
+        rounds = [
+            [(0, 1000, "A" * 50)],
+            [(0, 1000, "B" * 50), (1000, 2000, "B" * 50), (2000, 3000, "B" * 50)],
+            [(0, 1000, "C" * 35), (1000, 2000, "D" * 35)],
+        ]
+        calls = []
+        def factory():
+            rows = rounds[len(calls)]
+            return SimpleNamespace(transcribe=lambda audio, **kwargs: (
+                calls.append(kwargs) or iter(self._segments(rows)), None
+            ))
+
+        with patch.object(sp, "decode_audio_16k", return_value="highpass-only-pcm"):
+            result = sp.transcribe(
+                "input.mp4", model_factory=factory, speech_seconds=63.6, duration_ms=85000,
+            )
+
+        self.assertEqual(result.report["asr_passes"][1]["dropped_duplicates"], 2)
+        self.assertEqual(result.report["asr_selected_pass"], "C")
+        self.assertEqual(
+            result,
+            [(start_ms, end_ms, text) for start_ms, end_ms, text in rounds[2]],
+        )
+
+    def test_all_duplicate_loop_passes_produce_no_selected_transcript(self):
+        repeated = [
+            [(0, 1000, "echo"), (1000, 2000, "echo")],
+            [(0, 1000, "repeat"), (1000, 2000, "repeat"), (2000, 3000, "repeat")],
+            [(0, 1000, "again"), (1000, 2000, "again")],
+        ]
+        calls = []
 
         def factory():
-            factories.append(len(factories))
-            text = "medium partial" if len(factories) == 1 else "small fallback"
-            segment = seg(0.0, 1.0, text)
-            return SimpleNamespace(transcribe=lambda *args, **kwargs: (iter([segment]), None))
+            rows = repeated[len(calls)]
+            return SimpleNamespace(transcribe=lambda audio, **kwargs: (
+                calls.append(kwargs) or iter(self._segments(rows)), None
+            ))
 
-        result = sp.transcribe("x.mp4", model_factory=factory, runtime_limit_seconds=0)
-        self.assertEqual(result, [(0, 1000, "small fallback")])
-        self.assertEqual(len(factories), 2)
+        with patch.object(sp, "decode_audio_16k", return_value="highpass-only-pcm"):
+            result = sp.transcribe(
+                "input.mp4", model_factory=factory, speech_seconds=63.6, duration_ms=85000,
+            )
+
+        self.assertEqual(result, [])
+        self.assertIsNone(result.report["asr_selected_pass"])
+        self.assertEqual([row["name"] for row in result.report["asr_passes"]], ["A", "B", "C"])
+        self.assertEqual([row["dropped_duplicates"] for row in result.report["asr_passes"]], [1, 2, 1])
+
+    def test_retry_runtime_limit_keeps_pass_a_and_does_not_start_pass_c(self):
+        clock = SimpleNamespace(now=0.0)
+        def monotonic():
+            return clock.now
+
+        calls = []
+        def factory():
+            index = len(calls)
+            def transcribe(audio, **kwargs):
+                calls.append(kwargs)
+                if index == 0:
+                    return iter(self._segments([(0, 1000, "A" * 30)])), None
+                def slow_b():
+                    clock.now = 6.0
+                    yield SimpleNamespace(start=0.0, end=5.0, text="B" * 80)
+                return slow_b(), None
+            return SimpleNamespace(transcribe=transcribe)
+
+        with patch.object(sp.time, "monotonic", side_effect=monotonic),              patch.object(sp, "decode_audio_16k", return_value="highpass-only-pcm") as decode:
+            result = sp.transcribe(
+                "input.mp4", model_factory=factory, speech_seconds=63.6,
+                duration_ms=85000, runtime_limit_seconds=5,
+            )
+
+        self.assertEqual(result.report["asr_selected_pass"], "A")
+        self.assertEqual([row["name"] for row in result.report["asr_passes"]], ["A", "B"])
+        self.assertEqual(len(calls), 2)
+        decode.assert_not_called()
+        self.assertEqual(result[0][2], "A" * 30)
+
+    def test_medium_runtime_limit_keeps_pass_a_without_starting_small_fallback(self):
+        seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
+        clock = SimpleNamespace(now=0.0)
+        calls = []
+
+        def monotonic():
+            return clock.now
+
+        def factory():
+            def transcribe(audio, **kwargs):
+                calls.append(kwargs)
+
+                def slow_medium():
+                    yield seg(0.0, 1.0, "medium first")
+                    clock.now = 6.0
+                    yield seg(1.0, 2.0, "medium second")
+
+                return slow_medium(), None
+
+            return SimpleNamespace(transcribe=transcribe)
+
+        with patch.object(sp.time, "monotonic", side_effect=monotonic):
+            result = sp.transcribe(
+                "x.mp4", model_factory=factory, runtime_limit_seconds=5,
+            )
+
+        self.assertEqual(result, [(0, 1000, "medium first"), (1000, 2000, "medium second")])
+        self.assertEqual(len(calls), 1)
         self.assertEqual(result.report["asr_initial_model"], "medium")
-        self.assertEqual(result.report["asr_model"], "small")
-        self.assertEqual(result.report["asr_fallback_reason"], "medium_runtime_exceeded_15m")
+        self.assertEqual(result.report["asr_model"], "medium")
+        self.assertIsNone(result.report["asr_fallback_reason"])
+        self.assertEqual(result.report["asr_selected_pass"], "A")
+        self.assertEqual([row["name"] for row in result.report["asr_passes"]], ["A"])
 
 
 if __name__ == "__main__":

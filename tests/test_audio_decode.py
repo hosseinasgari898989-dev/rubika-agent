@@ -28,6 +28,11 @@ class AudioCmd(unittest.TestCase):
             self.assertEqual(cmd[cmd.index("-f") + 1], "f32le")
             self.assertEqual(cmd[-1], "-")
 
+    def test_retry_audio_filter_uses_highpass_without_loudnorm(self):
+        cmd = sp.audio_cmd("/tmp/retry.mp4", normalize=False)
+        self.assertEqual(cmd[cmd.index("-af") + 1], "highpass=f=80")
+        self.assertNotIn("loudnorm", cmd[cmd.index("-af") + 1])
+
     def test_failure_raises_in_both_modules(self):
         run = lambda cmd, **k: SimpleNamespace(returncode=1, stdout=b"", stderr=b"bad file")  # noqa: E731
         with self.assertRaises(sp.SubtitleError) as cm:

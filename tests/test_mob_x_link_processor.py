@@ -406,6 +406,15 @@ class MobXSubtitleWiringTests(unittest.TestCase):
                     "asr_cue_coverage_ratio": 62000 / 85000,
                     "asr_timeline": [[0, 47000, 5], [48000, 55000, 6], [56000, 64000, 5]],
                     "asr_quality_warning": "long_cue_duration",
+                    "asr_passes": [
+                        {"name": "A", "raw_cues": 2, "chars": 149, "coverage": 0.74,
+                         "max_cue_ms": 47300, "elapsed_seconds": 20.1, "dropped_duplicates": 0,
+                         "transcript": "must not enter the sanitized report"},
+                        {"name": "B", "raw_cues": 6, "chars": 300, "coverage": 0.7,
+                         "max_cue_ms": 12000, "elapsed_seconds": 18.2, "dropped_duplicates": 0},
+                    ],
+                    "asr_selected_pass": "B",
+                    "chars_per_speech_second": 4.717,
                     "asr_unapproved_transcript": "must not enter the sanitized report"}
 
         with ExitStack() as stack:
@@ -447,7 +456,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
 
     def test_speech_video_is_subtitled_and_rechecked_before_mega_preview(self):
         result, events, pipeline, storage, cloud, transcribe_mock = self._run_video_job(
-            {"decision": "subtitle", "reason": "ok", "language": "en"}
+            {"decision": "subtitle", "reason": "ok", "language": "en", "speech_seconds": 9.5}
         )
         names = [event[0] for event in events]
         self.assertEqual(names.count("rules"), 1)
@@ -468,12 +477,20 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         diagnostics = result["subtitle_processing"]
         for key in ("asr_raw_cues", "asr_clean_cues", "asr_dropped_duplicates",
                     "asr_max_cue_ms", "asr_first_start_ms", "asr_last_end_ms",
-                    "asr_cue_coverage_ratio", "asr_timeline", "asr_quality_warning"):
+                    "asr_cue_coverage_ratio", "asr_timeline", "asr_quality_warning",
+                    "asr_passes", "asr_selected_pass", "chars_per_speech_second"):
             self.assertIn(key, diagnostics)
         self.assertEqual(diagnostics["asr_timeline"], [[0, 47000, 5], [48000, 55000, 6], [56000, 64000, 5]])
         self.assertEqual(diagnostics["asr_quality_warning"], "long_cue_duration")
+        self.assertEqual(diagnostics["asr_selected_pass"], "B")
+        self.assertEqual(diagnostics["asr_passes"][1]["chars"], 300)
+        self.assertNotIn("transcript", repr(diagnostics))
+        self.assertNotIn("must not enter the sanitized report", repr(diagnostics))
         self.assertNotIn("asr_unapproved_transcript", diagnostics)
-        transcribe_mock.assert_called_once_with("/tmp/source.mp4", model_size="medium", language="en")
+        transcribe_mock.assert_called_once_with(
+            "/tmp/source.mp4", model_size="medium", language="en",
+            speech_seconds=9.5, duration_ms=12000,
+        )
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertIn("زیرنویس فارسی: دارد (1 خط)", preview_caption)
         self.assertIn("مدل زیرنویس به small برگشت", preview_caption)
@@ -553,6 +570,13 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             "asr_cue_coverage_ratio": 0.25,
             "asr_timeline": [[0, 1000, 5], [3000, 4000, 4]],
             "asr_quality_warning": "low_cue_coverage",
+            "asr_passes": [
+                {"name": "A", "raw_cues": 3, "chars": 9, "coverage": 0.25,
+                 "max_cue_ms": 1000, "elapsed_seconds": 2.0, "dropped_duplicates": 1,
+                 "transcript": "must never be forwarded"},
+            ],
+            "asr_selected_pass": "A",
+            "chars_per_speech_second": 0.9,
             "transcript": "must never be forwarded",
         }
         result, _events, _pipeline, storage, _cloud, _t = self._run_video_job(
@@ -573,7 +597,9 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(diagnostics["asr_timeline"], [[0, 1000, 5], [3000, 4000, 4]])
         self.assertEqual(diagnostics["asr_quality_warning"], "low_cue_coverage")
         self.assertEqual(diagnostics["asr_model"], "small")
-        self.assertNotIn("transcript", diagnostics)
+        self.assertEqual(diagnostics["asr_selected_pass"], "A")
+        self.assertEqual(diagnostics["asr_passes"][0]["chars"], 9)
+        self.assertNotIn("transcript", repr(diagnostics))
         self.assertNotIn("must never be forwarded", repr(diagnostics))
         self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
 
