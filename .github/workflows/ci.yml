@@ -34,6 +34,10 @@ jobs:
           python-version: "3.12"
       - name: Install pinned dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Install ffmpeg with libass for real subtitle render tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y ffmpeg
       - name: Check Cloudflare Worker JavaScript syntax
         run: node --check --input-type=module < src/index.js
       - name: Check owner panel JavaScript syntax
@@ -61,7 +65,16 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
       - name: Run subtitle tools tests
+        env:
+          SUBTITLE_BIDI_ARTIFACT_DIR: ${{ runner.temp }}/subtitle-bidi
         run: python tests/test_subtitle_tools.py
+      - name: Upload before/after libass PNGs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-bidi-before-after
+          path: ${{ runner.temp }}/subtitle-bidi/*.png
+          if-no-files-found: warn
       - name: Run Mob X subtitle pipeline tests
         run: python tests/test_subtitle_pipeline.py
       - name: Run audio decode tests
