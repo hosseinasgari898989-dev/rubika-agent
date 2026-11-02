@@ -4,7 +4,7 @@
 (()=>{"use strict";
 const toMegaEmbedUrl=shareUrl=>{
 if(typeof shareUrl!=='string')return null;
-const m=/^https:\/\/mega\.nz\/file\/([A-Za-z0-9_-]{8})#([A-Za-z0-9_-]{22})$/.exec(shareUrl);
+const m=/^https:\/\/mega\.nz\/file\/([A-Za-z0-9_-]{8})#([A-Za-z0-9_-]{43})$/.exec(shareUrl);
 return m?"https://mega.nz/embed/"+m[1]+"#"+m[2]:null;
 };
 const R=window.RC;
