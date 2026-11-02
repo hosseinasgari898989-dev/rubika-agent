@@ -22,6 +22,7 @@ from agent.brain.mob_x_link_processor import (
     run_video_speech_gate,
     probe_public_sources,
     select_media,
+    _safe_asr_diagnostics,
     WorkerClient,
 )
 
@@ -621,6 +622,77 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         )
         self.assertIn("زیرنویس ناموفق (badreasonx)", text)
         self.assertTrue(text.startswith("cap\n\n"))
+
+
+class SafeAsrSegmentDiagnosticsTests(unittest.TestCase):
+    def test_segment_ranges_and_drop_reasons_are_sanitized_without_transcript_text(self):
+        source = {
+            "asr_passes": [
+                {
+                    "name": "A",
+                    "raw_cues": 2,
+                    "segments_before_word_timing_count": 4,
+                    "segments_before_word_timing_ranges_ms": [
+                        [20000, 22000], [40000, 43000], [72000, 80000], [1000, 2000],
+                    ],
+                    "segments_before_word_timing_ranges_truncated": False,
+                    "segments_after_word_timing_count": 1,
+                    "segments_after_word_timing_ranges_ms": [[1000, 2000]],
+                    "segments_after_word_timing_ranges_truncated": False,
+                    "segments_dropped_word_timing": [
+                        {"reason": "missing_word_timing", "count": 1,
+                         "ranges_ms": [[20000, 22000]], "ranges_truncated": False},
+                        {"reason": "invalid_word_timing", "count": 1,
+                         "ranges_ms": [[40000, 43000]], "ranges_truncated": False},
+                        {"reason": "empty_segment_text", "count": 1,
+                         "ranges_ms": [[72000, 80000]], "ranges_truncated": False},
+                    ],
+                    "cue_free_gaps_over_3s": [[0, 20000, 20000], [22000, 85000, 63000]],
+                    "transcript": "private spoken words must never escape",
+                },
+            ],
+            "unapproved_text": "private spoken words must never escape",
+        }
+
+        safe = _safe_asr_diagnostics(source)
+        passed = safe["asr_passes"][0]
+        self.assertEqual(passed["segments_before_word_timing_count"], 4)
+        self.assertEqual(
+            passed["segments_before_word_timing_ranges_ms"],
+            [[20000, 22000], [40000, 43000], [72000, 80000], [1000, 2000]],
+        )
+        self.assertEqual(passed["segments_after_word_timing_ranges_ms"], [[1000, 2000]])
+        self.assertEqual(
+            passed["segments_dropped_word_timing"][1]["reason"],
+            "invalid_word_timing",
+        )
+        self.assertEqual(
+            passed["cue_free_gaps_over_3s"],
+            [[0, 20000, 20000], [22000, 85000, 63000]],
+        )
+        self.assertNotIn("transcript", repr(safe))
+        self.assertNotIn("private spoken words", repr(safe))
+        self.assertNotIn("unapproved_text", safe)
+
+    def test_segment_diagnostics_are_bounded_and_unknown_reason_is_rejected(self):
+        source = {
+            "asr_passes": [{
+                "name": "B",
+                "segments_before_word_timing_count": 500,
+                "segments_before_word_timing_ranges_ms": [[i, i + 1] for i in range(500)],
+                "segments_before_word_timing_ranges_truncated": True,
+                "segments_dropped_word_timing": [
+                    {"reason": "secret_text", "count": 1, "ranges_ms": [[1, 2]]},
+                ],
+                "cue_free_gaps_over_3s": [[0, 5000, 5000], [5, 6, 1]],
+            }],
+        }
+        passed = _safe_asr_diagnostics(source)["asr_passes"][0]
+        self.assertEqual(passed["segments_before_word_timing_count"], 500)
+        self.assertEqual(len(passed["segments_before_word_timing_ranges_ms"]), 200)
+        self.assertTrue(passed["segments_before_word_timing_ranges_truncated"])
+        self.assertEqual(passed["segments_dropped_word_timing"], [])
+        self.assertEqual(passed["cue_free_gaps_over_3s"], [[0, 5000, 5000]])
 
 
 if __name__ == "__main__":
