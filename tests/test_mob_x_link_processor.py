@@ -685,6 +685,7 @@ class SafeAsrSegmentDiagnosticsTests(unittest.TestCase):
                     {"reason": "secret_text", "count": 1, "ranges_ms": [[1, 2]]},
                 ],
                 "cue_free_gaps_over_3s": [[0, 5000, 5000], [5, 6, 1]],
+                "cue_free_gaps_over_3s_truncated": True,
             }],
         }
         passed = _safe_asr_diagnostics(source)["asr_passes"][0]
@@ -693,6 +694,7 @@ class SafeAsrSegmentDiagnosticsTests(unittest.TestCase):
         self.assertTrue(passed["segments_before_word_timing_ranges_truncated"])
         self.assertEqual(passed["segments_dropped_word_timing"], [])
         self.assertEqual(passed["cue_free_gaps_over_3s"], [[0, 5000, 5000]])
+        self.assertTrue(passed["cue_free_gaps_over_3s_truncated"])
 
 
 if __name__ == "__main__":

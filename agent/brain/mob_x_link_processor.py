@@ -187,7 +187,7 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
                     if not isinstance(dropped, dict):
                         continue
                     reason = dropped.get("reason")
-                    if reason not in allowed_drop_reasons:
+                    if not isinstance(reason, str) or reason not in allowed_drop_reasons:
                         continue
                     try:
                         count = max(0, int(dropped.get("count") or 0))
@@ -201,6 +201,7 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
                     })
             row["segments_dropped_word_timing"] = dropped_rows
             row["cue_free_gaps_over_3s"] = safe_gaps(item.get("cue_free_gaps_over_3s"))
+            row["cue_free_gaps_over_3s_truncated"] = item.get("cue_free_gaps_over_3s_truncated") is True
             passes.append(row)
 
     safe = {

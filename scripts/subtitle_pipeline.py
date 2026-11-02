@@ -263,6 +263,7 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             raw_cues, cleaned, duplicates, duration_ms_value,
         )
         char_count = sum(len(text) for _start, _end, text in cleaned)
+        cue_gaps = cue_free_gaps_over_3s(cleaned, duration_ms_value)
         summary = {
             "name": name,
             "raw_cues": len(raw_cues),
@@ -272,8 +273,9 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             "elapsed_seconds": round(max(0.0, elapsed), 1),
             "dropped_duplicates": duplicates,
             **segment_diagnostics,
-            "cue_free_gaps_over_3s": cue_free_gaps_over_3s(
-                cleaned, duration_ms_value,
+            "cue_free_gaps_over_3s": cue_gaps[:ASR_DIAGNOSTIC_MAX_SEGMENTS],
+            "cue_free_gaps_over_3s_truncated": (
+                len(cue_gaps) > ASR_DIAGNOSTIC_MAX_SEGMENTS
             ),
         }
         return summary, cleaned, diagnostics, duplicates
