@@ -82,7 +82,7 @@ class MobTranslationTests(unittest.TestCase):
         result=SimpleNamespace(provider="groq",model="test",text="0|در باز است.\n1|همین حالا وارد شوید.",usage={})
         with patch("agent.brain.ai_provider_clients.call_provider_with_ledger",return_value=result) as call:
             self.assertEqual(translate_to_persian(source,kind="subtitle",run_id="mobsub_"+"a"*32),result.text)
-        self.assertEqual(call.call_args.kwargs["max_output_tokens"],1200)
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"],8192)
 
     def test_ledger_failure_fails_closed_without_untracked_fallback(self):
         from agent.brain.ai_usage_ledger import UsageLedgerError

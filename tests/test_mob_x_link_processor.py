@@ -389,7 +389,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
 
         def build(video, workdir, translate_fn, **kwargs):
             events.append(("subtitle", video))
-            translated = translate_fn("Rules\n\n0|Hello there", max_tokens=1200)
+            translated = translate_fn("Rules\n\n0|Hello there", max_tokens=8192)
             self.assertEqual(translated, "0|ترجمه 0")
             kwargs["transcribe_fn"](video)
             if pipeline_error:
@@ -534,6 +534,48 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertIn("زیرنویس ناموفق (translation_incomplete)", preview_caption)
         self.assertNotIn("زیرنویس ناموفق", cloud.upsert_item.call_args.args[0]["caption"])
+
+    def test_translation_failure_includes_sanitized_asr_diagnostics_in_subtitle_processing(self):
+        from scripts.subtitle_pipeline import SubtitleError
+
+        error = SubtitleError("translation_incomplete", "1/2 missing")
+        error.diagnostics = {
+            "asr_initial_model": "medium",
+            "asr_model": "small",
+            "asr_fallback_reason": "medium_runtime_exceeded_15m",
+            "asr_elapsed_seconds": 19.5,
+            "asr_raw_cues": 3,
+            "asr_clean_cues": 2,
+            "asr_dropped_duplicates": 1,
+            "asr_max_cue_ms": 1000,
+            "asr_first_start_ms": 0,
+            "asr_last_end_ms": 4000,
+            "asr_cue_coverage_ratio": 0.25,
+            "asr_timeline": [[0, 1000, 5], [3000, 4000, 4]],
+            "asr_quality_warning": "low_cue_coverage",
+            "transcript": "must never be forwarded",
+        }
+        result, _events, _pipeline, storage, _cloud, _t = self._run_video_job(
+            {"decision": "subtitle", "reason": "ok", "language": "en"},
+            pipeline_error=error,
+        )
+
+        diagnostics = result["subtitle_processing"]
+        self.assertEqual(diagnostics["status"], "failed")
+        self.assertEqual(diagnostics["reason"], "translation_incomplete")
+        self.assertEqual(diagnostics["asr_raw_cues"], 3)
+        self.assertEqual(diagnostics["asr_clean_cues"], 2)
+        self.assertEqual(diagnostics["asr_dropped_duplicates"], 1)
+        self.assertEqual(diagnostics["asr_max_cue_ms"], 1000)
+        self.assertEqual(diagnostics["asr_first_start_ms"], 0)
+        self.assertEqual(diagnostics["asr_last_end_ms"], 4000)
+        self.assertEqual(diagnostics["asr_cue_coverage_ratio"], 0.25)
+        self.assertEqual(diagnostics["asr_timeline"], [[0, 1000, 5], [3000, 4000, 4]])
+        self.assertEqual(diagnostics["asr_quality_warning"], "low_cue_coverage")
+        self.assertEqual(diagnostics["asr_model"], "small")
+        self.assertNotIn("transcript", diagnostics)
+        self.assertNotIn("must never be forwarded", repr(diagnostics))
+        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
 
     def test_unexpected_subtitle_exception_degrades_instead_of_failing_post(self):
         result, events, _pipeline, storage, _cloud, _t = self._run_video_job(

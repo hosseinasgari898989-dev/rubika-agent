@@ -26,7 +26,7 @@ except ImportError:  # imported as scripts.subtitle_pipeline
 MAX_BATCHES = 2
 MAX_BATCH_CHARS = 3000
 MAX_BATCH_CUES = 60
-MAX_OUT_TOKENS = 1200
+MAX_OUT_TOKENS = 8192
 MAX_MISSING_RATIO = 0.3
 MAX_OUT_BYTES = 49 * 1024 * 1024  # Rubika upload ladder is OK only below ~50 MiB
 DURATION_TOLERANCE_MS = 1500
@@ -41,10 +41,11 @@ ASR_OPTIONS = {"vad_filter": True, "vad_parameters": ASR_VAD_PARAMETERS,
 
 
 class SubtitleError(Exception):
-    def __init__(self, code: str, detail: str = ""):
+    def __init__(self, code: str, detail: str = "", *, diagnostics: dict | None = None):
         super().__init__(f"{code}: {detail}" if detail else code)
         self.code = code
         self.detail = detail
+        self.diagnostics = dict(diagnostics or {})
 
 
 def audio_cmd(path: str) -> list:
@@ -174,6 +175,36 @@ def count_dropped_duplicates(cues: list) -> int:
     return dropped
 
 
+def build_asr_diagnostics(raw_cues: list, cues: list, dropped_duplicates: int,
+                         duration_ms: int) -> dict:
+    """Return bounded ASR timing statistics only; never retain cue text."""
+    cue_durations_ms = [max(0, int(end) - int(start)) for start, end, _text in cues]
+    total_cue_ms = sum(cue_durations_ms)
+    max_cue_ms = max(cue_durations_ms, default=0)
+    duration_ms = max(0, int(duration_ms))
+    coverage_ratio = total_cue_ms / duration_ms if duration_ms > 0 else 0.0
+    quality_warnings = []
+    if duration_ms > 0 and coverage_ratio < 0.5:
+        quality_warnings.append("low_cue_coverage")
+    if max_cue_ms > 20000:
+        quality_warnings.append("long_cue_duration")
+    timeline = [
+        [max(0, int(start)), max(0, int(end)), len(str(text))]
+        for start, end, text in cues[:200]
+    ]
+    return {
+        "asr_raw_cues": len(raw_cues),
+        "asr_clean_cues": len(cues),
+        "asr_dropped_duplicates": max(0, int(dropped_duplicates)),
+        "asr_max_cue_ms": max_cue_ms,
+        "asr_first_start_ms": min((max(0, int(start)) for start, _end, _text in cues), default=0),
+        "asr_last_end_ms": max((max(0, int(end)) for _start, end, _text in cues), default=0),
+        "asr_cue_coverage_ratio": round(max(0.0, coverage_ratio), 4),
+        "asr_timeline": timeline,
+        "asr_quality_warning": "_and_".join(quality_warnings) if quality_warnings else None,
+    }
+
+
 def _split_text(text: str, max_chars: int) -> list:
     """Split text at the space nearest the middle until every piece fits max_chars."""
     if len(text) <= max_chars or " " not in text:
@@ -261,7 +292,7 @@ def probe_duration_ms(path: str, run=subprocess.run) -> int:
 def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: str = "assets/fonts",
                           font: str = "Estedad", glossary: str = "", transcribe_fn=transcribe,
                           run=subprocess.run, max_missing_ratio: float = 0.0) -> dict:
-    """Full pipeline. Returns {out, srt, ass, cues, missing, batches, size, duration_ms}."""
+    """Full pipeline. ASR diagnostics survive every SubtitleError after transcription."""
     wd = Path(workdir)
     wd.mkdir(parents=True, exist_ok=True)
     raw_cues = transcribe_fn(str(video))
@@ -270,51 +301,43 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
         asr_report = {}
     dropped_duplicates = count_dropped_duplicates(raw_cues)
     cues = clean_cues(raw_cues)
-    if not cues:
-        raise SubtitleError("no_cues")
-    # Leave space for numbered cue prefixes/newlines so the full prompt stays <= 3000 chars.
-    fa_cues, stats = translate_cues(
-        cues, translate_fn, max_batches=MAX_BATCHES,
-        max_chars=MAX_BATCH_CHARS - 8 * MAX_BATCH_CUES,
-        max_cues=MAX_BATCH_CUES, max_tokens=MAX_OUT_TOKENS,
-        glossary=glossary, max_missing_ratio=max_missing_ratio,
-    )
-    fa_cues = split_long_cues(fa_cues)
-    srt, ass, out = wd / "fa.srt", wd / "fa.ass", wd / "subtitled.mp4"
-    srt.write_text(st.format_srt(fa_cues), encoding="utf-8")
-    ass.write_text(st.to_ass(fa_cues, font=font), encoding="utf-8")
+    asr_diagnostics = build_asr_diagnostics(raw_cues, cues, dropped_duplicates, 0)
     try:
-        cmd = st.burn_cmd(str(video), str(ass), fontsdir, str(out))
-    except ValueError as exc:
-        raise SubtitleError("unsafe_path", str(exc)) from exc
-    r = run(cmd, capture_output=True, text=True, timeout=1800)
-    if r.returncode != 0 or not out.exists():
-        raise SubtitleError("burn_failed", (r.stderr or "")[-300:])
-    size = out.stat().st_size
-    if size <= 0:
-        raise SubtitleError("burn_failed", "empty output")
-    if size > MAX_OUT_BYTES:
-        raise SubtitleError("output_too_large", f"{size} bytes")
-    d_in, d_out = probe_duration_ms(str(video), run), probe_duration_ms(str(out), run)
-    if abs(d_in - d_out) > DURATION_TOLERANCE_MS:
-        raise SubtitleError("duration_mismatch", f"{d_in} vs {d_out} ms")
-    cue_durations_ms = [max(0, int(e) - int(s)) for s, e, _text in cues]
-    total_cue_ms = sum(cue_durations_ms)
-    max_cue_ms = max(cue_durations_ms, default=0)
-    coverage_ratio = total_cue_ms / d_in if d_in > 0 else 0.0
-    quality_warnings = []
-    if coverage_ratio < 0.5:
-        quality_warnings.append("low_cue_coverage")
-    if max_cue_ms > 20000:
-        quality_warnings.append("long_cue_duration")
-    quality_warning = "_and_".join(quality_warnings) if quality_warnings else None
-    timeline = [[int(s), int(e), len(str(text))] for s, e, text in cues[:200]]
-    return {"out": str(out), "srt": str(srt), "ass": str(ass), "cues": len(fa_cues),
+        d_in = probe_duration_ms(str(video), run)
+        asr_diagnostics = build_asr_diagnostics(raw_cues, cues, dropped_duplicates, d_in)
+        if not cues:
+            raise SubtitleError("no_cues")
+        # Leave space for numbered cue prefixes/newlines so the full prompt stays <= 3000 chars.
+        fa_cues, stats = translate_cues(
+            cues, translate_fn, max_batches=MAX_BATCHES,
+            max_chars=MAX_BATCH_CHARS - 8 * MAX_BATCH_CUES,
+            max_cues=MAX_BATCH_CUES, max_tokens=MAX_OUT_TOKENS,
+            glossary=glossary, max_missing_ratio=max_missing_ratio,
+        )
+        fa_cues = split_long_cues(fa_cues)
+        srt, ass, out = wd / "fa.srt", wd / "fa.ass", wd / "subtitled.mp4"
+        srt.write_text(st.format_srt(fa_cues), encoding="utf-8")
+        ass.write_text(st.to_ass(fa_cues, font=font), encoding="utf-8")
+        try:
+            cmd = st.burn_cmd(str(video), str(ass), fontsdir, str(out))
+        except ValueError as exc:
+            raise SubtitleError("unsafe_path", str(exc)) from exc
+        r = run(cmd, capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0 or not out.exists():
+            raise SubtitleError("burn_failed", (r.stderr or "")[-300:])
+        size = out.stat().st_size
+        if size <= 0:
+            raise SubtitleError("burn_failed", "empty output")
+        if size > MAX_OUT_BYTES:
+            raise SubtitleError("output_too_large", f"{size} bytes")
+        d_out = probe_duration_ms(str(out), run)
+        if abs(d_in - d_out) > DURATION_TOLERANCE_MS:
+            raise SubtitleError("duration_mismatch", f"{d_in} vs {d_out} ms")
+        return {
+            "out": str(out), "srt": str(srt), "ass": str(ass), "cues": len(fa_cues),
             "missing": stats["missing"], "batches": stats["batches"], "size": size,
-            "duration_ms": d_out, **asr_report,
-            "asr_raw_cues": len(raw_cues), "asr_clean_cues": len(cues),
-            "asr_dropped_duplicates": dropped_duplicates, "asr_max_cue_ms": max_cue_ms,
-            "asr_first_start_ms": min(int(s) for s, _e, _text in cues),
-            "asr_last_end_ms": max(int(e) for _s, e, _text in cues),
-            "asr_cue_coverage_ratio": round(coverage_ratio, 4),
-            "asr_timeline": timeline, "asr_quality_warning": quality_warning}
+            "duration_ms": d_out, **asr_report, **asr_diagnostics,
+        }
+    except SubtitleError as exc:
+        exc.diagnostics = {**asr_report, **asr_diagnostics}
+        raise

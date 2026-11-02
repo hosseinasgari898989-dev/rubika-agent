@@ -1373,7 +1373,7 @@ function makeOmniAI(probability = 0.97) {
 {
   const state=env();let args=null;state.AI={run:async(model,options)=>{args={model,options};return {response:"0|در باز است.\\n1|وارد شوید."};}};
   const r=await read(await worker.fetch(request("/api/brain/translate-official",{method:"POST",body:{text:"0|The door is open.\\n1|Go inside.",kind:"subtitle",run_id:"mobsub_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}),state));
-  assert.equal(r.status,200);assert.equal(args.options.max_tokens,1200);assert.equal(r.body.usage.kind,"subtitle");
+  assert.equal(r.status,200);assert.equal(args.options.max_tokens,8192);assert.equal(r.body.usage.kind,"subtitle");
 }
 {
   const state=env();let called=false;state.AI={run:async()=>{called=true;return {response:"ترجمه فارسی"};}};
