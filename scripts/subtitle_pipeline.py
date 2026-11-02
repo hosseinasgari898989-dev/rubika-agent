@@ -226,9 +226,11 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             candidates, key=lambda candidate: candidate[2]["chars"],
         )
     else:
-        selected_name, selected_cues, selected_summary, selected_diagnostics = (
-            "A", cues_a, summary_a, diagnostics_a,
-        )
+        # No non-looping pass is safe to burn; fail closed rather than publish a repeated cue.
+        selected_name = None
+        selected_cues = []
+        selected_summary = summary_a
+        selected_diagnostics = diagnostics_a
 
     # This rate describes the original A pass that triggered (or avoided) retries.
     chars_per_speech_second = chars_per_speech_second_a

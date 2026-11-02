@@ -366,6 +366,30 @@ class Transcribe(unittest.TestCase):
         self.assertEqual(result.report["asr_selected_pass"], "C")
         self.assertEqual(result, self._segments(rounds[2]))
 
+    def test_all_duplicate_loop_passes_produce_no_selected_transcript(self):
+        repeated = [
+            [(0, 1000, "echo"), (1000, 2000, "echo")],
+            [(0, 1000, "repeat"), (1000, 2000, "repeat"), (2000, 3000, "repeat")],
+            [(0, 1000, "again"), (1000, 2000, "again")],
+        ]
+        calls = []
+
+        def factory():
+            rows = repeated[len(calls)]
+            return SimpleNamespace(transcribe=lambda audio, **kwargs: (
+                calls.append(kwargs) or iter(self._segments(rows)), None
+            ))
+
+        with patch.object(sp, "decode_audio_16k", return_value="highpass-only-pcm"):
+            result = sp.transcribe(
+                "input.mp4", model_factory=factory, speech_seconds=63.6, duration_ms=85000,
+            )
+
+        self.assertEqual(result, [])
+        self.assertIsNone(result.report["asr_selected_pass"])
+        self.assertEqual([row["name"] for row in result.report["asr_passes"]], ["A", "B", "C"])
+        self.assertEqual([row["dropped_duplicates"] for row in result.report["asr_passes"]], [1, 2, 1])
+
     def test_retry_runtime_limit_keeps_pass_a_and_does_not_start_pass_c(self):
         clock = SimpleNamespace(now=0.0)
         def monotonic():
