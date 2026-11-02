@@ -128,8 +128,15 @@ class Build(unittest.TestCase):
         self.wd = str(Path(self.tmp.name) / "work")
         self.video = str(Path(self.tmp.name) / "in.mp4")
         Path(self.video).write_bytes(b"v")
+        self.glyph_box_patch = patch.object(
+            sp.st,
+            "to_ass_with_glyph_boxes",
+            side_effect=lambda cues, **kwargs: (sp.st.to_ass(cues), []),
+        )
+        self.glyph_box_patch.start()
 
     def tearDown(self):
+        self.glyph_box_patch.stop()
         self.tmp.cleanup()
 
     def build(self, run, cues=CUES):

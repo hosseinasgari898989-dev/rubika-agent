@@ -552,7 +552,15 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
         fa_cues = split_long_cues(fa_cues)
         srt, ass, out = wd / "fa.srt", wd / "fa.ass", wd / "subtitled.mp4"
         srt.write_text(st.format_srt(fa_cues), encoding="utf-8")
-        ass.write_text(st.to_ass(fa_cues, font=font), encoding="utf-8")
+        try:
+            ass_text, _glyph_bounds = st.to_ass_with_glyph_boxes(
+                fa_cues, fontsdir=fontsdir, font=font,
+            )
+        except Exception as exc:
+            raise SubtitleError(
+                "subtitle_box_render_failed", type(exc).__name__,
+            ) from exc
+        ass.write_text(ass_text, encoding="utf-8")
         try:
             cmd = st.burn_cmd(str(video), str(ass), fontsdir, str(out))
         except ValueError as exc:

@@ -59,25 +59,27 @@ class SubtitleToolsTest(unittest.TestCase):
         self.assertEqual(
             style_line,
             "Style: Default,Estedad,60,&H00FFFFFF,&H000000FF,&H66000000,&H80000000,"
-            "-1,0,0,0,100,100,0,0,3,6,0,2,40,40,40,1",
+            "-1,0,0,0,100,100,0,0,1,0,0,2,40,40,40,1",
         )
-        self.assertIn(r"{\ybord4}", ass)
-        self.assertNotIn("{", ass.split("[Events]")[1].split("Text\n", 1)[1].replace(r"{\ybord4}", "", 1))
+        self.assertNotIn(r"\ybord", ass)
+        self.assertNotIn(r"\p1", ass)
+        event_text = "\\n".join(line for line in ass.splitlines() if line.startswith("Dialogue:"))
+        self.assertNotIn("{", event_text)
 
     def test_opaque_box_vertical_padding_changes_symmetrically_only(self):
         ass = st.to_ass([(0, 1800, "نمونه زیرنویس")])
         style_line = next(line for line in ass.splitlines() if line.startswith("Style: Default,"))
         fields = style_line.split(",")
-        # ASS style fields: Fontname, Fontsize, ..., BorderStyle, Outline, Shadow, ..., MarginV.
+        # BorderStyle 1 removes the oversized ASS opaque box; drawing is added separately.
         self.assertEqual(fields[1], "Estedad")
         self.assertEqual(fields[2], "60")
-        self.assertEqual(fields[15], "3")
-        self.assertEqual(fields[16], "6")
+        self.assertEqual(fields[15], "1")
+        self.assertEqual(fields[16], "0")
         self.assertEqual(fields[17], "0")
         self.assertEqual(fields[21], "40")
         dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
-        self.assertIn(r"{\ybord4}", dialogue)
-        self.assertNotIn(r"{\xbord", dialogue)
+        self.assertNotIn(r"\ybord", dialogue)
+        self.assertNotIn(r"\p1", dialogue)
 
     def test_ass_frame_renders_with_libass_when_available(self):
         ffmpeg = shutil.which("ffmpeg")
@@ -157,14 +159,17 @@ class SubtitleBidiTest(unittest.TestCase):
         dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
         body = dialogue.rsplit(",,", 1)[1].removeprefix("{" + chr(92) + "ybord4}")
 
+        display_lines = body.split(chr(92) + "N")
         self.assertEqual(
-            body.split(chr(92) + "N"),
+            display_lines[:3],
             [
                 chr(0x202B) + "سلام!..." + chr(0x202C),
                 chr(0x202B) + "متن، English 42؟" + chr(0x202C),
                 chr(0x202B) + "عدد ۱۲۳" + chr(0x202C),
             ],
         )
+        self.assertEqual(len(display_lines), 3)
+        self.assertIn("Default,,0,0,40,,", dialogue)
         self.assertEqual(st.format_srt(cues), original_srt)
         self.assertEqual(st.parse_srt(original_srt), cues)
 
@@ -208,7 +213,7 @@ class SubtitleBidiTest(unittest.TestCase):
         after_ass = st.to_ass(cue)
         after_dialogue = next(line for line in after_ass.splitlines() if line.startswith("Dialogue:"))
         prefix = after_dialogue.rsplit(",,", 1)[0]
-        before_dialogue = prefix + ",," + "{" + chr(92) + "ybord4}" + st.RLM + "سلام!"
+        before_dialogue = prefix + ",," + st.RLM + "سلام!"
         before_ass = after_ass.replace(after_dialogue, before_dialogue)
 
         def render(name, ass_text):
@@ -289,6 +294,103 @@ class SubtitleBidiTest(unittest.TestCase):
                            "legacy leading RLM should leave ! on the right edge")
         self.assertLess(after_right, after_body_left,
                         "RLE/PDF should move ! to the left edge of Persian text")
+
+
+class SubtitleBoxPaddingTest(unittest.TestCase):
+    def test_rendered_estedad_glyph_boxes_have_12px_padding_and_fixed_bottom(self):
+        ffmpeg = shutil.which("ffmpeg")
+        self.assertIsNotNone(ffmpeg, "ffmpeg must be installed for real libass tests")
+        filters = subprocess.run(
+            [ffmpeg, "-hide_banner", "-filters"],
+            capture_output=True, text=True, check=True, timeout=15,
+        ).stdout
+        self.assertTrue(
+            any("ass " in line and "libass" in line.lower() for line in filters.splitlines()),
+            "ffmpeg must include the libass ASS filter",
+        )
+        from PIL import Image
+
+        root = Path(__file__).resolve().parents[1]
+        fontsdir = root / "assets" / "fonts"
+        self.assertTrue((fontsdir / "Estedad-Regular.ttf").is_file())
+        self.assertTrue((fontsdir / "Estedad-Bold.ttf").is_file())
+        cases = [
+            ("short", "سلام!"),
+            ("long", "این یک جمله فارسی نسبتاً بلند است که باید کادر آن دقیقاً دور حروف قرار بگیرد."),
+            ("multiline", "خط اول زیرنویس فارسی است\nخط دوم هم باید داخل همان یک کادر قرار بگیرد."),
+        ]
+
+        def pixel_bbox(image, predicate):
+            pixels = image.load()
+            points = [
+                (x, y)
+                for y in range(image.height)
+                for x in range(image.width)
+                if predicate(*pixels[x, y])
+            ]
+            self.assertTrue(points, "expected subtitle pixels were not detected")
+            return (
+                min(x for x, _ in points),
+                min(y for _, y in points),
+                max(x for x, _ in points) + 1,
+                max(y for _, y in points) + 1,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            for name, text in cases:
+                with self.subTest(case=name):
+                    cues = [(0, 2000, text)]
+                    ass_text, measured = st.to_ass_with_glyph_boxes(
+                        cues, fontsdir=str(fontsdir), ffmpeg=ffmpeg,
+                    )
+                    self.assertEqual(len(measured), 1)
+                    drawing_lines = [
+                        line for line in ass_text.splitlines()
+                        if line.startswith("Dialogue: 0,") and r"\p1" in line
+                    ]
+                    self.assertEqual(
+                        len(drawing_lines), 1,
+                        "all lines in one cue must share one background drawing",
+                    )
+                    self.assertIn(r"\an7\pos(0,0)\p1", drawing_lines[0])
+
+                    ass_path = output_dir / f"{name}.ass"
+                    png_path = output_dir / f"{name}.png"
+                    ass_path.write_text(ass_text, encoding="utf-8")
+                    subprocess.run(
+                        [
+                            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                            "-f", "lavfi", "-i",
+                            "color=c=0x808080:s=1280x720:r=1:d=2",
+                            "-vf", f"ass={ass_path}:fontsdir={fontsdir}",
+                            "-frames:v", "1", str(png_path),
+                        ],
+                        capture_output=True, text=True, check=True, timeout=30,
+                    )
+                    image = Image.open(png_path).convert("RGB")
+                    glyph = pixel_bbox(
+                        image,
+                        lambda r, g, b: r > 220 and g > 220 and b > 220,
+                    )
+                    box = pixel_bbox(
+                        image,
+                        lambda r, g, b: 5 < r < 105 and 5 < g < 105 and 5 < b < 105,
+                    )
+                    padding = {
+                        "left": glyph[0] - box[0],
+                        "top": glyph[1] - box[1],
+                        "right": box[2] - glyph[2],
+                        "bottom": box[3] - glyph[3],
+                    }
+                    for side, value in padding.items():
+                        self.assertLessEqual(
+                            abs(value - 12), 2,
+                            f"{name} {side} padding is {value}px, expected 12px",
+                        )
+                    self.assertEqual(box[3] - 1, 686, "drawing lower edge must stay at row 686")
+
+
 
 
 if __name__ == "__main__":
