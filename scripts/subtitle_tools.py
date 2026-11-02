@@ -7,11 +7,14 @@ This module only does text/command work; it never touches the network.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 Cue = tuple  # (start_ms, end_ms, text)
 _TS = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9_./\-]+$")
 RLM = "\u200f"
+RLE = "\u202b"
+PDF = "\u202c"
 # Burned-in subtitle size (PlayResY 720). Medium-large; callers asking for less get this floor.
 DEFAULT_ASS_SIZE = 60
 MIN_ASS_SIZE = 60
@@ -110,6 +113,15 @@ def _ass_ts(ms: int) -> str:
     return f"{h}:{m:02d}:{s:02d}.{f // 10:02d}"
 
 
+def _has_arabic_letter(text: str) -> bool:
+    """Return whether a display line contains an Arabic-script letter."""
+    for char in text:
+        if unicodedata.category(char).startswith("L"):
+            if unicodedata.name(char, "").startswith("ARABIC LETTER"):
+                return True
+    return False
+
+
 def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl: bool = True) -> str:
     size = max(int(size), MIN_ASS_SIZE)
     head = (
@@ -126,7 +138,14 @@ def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl:
     for s, e, t in cues:
         clean = t.replace("{", "(").replace("}", ")").replace("\n", "\\N")
         if rtl:
-            clean = RLM + clean
+            display_lines = []
+            for display_line in clean.split(r"\N"):
+                if _has_arabic_letter(display_line):
+                    display_lines.append(RLE + display_line + PDF)
+                else:
+                    # Preserve the old directional hint for lines without Arabic letters.
+                    display_lines.append(RLM + display_line)
+            clean = r"\N".join(display_lines)
         lines.append(
             f"Dialogue: 0,{_ass_ts(s)},{_ass_ts(e)},Default,,0,0,0,,"
             f"{{\\ybord{ASS_VERTICAL_OUTLINE}}}{clean}"
