@@ -13,7 +13,7 @@ JOB = {
 
 
 class FailedMediaHookTests(unittest.TestCase):
-    def run_job(self, preview_side_effect):
+    def run_job(self, preview_side_effect, *, force_fail=None):
         cloud = mock.Mock()
         cloud.get_seen_index.return_value = {"ids": set()}
         client = mock.Mock()
@@ -32,7 +32,10 @@ class FailedMediaHookTests(unittest.TestCase):
             send_owner_preview=mock.Mock(return_value="msg_1"),
             preserve_failed_media=mock.Mock(return_value={"ok": True}),
         )
-        env = mock.patch.dict("os.environ", {"RUBIKA_TOKEN": "t" * 40, "RUBIKA_OWNER_CHAT_ID": "c1"})
+        env_values = {"RUBIKA_TOKEN": "t" * 40, "RUBIKA_OWNER_CHAT_ID": "c1"}
+        if force_fail is not None:
+            env_values["MOB_X_TEST_FORCE_PREVIEW_FAIL"] = force_fail
+        env = mock.patch.dict("os.environ", env_values, clear=True)
         err = None
         with mock.patch.multiple(proc, **mocks), env:
             try:
@@ -55,6 +58,41 @@ class FailedMediaHookTests(unittest.TestCase):
     def test_preserve_not_called_when_upload_succeeds(self):
         err, p, _ = self.run_job(lambda *a, **k: "file_id_1")
         self.assertIsNone(err)
+        p["upload_preview_media"].assert_called_once()
+        p["preserve_failed_media"].assert_not_called()
+
+    def test_exact_test_flag_forces_preview_failure_and_preserves_media(self):
+        with mock.patch("builtins.print") as log:
+            err, p, client = self.run_job(
+                lambda *a, **k: self.fail("Rubika upload must be skipped when the test flag is enabled"),
+                force_fail="1",
+            )
+
+        self.assertIsNotNone(err)
+        self.assertEqual(err.code, "mob_x_preview_upload_failed")
+        p["upload_preview_media"].assert_not_called()
+        p["preserve_failed_media"].assert_called_once()
+        args, kwargs = p["preserve_failed_media"].call_args
+        self.assertIs(args[0], client)
+        self.assertIn("mob_x_preview_upload_failed", args)
+        self.assertEqual(kwargs.get("job_id"), "job_abcdef1234")
+        self.assertTrue(any(
+            "mob_x_test_force_preview_fail" in call.args[0]
+            and "MOB_X_TEST_FORCE_PREVIEW_FAIL" in call.args[0]
+            and '"enabled": true' in call.args[0]
+            for call in log.call_args_list
+        ))
+
+    def test_zero_test_flag_keeps_existing_upload_path(self):
+        err, p, _ = self.run_job(lambda *a, **k: "file_id_1", force_fail="0")
+        self.assertIsNone(err)
+        p["upload_preview_media"].assert_called_once()
+        p["preserve_failed_media"].assert_not_called()
+
+    def test_missing_test_flag_keeps_existing_upload_path(self):
+        err, p, _ = self.run_job(lambda *a, **k: "file_id_1", force_fail=None)
+        self.assertIsNone(err)
+        p["upload_preview_media"].assert_called_once()
         p["preserve_failed_media"].assert_not_called()
 
 
