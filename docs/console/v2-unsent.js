@@ -21,7 +21,7 @@ A.fmAll=()=>{const bs=[...document.querySelectorAll('input[data-a="fmTog"]')];
 const on=bs.some(b=>!b.checked);bs.forEach(b=>{b.checked=on;if(on)SEL.add(b.dataset.id);else SEL.delete(b.dataset.id)});cnt()};
 const mb=n=>n==null?'—':(Number(n)/1048576).toFixed(1)+' MB';
 const link=x=>x.share_url&&/^https:\/\/mega\.(nz|io)\//.test(x.share_url)
-?`<a href="${E(x.share_url)}" target="_blank" rel="noopener noreferrer">دانلود</a>`:'<span class="s">بدون لینک</span>';const link=x=>x.share_url&&/^https:\/\/mega\.(nz|io)\//.test(x.share_url)
+?`<a href="${E(x.share_url)}" target="_blank" rel="noopener noreferrer">دانلود</a>`:'<span class="s">بدون لینک</span>';
 ?`<a href="${E(x.share_url)}" target="_blank" rel="noopener noreferrer">دانلود</a>`:'<span class="s">بدون لینک</span>';
 
 let ITEMS_BY_ID=new Map();
