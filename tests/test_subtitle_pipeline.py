@@ -364,7 +364,10 @@ class Transcribe(unittest.TestCase):
 
         self.assertEqual(result.report["asr_passes"][1]["dropped_duplicates"], 2)
         self.assertEqual(result.report["asr_selected_pass"], "C")
-        self.assertEqual(result, self._segments(rounds[2]))
+        self.assertEqual(
+            result,
+            [(start_ms, end_ms, text) for start_ms, end_ms, text in rounds[2]],
+        )
 
     def test_all_duplicate_loop_passes_produce_no_selected_transcript(self):
         repeated = [
