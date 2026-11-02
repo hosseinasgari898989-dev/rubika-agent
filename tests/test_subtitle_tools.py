@@ -149,19 +149,19 @@ class SubtitleToolsTest(unittest.TestCase):
 
 class SubtitleBidiTest(unittest.TestCase):
     def test_each_arabic_display_line_is_wrapped_independently_without_changing_srt(self):
-        cues = [(1234, 5678, "سلام!...\\nمتن، English 42؟\\nعدد ۱۲۳")]
+        cues = [(1234, 5678, "سلام!..." + chr(10) + "متن، English 42؟" + chr(10) + "عدد ۱۲۳")]
         original_srt = st.format_srt(cues)
 
         ass = st.to_ass(cues)
         dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
-        body = dialogue.rsplit(",,", 1)[1].removeprefix(r"{\\ybord4}")
+        body = dialogue.rsplit(",,", 1)[1].removeprefix("{" + chr(92) + "ybord4}")
 
         self.assertEqual(
-            body.split(r"\\N"),
+            body.split(chr(92) + "N"),
             [
-                "\\u202bسلام!...\\u202c",
-                "\\u202bمتن، English 42؟\\u202c",
-                "\\u202bعدد ۱۲۳\\u202c",
+                chr(0x202B) + "سلام!..." + chr(0x202C),
+                chr(0x202B) + "متن، English 42؟" + chr(0x202C),
+                chr(0x202B) + "عدد ۱۲۳" + chr(0x202C),
             ],
         )
         self.assertEqual(st.format_srt(cues), original_srt)
@@ -170,7 +170,7 @@ class SubtitleBidiTest(unittest.TestCase):
     def test_latin_only_display_lines_are_not_wrapped(self):
         ass = st.to_ass([(0, 1000, "English 123!")])
         dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
-        body = dialogue.rsplit(",,", 1)[1].removeprefix(r"{\\ybord4}")
+        body = dialogue.rsplit(",,", 1)[1].removeprefix("{" + chr(92) + "ybord4}")
         self.assertEqual(body, "English 123!")
 
 
