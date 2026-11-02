@@ -477,6 +477,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(result["subtitle_processing"]["asr_model"], "small")
         self.assertEqual(result["subtitle_processing"]["asr_fallback_reason"], "medium_runtime_exceeded_15m")
         diagnostics = result["subtitle_processing"]
+        self.assertEqual(diagnostics["non_speech_tags_removed"], 2)
         for key in ("asr_raw_cues", "asr_clean_cues", "asr_dropped_duplicates",
                     "asr_max_cue_ms", "asr_first_start_ms", "asr_last_end_ms",
                     "asr_cue_coverage_ratio", "asr_timeline", "asr_quality_warning",
@@ -601,7 +602,6 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(diagnostics["asr_timeline"], [[0, 1000, 5], [3000, 4000, 4]])
         self.assertEqual(diagnostics["asr_quality_warning"], "low_cue_coverage")
         self.assertEqual(diagnostics["asr_model"], "small")
-        self.assertEqual(diagnostics["non_speech_tags_removed"], 2)
         self.assertEqual(diagnostics["asr_selected_pass"], "A")
         self.assertEqual(diagnostics["asr_passes"][0]["chars"], 9)
         self.assertNotIn("transcript", repr(diagnostics))
