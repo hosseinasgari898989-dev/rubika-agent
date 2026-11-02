@@ -147,5 +147,32 @@ class SubtitleToolsTest(unittest.TestCase):
         self.assertNotIn("-filter_complex", cmd)
 
 
+class SubtitleBidiTest(unittest.TestCase):
+    def test_each_arabic_display_line_is_wrapped_independently_without_changing_srt(self):
+        cues = [(1234, 5678, "سلام!...\\nمتن، English 42؟\\nعدد ۱۲۳")]
+        original_srt = st.format_srt(cues)
+
+        ass = st.to_ass(cues)
+        dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
+        body = dialogue.split(",,", 1)[1].removeprefix(r"{\\ybord4}")
+
+        self.assertEqual(
+            body.split(r"\\N"),
+            [
+                "\\u202bسلام!...\\u202c",
+                "\\u202bمتن، English 42؟\\u202c",
+                "\\u202bعدد ۱۲۳\\u202c",
+            ],
+        )
+        self.assertEqual(st.format_srt(cues), original_srt)
+        self.assertEqual(st.parse_srt(original_srt), cues)
+
+    def test_latin_only_display_lines_are_not_wrapped(self):
+        ass = st.to_ass([(0, 1000, "English 123!")])
+        dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
+        body = dialogue.split(",,", 1)[1].removeprefix(r"{\\ybord4}")
+        self.assertEqual(body, "English 123!")
+
+
 if __name__ == "__main__":
     unittest.main()
