@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -33,6 +34,84 @@ MAX_OUT_BYTES = 49 * 1024 * 1024  # Rubika upload ladder is OK only below ~50 Mi
 DURATION_TOLERANCE_MS = 1500
 MIN_CUE_MS = 400
 MAX_CUE_CHARS = 80  # longer Persian cues are split in two or more timed pieces
+
+_NON_SPEECH_LABEL_RE = re.compile(
+    r"^(?:"
+    r"(?:background|tense|dramatic|suspenseful|scary|sad|happy|soft|instrumental|upbeat)\s+music"
+    r"|music(?:\s*[-:]\s*(?:background|tense|dramatic|suspenseful|scary|sad|happy|soft|instrumental|upbeat))?"
+    r"|(?:sound\s+effects?|sfx)(?:\s*[-:]\s*[a-z][a-z\s-]*)?"
+    r"|(?:applause|clapping|laughter|laughing|laughs|cheering|crowd\s+cheering|crowd\s+noise|"
+    r"sighs?|sighing|gasps?|gasping|coughs?|coughing|crying|sobbing|snoring|whistling|"
+    r"footsteps|door\s+slams?|bell\s+rings?)"
+    r"|موسیقی(?:[\s\u200c]+(?:تنش[\s\u200c]*زا|هیجانی|دلهره‌آور|پس‌زمینه|پس زمینه|غمگین|شاد|ترسناک|ملایم|حماسی|آرام|متن|زمینه‌ای))?"
+    r"|(?:تنش[\s\u200c]*زا|هیجانی|دلهره‌آور|پس‌زمینه|پس زمینه|غمگین|شاد|ترسناک|ملایم|حماسی|آرام)[\s\u200c]+موسیقی"
+    r"|(?:جلوه|افکت)(?:های|‌های)?[\s\u200c]+صوتی"
+    r"|صدای[\s\u200c]+(?:افکت|موسیقی|تشویق|کف[\s\u200c]+زدن|دست[\s\u200c]+زدن|خنده|گریه|سرفه|فریاد)"
+    r"|(?:تشویق|کف[\s\u200c]+زدن|دست[\s\u200c]+زدن|خنده|خندیدن|گریه|گریه‌کردن|سرفه|آه|ناله|فریاد)"
+    r")$",
+    re.IGNORECASE,
+)
+_NON_SPEECH_BRACKET_RE = re.compile(
+    r"(?:\[|\(|（|【)\s*(?P<label>[^\[\]()（）【】]+?)\s*(?:\]|\)|）|】)"
+)
+_NON_SPEECH_NOTE_RE = re.compile(r"[♪♫♬]+\s*(?P<label>[^♪♫♬]+?)\s*[♪♫♬]+")
+_MUSIC_MARKER_RE = re.compile(r"[♪♫♬]+")
+
+
+def _is_non_speech_label(value: object) -> bool:
+    """Recognize a whole non-speech cue without matching ordinary spoken sentences."""
+    text = str(value or "").strip()
+    text = re.sub(r"^[\s\[\](){}（）【】「」『』<>]+|[\s\[\](){}（）【】「」『』<>]+$", "", text)
+    text = _MUSIC_MARKER_RE.sub(" ", text).replace("\u200c", " ")
+    text = re.sub(r"\s+", " ", text).strip(" \t\r\n:：-–—")
+    return not text or bool(_NON_SPEECH_LABEL_RE.fullmatch(text))
+
+
+def strip_non_speech_tags(cues: list) -> tuple[list, int]:
+    """Remove non-speech-only cues and inline non-speech labels, returning a count only."""
+    cleaned = []
+    removed = 0
+    for start, end, raw_text in cues:
+        text = str(raw_text or "")
+        if _is_non_speech_label(text):
+            removed += 1
+            continue
+
+        cue_removed = 0
+
+        def remove_bracketed(match):
+            nonlocal cue_removed
+            if _is_non_speech_label(match.group("label")):
+                cue_removed += 1
+                return " "
+            return match.group(0)
+
+        text = _NON_SPEECH_BRACKET_RE.sub(remove_bracketed, text)
+
+        def remove_note_label(match):
+            nonlocal cue_removed
+            if _is_non_speech_label(match.group("label")):
+                cue_removed += 1
+                return " "
+            return match.group(0)
+
+        text = _NON_SPEECH_NOTE_RE.sub(remove_note_label, text)
+        text, music_markers = _MUSIC_MARKER_RE.subn(" ", text)
+        if music_markers:
+            cue_removed += 1
+        text = re.sub(r"\s+([,.;!?،؛؟])", r"\1", text)
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"^[,،;؛:–—-]+\s*|\s*[,،;؛:–—-]+$", "", text).strip()
+
+        if not text:
+            removed += max(1, cue_removed)
+            continue
+        removed += cue_removed
+        cleaned.append((start, end, text))
+    return cleaned, removed
+
+
 
 # ASR tuning: more sensitive VAD (catches quiet/unclear speech) and no context carry-over
 # between segments (prevents hallucination loops on music/noise).
@@ -536,6 +615,8 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
     asr_report = dict(asr_report) if isinstance(asr_report, dict) else {}
     dropped_duplicates = count_dropped_duplicates(raw_cues)
     cues = clean_cues(raw_cues)
+    cues, non_speech_tags_removed = strip_non_speech_tags(cues)
+    cues = clean_cues(cues)
     asr_diagnostics = build_asr_diagnostics(raw_cues, cues, dropped_duplicates, 0)
     try:
         d_in = probe_duration_ms(str(video), run)
@@ -580,7 +661,11 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
             "out": str(out), "srt": str(srt), "ass": str(ass), "cues": len(fa_cues),
             "missing": stats["missing"], "batches": stats["batches"], "size": size,
             "duration_ms": d_out, **asr_report, **asr_diagnostics,
+            "non_speech_tags_removed": non_speech_tags_removed,
         }
     except SubtitleError as exc:
-        exc.diagnostics = {**asr_report, **asr_diagnostics}
+        exc.diagnostics = {
+            **asr_report, **asr_diagnostics,
+            "non_speech_tags_removed": non_speech_tags_removed,
+        }
         raise

@@ -405,6 +405,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
                     "asr_dropped_duplicates": 0, "asr_max_cue_ms": 47000,
                     "asr_first_start_ms": 0, "asr_last_end_ms": 64000,
                     "asr_cue_coverage_ratio": 62000 / 85000,
+                    "non_speech_tags_removed": 2,
                     "asr_timeline": [[0, 47000, 5], [48000, 55000, 6], [56000, 64000, 5]],
                     "asr_quality_warning": "long_cue_duration",
                     "asr_passes": [
@@ -476,6 +477,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(result["subtitle_processing"]["asr_model"], "small")
         self.assertEqual(result["subtitle_processing"]["asr_fallback_reason"], "medium_runtime_exceeded_15m")
         diagnostics = result["subtitle_processing"]
+        self.assertEqual(diagnostics["non_speech_tags_removed"], 2)
         for key in ("asr_raw_cues", "asr_clean_cues", "asr_dropped_duplicates",
                     "asr_max_cue_ms", "asr_first_start_ms", "asr_last_end_ms",
                     "asr_cue_coverage_ratio", "asr_timeline", "asr_quality_warning",
@@ -569,6 +571,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             "asr_first_start_ms": 0,
             "asr_last_end_ms": 4000,
             "asr_cue_coverage_ratio": 0.25,
+            "non_speech_tags_removed": "4",
             "asr_timeline": [[0, 1000, 5], [3000, 4000, 4]],
             "asr_quality_warning": "low_cue_coverage",
             "asr_passes": [
@@ -595,6 +598,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(diagnostics["asr_first_start_ms"], 0)
         self.assertEqual(diagnostics["asr_last_end_ms"], 4000)
         self.assertEqual(diagnostics["asr_cue_coverage_ratio"], 0.25)
+        self.assertEqual(diagnostics["non_speech_tags_removed"], 4)
         self.assertEqual(diagnostics["asr_timeline"], [[0, 1000, 5], [3000, 4000, 4]])
         self.assertEqual(diagnostics["asr_quality_warning"], "low_cue_coverage")
         self.assertEqual(diagnostics["asr_model"], "small")

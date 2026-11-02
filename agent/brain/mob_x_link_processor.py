@@ -212,6 +212,7 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
         "asr_first_start_ms": nonnegative_int("asr_first_start_ms"),
         "asr_last_end_ms": nonnegative_int("asr_last_end_ms"),
         "asr_cue_coverage_ratio": round(max(0.0, coverage), 4),
+        "non_speech_tags_removed": nonnegative_int("non_speech_tags_removed"),
         "asr_timeline": timeline,
         "asr_quality_warning": warning,
         "asr_passes": passes,
@@ -235,7 +236,7 @@ def _safe_subtitle_error_diagnostics(exc: BaseException) -> dict[str, Any]:
     diagnostic_keys = {
         "asr_raw_cues", "asr_clean_cues", "asr_dropped_duplicates",
         "asr_max_cue_ms", "asr_first_start_ms", "asr_last_end_ms",
-        "asr_cue_coverage_ratio", "asr_timeline", "asr_quality_warning",
+        "asr_cue_coverage_ratio", "non_speech_tags_removed", "asr_timeline", "asr_quality_warning",
         "asr_passes", "asr_selected_pass", "chars_per_speech_second",
     }
     if not any(key in source for key in diagnostic_keys):
