@@ -33,6 +33,9 @@ PAGES = [
     ("unsent", "ارسال‌نشده‌ها"),
 ]
 NOW = "2026-10-27T00:00:00Z"
+MEGA_KEY = "A" * 43
+MEGA_URL = f"https://mega.nz/file/AbCd1234#{MEGA_KEY}"
+MEGA_EMBED_URL = f"https://mega.nz/embed/AbCd1234#{MEGA_KEY}"
 CORS = {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
@@ -190,7 +193,7 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
                 "media_type": "video", "caption": "Preview fixture",
                 "reason": "rubika_send_failed", "size_bytes": 1048576,
                 "created_at": NOW,
-                "share_url": "https://mega.nz/file/AbCd1234#ABCDEFGHIJKLMNOPQRSTUV",
+                "share_url": MEGA_URL,
             },
             {
                 "id": "fixture-failed-invalid", "status": "stored", "source": "tiktok",
@@ -353,14 +356,14 @@ def main() -> int:
                     timeout=5000,
                 )
                 frame = page.locator('#modal iframe.fm-preview-frame')
-                if frame.get_attribute("src") != "https://mega.nz/embed/AbCd1234#ABCDEFGHIJKLMNOPQRSTUV":
+                if frame.get_attribute("src") != MEGA_EMBED_URL:
                     failures.append("unsent: iframe src is not the expected validated MEGA embed URL")
                 if frame.get_attribute("sandbox") != "allow-scripts allow-same-origin":
                     failures.append("unsent: iframe sandbox is not restricted as expected")
                 if frame.get_attribute("allowfullscreen") is None:
                     failures.append("unsent: iframe does not allow fullscreen")
                 fallback = page.locator('#modal a[data-a="fmOpenMega"]')
-                if fallback.get_attribute("href") != "https://mega.nz/file/AbCd1234#ABCDEFGHIJKLMNOPQRSTUV":
+                if fallback.get_attribute("href") != MEGA_URL:
                     failures.append("unsent: fallback href is not the fixed MEGA share URL")
                 if fallback.get_attribute("target") != "_blank" or fallback.get_attribute("rel") != "noopener noreferrer":
                     failures.append("unsent: fallback link security attributes are missing")
