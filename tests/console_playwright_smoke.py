@@ -30,8 +30,12 @@ PAGES = [
     ("d1", "دیتابیس"),
     ("soon", "به‌زودی"),
     ("set", "اتصال"),
+    ("unsent", "ارسال‌نشده‌ها"),
 ]
 NOW = "2026-10-27T00:00:00Z"
+MEGA_KEY = "A" * 43
+MEGA_URL = f"https://mega.nz/file/AbCd1234#{MEGA_KEY}"
+MEGA_EMBED_URL = f"https://mega.nz/embed/AbCd1234#{MEGA_KEY}"
 CORS = {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
@@ -182,6 +186,23 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
             "status": "queued", "progress": 0, "created_at": NOW,
             "error": None, "panel_link_id": 1, "result": {},
         }}
+    if path == "/api/console/failed-media/list":
+        return {"ok": True, "total": 2, "items": [
+            {
+                "id": "fixture-failed-valid", "status": "stored", "source": "mob_x",
+                "media_type": "video", "caption": "Preview fixture",
+                "reason": "rubika_send_failed", "size_bytes": 1048576,
+                "created_at": NOW,
+                "share_url": MEGA_URL,
+            },
+            {
+                "id": "fixture-failed-invalid", "status": "stored", "source": "tiktok",
+                "media_type": "video", "caption": "Invalid link fixture",
+                "reason": "rubika_send_failed", "size_bytes": 2048,
+                "created_at": NOW,
+                "share_url": "https://example.com/file/AbCd1234#ABCDEFGHIJKLMNOPQRSTUV",
+            },
+        ]}
     if path == "/api/console/d1/tables":
         return {"ok": True, "items": [
             {"name": "items", "row_count": 1, "columns": [{"name": "id"}, {"name": "title"}]},
@@ -241,6 +262,14 @@ def main() -> int:
         )
         page = context.new_page()
         page.route(f"{MOCK_BASE}/**", mock_worker)
+        # Never contact the live MEGA embed from the mocked smoke test.
+        page.route(
+            "https://mega.nz/embed/**",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html",
+                body="<title>Mock MEGA embed</title>",
+            ),
+        )
         page.on("pageerror", lambda exc: browser_errors.append(f"{active_page[0]} uncaught JS: {exc}"))
         page.on(
             "console",
@@ -304,6 +333,47 @@ def main() -> int:
 
                 except Exception as exc:
                     failures.append(f"{page_id}: could not open/render page: {exc}")
+
+            # The failed-media preview modal is tested with a valid fixture and a hostile URL.
+            active_page[0] = "unsent"
+            try:
+                page.locator('#nav button[data-id="unsent"]').click()
+                page.wait_for_function(
+                    "(expected) => document.querySelector('#ttl')?.textContent === expected",
+                    arg="ارسال‌نشده‌ها", timeout=5000,
+                )
+                page.wait_for_selector('#view button[data-a="fmPreview"]', timeout=5000)
+                preview_buttons = page.locator('#view button[data-a="fmPreview"]')
+                if preview_buttons.count() != 2:
+                    failures.append(f"unsent: expected two preview buttons, found {preview_buttons.count()}")
+                if preview_buttons.nth(0).is_disabled():
+                    failures.append("unsent: valid MEGA preview button is disabled")
+                if not preview_buttons.nth(1).is_disabled():
+                    failures.append("unsent: non-MEGA preview button is enabled")
+                preview_buttons.nth(0).click()
+                page.wait_for_function(
+                    "() => document.querySelector('#modal')?.classList.contains('on') && !!document.querySelector('#modal iframe.fm-preview-frame')",
+                    timeout=5000,
+                )
+                frame = page.locator('#modal iframe.fm-preview-frame')
+                if frame.get_attribute("src") != MEGA_EMBED_URL:
+                    failures.append("unsent: iframe src is not the expected validated MEGA embed URL")
+                if frame.get_attribute("sandbox") != "allow-scripts allow-same-origin":
+                    failures.append("unsent: iframe sandbox is not restricted as expected")
+                if frame.get_attribute("allowfullscreen") is None:
+                    failures.append("unsent: iframe does not allow fullscreen")
+                fallback = page.locator('#modal a[data-a="fmOpenMega"]')
+                if fallback.get_attribute("href") != MEGA_URL:
+                    failures.append("unsent: fallback href is not the fixed MEGA share URL")
+                if fallback.get_attribute("target") != "_blank" or fallback.get_attribute("rel") != "noopener noreferrer":
+                    failures.append("unsent: fallback link security attributes are missing")
+                page.locator('#modal button[data-a="fmPreviewClose"]').click()
+                page.wait_for_function(
+                    "() => !document.querySelector('#modal')?.classList.contains('on') && document.querySelectorAll('#modal iframe').length === 0",
+                    timeout=3000,
+                )
+            except Exception as exc:
+                failures.append(f"unsent: preview open/close smoke failed: {exc}")
 
             # Exercise a representative real control on every API-backed page.
             actions = [

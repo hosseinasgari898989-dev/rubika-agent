@@ -439,7 +439,14 @@ R.go(R.cur);
    Uses POST /api/console/failed-media/list and /failed-media/delete-request (src/console_failed_media.js).
    Deleting only REQUESTS deletion: the Worker marks rows and starts the delete workflow (mega-rm first, row after). */
 (()=>{"use strict";
-const R=window.RC;if(!R||!R.V||!R.V.jobs)return;
+const toMegaEmbedUrl=shareUrl=>{
+if(typeof shareUrl!=='string')return null;
+const m=/^https:\/\/mega\.nz\/file\/([A-Za-z0-9_-]{8})#([A-Za-z0-9_-]{43})$/.exec(shareUrl);
+return m?"https://mega.nz/embed/"+m[1]+"#"+m[2]:null;
+};
+const R=window.RC;
+if(R)R.toMegaEmbedUrl=toMegaEmbedUrl;
+if(!R||!R.V||!R.V.jobs)return;
 const {V,A,api,card,tbl,badge,E,N,fmt,toast,NAV}=R;
 if(R.ST)Object.assign(R.ST,{stored:'ذخیره‌شده',delete_requested:'در انتظار حذف',delete_failed:'حذف ناموفق'});
 if(R.BC)Object.assign(R.BC,{stored:'info',delete_requested:'warn',delete_failed:'bad'});
@@ -453,11 +460,39 @@ const mb=n=>n==null?'—':(Number(n)/1048576).toFixed(1)+' MB';
 const link=x=>x.share_url&&/^https:\/\/mega\.(nz|io)\//.test(x.share_url)
 ?`<a href="${E(x.share_url)}" target="_blank" rel="noopener noreferrer">دانلود</a>`:'<span class="s">بدون لینک</span>';
 
+let ITEMS_BY_ID=new Map();
+const previewButton=x=>{
+const enabled=!!toMegaEmbedUrl(x.share_url);
+return '<button class="btn g sm" data-a="fmPreview" data-id="'+E(x.id)+'" '+(enabled?'':'disabled')+'>پیش‌نمایش</button>';
+};
+A.fmPreview=el=>{
+const item=ITEMS_BY_ID.get(String(el.dataset.id));
+const embedUrl=toMegaEmbedUrl(item&&item.share_url);
+if(!embedUrl)return;
+const shareUrl=item.share_url;
+R.modal('<h3 style="margin-bottom:10px">پیش‌نمایش رسانهٔ ذخیره‌شده</h3>'+
+'<div class="s" style="margin-bottom:10px">اگر ویدیو در این پنجره بارگذاری نشد، لینک ثابت Mega را باز کن.</div>'+
+'<iframe class="fm-preview-frame" title="پیش‌نمایش فایل Mega" src="'+E(embedUrl)+'" sandbox="allow-scripts allow-same-origin" allowfullscreen allow="fullscreen" referrerpolicy="no-referrer" style="display:block;width:100%;aspect-ratio:16/9;min-height:220px;border:0;border-radius:14px;background:#000"></iframe>'+
+'<div class="row" style="margin-top:14px"><a class="btn g sm" data-a="fmOpenMega" href="'+E(shareUrl)+'" target="_blank" rel="noopener noreferrer">باز کردن در Mega</a><button class="btn sm" data-a="fmPreviewClose">بستن</button></div>');
+};
+A.fmPreviewClose=()=>{
+R.closeModal();
+const sheet=document.getElementById('sheet');
+if(sheet)sheet.replaceChildren();
+};
+document.getElementById('modal').addEventListener('click',e=>{
+if(e.target.id==='modal'&&document.querySelector('#sheet iframe.fm-preview-frame')){
+const sheet=document.getElementById('sheet');
+if(sheet)sheet.replaceChildren();
+}
+});
+
 V.unsent=async()=>{
 let r;
 try{r=await api('/api/console/failed-media/list',{method:'POST',body:{limit:100}})}
 catch(e){return card('ارسال‌نشده‌ها',`<div class="empty">${E(e.message)}</div>`)}
 const items=r.items||[];
+ITEMS_BY_ID=new Map(items.map(x=>[String(x.id),x]));
 for(const id of [...SEL])if(!items.some(x=>x.id===id&&deletable(x)))SEL.delete(id);
 const more=N(r.total)>items.length?`<div class="s">فقط ${N(items.length)} مورد اخیر از ${N(r.total)} نمایش داده می‌شود.</div>`:'';
 const bar=`<div class="row" style="margin:8px 0"><button class="btn g sm" data-a="fmAll">انتخاب همه / هیچ</button><span class="s">انتخاب‌شده: <b id="fm_cnt">${SEL.size}</b></span><button class="btn sm" data-a="fmDel">🗑 حذف انتخاب‌شده‌ها</button><button class="btn g sm" data-a="fmDelAll">🗑 حذف همه</button><button class="btn g sm" data-a="reload">↻ تازه‌سازی</button></div>`;
@@ -467,7 +502,7 @@ return card('ارسال‌نشده‌ها · نسخهٔ اصلی در Mega',`<di
 ['منبع',x=>E(x.source)],['نوع',x=>E(x.media_type)],
 ['کپشن',x=>E(String(x.caption||'').slice(0,160)||'—')],
 ['دلیل',x=>`<code>${E(x.reason)}</code>`],['حجم',x=>mb(x.size_bytes)],
-['وضعیت',x=>badge(x.status)],['ثبت',x=>fmt(x.created_at)],['فایل',link]
+['وضعیت',x=>badge(x.status)],['ثبت',x=>fmt(x.created_at)],['فایل',x=>link(x)+'<div style="margin-top:6px">'+previewButton(x)+'</div>']
 ],items,'موردی نیست'))};
 
 const ask=async(body,label)=>{
