@@ -146,6 +146,7 @@ jobs:
           RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
           RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
           MOB_X_PANEL_LINK_ID: ${{ inputs.panel_link_id }}
+          MOB_X_TEST_FORCE_PREVIEW_FAIL: ${{ vars.MOB_X_TEST_FORCE_PREVIEW_FAIL || '' }}
         run: |
           set -euo pipefail
           if [ -n "${MOB_X_PANEL_LINK_ID:-}" ]; then

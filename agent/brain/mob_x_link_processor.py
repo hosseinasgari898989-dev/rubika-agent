@@ -119,6 +119,10 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
     }
 
 
+class MobXTestForcePreviewUploadFailure(RuntimeError):
+    """Raised only when the owner explicitly enables the preview-failure test flag."""
+
+
 class MobXLinkError(RuntimeError):
     def __init__(
         self, code: str, *, error_class: str | None = None, error_detail: str | None = None,
@@ -775,6 +779,14 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         if not rubika_token.strip() or not owner_chat_id.strip():
             raise MobXLinkError("mob_x_preview_credentials_missing")
         try:
+            if os.getenv("MOB_X_TEST_FORCE_PREVIEW_FAIL") == "1":
+                print(json.dumps({
+                    "event": "mob_x_test_force_preview_fail",
+                    "test_flag": "MOB_X_TEST_FORCE_PREVIEW_FAIL",
+                    "enabled": True,
+                    "error_code": "mob_x_preview_upload_failed",
+                }, ensure_ascii=False, sort_keys=True))
+                raise MobXTestForcePreviewUploadFailure("mob_x_preview_upload_failed")
             rubika_file_id = upload_preview_media(rubika_token, publish_path, media_type)
         except Exception:
             preserve_failed_media(
