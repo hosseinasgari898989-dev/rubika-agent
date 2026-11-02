@@ -383,7 +383,9 @@ class Transcribe(unittest.TestCase):
                 segment(40.0, 43.0, "private invalid words text", [
                     SimpleNamespace(start=42.5, end=41.0, word="invalid"),
                 ]),
-                segment(72.0, 80.0, "private empty word text", []),
+                segment(72.0, 80.0, "private invalid word time", [
+                    SimpleNamespace(start=79.5, end=79.5, word=" invalid"),
+                ]),
                 segment(5.0, 6.0, "   ", []),
                 segment(9.0, 13.0, "private valid cue text", [
                     SimpleNamespace(start=10.3, end=11.1, word=" private"),
