@@ -83,6 +83,51 @@ class TranscriptionResult(list):
         self.report = dict(report)
 
 
+ASR_DIAGNOSTIC_MAX_SEGMENTS = 200
+ASR_CUE_GAP_THRESHOLD_MS = 3000
+
+
+def _segment_range_ms(segment: object) -> list[int | None]:
+    """Return a transcript-free [start_ms, end_ms] range for one ASR segment."""
+    result = []
+    for attribute in ("start", "end"):
+        try:
+            seconds = float(getattr(segment, attribute))
+            if not math.isfinite(seconds):
+                result.append(None)
+            else:
+                result.append(max(0, int(round(seconds * 1000))))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            result.append(None)
+    return result
+
+
+def cue_free_gaps_over_3s(cues: list, duration_ms: int,
+                          threshold_ms: int = ASR_CUE_GAP_THRESHOLD_MS) -> list[list[int]]:
+    """Return leading, interior and trailing cue-free intervals longer than three seconds."""
+    duration = max(0, int(duration_ms))
+    threshold = max(0, int(threshold_ms))
+    if duration <= 0:
+        return []
+    intervals = []
+    for start, end, _text in cues:
+        start_ms = min(duration, max(0, int(start)))
+        end_ms = min(duration, max(start_ms, int(end)))
+        intervals.append((start_ms, end_ms))
+    intervals.sort()
+    cursor = 0
+    gaps = []
+    for start_ms, end_ms in intervals:
+        if start_ms > cursor and start_ms - cursor > threshold:
+            gaps.append([cursor, start_ms, start_ms - cursor])
+        cursor = max(cursor, end_ms)
+        if cursor >= duration:
+            break
+    if duration - cursor > threshold:
+        gaps.append([cursor, duration, duration - cursor])
+    return gaps
+
+
 def transcribe(video: str, model_size: str = "medium", language: str = "en",
                model_factory=None, runtime_limit_seconds: float = 900.0,
                speech_seconds: float | None = None, duration_ms: int | None = None) -> list:
@@ -110,7 +155,7 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
         speech_seconds_value = 0.0
     duration_ms_value = max(0, int(duration_ms or 0))
 
-    def run_model(size: str, audio_input, options: dict, *, watch_runtime: bool) -> tuple[list, float, float, bool]:
+    def run_model(size: str, audio_input, options: dict, *, watch_runtime: bool) -> tuple[list, dict, float, float, bool]:
         model_started = time.monotonic()
         model = create_model(size)
         segments, _info = model.transcribe(
@@ -118,6 +163,13 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
         )
         iterator = iter(segments)
         cues = []
+        before_ranges = []
+        after_ranges = []
+        dropped_ranges = {
+            "empty_segment_text": [],
+            "missing_word_timing": [],
+            "invalid_word_timing": [],
+        }
         exceeded = False
         while True:
             if watch_runtime and size == "medium" and time.monotonic() - started >= runtime_limit_seconds:
@@ -130,9 +182,22 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
                 seg = next(iterator)
             except StopIteration:
                 break
-            text = " ".join(str(seg.text).split())
+            segment_range = _segment_range_ms(seg)
+            before_ranges.append(segment_range)
+            text = " ".join(str(getattr(seg, "text", "") or "").split())
+            if not text:
+                dropped_ranges["empty_segment_text"].append(segment_range)
+                continue
+
+            raw_words = getattr(seg, "words", None)
+            if raw_words is None:
+                dropped_ranges["missing_word_timing"].append(segment_range)
+                continue
+
             word_times = []
-            for word in getattr(seg, "words", None) or ():
+            saw_word_entry = False
+            for word in raw_words:
+                saw_word_entry = True
                 word_text = " ".join(str(getattr(word, "word", "") or "").split())
                 if not word_text:
                     continue
@@ -147,24 +212,58 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
                     and word_end > word_start
                 ):
                     word_times.append((word_start, word_end))
-            if text and word_times:
-                start_ms = int(round(word_times[0][0] * 1000))
-                end_ms = int(round(word_times[-1][1] * 1000))
-                if end_ms > start_ms:
-                    cues.append((start_ms, end_ms, text))
+
+            if not saw_word_entry:
+                dropped_ranges["missing_word_timing"].append(segment_range)
+                continue
+            if not word_times:
+                dropped_ranges["invalid_word_timing"].append(segment_range)
+                continue
+
+            start_ms = int(round(word_times[0][0] * 1000))
+            end_ms = int(round(word_times[-1][1] * 1000))
+            if end_ms <= start_ms:
+                dropped_ranges["invalid_word_timing"].append(segment_range)
+                continue
+            cues.append((start_ms, end_ms, text))
+            after_ranges.append(segment_range)
+
+        segment_diagnostics = {
+            "segments_before_word_timing_count": len(before_ranges),
+            "segments_before_word_timing_ranges_ms": before_ranges[:ASR_DIAGNOSTIC_MAX_SEGMENTS],
+            "segments_before_word_timing_ranges_truncated": (
+                len(before_ranges) > ASR_DIAGNOSTIC_MAX_SEGMENTS
+            ),
+            "segments_after_word_timing_count": len(after_ranges),
+            "segments_after_word_timing_ranges_ms": after_ranges[:ASR_DIAGNOSTIC_MAX_SEGMENTS],
+            "segments_after_word_timing_ranges_truncated": (
+                len(after_ranges) > ASR_DIAGNOSTIC_MAX_SEGMENTS
+            ),
+            "segments_dropped_word_timing": [
+                {
+                    "reason": reason,
+                    "count": len(ranges),
+                    "ranges_ms": ranges[:ASR_DIAGNOSTIC_MAX_SEGMENTS],
+                    "ranges_truncated": len(ranges) > ASR_DIAGNOSTIC_MAX_SEGMENTS,
+                }
+                for reason, ranges in dropped_ranges.items() if ranges
+            ],
+        }
         model_elapsed = max(0.0, time.monotonic() - model_started)
         total_elapsed = max(0.0, time.monotonic() - started)
         if watch_runtime and size == "medium" and total_elapsed >= runtime_limit_seconds:
             exceeded = True
-        return cues, model_elapsed, total_elapsed, exceeded
+        return cues, segment_diagnostics, model_elapsed, total_elapsed, exceeded
 
-    def summarize_pass(name: str, raw_cues: list, elapsed: float):
+    def summarize_pass(name: str, raw_cues: list, elapsed: float,
+                       segment_diagnostics: dict):
         cleaned = clean_cues(raw_cues)
         duplicates = count_dropped_duplicates(raw_cues)
         diagnostics = build_asr_diagnostics(
             raw_cues, cleaned, duplicates, duration_ms_value,
         )
         char_count = sum(len(text) for _start, _end, text in cleaned)
+        cue_gaps = cue_free_gaps_over_3s(cleaned, duration_ms_value)
         summary = {
             "name": name,
             "raw_cues": len(raw_cues),
@@ -173,11 +272,16 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             "max_cue_ms": diagnostics["asr_max_cue_ms"],
             "elapsed_seconds": round(max(0.0, elapsed), 1),
             "dropped_duplicates": duplicates,
+            **segment_diagnostics,
+            "cue_free_gaps_over_3s": cue_gaps[:ASR_DIAGNOSTIC_MAX_SEGMENTS],
+            "cue_free_gaps_over_3s_truncated": (
+                len(cue_gaps) > ASR_DIAGNOSTIC_MAX_SEGMENTS
+            ),
         }
         return summary, cleaned, diagnostics, duplicates
 
     # Pass A is the existing medium/int8 configuration and remains the default path.
-    cues_a, elapsed_a, total_elapsed, exceeded = run_model(
+    cues_a, segments_a, elapsed_a, total_elapsed, exceeded = run_model(
         model_size, audio, ASR_OPTIONS, watch_runtime=True,
     )
     model_used = model_size
@@ -186,7 +290,7 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
     fallback_elapsed = 0.0
     pass_a_elapsed = elapsed_a
     summary_a, cleaned_a, diagnostics_a, duplicates_a = summarize_pass(
-        "A", cues_a, pass_a_elapsed,
+        "A", cues_a, pass_a_elapsed, segments_a,
     )
     passes = [summary_a]
     candidates = []
@@ -231,11 +335,11 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
                     break
                 if time.monotonic() - started >= runtime_limit_seconds:
                     break
-            retry_cues, retry_elapsed, total_elapsed, retry_exceeded = run_model(
+            retry_cues, retry_segments, retry_elapsed, total_elapsed, retry_exceeded = run_model(
                 model_size, pass_audio, options, watch_runtime=True,
             )
             summary, _cleaned, diagnostics, duplicates = summarize_pass(
-                name, retry_cues, retry_elapsed,
+                name, retry_cues, retry_elapsed, retry_segments,
             )
             passes.append(summary)
             if not retry_exceeded and duplicates == 0 and summary["chars"] > 0:

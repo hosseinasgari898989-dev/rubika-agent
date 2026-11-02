@@ -373,6 +373,78 @@ class Transcribe(unittest.TestCase):
         self.assertGreater(decode.call_args.kwargs["timeout"], 0)
         self.assertLessEqual(decode.call_args.kwargs["timeout"], 600)
 
+    def test_reports_segment_ranges_word_filter_reasons_and_long_cue_free_gaps_per_pass(self):
+        def segment(start, end, text, words):
+            return SimpleNamespace(start=start, end=end, text=text, words=words)
+
+        rounds = [
+            [
+                segment(20.0, 22.0, "private missing words text", None),
+                segment(40.0, 43.0, "private invalid words text", [
+                    SimpleNamespace(start=42.5, end=41.0, word="invalid"),
+                ]),
+                segment(72.0, 80.0, "private invalid word time", [
+                    SimpleNamespace(start=79.5, end=79.5, word=" invalid"),
+                ]),
+                segment(5.0, 6.0, "   ", []),
+                segment(9.0, 13.0, "private valid cue text", [
+                    SimpleNamespace(start=10.3, end=11.1, word=" private"),
+                    SimpleNamespace(start=11.5, end=12.2, word=" words"),
+                ]),
+            ],
+            [
+                segment(20.0, 21.0, "private B one", [
+                    SimpleNamespace(start=20.0, end=21.0, word=" B"),
+                ]),
+                segment(40.0, 41.0, "private B two", [
+                    SimpleNamespace(start=40.0, end=41.0, word=" B"),
+                ]),
+            ],
+            [
+                segment(72.0, 73.0, "private C one", [
+                    SimpleNamespace(start=72.0, end=73.0, word=" C"),
+                ]),
+            ],
+        ]
+        index = {"value": 0}
+
+        def factory():
+            rows = rounds[index["value"]]
+            index["value"] += 1
+            return SimpleNamespace(transcribe=lambda audio, **kwargs: (iter(rows), None))
+
+        with patch.object(sp, "decode_audio_16k", return_value="highpass-only-pcm"):
+            result = sp.transcribe(
+                "input.mp4", model_factory=factory, speech_seconds=63.6, duration_ms=85000,
+            )
+
+        passes = result.report["asr_passes"]
+        a, b, c = passes
+        self.assertEqual(a["name"], "A")
+        self.assertEqual(a["segments_before_word_timing_count"], 5)
+        self.assertEqual(a["segments_before_word_timing_ranges_ms"], [
+            [20000, 22000], [40000, 43000], [72000, 80000], [5000, 6000], [9000, 13000],
+        ])
+        self.assertEqual(a["segments_after_word_timing_count"], 1)
+        self.assertEqual(a["segments_after_word_timing_ranges_ms"], [[9000, 13000]])
+        dropped = {item["reason"]: item for item in a["segments_dropped_word_timing"]}
+        self.assertEqual(dropped["missing_word_timing"]["count"], 1)
+        self.assertEqual(dropped["missing_word_timing"]["ranges_ms"], [[20000, 22000]])
+        self.assertEqual(dropped["invalid_word_timing"]["count"], 2)
+        self.assertEqual(dropped["invalid_word_timing"]["ranges_ms"], [[40000, 43000], [72000, 80000]])
+        self.assertEqual(dropped["empty_segment_text"]["count"], 1)
+        self.assertEqual(dropped["empty_segment_text"]["ranges_ms"], [[5000, 6000]])
+        self.assertTrue(a["cue_free_gaps_over_3s"])
+        self.assertIn([0, 10300, 10300], a["cue_free_gaps_over_3s"])
+        self.assertIn([12200, 85000, 72800], a["cue_free_gaps_over_3s"])
+        self.assertEqual(b["segments_before_word_timing_count"], 2)
+        self.assertEqual(b["segments_after_word_timing_count"], 2)
+        self.assertEqual(b["segments_dropped_word_timing"], [])
+        self.assertEqual(c["segments_before_word_timing_count"], 1)
+        self.assertEqual(c["segments_after_word_timing_count"], 1)
+        self.assertNotIn("private", repr(result.report))
+        self.assertNotIn("private ", repr(result.report))
+
     def test_healthy_asr_does_not_run_extra_passes(self):
         calls = []
         def factory():
