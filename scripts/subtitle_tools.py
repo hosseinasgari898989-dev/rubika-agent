@@ -207,6 +207,7 @@ def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl:
 
 
 def _render_glyph_bounds(cues: list, fontsdir: str, margin_vs: list,
+                         font: str = "Estedad", size: int = DEFAULT_ASS_SIZE,
                          ffmpeg: str = "ffmpeg") -> list:
     """Render each cue with real libass/Estedad pixels and return its visible glyph bbox."""
     from PIL import Image
@@ -224,7 +225,10 @@ def _render_glyph_bounds(cues: list, fontsdir: str, margin_vs: list,
         workdir = Path(temp)
         ass_path = workdir / "glyph-mask.ass"
         frame_pattern = workdir / "glyph-%04d.png"
-        ass_path.write_text(to_ass(probe_cues, margin_vs=margin_vs), encoding="utf-8")
+        ass_path.write_text(
+            to_ass(probe_cues, font=font, size=size, margin_vs=margin_vs),
+            encoding="utf-8",
+        )
         command = [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i",
@@ -258,7 +262,9 @@ def to_ass_with_glyph_boxes(cues: list, fontsdir: str = "assets/fonts",
         return to_ass(cues, font=font, size=size, rtl=rtl), []
 
     margins = [DEFAULT_ASS_MARGIN_V] * len(cues)
-    bounds = _render_glyph_bounds(cues, fontsdir, margins, ffmpeg=ffmpeg)
+    bounds = _render_glyph_bounds(
+        cues, fontsdir, margins, font=font, size=size, ffmpeg=ffmpeg,
+    )
     for _ in range(4):
         corrections = [
             bound[3] - GLYPH_BOTTOM_TARGET_EXCLUSIVE for bound in bounds
@@ -272,7 +278,9 @@ def to_ass_with_glyph_boxes(cues: list, fontsdir: str = "assets/fonts",
         if updated == margins:
             raise RuntimeError("subtitle_glyph_baseline_could_not_be_aligned")
         margins = updated
-        bounds = _render_glyph_bounds(cues, fontsdir, margins, ffmpeg=ffmpeg)
+        bounds = _render_glyph_bounds(
+        cues, fontsdir, margins, font=font, size=size, ffmpeg=ffmpeg,
+    )
 
     if any(abs(bound[3] - GLYPH_BOTTOM_TARGET_EXCLUSIVE) > 1 for bound in bounds):
         raise RuntimeError("subtitle_glyph_baseline_out_of_tolerance")

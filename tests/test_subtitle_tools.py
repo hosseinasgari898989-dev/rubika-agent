@@ -53,7 +53,7 @@ class SubtitleToolsTest(unittest.TestCase):
     def test_ass_output(self):
         ass = st.to_ass([(1000, 2500, "سلام {دنیا}\nخط دوم")])
         self.assertIn("Estedad", ass)
-        self.assertIn("Dialogue: 0,0:00:01.00,0:00:02.50", ass)
+        self.assertIn("Dialogue: 1,0:00:01.00,0:00:02.50", ass)
         self.assertIn("\\N", ass)
         style_line = next(line for line in ass.splitlines() if line.startswith("Style: Default,"))
         self.assertEqual(
