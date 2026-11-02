@@ -15,6 +15,8 @@ RLM = "\u200f"
 # Burned-in subtitle size (PlayResY 720). Medium-large; callers asking for less get this floor.
 DEFAULT_ASS_SIZE = 60
 MIN_ASS_SIZE = 60
+# BorderStyle 3 keeps the opaque box; reduce its vertical border only, symmetrically.
+ASS_VERTICAL_OUTLINE = 4
 
 
 def _ms(m: re.Match) -> int:
@@ -125,7 +127,10 @@ def to_ass(cues: list, font: str = "Estedad", size: int = DEFAULT_ASS_SIZE, rtl:
         clean = t.replace("{", "(").replace("}", ")").replace("\n", "\\N")
         if rtl:
             clean = RLM + clean
-        lines.append(f"Dialogue: 0,{_ass_ts(s)},{_ass_ts(e)},Default,,0,0,0,,{clean}")
+        lines.append(
+            f"Dialogue: 0,{_ass_ts(s)},{_ass_ts(e)},Default,,0,0,0,,"
+            f"{{\\ybord{ASS_VERTICAL_OUTLINE}}}{clean}"
+        )
     return head + "\n".join(lines) + "\n"
 
 
