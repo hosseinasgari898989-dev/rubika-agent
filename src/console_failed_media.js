@@ -134,7 +134,7 @@ async function list(request, env, h, fail) {
 async function deleteRequest(request, env, h, fail) {
   const { b, res } = await readBody(request, h, fail);
   if (res) return res;
-  const eligible = "status IN ('stored','delete_failed')";
+  const eligible = "status IN ('stored','delete_failed','delete_requested')";
   let sql;
   let args = [];
   if (b.all === true) {
