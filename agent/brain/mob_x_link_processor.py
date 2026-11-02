@@ -106,7 +106,27 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
     if not isinstance(warning, str) or warning not in ASR_QUALITY_WARNING_CODES:
         warning = None
 
-    return {
+    passes = []
+    raw_passes = source.get("asr_passes")
+    if isinstance(raw_passes, list):
+        for item in raw_passes[:3]:
+            if not isinstance(item, dict) or item.get("name") not in {"A", "B", "C"}:
+                continue
+            row = {"name": item["name"]}
+            for key in ("raw_cues", "chars", "max_cue_ms", "dropped_duplicates"):
+                try:
+                    row[key] = max(0, int(item.get(key) or 0))
+                except (TypeError, ValueError, OverflowError):
+                    row[key] = 0
+            for key in ("coverage", "elapsed_seconds"):
+                try:
+                    number = float(item.get(key) or 0.0)
+                    row[key] = round(number, 4 if key == "coverage" else 1) if math.isfinite(number) and number >= 0 else 0.0
+                except (TypeError, ValueError, OverflowError):
+                    row[key] = 0.0
+            passes.append(row)
+
+    safe = {
         "asr_raw_cues": nonnegative_int("asr_raw_cues"),
         "asr_clean_cues": nonnegative_int("asr_clean_cues"),
         "asr_dropped_duplicates": nonnegative_int("asr_dropped_duplicates"),
@@ -116,7 +136,18 @@ def _safe_asr_diagnostics(value: object) -> dict[str, Any]:
         "asr_cue_coverage_ratio": round(max(0.0, coverage), 4),
         "asr_timeline": timeline,
         "asr_quality_warning": warning,
+        "asr_passes": passes,
     }
+    selected_pass = source.get("asr_selected_pass")
+    if selected_pass in {"A", "B", "C"}:
+        safe["asr_selected_pass"] = selected_pass
+    try:
+        chars_per_second = float(source.get("chars_per_speech_second"))
+        if math.isfinite(chars_per_second) and 0 <= chars_per_second <= 1000000:
+            safe["chars_per_speech_second"] = round(chars_per_second, 3)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return safe
 
 
 def _safe_subtitle_error_diagnostics(exc: BaseException) -> dict[str, Any]:
@@ -128,6 +159,7 @@ def _safe_subtitle_error_diagnostics(exc: BaseException) -> dict[str, Any]:
         "asr_raw_cues", "asr_clean_cues", "asr_dropped_duplicates",
         "asr_max_cue_ms", "asr_first_start_ms", "asr_last_end_ms",
         "asr_cue_coverage_ratio", "asr_timeline", "asr_quality_warning",
+        "asr_passes", "asr_selected_pass", "chars_per_speech_second",
     }
     if not any(key in source for key in diagnostic_keys):
         return {}
@@ -704,8 +736,12 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                 language = "en"
 
             def transcribe_subtitles(video_path: str) -> list:
-                # faster-whisper is pinned and installed only by the Mob X workflow.
-                return subtitle_pipeline.transcribe(video_path, model_size="medium", language=language)
+                # Use the measured speech duration and source-video duration for ASR quality checks.
+                return subtitle_pipeline.transcribe(
+                    video_path, model_size="medium", language=language,
+                    speech_seconds=speech_gate_result.get("speech_seconds"),
+                    duration_ms=round(float(inspection.duration_seconds or 0) * 1000),
+                )
 
             def translate_subtitle_batch(prompt: str, *, max_tokens: int) -> str:
                 if max_tokens != subtitle_pipeline.MAX_OUT_TOKENS:

@@ -48,15 +48,16 @@ class SubtitleError(Exception):
         self.diagnostics = dict(diagnostics or {})
 
 
-def audio_cmd(path: str) -> list:
-    """Decode normalized speech to 16 kHz mono float32 PCM."""
-    return ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-af", "highpass=f=80,loudnorm",
+def audio_cmd(path: str, *, normalize: bool = True) -> list:
+    """Decode high-pass-filtered speech to 16 kHz mono float32 PCM."""
+    audio_filter = "highpass=f=80,loudnorm" if normalize else "highpass=f=80"
+    return ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-af", audio_filter,
             "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"]
 
 
-def decode_audio_16k(path: str, run=subprocess.run):
-    """Decode with ffmpeg to a float32 numpy array. Bypasses PyAV (av.open metadata_errors bug)."""
-    r = run(audio_cmd(path), capture_output=True, timeout=600)
+def decode_audio_16k(path: str, run=subprocess.run, *, normalize: bool = True):
+    """Decode with ffmpeg to float32 PCM; optionally omit loudness normalization."""
+    r = run(audio_cmd(path, normalize=normalize), capture_output=True, timeout=600)
     if r.returncode != 0:
         tail = r.stderr or b""
         tail = tail.decode("utf-8", "replace") if isinstance(tail, bytes) else str(tail)
@@ -76,8 +77,9 @@ class TranscriptionResult(list):
 
 
 def transcribe(video: str, model_size: str = "medium", language: str = "en",
-               model_factory=None, runtime_limit_seconds: float = 900.0) -> list:
-    """Transcribe with CPU/int8 faster-whisper, falling back to small after 15 minutes."""
+               model_factory=None, runtime_limit_seconds: float = 900.0,
+               speech_seconds: float | None = None, duration_ms: int | None = None) -> list:
+    """Transcribe and, only for suspiciously sparse medium output, run two bounded retries."""
     started = time.monotonic()
     audio = video
     if model_factory is None:
@@ -93,12 +95,19 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             return model_factory()
 
     runtime_limit_seconds = max(0.0, float(runtime_limit_seconds))
+    try:
+        speech_seconds_value = float(speech_seconds) if speech_seconds is not None else 0.0
+        if not math.isfinite(speech_seconds_value) or speech_seconds_value <= 0:
+            speech_seconds_value = 0.0
+    except (TypeError, ValueError, OverflowError):
+        speech_seconds_value = 0.0
+    duration_ms_value = max(0, int(duration_ms or 0))
 
-    def run_model(size: str, *, watch_runtime: bool) -> tuple[list, float, float, bool]:
+    def run_model(size: str, audio_input, options: dict, *, watch_runtime: bool) -> tuple[list, float, float, bool]:
         model_started = time.monotonic()
         model = create_model(size)
         segments, _info = model.transcribe(
-            audio, language=language, beam_size=5, **ASR_OPTIONS,
+            audio_input, language=language, beam_size=5, **options,
         )
         iterator = iter(segments)
         cues = []
@@ -123,26 +132,129 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             exceeded = True
         return cues, model_elapsed, total_elapsed, exceeded
 
-    cues, model_elapsed, total_elapsed, exceeded = run_model(model_size, watch_runtime=True)
+    def summarize_pass(name: str, raw_cues: list, elapsed: float):
+        cleaned = clean_cues(raw_cues)
+        duplicates = count_dropped_duplicates(raw_cues)
+        diagnostics = build_asr_diagnostics(
+            raw_cues, cleaned, duplicates, duration_ms_value,
+        )
+        char_count = sum(len(text) for _start, _end, text in cleaned)
+        summary = {
+            "name": name,
+            "raw_cues": len(raw_cues),
+            "chars": char_count,
+            "coverage": diagnostics["asr_cue_coverage_ratio"],
+            "max_cue_ms": diagnostics["asr_max_cue_ms"],
+            "elapsed_seconds": round(max(0.0, elapsed), 1),
+            "dropped_duplicates": duplicates,
+        }
+        return summary, cleaned, diagnostics, duplicates
+
+    # Pass A is the existing medium/int8 configuration and remains the default path.
+    cues_a, elapsed_a, total_elapsed, exceeded = run_model(
+        model_size, audio, ASR_OPTIONS, watch_runtime=True,
+    )
+    model_used = model_size
+    fallback_reason = None
+    medium_elapsed = 0.0
+    fallback_elapsed = 0.0
+    pass_a_elapsed = elapsed_a
     if model_size == "medium" and exceeded:
-        # Discard partial medium output; never mix cues from two ASR models.
-        cues, small_elapsed, total_elapsed, _ = run_model("small", watch_runtime=False)
-        report = {
-            "asr_initial_model": "medium",
-            "asr_model": "small",
-            "asr_fallback_reason": "medium_runtime_exceeded_15m",
-            "asr_medium_elapsed_seconds": round(model_elapsed, 1),
-            "asr_fallback_elapsed_seconds": round(small_elapsed, 1),
-            "asr_elapsed_seconds": round(total_elapsed, 1),
-        }
+        # Preserve the established small-model fallback if the original 15-minute run expires.
+        # No low-density retry is started after the shared time budget has been consumed.
+        cues_a, fallback_elapsed, total_elapsed, _ = run_model(
+            "small", audio, ASR_OPTIONS, watch_runtime=False,
+        )
+        model_used = "small"
+        fallback_reason = "medium_runtime_exceeded_15m"
+        medium_elapsed = elapsed_a
+        pass_a_elapsed += fallback_elapsed
+
+    summary_a, cleaned_a, diagnostics_a, duplicates_a = summarize_pass(
+        "A", cues_a, pass_a_elapsed,
+    )
+    passes = [summary_a]
+    candidates = []
+    if duplicates_a == 0 and summary_a["chars"] > 0:
+        candidates.append(("A", cues_a, summary_a, diagnostics_a))
+
+    chars_per_speech_second_a = (
+        summary_a["chars"] / speech_seconds_value if speech_seconds_value > 0 else None
+    )
+    suspicious = (
+        diagnostics_a["asr_quality_warning"] is not None
+        or (
+            chars_per_speech_second_a is not None
+            and chars_per_speech_second_a < 5.0
+        )
+    )
+
+    # Extra passes share the original 900-second deadline. A pass that reaches the
+    # deadline is diagnostic only; its partial cues are never allowed to replace A.
+    if suspicious and model_size == "medium" and not exceeded:
+        retry_specs = (
+            ("B", audio, {**ASR_OPTIONS, "vad_filter": False}),
+            ("C", None, {
+                **ASR_OPTIONS,
+                "vad_filter": True,
+                "vad_parameters": {**ASR_VAD_PARAMETERS, "threshold": 0.2},
+            }),
+        )
+        for name, pass_audio, options in retry_specs:
+            if time.monotonic() - started >= runtime_limit_seconds:
+                break
+            if name == "C":
+                try:
+                    # C deliberately omits loudnorm; only the high-pass filter is applied.
+                    pass_audio = decode_audio_16k(video, normalize=False)
+                except SubtitleError:
+                    break
+                if time.monotonic() - started >= runtime_limit_seconds:
+                    break
+            retry_cues, retry_elapsed, total_elapsed, retry_exceeded = run_model(
+                model_size, pass_audio, options, watch_runtime=True,
+            )
+            summary, _cleaned, diagnostics, duplicates = summarize_pass(
+                name, retry_cues, retry_elapsed,
+            )
+            passes.append(summary)
+            if not retry_exceeded and duplicates == 0 and summary["chars"] > 0:
+                candidates.append((name, retry_cues, summary, diagnostics))
+            if retry_exceeded:
+                break
+
+    # Highest clean character count wins. Ties keep the earlier pass; a duplicate
+    # loop is never eligible, and A remains the safe fallback if every pass loops.
+    if candidates:
+        selected_name, selected_cues, selected_summary, selected_diagnostics = max(
+            candidates, key=lambda candidate: candidate[2]["chars"],
+        )
     else:
-        report = {
-            "asr_initial_model": model_size,
-            "asr_model": model_size,
-            "asr_fallback_reason": None,
-            "asr_elapsed_seconds": round(total_elapsed, 1),
-        }
-    return TranscriptionResult(cues, report)
+        selected_name, selected_cues, selected_summary, selected_diagnostics = (
+            "A", cues_a, summary_a, diagnostics_a,
+        )
+
+    chars_per_speech_second = (
+        selected_summary["chars"] / speech_seconds_value
+        if speech_seconds_value > 0 else None
+    )
+    total_elapsed = max(total_elapsed, time.monotonic() - started)
+    report = {
+        "asr_initial_model": model_size,
+        "asr_model": model_used,
+        "asr_fallback_reason": fallback_reason,
+        "asr_elapsed_seconds": round(max(0.0, total_elapsed), 1),
+        "asr_medium_elapsed_seconds": round(medium_elapsed, 1),
+        "asr_fallback_elapsed_seconds": round(fallback_elapsed, 1),
+        "asr_passes": passes,
+        "asr_selected_pass": selected_name,
+        "chars_per_speech_second": (
+            round(chars_per_speech_second, 3)
+            if chars_per_speech_second is not None else None
+        ),
+        **selected_diagnostics,
+    }
+    return TranscriptionResult(selected_cues, report)
 
 
 def clean_cues(cues: list) -> list:
@@ -297,8 +409,7 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
     wd.mkdir(parents=True, exist_ok=True)
     raw_cues = transcribe_fn(str(video))
     asr_report = getattr(raw_cues, "report", {})
-    if not isinstance(asr_report, dict):
-        asr_report = {}
+    asr_report = dict(asr_report) if isinstance(asr_report, dict) else {}
     dropped_duplicates = count_dropped_duplicates(raw_cues)
     cues = clean_cues(raw_cues)
     asr_diagnostics = build_asr_diagnostics(raw_cues, cues, dropped_duplicates, 0)
