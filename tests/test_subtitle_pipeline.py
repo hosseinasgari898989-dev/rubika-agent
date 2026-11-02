@@ -48,6 +48,38 @@ class CleanCues(unittest.TestCase):
         self.assertEqual(sp.count_dropped_duplicates(raw), 2)
 
 
+class NonSpeechTags(unittest.TestCase):
+    def test_standalone_labels_and_inline_tags_are_removed_but_spoken_text_stays(self):
+        cues = [
+            (0, 500, "[Music]"),
+            (500, 1000, "[Applause]"),
+            (1000, 1500, "(music)"),
+            (1500, 2000, "موسیقی تنش‌زا"),
+            (2000, 2500, "جلوه صوتی"),
+            (2500, 3000, "♪"),
+            (3000, 4500, "Hello [Music] there [Applause]"),
+            (4500, 6000, "The music and applause continue in the dialogue."),
+        ]
+
+        cleaned, removed = sp.strip_non_speech_tags(cues)
+
+        self.assertEqual(removed, 8)
+        self.assertEqual(
+            cleaned,
+            [
+                (3000, 4500, "Hello there"),
+                (4500, 6000, "The music and applause continue in the dialogue."),
+            ],
+        )
+
+    def test_inline_music_notes_are_removed_without_dropping_dialogue(self):
+        cleaned, removed = sp.strip_non_speech_tags([
+            (0, 2000, "♪background music♪ Keep talking♪"),
+        ])
+        self.assertEqual(cleaned, [(0, 2000, "Keep talking")])
+        self.assertEqual(removed, 2)
+
+
 class Translate(unittest.TestCase):
     def test_happy_path_and_cap(self):
         seen = []
@@ -153,6 +185,59 @@ class Build(unittest.TestCase):
         burn = next(c for c in run.calls if c[0] == "ffmpeg")
         self.assertIn("-c:a", burn)
         self.assertIsNone(res["asr_quality_warning"])
+
+    def test_non_speech_labels_are_removed_before_translation_and_ass_generation(self):
+        raw = [
+            (0, 700, "[Music]"),
+            (800, 1800, "Hello [Applause] there."),
+            (1900, 2400, "موسیقی تنش‌زا"),
+            (2600, 3800, "Welcome back"),
+            (3900, 4200, "♪"),
+        ]
+        prompts = []
+
+        def translate(prompt, *, max_tokens):
+            prompts.append(prompt)
+            return fake_translate(prompt, max_tokens=max_tokens)
+
+        result = sp.build_subtitled_video(
+            self.video, self.wd, translate,
+            transcribe_fn=lambda _path: raw,
+            run=make_run(dur_in=5000, dur_out=5000),
+        )
+
+        self.assertEqual(result["non_speech_tags_removed"], 4)
+        self.assertEqual(result["cues"], 2)
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("0|Hello there.", prompts[0])
+        self.assertIn("1|Welcome back", prompts[0])
+        for label in ("Music", "Applause", "موسیقی تنش‌زا"):
+            self.assertNotIn(label, prompts[0])
+        srt = Path(result["srt"]).read_text(encoding="utf-8")
+        ass = Path(result["ass"]).read_text(encoding="utf-8")
+        self.assertNotIn("Music", srt)
+        self.assertNotIn("Applause", srt)
+        self.assertNotIn("موسیقی تنش‌زا", srt)
+        self.assertNotIn("Music", ass)
+        self.assertNotIn("Applause", ass)
+
+    def test_all_non_speech_cues_skip_translation_and_keep_removal_count_on_error(self):
+        calls = []
+        with self.assertRaises(sp.SubtitleError) as caught:
+            sp.build_subtitled_video(
+                self.video, self.wd,
+                lambda prompt, **kwargs: calls.append(prompt) or "",
+                transcribe_fn=lambda _path: [
+                    (0, 1000, "[Music]"),
+                    (1000, 2000, "جلوه صوتی"),
+                    (2000, 3000, "♪"),
+                ],
+                run=make_run(dur_in=5000, dur_out=5000),
+            )
+
+        self.assertEqual(caught.exception.code, "no_cues")
+        self.assertEqual(calls, [])
+        self.assertEqual(caught.exception.diagnostics["non_speech_tags_removed"], 3)
 
     def test_sparse_real_case_reports_timeline_and_long_cue_warning(self):
         raw = [(0, 47000, "first"), (48000, 55000, "second"), (56000, 64000, "third")]
