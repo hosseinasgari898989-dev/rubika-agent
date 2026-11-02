@@ -246,7 +246,11 @@ class Build(unittest.TestCase):
 
 class Transcribe(unittest.TestCase):
     def test_segments_to_cues_uses_beam_five_and_vad(self):
-        seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
+        def seg(s, e, t):
+            return SimpleNamespace(
+                start=s, end=e, text=t,
+                words=[SimpleNamespace(start=s, end=e, word=t, probability=0.99)] if t.strip() else [],
+            )
         seen = []
         def run_asr(*args, **kwargs):
             seen.append(kwargs)
@@ -256,11 +260,42 @@ class Transcribe(unittest.TestCase):
         self.assertEqual(result, [(0, 1200, "Hi you")])
         self.assertEqual(seen[0]["beam_size"], 5)
         self.assertTrue(seen[0]["vad_filter"])
+        self.assertTrue(seen[0]["word_timestamps"])
+        self.assertEqual(seen[0]["hallucination_silence_threshold"], 2)
         self.assertEqual(result.report["asr_model"], "medium")
         self.assertIsNone(result.report["asr_fallback_reason"])
 
+    def test_word_timestamps_anchor_cues_and_wordless_segments_are_dropped(self):
+        seen = []
+
+        def run_asr(*args, **kwargs):
+            seen.append(kwargs)
+            return [
+                SimpleNamespace(
+                    start=0.0, end=3.0, text=" Hello   there ",
+                    words=[
+                        SimpleNamespace(start=0.18, end=0.44, word=" Hello", probability=0.98),
+                        SimpleNamespace(start=1.12, end=1.54, word=" there", probability=0.97),
+                    ],
+                ),
+                SimpleNamespace(start=3.0, end=4.0, text="hallucinated without word data", words=None),
+                SimpleNamespace(start=4.0, end=5.0, text="also wordless", words=[]),
+            ], None
+
+        result = sp.transcribe(
+            "x.mp4", model_factory=lambda: SimpleNamespace(transcribe=run_asr),
+        )
+
+        self.assertEqual(result, [(180, 1540, "Hello there")])
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0]["word_timestamps"])
+        self.assertEqual(seen[0]["hallucination_silence_threshold"], 2)
+
     def test_default_model_is_medium_cpu_int8(self):
-        seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
+        seg = lambda s, e, t: SimpleNamespace(
+            start=s, end=e, text=t,
+            words=[SimpleNamespace(start=s, end=e, word=t, probability=0.99)],
+        )  # noqa: E731
         constructed, transcribed = [], []
 
         class FakeWhisperModel:
@@ -278,12 +313,20 @@ class Transcribe(unittest.TestCase):
         self.assertEqual(transcribed[0][0], "mocked-pcm")
         self.assertEqual(transcribed[0][1]["beam_size"], 5)
         self.assertTrue(transcribed[0][1]["vad_filter"])
+        self.assertTrue(transcribed[0][1]["word_timestamps"])
+        self.assertEqual(transcribed[0][1]["hallucination_silence_threshold"], 2)
         self.assertEqual(result.report["asr_model"], "medium")
 
     @staticmethod
     def _segments(rows):
         return [
-            SimpleNamespace(start=start_ms / 1000, end=end_ms / 1000, text=text)
+            SimpleNamespace(
+                start=start_ms / 1000, end=end_ms / 1000, text=text,
+                words=[SimpleNamespace(
+                    start=start_ms / 1000, end=end_ms / 1000,
+                    word=text, probability=0.99,
+                )],
+            )
             for start_ms, end_ms, text in rows
         ]
 
@@ -315,6 +358,9 @@ class Transcribe(unittest.TestCase):
         self.assertEqual(result.report["asr_passes"][1]["chars"], 300)
         self.assertEqual(result.report["asr_passes"][2]["chars"], 120)
         self.assertEqual(len(calls), 3)
+        for call in calls:
+            self.assertTrue(call["word_timestamps"])
+            self.assertEqual(call["hallucination_silence_threshold"], 2)
         self.assertTrue(calls[0]["vad_filter"])
         self.assertFalse(calls[1]["vad_filter"])
         self.assertTrue(calls[2]["vad_filter"])
@@ -407,7 +453,10 @@ class Transcribe(unittest.TestCase):
                     return iter(self._segments([(0, 1000, "A" * 30)])), None
                 def slow_b():
                     clock.now = 6.0
-                    yield SimpleNamespace(start=0.0, end=5.0, text="B" * 80)
+                    yield SimpleNamespace(
+                        start=0.0, end=5.0, text="B" * 80,
+                        words=[SimpleNamespace(start=0.0, end=5.0, word="B" * 80, probability=0.99)],
+                    )
                 return slow_b(), None
             return SimpleNamespace(transcribe=transcribe)
 
@@ -424,7 +473,10 @@ class Transcribe(unittest.TestCase):
         self.assertEqual(result[0][2], "A" * 30)
 
     def test_medium_runtime_limit_keeps_pass_a_without_starting_small_fallback(self):
-        seg = lambda s, e, t: SimpleNamespace(start=s, end=e, text=t)  # noqa: E731
+        seg = lambda s, e, t: SimpleNamespace(
+            start=s, end=e, text=t,
+            words=[SimpleNamespace(start=s, end=e, word=t, probability=0.99)],
+        )  # noqa: E731
         clock = SimpleNamespace(now=0.0)
         calls = []
 

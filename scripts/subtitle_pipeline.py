@@ -37,8 +37,13 @@ MAX_CUE_CHARS = 80  # longer Persian cues are split in two or more timed pieces
 # ASR tuning: more sensitive VAD (catches quiet/unclear speech) and no context carry-over
 # between segments (prevents hallucination loops on music/noise).
 ASR_VAD_PARAMETERS = {"threshold": 0.35, "min_silence_duration_ms": 400, "speech_pad_ms": 300}
-ASR_OPTIONS = {"vad_filter": True, "vad_parameters": ASR_VAD_PARAMETERS,
-               "condition_on_previous_text": False}
+ASR_OPTIONS = {
+    "vad_filter": True,
+    "vad_parameters": ASR_VAD_PARAMETERS,
+    "condition_on_previous_text": False,
+    "word_timestamps": True,
+    "hallucination_silence_threshold": 2,
+}
 
 
 class SubtitleError(Exception):
@@ -126,8 +131,27 @@ def transcribe(video: str, model_size: str = "medium", language: str = "en",
             except StopIteration:
                 break
             text = " ".join(str(seg.text).split())
-            if text:
-                cues.append((int(seg.start * 1000), int(seg.end * 1000), text))
+            word_times = []
+            for word in getattr(seg, "words", None) or ():
+                word_text = " ".join(str(getattr(word, "word", "") or "").split())
+                if not word_text:
+                    continue
+                try:
+                    word_start = float(word.start)
+                    word_end = float(word.end)
+                except (AttributeError, TypeError, ValueError, OverflowError):
+                    continue
+                if (
+                    math.isfinite(word_start)
+                    and math.isfinite(word_end)
+                    and word_end > word_start
+                ):
+                    word_times.append((word_start, word_end))
+            if text and word_times:
+                start_ms = int(round(word_times[0][0] * 1000))
+                end_ms = int(round(word_times[-1][1] * 1000))
+                if end_ms > start_ms:
+                    cues.append((start_ms, end_ms, text))
         model_elapsed = max(0.0, time.monotonic() - model_started)
         total_elapsed = max(0.0, time.monotonic() - started)
         if watch_runtime and size == "medium" and total_elapsed >= runtime_limit_seconds:

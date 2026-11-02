@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Offline unit tests for scripts/subtitle_tools.py (no network, no ffmpeg)."""
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import subtitle_tools as st  # noqa: E402
@@ -57,7 +61,56 @@ class SubtitleToolsTest(unittest.TestCase):
             "Style: Default,Estedad,60,&H00FFFFFF,&H000000FF,&H66000000,&H80000000,"
             "-1,0,0,0,100,100,0,0,3,6,0,2,40,40,40,1",
         )
-        self.assertNotIn("{", ass.split("[Events]")[1].split("Text\n", 1)[1])
+        self.assertIn(r"{\ybord4}", ass)
+        self.assertNotIn("{", ass.split("[Events]")[1].split("Text\n", 1)[1].replace(r"{\ybord4}", "", 1))
+
+    def test_opaque_box_vertical_padding_changes_symmetrically_only(self):
+        ass = st.to_ass([(0, 1800, "نمونه زیرنویس")])
+        style_line = next(line for line in ass.splitlines() if line.startswith("Style: Default,"))
+        fields = style_line.split(",")
+        # ASS style fields: Fontname, Fontsize, ..., BorderStyle, Outline, Shadow, ..., MarginV.
+        self.assertEqual(fields[1], "Estedad")
+        self.assertEqual(fields[2], "60")
+        self.assertEqual(fields[15], "3")
+        self.assertEqual(fields[16], "6")
+        self.assertEqual(fields[17], "0")
+        self.assertEqual(fields[21], "40")
+        dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
+        self.assertIn(r"{\ybord4}", dialogue)
+        self.assertNotIn(r"{\xbord", dialogue)
+
+    def test_ass_frame_renders_with_libass_when_available(self):
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            self.skipTest("ffmpeg is not installed in this CI runner")
+        filters = subprocess.run(
+            [ffmpeg, "-hide_banner", "-filters"],
+            capture_output=True, text=True, check=True, timeout=15,
+        ).stdout
+        if not any("ass " in line and "libass" in line.lower() for line in filters.splitlines()):
+            self.skipTest("ffmpeg was built without the libass ASS filter")
+
+        repo_root = Path(__file__).resolve().parents[1]
+        fontsdir = repo_root / "assets" / "fonts"
+        with tempfile.TemporaryDirectory() as tmp:
+            ass_path = Path(tmp) / "sample.ass"
+            png_path = Path(tmp) / "sample.png"
+            ass_path.write_text(
+                st.to_ass([(0, 1800, "نمونه زیرنویس")]),
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=white:s=1280x720:r=1:d=2",
+                    "-vf", f"ass={ass_path}:fontsdir={fontsdir}",
+                    "-frames:v", "1", str(png_path),
+                ],
+                capture_output=True, text=True, check=True, timeout=30,
+            )
+            self.assertTrue(png_path.is_file())
+            self.assertGreater(png_path.stat().st_size, 100)
+            self.assertEqual(png_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
 
     def test_ass_font_size_is_medium_large_with_floor(self):
         cue = [(1000, 2500, "سلام")]
