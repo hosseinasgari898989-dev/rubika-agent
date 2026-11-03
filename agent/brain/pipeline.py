@@ -5,6 +5,7 @@ silently substitutes a guessed search result or auto-approves an unknown item.
 """
 from __future__ import annotations
 
+import math
 import re
 import shutil
 from dataclasses import dataclass, field, replace
@@ -36,7 +37,7 @@ class BatchResult:
     status: str
     required_counts: dict[str, int]
     staged: list[StagedMedia] = field(default_factory=list)
-    skipped: list[dict[str, str]] = field(default_factory=list)
+    skipped: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def ready_for_review(self) -> bool:
@@ -58,6 +59,24 @@ class BatchResult:
 def _safe_component(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-")
     return cleaned[:80] or "item"
+
+
+def _music_diagnostic_fields(moderation: Any, has_audio: Any) -> dict[str, Any]:
+    """Return only validated scalar music/audio diagnostics; unknowns remain null."""
+    checks = moderation if isinstance(moderation, Mapping) else {}
+    raw_probability = checks.get("music_probability")
+    probability = None
+    if type(raw_probability) in {int, float}:
+        try:
+            numeric = float(raw_probability)
+            if math.isfinite(numeric) and 0.0 <= numeric <= 1.0:
+                probability = numeric
+        except (OverflowError, TypeError, ValueError):
+            pass
+    return {
+        "music_probability": probability,
+        "has_audio_stream": has_audio if type(has_audio) is bool else None,
+    }
 
 
 def stage_edit_batch(
@@ -103,13 +122,20 @@ def stage_edit_batch(
             continue
         identity = f"{platform}:{candidate.external_id}"
         if identity in seen_ids or candidate.external_id in seen_ids:
-            result.skipped.append({"item": identity, "reason": "duplicate_external_id"})
+            result.skipped.append({
+                "item": identity, "reason": "duplicate_external_id",
+                "music_probability": None, "has_audio_stream": None,
+            })
             continue
         local_reasons = precheck_edit_candidate(candidate)
         if local_reasons:
-            result.skipped.append({"item": identity, "reason": local_reasons[0]})
+            result.skipped.append({
+                "item": identity, "reason": local_reasons[0],
+                "music_probability": None, "has_audio_stream": None,
+            })
             continue
         original: Path | None = None
+        first: InspectionResult | None = None
         moderation: Mapping[str, Any] = {}
         recovery_receipt: dict[str, Any] = {
             "attempts": 0, "recovered": False, "error_codes": [], "action": "no_moderation_attempt"
@@ -121,11 +147,15 @@ def stage_edit_batch(
                 result.skipped.append({
                     "item": identity,
                     "reason": "media_validation_failed:" + ",".join(first.errors),
+                    **_music_diagnostic_fields(moderation, first.has_audio),
                 })
                 original.unlink(missing_ok=True)
                 continue
             if first.sha256 and first.sha256 in seen_digests:
-                result.skipped.append({"item": identity, "reason": "duplicate_file_hash"})
+                result.skipped.append({
+                    "item": identity, "reason": "duplicate_file_hash",
+                    **_music_diagnostic_fields(moderation, first.has_audio),
+                })
                 original.unlink(missing_ok=True)
                 continue
 
@@ -175,9 +205,13 @@ def stage_edit_batch(
                         )
                 else:
                     reason = "ineligible"
-                skipped_row: dict[str, Any] = {"item": identity, "reason": reason}
+                skipped_row: dict[str, Any] = {
+                    "item": identity,
+                    "reason": reason,
+                    **_music_diagnostic_fields(moderation, first.has_audio),
+                }
                 for key in (
-                    "music_probability", "music_decision_reason", "music_detection_method",
+                    "music_decision_reason", "music_detection_method",
                     "music_model", "music_confidence", "music_check_uncertain",
                 ):
                     value = moderation.get(key)
@@ -215,7 +249,7 @@ def stage_edit_batch(
                     publish_path = destination
                     final_inspection = inspector(publish_path, "video")
                     if not final_inspection.ok or final_inspection.width != 1080 or final_inspection.height != 1080:
-                        result.skipped.append({"item": identity, "reason": "normalized_output_invalid"})
+                        result.skipped.append({"item": identity, "reason": "normalized_output_invalid", **_music_diagnostic_fields(moderation, first.has_audio)})
                         destination.unlink(missing_ok=True)
                         original.unlink(missing_ok=True)
                         continue
@@ -232,12 +266,12 @@ def stage_edit_batch(
                 publish_path = destination
                 final_inspection = inspector(publish_path, "video")
                 if not final_inspection.ok or final_inspection.media_type != "video":
-                    result.skipped.append({"item": identity, "reason": "preserved_output_invalid"})
+                    result.skipped.append({"item": identity, "reason": "preserved_output_invalid", **_music_diagnostic_fields(moderation, first.has_audio)})
                     destination.unlink(missing_ok=True)
                     original.unlink(missing_ok=True)
                     continue
             elif output_format != "square_1080x1080":
-                result.skipped.append({"item": identity, "reason": "unsupported_output_format_policy"})
+                result.skipped.append({"item": identity, "reason": "unsupported_output_format_policy", **_music_diagnostic_fields(moderation, first.has_audio)})
                 original.unlink(missing_ok=True)
                 continue
 
@@ -269,6 +303,7 @@ def stage_edit_batch(
                 "item": identity,
                 "reason": "pipeline_error_" + safe_code,
                 "recovery_guidance": recovery_guidance(safe_code),
+                **_music_diagnostic_fields(moderation, first.has_audio if first is not None else None),
             }
             receipt = getattr(exc, "recovery_diagnostics", None)
             if isinstance(receipt, dict):
