@@ -16,7 +16,7 @@ const ID2 = "fm_" + "b".repeat(24);
 const keyFor = id => "/Rubika-Agent/failed/" + id.slice(-8) + ".mp4";
 
 let env;
-function makeEnv({ fail = false, changes = null, token = "test-dispatch-token", allCount = 7 } = {}) {
+function makeEnv({ fail = false, changes = null, token = "", allCount = 7 } = {}) {
   const calls = [];
   const rows = new Map();
   const seed = (id, status = "stored") => rows.set(id, {
@@ -25,7 +25,7 @@ function makeEnv({ fail = false, changes = null, token = "test-dispatch-token", 
   });
   seed(ID1);
   seed(ID2);
-  for (let i = 0; i < allCount; i += 1) {
+  for (let i = 0; i < Math.max(0, allCount - 2); i += 1) {
     const id = "fm_" + i.toString(16).padStart(24, "0");
     if (!rows.has(id)) seed(id);
   }
@@ -282,7 +282,7 @@ test("pending-delete and delete-result enforce the /failed/ key and keep Mega be
 });
 
 if (globalThis.fetch && typeof globalThis.fetch === "function") {
-  test("owner bearer is rechecked even when route is invoked internally", async () => {
+  test("route-level owner bearer is checked before mutation", async () => {
     env = makeEnv();
     const wrong = await post("/failed-media/delete-request", { ids: [ID1] }, "viewer-token");
     assert.equal(wrong.status, 403);
