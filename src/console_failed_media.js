@@ -41,17 +41,23 @@ const decodeBase64Url = (value) => {
   }
 };
 
-// The current web console has one privileged AGENT_API_TOKEN bearer. Do not accept caller-supplied roles/IDs.
-// The later owner/viewer token split is deliberately not simulated by an untrusted header here.
-function hasOwnerBearer(request, env) {
-  const expected = typeof env.AGENT_API_TOKEN === "string" ? env.AGENT_API_TOKEN : "";
+// Defense in depth for the owner-only deletion request. The router also gates all
+// owner mutations; this check deliberately uses only OWNER_WEB_TOKEN and fails closed.
+async function hasOwnerBearer(request, env) {
+  const expected = typeof env.OWNER_WEB_TOKEN === "string" ? env.OWNER_WEB_TOKEN : "";
   const match = /^Bearer ([^\s]+)$/.exec(request.headers.get("authorization") || "");
-  if (!expected || expected.length < 32 || !match || match[1].length !== expected.length) return false;
-  const a = new TextEncoder().encode(match[1]);
-  const b = new TextEncoder().encode(expected);
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i];
-  return diff === 0;
+  if (!expected || expected.length < 32 || !match) return false;
+  const encoder = new TextEncoder();
+  const [providedDigest, expectedDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(match[1])),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  if (typeof crypto.subtle.timingSafeEqual === "function") {
+    return crypto.subtle.timingSafeEqual(providedDigest, expectedDigest);
+  }
+  let difference = 0;
+  for (let index = 0; index < 32; index += 1) difference |= providedDigest[index] ^ expectedDigest[index];
+  return difference === 0;
 }
 
 async function issueDeleteConfirmation(env, rows) {
@@ -215,7 +221,7 @@ async function list(request, env, h, fail) {
 }
 
 async function deleteRequest(request, env, h, fail) {
-  if (!hasOwnerBearer(request, env)) return fail("owner_required", 403);
+  if (!(await hasOwnerBearer(request, env))) return fail("owner_required", 403);
   const { b, res } = await readBody(request, h, fail);
   if (res) return res;
 
