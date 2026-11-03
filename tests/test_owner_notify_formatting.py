@@ -23,7 +23,7 @@ class OwnerDigestFormattingTests(unittest.TestCase):
         body = render_daily_digest(state)
         self.assertIn("🧠 اعلامیهٔ روزانهٔ مغز Rubika-Agent", body)
         self.assertIn("پایش سلامت", body)
-        self.assertIn("500 MiB", body)
+        self.assertIn("500 MB", body)
         self.assertIn("MEGA", body)
         self.assertNotIn("**🧠 اعلامیهٔ روزانهٔ مغز Rubika-Agent**", body)
         self.assertNotIn("**", body)
