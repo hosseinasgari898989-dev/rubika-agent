@@ -717,17 +717,31 @@ class FakeDB {
 }
 
 const TOKEN = "test-agent-api-token-with-at-least-thirty-two-characters";
-const env = () => ({ DB: new FakeDB(), AGENT_API_TOKEN: TOKEN });
-const request = (url, { method = "GET", body, token = TOKEN, headers = {} } = {}) =>
-  new Request("https://worker.test" + url, {
+const OWNER_TOKEN = "test-owner-web-token-with-at-least-thirty-two-characters";
+const env = () => ({ DB: new FakeDB(), AGENT_API_TOKEN: TOKEN, OWNER_WEB_TOKEN: OWNER_TOKEN });
+const OWNER_EXEMPT_POSTS = new Set([
+  "/mob-x/claim", "/mob-x/publish-claim",
+  "/failed-media/record", "/failed-media/list", "/failed-media/pending-delete", "/failed-media/delete-result",
+]);
+const needsOwnerToken = (url, method) => {
+  if (!url.startsWith("/api/console/") || ["GET", "HEAD", "OPTIONS"].includes(method)) return false;
+  const sub = String(url).split("?")[0].replace(/\/+$/, "").slice("/api/console".length);
+  if (OWNER_EXEMPT_POSTS.has(sub)) return false;
+  if (/^\/mob-x\/jobs\/[A-Za-z0-9_-]{1,100}\/(?:transition|preview|delivery)$/.test(sub)) return false;
+  return true;
+};
+const request = (url, { method = "GET", body, token, headers = {} } = {}) => {
+  const bearer = token === undefined ? (needsOwnerToken(url, method) ? OWNER_TOKEN : TOKEN) : token;
+  return new Request("https://worker.test" + url, {
     method,
     headers: {
       ...(body === undefined ? {} : { "content-type": "application/json" }),
-      ...(token === null ? {} : { authorization: "Bearer " + token }),
+      ...(bearer === null ? {} : { authorization: "Bearer " + bearer }),
       ...headers,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+};
 const read = async response => ({ status: response.status, body: await response.json() });
 
 {
@@ -769,6 +783,42 @@ const read = async response => ({ status: response.status, body: await response.
   response = await read(await worker.fetch(request("/api/console/not-a-route"), state));
   assert.equal(response.status, 404);
   assert.equal(response.body.error, "not_found");
+}
+
+// Owner-only web mutations require OWNER_WEB_TOKEN; the AGENT token remains viewer/runner-only.
+{
+  const state = env();
+  const path = "/api/console/links/clear";
+  const body = { confirm: true };
+  for (const [label, token] of [
+    ["missing bearer", null],
+    ["viewer bearer", TOKEN],
+    ["wrong owner bearer", "wrong-owner-web-token-with-at-least-thirty-two-characters"],
+  ]) {
+    const response = await read(await worker.fetch(request(path, { method: "POST", body, token }), state));
+    assert.equal(response.status, 403, label);
+    assert.equal(response.body.error, "owner_required", label);
+  }
+
+  const missingSecret = env();
+  delete missingSecret.OWNER_WEB_TOKEN;
+  const closed = await read(await worker.fetch(
+    request(path, { method: "POST", body, token: OWNER_TOKEN }), missingSecret
+  ));
+  assert.equal(closed.status, 403, "missing OWNER_WEB_TOKEN must fail closed");
+  assert.equal(closed.body.error, "owner_required");
+  assert.equal(missingSecret.DB.panelLinks.size, 0, "denied owner requests must not mutate D1 state");
+
+  const viewerRead = await read(await worker.fetch(
+    request("/api/console/events", { token: TOKEN }), state
+  ));
+  assert.equal(viewerRead.status, 200, "AGENT_API_TOKEN keeps read-only viewer access");
+
+  const actionClaim = await read(await worker.fetch(
+    request("/api/console/mob-x/claim", { method: "POST", body: {}, token: TOKEN }), state
+  ));
+  assert.equal(actionClaim.status, 200, "GitHub Actions runner contract remains on AGENT_API_TOKEN");
+  assert.equal(actionClaim.body.claimed, false);
 }
 
 // POST /sources accepts X but stores it under the schema-supported mob_official platform.
