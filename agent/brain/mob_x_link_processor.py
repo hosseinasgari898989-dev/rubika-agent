@@ -304,7 +304,7 @@ def build_mob_x_caption(original_caption: object, translation: object = None) ->
     """Format a media-backed official X post for Rubika bold and quote metadata."""
     source = _safe_markdown_body(original_caption, 5000)
     if not source:
-        return "**ماب انترتینمنت در پیج X خود پستی منتشر کرد.**"
+        return "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
 
     heading = "**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**"
     translated = _safe_markdown_body(translation, 4000)
@@ -960,6 +960,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
             "title": candidate.title, "published_at": candidate.published_at,
             "media_type": media_type, "caption": caption,
             "original_caption": original, "persian_translation": translation,
+            "caption_mode": "no_caption" if not translation_source else "generated",
             "media_url": media_url, "storage_key": storage_key,
             "source_tier": "official", "review_state": "pending",
             "rubika_file_id": rubika_file_id, "preview_sent": False,
