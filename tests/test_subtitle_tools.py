@@ -305,9 +305,9 @@ class SubtitleLayoutMatrixTest(unittest.TestCase):
     ]
 
     SHORT_LINES = [
-        "آره، آره. English 42!",
-        "علامت فارسی؟ عدد ۱۲۳ و English",
-        "جملهٔ کوتاه سوم!",
+        "آره، آره. EN 42!",
+        "فارسی؟ ۱۲۳!",
+        "English 42!",
     ]
     LONG_LINE = (
         "این جملهٔ فارسی نسبتاً بلند است و باید با اندازه‌گیری واقعی libass "
@@ -371,6 +371,12 @@ class SubtitleLayoutMatrixTest(unittest.TestCase):
                         )
                         self.assertTrue(layouted, "layout must not silently remove subtitle text")
                         self.assertEqual(len(layouted), len(font_sizes))
+                        if variant == "short":
+                            self.assertEqual(
+                                sum(len(text.split("\n")) for _start, _end, text in layouted),
+                                requested_lines,
+                                "short matrix cases must exercise exactly the requested number of rendered lines",
+                            )
                         self.assertTrue(all(16 <= size <= round(60 * short_edge / 720) for size in font_sizes))
                         for _start, _end, text in layouted:
                             self.assertLessEqual(

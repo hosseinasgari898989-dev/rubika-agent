@@ -147,6 +147,151 @@ def _ass_display_text(text: str, rtl: bool = True) -> str:
     return r"\N".join(display_lines)
 
 
+
+def _frame_metrics(width: int, height: int) -> dict:
+    """Return dimension-relative subtitle geometry for the actual video canvas."""
+    if (not isinstance(width, int) or not isinstance(height, int)
+            or width < 1 or height < 1):
+        raise ValueError("invalid_subtitle_frame_size")
+    short_edge = min(width, height)
+    portrait = height > width
+    padding = max(1, int(round(GLYPH_BOX_PADDING * short_edge / BASE_LAYOUT_EDGE)))
+    radius = max(1, int(round(GLYPH_BOX_RADIUS * short_edge / BASE_LAYOUT_EDGE)))
+    # Fixed lower safe band per orientation; no automatic burned-in subtitle detection.
+    bottom_gap = max(1, int(round(short_edge * (24 if portrait else 33) / BASE_LAYOUT_EDGE)))
+    margin_v = max(0, int(round(short_edge * (30 if portrait else DEFAULT_ASS_MARGIN_V) / BASE_LAYOUT_EDGE)))
+    box_bottom = height - bottom_gap
+    return {
+        "short_edge": short_edge,
+        "portrait": portrait,
+        "max_lines": PORTRAIT_MAX_LINES if portrait else LANDSCAPE_MAX_LINES,
+        "padding": padding,
+        "radius": radius,
+        "bottom_gap": bottom_gap,
+        "box_bottom": box_bottom,
+        "glyph_bottom": box_bottom - padding,
+        "margin_v": margin_v,
+        "margin_l": max(1, int(round(width * (1 - MAX_TEXT_WIDTH_RATIO) / 2))),
+        "margin_r": max(1, int(round(width * (1 - MAX_TEXT_WIDTH_RATIO) / 2))),
+        "max_text_width": max(1, int(round(width * MAX_TEXT_WIDTH_RATIO))),
+    }
+
+
+def _scaled_font_size(width: int, height: int, base_size: int = DEFAULT_ASS_SIZE) -> int:
+    metrics = _frame_metrics(width, height)
+    return max(MIN_ASS_SIZE, int(round(int(base_size) * metrics["short_edge"] / BASE_LAYOUT_EDGE)))
+
+
+def _layout_font(fontsdir: str, font: str, size: int):
+    from PIL import ImageFont
+
+    directory = Path(fontsdir)
+    candidates = [directory / f"{font}-Bold.ttf", directory / f"{font}-Regular.ttf"]
+    font_path = next((path for path in candidates if path.is_file()), None)
+    if font_path is None:
+        raise RuntimeError("subtitle_layout_font_missing")
+    try:
+        return ImageFont.truetype(str(font_path), int(size), layout_engine=ImageFont.Layout.RAQM)
+    except (AttributeError, TypeError, ValueError):
+        # Some Pillow builds lack libraqm; libass still does the authoritative render.
+        return ImageFont.truetype(str(font_path), int(size))
+
+
+def _measure_line(font_obj, text: str) -> float:
+    direction = "rtl" if _has_arabic_letter(text) else "ltr"
+    try:
+        return float(font_obj.getlength(text, direction=direction, language="fa" if direction == "rtl" else "en"))
+    except (TypeError, KeyError, ValueError):
+        return float(font_obj.getlength(text))
+
+
+def _wrap_words(text: str, font_obj, max_width: int) -> list:
+    """Greedily wrap each source line on spaces without dropping any word."""
+    words = " ".join(str(text).split()).split(" ")
+    lines = []
+    current = ""
+    for word in words:
+        if not word:
+            continue
+        candidate = word if not current else current + " " + word
+        if current and _measure_line(font_obj, candidate) > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
+def layout_cues(cues: list, *, width: int, height: int, fontsdir: str = "assets/fonts",
+                font: str = "Estedad", size: int = DEFAULT_ASS_SIZE) -> tuple:
+    """Wrap cues against 80% of the real frame width; portrait blocks are limited to two lines.
+
+    Existing explicit line breaks are honored. Long blocks shrink first, then are split at
+    word boundaries with proportional timing; no words are removed.
+    """
+    metrics = _frame_metrics(width, height)
+    base_size = _scaled_font_size(width, height, size)
+    minimum_size = max(MIN_ASS_SIZE, int(round(base_size * 0.40)))
+    max_width = metrics["max_text_width"]
+    max_lines = metrics["max_lines"]
+    output, font_sizes = [], []
+
+    for start_ms, end_ms, raw_text in cues:
+        paragraphs = [
+            " ".join(part.split())
+            for part in str(raw_text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        ]
+        paragraphs = [part for part in paragraphs if part]
+        if not paragraphs:
+            continue
+
+        selected = None
+        candidate_size = base_size
+        decrement = max(1, int(round(base_size * 0.025)))
+        while candidate_size >= minimum_size:
+            font_obj = _layout_font(fontsdir, font, candidate_size)
+            lines = [line for paragraph in paragraphs for line in _wrap_words(paragraph, font_obj, max_width)]
+            fits = len(lines) <= max_lines and all(_measure_line(font_obj, line) <= max_width for line in lines)
+            if fits:
+                selected = (lines, candidate_size)
+                break
+            candidate_size -= decrement
+        if selected:
+            lines, chosen_size = selected
+        else:
+            chosen_size = minimum_size
+            font_obj = _layout_font(fontsdir, font, chosen_size)
+            lines = [line for paragraph in paragraphs for line in _wrap_words(paragraph, font_obj, max_width)]
+            if any(_measure_line(font_obj, line) > max_width for line in lines):
+                raise ValueError("subtitle_word_exceeds_safe_width")
+
+        chunks = [lines[i:i + max_lines] for i in range(0, len(lines), max_lines)]
+        duration = max(0, int(end_ms) - int(start_ms))
+        if len(chunks) > 1 and duration < len(chunks) * LAYOUT_SPLIT_MIN_MS:
+            raise ValueError("subtitle_cue_too_short_for_layout_split")
+        weights = [max(1, len(" ".join(chunk))) for chunk in chunks]
+        total_weight = sum(weights)
+        cursor = int(start_ms)
+        remaining = duration
+        remaining_weight = total_weight
+        for index, (chunk, weight) in enumerate(zip(chunks, weights)):
+            if index == len(chunks) - 1:
+                next_cursor = int(end_ms)
+            else:
+                ideal = int(round(remaining * weight / max(1, remaining_weight)))
+                min_after = (len(chunks) - index - 1) * LAYOUT_SPLIT_MIN_MS
+                span = max(LAYOUT_SPLIT_MIN_MS, min(ideal, remaining - min_after))
+                next_cursor = cursor + span
+            output.append((cursor, next_cursor, "\n".join(chunk)))
+            font_sizes.append(chosen_size)
+            used = next_cursor - cursor
+            cursor = next_cursor
+            remaining -= used
+            remaining_weight -= weight
+    return output, font_sizes
+
 def _ass_header(font: str, size: int, width: int = FRAME_WIDTH, height: int = FRAME_HEIGHT,
                 margin_l: int | None = None, margin_r: int | None = None) -> str:
     metrics = _frame_metrics(width, height)
