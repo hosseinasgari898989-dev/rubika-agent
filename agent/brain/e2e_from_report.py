@@ -225,6 +225,27 @@ def _find_original_tiktok_media(
     return None
 
 
+def _tiktok_candidates_with_preservable_staging_failure(
+    candidates: list[Candidate], stage: Any,
+) -> list[Candidate]:
+    """Select downloaded TikTok items that failed staging or their D1 sync."""
+    if int(getattr(stage, "staged_count", 0) or 0) == 0:
+        return [candidate for candidate in candidates if candidate.platform == "tiktok"]
+
+    sync_failed_ids = set()
+    for value in getattr(stage, "cloud_sync_errors", ()) or ():
+        if not isinstance(value, str):
+            continue
+        item_id, separator, _error = value.rpartition(":")
+        if separator and item_id.startswith("tiktok:"):
+            sync_failed_ids.add(item_id)
+    return [
+        candidate for candidate in candidates
+        if candidate.platform == "tiktok"
+        and "tiktok:" + candidate.external_id in sync_failed_ids
+    ]
+
+
 def _preserve_failed_tiktok_original(
     client: Any,
     storage: Any,
@@ -427,9 +448,13 @@ def run_one(
                 # A completed download that failed during staging can still be kept.
                 # Intentional validation/duplicate/moderation rejections remove the raw
                 # file in stage_edit_batch, so they naturally remain unpreserved.
-                if platform == "tiktok" and stage.staged_count == 0 and candidates:
+                preservation_candidates = (
+                    _tiktok_candidates_with_preservable_staging_failure(candidates, stage)
+                    if platform == "tiktok" else []
+                )
+                if preservation_candidates:
                     preserved_rows = []
-                    for failed_candidate in candidates:
+                    for failed_candidate in preservation_candidates:
                         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", failed_candidate.external_id)[:80]
                         raw_original = output_dir / "raw" / f"tiktok_{safe_id}.mp4"
                         if not raw_original.is_file() or raw_original.stat().st_size <= 0:
