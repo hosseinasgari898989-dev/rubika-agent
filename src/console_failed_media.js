@@ -46,7 +46,7 @@ const decodeBase64Url = (value) => {
 async function hasOwnerBearer(request, env) {
   const expected = typeof env.OWNER_WEB_TOKEN === "string" ? env.OWNER_WEB_TOKEN : "";
   const match = /^Bearer ([^\s]+)$/.exec(request.headers.get("authorization") || "");
-  if (!expected || expected.length < 32 || !match) return false;
+  if (!expected || expected.length < 32 || expected === env.AGENT_API_TOKEN || !match) return false;
   const encoder = new TextEncoder();
   const [providedDigest, expectedDigest] = await Promise.all([
     crypto.subtle.digest("SHA-256", encoder.encode(match[1])),
