@@ -3423,10 +3423,15 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
           message_id: "stage-two-command-" + i, chat_id: "b0actualowner", text: commands[i][0],
         } },
       }, secret);
-      expectedSends += 1;
       const sendCalls = calls.filter(call => call.method === "sendMessage");
-      assert.equal(sendCalls.length, expectedSends, "typed slash commands keep their existing one-response behavior");
-      assert.equal(sendCalls.at(-1).payload.text.includes(commands[i][1]), true);
+      if (["/digest", "/errors", "/runs", "/links"].includes(commands[i][0])) {
+        expectedSends += 1;
+        assert.equal(sendCalls.length, expectedSends, "these commands intentionally send a fresh report page");
+        assert.equal(sendCalls.at(-1).payload.text.includes(commands[i][1]), true);
+      } else {
+        assert.equal(sendCalls.length, expectedSends, "these commands edit the existing main panel");
+        assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes(commands[i][1]), true);
+      }
     }
     assert.equal(state.DB.state.get("mode"), "idle");
   });
