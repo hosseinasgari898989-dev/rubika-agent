@@ -146,13 +146,13 @@ class AIHealthCheckTests(unittest.TestCase):
         worker = (ROOT / "src" / "index.js").read_text(encoding="utf-8")
         owner_panel = (ROOT / "src" / "owner_panel.js").read_text(encoding="utf-8")
         screens = (ROOT / "src" / "panel_screens.js").read_text(encoding="utf-8")
-        console = (ROOT / "docs" / "console" / "index.html").read_text(encoding="utf-8")
+        console = (ROOT / "docs" / "console" / "legacy.html").read_text(encoding="utf-8")
 
         # Read only: show the latest known failure code even after a cooldown expires.
         self.assertIn("SELECT error_code FROM ai_provider_calls WHERE provider = ? AND error_code IS NOT NULL", worker)
         self.assertIn("last_error_code: (latestError && latestError.error_code)", worker)
         self.assertIn("clean(d.last_error_code, 60)", owner_panel)
-        # /ailog and the web console already render error_code from the call ledger.
+        # /ailog and the preserved legacy web console render error_code from the call ledger.
         self.assertIn("SELECT provider, role, status, error_code, started_at FROM ai_provider_calls", screens)
         self.assertIn("tag(x.error_code, 24)", screens)
         self.assertIn('{label:"کد خطا",key:"error_code"}', console)
