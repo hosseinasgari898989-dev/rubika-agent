@@ -3398,14 +3398,14 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(settingsSourceOnDisk, settingsSource, "Claude settings module must remain unchanged");
 }
 
-// Lightweight CI checks for the owner console HTML. The HTML itself must remain byte-for-byte unchanged.
+// Lightweight CI checks for the legacy owner console HTML. The HTML itself must remain byte-for-byte unchanged.
 {
-  const htmlPath = path.join(root, "docs/console/index.html");
+  const htmlPath = path.join(root, "docs/console/legacy.html");
   const html = fs.readFileSync(htmlPath, "utf8");
-  assert.equal((html.match(/<\/script>/g) || []).length, 1, "owner console HTML must contain exactly one </script> closing tag");
+  assert.equal((html.match(/<\/script>/g) || []).length, 1, "legacy owner console HTML must contain exactly one </script> closing tag");
 
   const opening = html.match(/<script\s*>/i);
-  assert.ok(opening, "owner console HTML must contain its inline script");
+  assert.ok(opening, "legacy owner console HTML must contain its inline script");
   const start = opening.index + opening[0].length;
   const end = html.indexOf("</script>", start);
   assert.ok(end >= start, "owner console inline script must have a closing tag");
@@ -3414,7 +3414,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     input: inlineJs,
     encoding: "utf8",
   });
-  assert.equal(syntax.status, 0, "owner console inline JavaScript must pass node --check: " + (syntax.stderr || syntax.stdout || ""));
+  assert.equal(syntax.status, 0, "legacy owner console inline JavaScript must pass node --check: " + (syntax.stderr || syntax.stdout || ""));
 
   // Only the Worker API and GitHub API are actual network-request origins.
   // The third syntactic fetch occurrence is text inside a mock downloadable example, not an executed request.
@@ -3427,6 +3427,18 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.match(inlineJs, /url = base \+ path/, "Worker requests must be built from the approved base");
   assert.equal((inlineJs.match(/\b(?:XMLHttpRequest|WebSocket|EventSource)\b|\bsendBeacon\s*\(|\bimportScripts\s*\(/g) || []).length, 0,
     "no alternate network request primitive is allowed");
+}
+
+// The directory index is a small, hash-preserving redirect to v2; the old app lives separately.
+{
+  const entryPath = path.join(root, "docs/console/index.html");
+  const entryHtml = fs.readFileSync(entryPath, "utf8");
+  assert.ok(entryHtml.includes('<meta http-equiv="refresh" content="0;url=v2.html">'), "console entrypoint must provide the no-JS v2 redirect");
+  assert.ok(entryHtml.includes("location.replace('v2.html'+location.hash)"), "console entrypoint must preserve the location hash");
+  assert.ok(entryHtml.includes('href="v2.html">ورود به کنسول</a>'), "console entrypoint must show a Persian fallback link");
+  assert.ok(entryHtml.includes('<html lang="fa" dir="rtl">'), "console fallback must remain Persian RTL");
+  assert.ok(entryHtml.includes('background:#05060f'), "console fallback must use the dark theme background");
+  assert.ok(!entryHtml.includes('id="rc-v5"'), "the legacy app must not remain in the directory index");
 }
 
 // Phase-two console endpoints use the fake D1 database and audit each successful mutation to brain_events.
