@@ -249,6 +249,7 @@ def collect_workflow_failures() -> dict[str, int | None]:
             row for row in runs
             if isinstance(row, dict)
             and row.get("status") == "completed"
+            and row.get("head_branch") == "main"
             and (not scheduled_only or row.get("event") == "schedule")
         ]
         candidates.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
@@ -361,6 +362,7 @@ def render_daily_digest(state: dict[str, Any]) -> str:
         "━━━━━━━━━━━━━━━━━━",
     ]
 
+    health_lines = _health_section_lines(state)
     events = state.get("events") if isinstance(state.get("events"), list) else []
     event_lines: list[str] = []
     for event in events:
@@ -389,6 +391,9 @@ def render_daily_digest(state: dict[str, Any]) -> str:
 
     def build() -> str:
         rows = list(header)
+        rows.append("🩺 پایش سلامت (فقط‌خواندنی)")
+        rows.extend(health_lines)
+        rows.append("━━━━━━━━━━━━━━━━━━")
         rows.extend(event_lines)
         if omitted:
             rows.append(f"… {omitted} رویداد قدیمی‌تر در سوابق همین بازه نگهداری می‌شود.")
@@ -463,6 +468,7 @@ def refresh_daily_digest() -> dict[str, Any]:
         old_message_id = str(old_message_id) if old_message_id else None
         old_body = str(state.get("message_body") or "")
         uncertain = state.get("message_creation_uncertain") is True
+        state["workflow_failures"] = collect_workflow_failures()
         new_body = render_daily_digest(state)
 
         if not window_id or not lock_token:
