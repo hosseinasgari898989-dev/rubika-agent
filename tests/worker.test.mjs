@@ -1665,6 +1665,22 @@ class PanelFakeStatement {
       Object.assign(row, { params_json: paramsJson, updated_at: updatedAt });
       return { meta: { changes: 1 } };
     }
+    if (this.sql.startsWith("UPDATE console_jobs SET result_json = ?")) {
+      const [resultJson, updatedAt, jobId, expectedResultJson] = this.values;
+      const row = this.db.consoleJobs.get(jobId);
+      if (!row || row.type !== "mob_x_link" || row.status !== "ready_for_review" ||
+          row.result_json !== expectedResultJson) return { meta: { changes: 0 } };
+      row.result_json = String(resultJson);
+      row.updated_at = updatedAt;
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("UPDATE items SET caption = ?, original_caption = ?, persian_translation = ?")) {
+      const [caption, originalCaption, translation, itemId] = this.values;
+      const row = this.db.items.get(itemId);
+      if (!row || row.platform !== "mob_official" || row.status !== "ready") return { meta: { changes: 0 } };
+      Object.assign(row, { caption, original_caption: originalCaption, persian_translation: translation });
+      return { meta: { changes: 1 } };
+    }
     if (this.sql.startsWith("UPDATE console_rules SET version = version + 1")) {
       if (this.db.conflictConsoleRulesUpdate) {
         this.db.conflictConsoleRulesUpdate = false;
@@ -1788,6 +1804,7 @@ class PanelFakeDB {
     this.linkDeleteCalls = 0;
     this.nextPanelLinkId = 1;
     this.consoleJobs = new Map();
+    this.items = new Map();
     this.consoleOwners = new Map();
     this.nextConsoleOwnerId = 1;
     this.consoleInvites = new Map();
@@ -2107,6 +2124,112 @@ async function withDispatchFetch(responder, fn) {
     assert.deepEqual(dispatchCalls[0].payload, { ref: "main" });
   }, async ({ url }) =>
     String(url).startsWith("https://api.github.com/") ? new Response(null, { status: 204 }) : null);
+}
+
+// The PV no-caption action is job-scoped, bold, idempotent and never approves or dispatches publication.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.consoleOwners.set(1, {
+      id: 1, chat_id: "b0actualowner", role: "owner", enabled: 1,
+    });
+    const firstJobId = "job_abcdef1234567890";
+    const secondJobId = "job_abcdef1234567891";
+    const firstItemId = "mob_official:2107878755079213476";
+    const secondItemId = "mob_official:2107878755079213477";
+    const firstResult = {
+      item_id: firstItemId, external_id: "2107878755079213476",
+      caption: "**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**\\n\\n**Original post text**\\n\\n$**ترجمه متن:**\\n**ترجمهٔ خصوصی**$",
+      original_caption: "Original post text", persian_translation: "ترجمهٔ خصوصی",
+      rubika_file_id: "file-first", preview_sent: true, preview_message_id: "preview-old-first",
+    };
+    const secondResult = {
+      item_id: secondItemId, external_id: "2107878755079213477",
+      caption: "Second job caption", original_caption: "Second original",
+      persian_translation: "Second translation", rubika_file_id: "file-second",
+      preview_sent: true, preview_message_id: "preview-old-second",
+    };
+    state.DB.consoleJobs.set(firstJobId, {
+      id: firstJobId, type: "mob_x_link", status: "ready_for_review",
+      panel_link_id: 1, params_json: "{}", result_json: JSON.stringify(firstResult),
+    });
+    state.DB.consoleJobs.set(secondJobId, {
+      id: secondJobId, type: "mob_x_link", status: "ready_for_review",
+      panel_link_id: 2, params_json: "{}", result_json: JSON.stringify(secondResult),
+    });
+    state.DB.items.set(firstItemId, {
+      id: firstItemId, platform: "mob_official", status: "ready", review_state: "pending",
+      caption: firstResult.caption, original_caption: firstResult.original_caption,
+      persian_translation: firstResult.persian_translation,
+    });
+    state.DB.items.set(secondItemId, {
+      id: secondItemId, platform: "mob_official", status: "ready", review_state: "pending",
+      caption: secondResult.caption, original_caption: secondResult.original_caption,
+      persian_translation: secondResult.persian_translation,
+    });
+    const secret = await panel.hookSecret(state);
+    const click = async (button, messageId = "preview-old-first") => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+      } },
+    }, secret);
+
+    await click("p_mob_nocap_" + firstJobId);
+    const changed = JSON.parse(state.DB.consoleJobs.get(firstJobId).result_json);
+    assert.equal(changed.caption, "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**");
+    assert.equal(changed.caption_mode, "no_caption");
+    assert.equal(changed.original_caption, "");
+    assert.equal(changed.persian_translation, "");
+    assert.equal(changed.preview_sent, true);
+    assert.equal(state.DB.items.get(firstItemId).caption, changed.caption);
+    assert.equal(state.DB.items.get(firstItemId).original_caption, "");
+    assert.equal(state.DB.items.get(firstItemId).persian_translation, "");
+    assert.deepEqual(state.DB.consoleJobs.get(secondJobId), {
+      id: secondJobId, type: "mob_x_link", status: "ready_for_review",
+      panel_link_id: 2, params_json: "{}", result_json: JSON.stringify(secondResult),
+    });
+    assert.equal(state.DB.items.get(secondItemId).caption, secondResult.caption);
+    assert.equal(state.DB.items.get(secondItemId).original_caption, secondResult.original_caption);
+    assert.equal(state.DB.items.get(secondItemId).persian_translation, secondResult.persian_translation);
+
+    const previews = calls.filter(call => call.method === "sendFile");
+    assert.equal(previews.length, 1, "no-caption must refresh the preview once");
+    assert.equal(previews[0].payload.file_id, "file-first");
+    assert.equal(previews[0].payload.text, "ماب انترتینمنت در پیج خود پستی منتشر کرد.");
+    assert.deepEqual(previews[0].payload.metadata.meta_data_parts.map(part => part.type), ["Bold"]);
+    assert.equal(previews[0].payload.inline_keypad.rows.flatMap(row => row.buttons).some(button => button.id === "p_mob_publish_" + firstJobId), true);
+    assert.equal(calls.some(call => call.url && call.url.includes("api.github.com")), false, "the button must not dispatch publication");
+
+    await click("p_mob_nocap_" + firstJobId);
+    assert.equal(calls.filter(call => call.method === "sendFile").length, 1, "a second click must be idempotent");
+  });
+}
+
+// The same action is rejected when the Mob X job has already left review.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    const jobId = "job_abcdef1234567890";
+    state.DB.consoleJobs.set(jobId, {
+      id: jobId, type: "mob_x_link", status: "approved", panel_link_id: 1,
+      params_json: "{}", result_json: JSON.stringify({
+        item_id: "mob_official:2107878755079213476",
+        caption: "original", rubika_file_id: "file", preview_sent: true,
+      }),
+    });
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "old-preview", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: "p_mob_nocap_" + jobId },
+      } },
+    }, secret);
+    assert.equal(JSON.parse(state.DB.consoleJobs.get(jobId).result_json).caption, "original");
+    assert.equal(calls.some(call => call.method === "sendFile"), false);
+    assert.equal(calls.some(call => call.url && call.url.includes("api.github.com")), false);
+  });
 }
 
 // safeEqual compares values without treating differing lengths or Unicode values as equal.
