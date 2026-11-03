@@ -6,6 +6,7 @@ const src = readFileSync(new URL("../src/console_failed_media.js", import.meta.u
 const { handleFailedMedia } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 
 const OWNER_TOKEN = "test-owner-web-token-with-at-least-thirty-two-characters";
+const AGENT_TOKEN = "test-agent-api-token-with-at-least-thirty-two-characters";
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
 const readJson = async (req) => {
   try { return { ok: true, value: await req.json() }; } catch { return { ok: false, error: "invalid_json", status: 400 }; }
@@ -31,7 +32,8 @@ function makeEnv({ changes = 1, token = "", fail = false } = {}) {
   return {
     calls,
     rows,
-    AGENT_API_TOKEN: OWNER_TOKEN,
+    AGENT_API_TOKEN: AGENT_TOKEN,
+    OWNER_WEB_TOKEN: OWNER_TOKEN,
     GITHUB_DISPATCH_TOKEN: token,
     DB: {
       prepare(sql) {
@@ -171,6 +173,9 @@ test("delete-request requires a valid owner bearer before creating a challenge",
   const missing = await post("/failed-media/delete-request", { ids: [ID] }, null);
   assert.equal(missing.status, 403);
   env.AGENT_API_TOKEN = "short";
+  const validOwnerButWrongAgent = await post("/failed-media/delete-request", { ids: [ID] }, OWNER_TOKEN);
+  assert.equal(validOwnerButWrongAgent.status, 200, "owner authorization must use OWNER_WEB_TOKEN, not AGENT_API_TOKEN");
+  env.OWNER_WEB_TOKEN = "short";
   const shortSecret = await post("/failed-media/delete-request", { ids: [ID] }, "short");
   assert.equal(shortSecret.status, 403, "the internal guard rejects short configured owner tokens");
   assert.equal(env.calls.length, 0);
