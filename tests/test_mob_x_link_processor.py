@@ -247,7 +247,7 @@ class MobXLinkParserTests(unittest.TestCase):
         empty_caption = build_mob_x_caption("   ", None)
         self.assertEqual(
             empty_caption,
-            "**ماب انترتینمنت در پیج X خود پستی منتشر کرد.**",
+            "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**",
         )
         caption = build_mob_x_caption(
             "Official update: $literal$\n> not markup",
@@ -368,7 +368,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             "external_id": POST_ID,
         }
 
-    def _run_video_job(self, gate, *, pipeline_error=None):
+    def _run_video_job(self, gate, *, pipeline_error=None, original_text="Official video update"):
         from contextlib import ExitStack
 
         events = []
@@ -376,6 +376,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         cloud.get_seen_index.return_value = {"ids": set()}
         cloud.upsert_item.return_value = {"item_id": "mob_official:" + POST_ID}
         client = Mock()
+        client.transition.side_effect = lambda *args, **kwargs: events.append(("transition", kwargs["result"]))
         client.rules.side_effect = lambda: events.append(("rules",)) or {
             "translate_enabled": False, "caption_max_chars": 900,
         }
@@ -429,7 +430,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             cloud_class.prepare_staged_payload.return_value = {}
             # Keep the factory patch above deterministic for the class static helper and instance.
             stack.enter_context(patch("agent.brain.mob_x_link_processor.fetch_public_post",
-                                      return_value={"text": "Official video update", "title": "Mob update"}))
+                                      return_value={"text": original_text, "title": "Mob update"}))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.select_media",
                                       return_value=("video", VIDEO_URL)))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.download_public_media",
@@ -512,6 +513,26 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertIn("بدون زیرنویس: ویدیو گفتار ندارد", preview_caption)
         self.assertNotIn("زیرنویس فارسی", cloud.upsert_item.call_args.args[0]["caption"])
         self.assertNotIn("subtitle", [event[0] for event in events])
+
+    def test_media_backed_post_without_source_text_uses_fixed_no_caption_default(self):
+        result, events, _pipeline, _storage, cloud, _transcribe_mock = self._run_video_job(
+            {"decision": "skip", "reason": "no_speech", "language": None},
+            original_text="",
+        )
+
+        fixed = "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
+        staged_result = next(event[1] for event in events if event[0] == "transition")
+        self.assertEqual(result["status"], "ready_for_review")
+        self.assertEqual(staged_result["caption"], fixed)
+        self.assertEqual(staged_result["caption_mode"], "no_caption")
+        self.assertEqual(staged_result["original_caption"], "")
+        self.assertEqual(staged_result["persian_translation"], None)
+        self.assertEqual(cloud.upsert_item.call_args.args[0]["caption"], fixed)
+        preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
+        self.assertTrue(preview_caption.startswith(fixed))
+        self.assertNotIn("ترجمه", preview_caption)
+        self.assertNotIn("Official video update", preview_caption)
+        self.assertNotIn("translate", [event[0] for event in events])
 
     def test_no_cues_preview_reports_no_cues_without_changing_staged_caption(self):
         from scripts.subtitle_pipeline import SubtitleError

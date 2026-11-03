@@ -9,6 +9,7 @@ const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
 const MAX_BODY = 64 * 1024;
 const PRIVATE_TYPES = new Set(["private", "privatechat", "user", "userchat", "personal"]);
 const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
+const MOB_X_NO_CAPTION = "ماب انترتینمنت در پیج خود پستی منتشر کرد.";
 const te = new TextEncoder();
 const PANEL_TIMING = Symbol("panel_timing");
 const PANEL_SEQ = Symbol("panel_seq");
@@ -421,7 +422,7 @@ const isOwnerOnlyPanelAction = (id) => {
     value === "p_mob_confirm" ||
     value === "p_mob_cancel" ||
     value === "p_mob_edit_cancel" ||
-    /^p_mob_(?:publish|edit|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(value) ||
+    /^p_mob_(?:publish|edit|nocap|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(value) ||
     value === "p_links_clear" ||
     value === "p_links_clear_yes" ||
     value === "p_failall" ||
@@ -573,6 +574,97 @@ async function api(ui, path) {
 }
 const aiBlock = async (ui) => (await Promise.all(["groq", "openrouter"].map(async (p) => fmtAi(p, await api(ui, `/api/brain/ai-provider/status?provider=${p}`))))).join("\n\n");
 
+function mobPreviewKeypad(jobId) {
+  return kb([
+    [["✅ انتشار در کانال تست", "p_mob_publish_" + jobId], ["✏️ ویرایش کپشن", "p_mob_edit_" + jobId]],
+    [["🚫 بدون کپشن", "p_mob_nocap_" + jobId], ["✖️ رد", "p_mob_reject_" + jobId]],
+  ]);
+}
+
+async function saveMobCaptionAndRefresh(ui, jobId, row, result, caption, {
+  clearSource = false, clearEditMode = false, successText = "✅ کپشن ویرایش شد و پیش‌نمایش جدید ارسال شد.",
+} = {}) {
+  const env = ui.env;
+  const chat = ui.chat;
+  const previousPreviewId = typeof result.preview_message_id === "string" ? result.preview_message_id : "";
+  const nextResult = {
+    ...result,
+    caption,
+    caption_mode: clearSource ? "no_caption" : "edited",
+    caption_refresh_state: "pending",
+    preview_sent: false,
+  };
+  if (clearSource) {
+    nextResult.original_caption = "";
+    nextResult.persian_translation = "";
+  }
+  delete nextResult.preview_message_id;
+  const pendingJson = JSON.stringify(nextResult);
+  const now = new Date().toISOString();
+  const claimed = await env.DB.prepare(
+    "UPDATE console_jobs SET result_json = ?, updated_at = ? " +
+    "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND result_json = ?"
+  ).bind(pendingJson, now, jobId, row.result_json).run();
+  if (!claimed?.meta?.changes) {
+    await send(env, chat, "ذخیرهٔ کپشن انجام نشد؛ وضعیت کار یا کپشن هم‌زمان تغییر کرده است.", HOME_KB);
+    return false;
+  }
+
+  try {
+    if (clearSource) {
+      await env.DB.prepare(
+        "UPDATE items SET caption = ?, original_caption = '', persian_translation = '' " +
+        "WHERE id = ? AND platform = 'mob_official' AND status = 'ready'"
+      ).bind(caption, nextResult.item_id).run();
+    } else {
+      await env.DB.prepare(
+        "UPDATE items SET caption = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready'"
+      ).bind(caption, nextResult.item_id).run();
+    }
+
+    const formatted = md(caption);
+    const preview = await rubika(env, "sendFile", {
+      chat_id: chat,
+      file_id: nextResult.rubika_file_id,
+      text: formatted.text,
+      ...(formatted.metadata ? { metadata: formatted.metadata } : {}),
+      inline_keypad: mobPreviewKeypad(jobId),
+      disable_notification: false,
+      chat_keypad_type: "None",
+    });
+    const messageId = preview?.data?.message_id;
+    nextResult.preview_sent = true;
+    nextResult.caption_refresh_state = "done";
+    if (typeof messageId === "string" && messageId) nextResult.preview_message_id = messageId;
+    const finishedJson = JSON.stringify(nextResult);
+    const finished = await env.DB.prepare(
+      "UPDATE console_jobs SET result_json = ?, updated_at = ? " +
+      "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND result_json = ?"
+    ).bind(finishedJson, new Date().toISOString(), jobId, pendingJson).run();
+    if (!finished?.meta?.changes) {
+      await send(env, chat, "پیش‌نمایش ارسال شد، اما وضعیت کار هم‌زمان تغییر کرد؛ آن را تأیید نکن و وضعیت را تازه‌سازی کن.", HOME_KB);
+      return false;
+    }
+    if (previousPreviewId && messageId && previousPreviewId !== messageId) {
+      try { await rubika(env, "deleteMessage", { chat_id: chat, message_id: previousPreviewId }); } catch {}
+    }
+    if (clearEditMode) {
+      await setState(env, "mode", "idle");
+      await setState(env, "panel_mob_edit_job_id", "");
+    }
+    await send(env, chat, successText, HOME_KB);
+    return true;
+  } catch {
+    const failedResult = { ...nextResult, preview_sent: false, caption_refresh_state: "failed" };
+    await env.DB.prepare(
+      "UPDATE console_jobs SET result_json = ?, updated_at = ? " +
+      "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND result_json = ?"
+    ).bind(JSON.stringify(failedResult), new Date().toISOString(), jobId, pendingJson).run();
+    await send(env, chat, "کپشن ذخیره شد، اما پیش‌نمایش تازه ناموفق بود؛ انتشار را تأیید نکن تا پیش‌نمایش دوباره آماده شود.", HOME_KB);
+    return false;
+  }
+}
+
 async function debugText(env) {
   const lastError = clean(await getState(env, "last_error", "none"), 80) || "none";
   const readCounter = async (key) => {
@@ -657,7 +749,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const chat = ui.chat;
   if (id !== "p_mob") await setState(env, "mode", "idle");
 
-  const mobAction = /^p_mob_(publish|edit|reject|manualconfirm)_(job_[A-Fa-f0-9]{8,80})$/.exec(id);
+  const mobAction = /^p_mob_(publish|edit|nocap|reject|manualconfirm)_(job_[A-Fa-f0-9]{8,80})$/.exec(id);
   if (mobAction || id === "p_mob_edit_cancel") {
     if (id === "p_mob_edit_cancel") {
       await setState(env, "mode", "idle");
@@ -686,6 +778,28 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       await setState(env, "panel_mob_edit_job_id", jobId);
       await setState(env, "mode", "waiting_mob_caption_edit");
       await send(env, chat, "✏️ کپشن نهایی را به‌صورت متن ساده بفرست. پیش‌نمایش قبلی تا ثبت کپشن جدید معتبر می‌ماند.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
+      return;
+    }
+
+    if (action === "nocap") {
+      if (row.status !== "ready_for_review" || !result.rubika_file_id) {
+        await send(env, chat, "این پیش‌نمایش دیگر برای تغییر کپشن باز نیست؛ وضعیت کار: " + esc(row.status), HOME_KB);
+        return;
+      }
+      if (result.caption_mode === "no_caption" &&
+          result.caption === "**" + MOB_X_NO_CAPTION + "**" &&
+          result.preview_sent === true) {
+        await send(env, chat, "این کپشن قبلاً برای همین پست اعمال شده است؛ تأیید انتشار همچنان جداگانه انجام می‌شود.", HOME_KB);
+        return;
+      }
+      if (result.caption_refresh_state === "pending") {
+        await send(env, chat, "به‌روزرسانی پیش‌نمایش همین پست هنوز در حال انجام است؛ دوباره کلیک نکن.", HOME_KB);
+        return;
+      }
+      await saveMobCaptionAndRefresh(
+        ui, jobId, row, result, "**" + MOB_X_NO_CAPTION + "**",
+        { clearSource: true, successText: "✅ کپشن حذف و متن ثابت فقط برای همین پست جایگزین شد؛ پیش‌نمایش جدید آمادهٔ بررسی است." },
+      );
       return;
     }
 
@@ -1050,7 +1164,7 @@ async function processEvent(env, selfFetch, origin, ev) {
     const ui = { env: timedEnv, chat: ev.chat, selfFetch, origin };
     if (ev.kind === "click") {
       const currentPanelMid = await getState(timedEnv, "panel_mid", "");
-      const isMobJobAction = /^p_mob_(?:publish|edit|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || ""));
+      const isMobJobAction = /^p_mob_(?:publish|edit|nocap|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || ""));
       if (String(ev.mid || "") !== currentPanelMid && !isMobJobAction) {
         try { if (ev.mid) await rubika(timedEnv, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch {}
         const staleButton = String(ev.button || "");
@@ -1126,47 +1240,10 @@ async function processEvent(env, selfFetch, origin, ev) {
         await send(timedEnv, ev.chat, "کپشن بیش از سقف مجاز " + captionMax + " نویسه است؛ کوتاه‌ترش کن.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
         return;
       }
-      const previousPreviewId = typeof result.preview_message_id === "string" ? result.preview_message_id : "";
-      result.caption = caption;
-      result.preview_sent = false;
-      delete result.preview_message_id;
-      const now = new Date().toISOString();
-      const saved = await timedEnv.DB.prepare(
-        "UPDATE console_jobs SET result_json = ?, updated_at = ? WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review'"
-      ).bind(JSON.stringify(result), now, jobId).run();
-      if (!saved?.meta?.changes) {
-        await send(timedEnv, ev.chat, "ذخیرهٔ کپشن انجام نشد؛ وضعیت کار تغییر کرده است.", HOME_KB);
-        return;
-      }
-      await timedEnv.DB.prepare("UPDATE items SET caption = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready'").bind(caption, result.item_id).run();
-      try {
-        const preview = await rubika(timedEnv, "sendFile", {
-          chat_id: ev.chat,
-          file_id: result.rubika_file_id,
-          text: caption,
-          inline_keypad: kb([[
-            ["✅ انتشار در کانال تست", "p_mob_publish_" + jobId],
-            ["✏️ ویرایش کپشن", "p_mob_edit_" + jobId],
-            ["✖️ رد", "p_mob_reject_" + jobId],
-          ]]),
-          disable_notification: false,
-          chat_keypad_type: "None",
-        });
-        const messageId = preview?.data?.message_id;
-        result.preview_sent = true;
-        if (typeof messageId === "string" && messageId) result.preview_message_id = messageId;
-        await timedEnv.DB.prepare(
-          "UPDATE console_jobs SET result_json = ?, updated_at = ? WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review'"
-        ).bind(JSON.stringify(result), new Date().toISOString(), jobId).run();
-        if (previousPreviewId && messageId && previousPreviewId !== messageId) {
-          try { await rubika(timedEnv, "deleteMessage", { chat_id: ev.chat, message_id: previousPreviewId }); } catch {}
-        }
-        await setState(timedEnv, "mode", "idle");
-        await setState(timedEnv, "panel_mob_edit_job_id", "");
-        await send(timedEnv, ev.chat, "✅ کپشن ویرایش شد و پیش‌نمایش جدید ارسال شد.", HOME_KB);
-      } catch {
-        await send(timedEnv, ev.chat, "کپشن ذخیره شد، اما ارسال پیش‌نمایش تازه ناموفق بود؛ انتشار را تأیید نکن تا پیش‌نمایش دوباره آماده شود.", HOME_KB);
-      }
+      await saveMobCaptionAndRefresh(
+        ui, jobId, row, result, caption,
+        { clearEditMode: true, successText: "✅ کپشن ویرایش شد و پیش‌نمایش جدید ارسال شد." },
+      );
       return;
     }
     if (activeMode === "waiting_link") {
