@@ -3441,6 +3441,17 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.ok(!entryHtml.includes('id="rc-v5"'), "the legacy app must not remain in the directory index");
 }
 
+// The repository-root Pages site exposes /console/ as an alias into the canonical docs console.
+{
+  const entryPath = path.join(root, "console/index.html");
+  const entryHtml = fs.readFileSync(entryPath, "utf8");
+  assert.ok(entryHtml.includes('<meta http-equiv="refresh" content="0;url=../docs/console/v2.html">'), "root Pages console entrypoint must redirect into the canonical v2 console");
+  assert.ok(entryHtml.includes("location.replace('../docs/console/v2.html'+location.hash)"), "root Pages console entrypoint must preserve the location hash");
+  assert.ok(entryHtml.includes('href="../docs/console/v2.html">ورود به کنسول</a>'), "root Pages console entrypoint must show a Persian fallback link");
+  assert.ok(entryHtml.includes('<html lang="fa" dir="rtl">'), "root Pages console fallback must remain Persian RTL");
+  assert.ok(entryHtml.includes('background:#05060f'), "root Pages console fallback must use the dark theme background");
+}
+
 // Phase-two console endpoints use the fake D1 database and audit each successful mutation to brain_events.
 {
   const state = env();
