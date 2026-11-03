@@ -175,6 +175,10 @@ test("delete-request requires a valid owner bearer before creating a challenge",
   env.AGENT_API_TOKEN = "short";
   const validOwnerButWrongAgent = await post("/failed-media/delete-request", { ids: [ID] }, OWNER_TOKEN);
   assert.equal(validOwnerButWrongAgent.status, 200, "owner authorization must use OWNER_WEB_TOKEN, not AGENT_API_TOKEN");
+  env.calls.length = 0;
+  delete env.OWNER_WEB_TOKEN;
+  const missingSecret = await post("/failed-media/delete-request", { ids: [ID] }, OWNER_TOKEN);
+  assert.equal(missingSecret.status, 403, "an absent owner Secret fails closed");
   env.OWNER_WEB_TOKEN = "short";
   const shortSecret = await post("/failed-media/delete-request", { ids: [ID] }, "short");
   assert.equal(shortSecret.status, 403, "the internal guard rejects short configured owner tokens");
