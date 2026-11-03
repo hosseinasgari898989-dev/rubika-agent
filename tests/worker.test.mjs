@@ -3609,7 +3609,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     method: "POST", token: "viewer-token-is-not-the-owner-api-token",
     body: { ids: [id] },
   }), state));
-  assert.equal(viewer.status, 401);
+  assert.equal(viewer.status, 403, "the Worker owner gate must reject viewer credentials");
   assert.equal(state.DB.failedMedia.get(id).status, "stored");
 
   const directViewer = await failedMedia.handleFailedMedia(
