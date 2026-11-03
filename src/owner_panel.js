@@ -402,6 +402,32 @@ const hasOwnerAccess = async (env, chatId, primaryOwner) => {
     return safeEqual(primaryOwner || "", chatId);
   }
 };
+
+const hasOwnerRole = async (env, chatId, primaryOwner) => {
+  try {
+    const row = await env.DB.prepare("SELECT role, enabled FROM console_owners WHERE chat_id = ?").bind(chatId).first();
+    if (row) return row.role === "owner" && Number(row.enabled) === 1;
+    // The singleton row remains the trusted compatibility fallback before migration 0010.
+    return safeEqual(primaryOwner || "", chatId);
+  } catch {
+    return safeEqual(primaryOwner || "", chatId);
+  }
+};
+
+const isOwnerOnlyPanelAction = (id) => {
+  const value = String(id || "");
+  return isSettingsId(value) ||
+    value === "p_mob" ||
+    value === "p_mob_confirm" ||
+    value === "p_mob_cancel" ||
+    value === "p_mob_edit_cancel" ||
+    /^p_mob_(?:publish|edit|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(value) ||
+    value === "p_links_clear" ||
+    value === "p_links_clear_yes" ||
+    value === "p_failall" ||
+    value === "p_failall_yes" ||
+    /^p_(?:failgo|lseldel)_\d{1,2}_[0-9a-f]{0,5}$/.test(value);
+};
 const sha256Hex = async (value) => {
   const digest = await crypto.subtle.digest("SHA-256", te.encode(value));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -837,8 +863,8 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const previousMid = await getState(env, "panel_mid", "");
   const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
   if (isSettingsId(id)) {
-    if (!safeEqual((await getOwner(env)) || "", chat)) {
-      try { await rubika(env, "sendMessage", { chat_id: chat, text: "فقط مالک اصلی اجازهٔ مشاهده و تغییر این تنظیمات را دارد." }); } catch {}
+    if (!(await hasOwnerRole(env, chat, await getOwner(env)))) {
+      try { await rubika(env, "sendMessage", { chat_id: chat, text: "فقط نقش مالک اجازهٔ مشاهده و تغییر این تنظیمات را دارد." }); } catch {}
       return;
     }
     const notice = await applySettingsAction(env, id);
@@ -998,6 +1024,27 @@ async function processEvent(env, selfFetch, origin, ev) {
       ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
       : "t|" + ev.chat + "|" + ev.mid;
     if (!(await firstSeen(timedEnv, key))) return;
+    const commandWord = ev.kind === "text"
+      ? ev.text.split(/\s+/)[0].split("@")[0].toLowerCase()
+      : "";
+    const sensitiveFlowMode = ev.kind === "text" ? await getState(timedEnv, "mode", "idle") : "idle";
+    const sensitiveCallback = ev.kind === "click" && isOwnerOnlyPanelAction(ev.button);
+    const sensitiveText = ev.kind === "text" && (
+      commandWord === "/register" ||
+      commandWord === "/panelmode" ||
+      isOwnerOnlyPanelAction(COMMANDS[commandWord]) ||
+      sensitiveFlowMode === "waiting_link" ||
+      sensitiveFlowMode === "waiting_mob_caption_edit"
+    );
+    if ((sensitiveCallback || sensitiveText) && !(await hasOwnerRole(timedEnv, ev.chat, owner))) {
+      try {
+        await rubika(timedEnv, "sendMessage", {
+          chat_id: ev.chat,
+          text: "این عملیات فقط برای نقش مالک فعال است.",
+        });
+      } catch {}
+      return;
+    }
     const seq = await nextPanelSeq(timedEnv);
     Object.defineProperty(timedEnv, PANEL_SEQ, { value: seq });
     const ui = { env: timedEnv, chat: ev.chat, selfFetch, origin };
@@ -1025,8 +1072,8 @@ async function processEvent(env, selfFetch, origin, ev) {
     if (word === "/register") { await registerWebhook(timedEnv, origin); await send(timedEnv, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
     if (word === "/panelmode") {
       const match = /^\/panelmode\s+(atomic|inplace)\s*$/i.exec(ev.text);
-      if (!safeEqual(owner || "", ev.chat)) {
-        try { await rubika(timedEnv, "sendMessage", { chat_id: ev.chat, text: "فقط مالک اصلی اجازهٔ تغییر حالت پنل را دارد." }); } catch {}
+      if (!(await hasOwnerRole(timedEnv, ev.chat, owner))) {
+        try { await rubika(timedEnv, "sendMessage", { chat_id: ev.chat, text: "فقط نقش مالک اجازهٔ تغییر حالت پنل را دارد." }); } catch {}
         return;
       }
       if (!match) {

@@ -3008,7 +3008,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
     assert.equal(state.DB.state.get("panel_mid"), "primary-owner-panel", "denying viewer must not replace the owner's tracked panel");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
-    assert.equal(calls[0].payload.text.includes("فقط مالک اصلی"), true);
+    assert.equal(calls[0].payload.text.includes("نقش مالک"), true);
   });
 }
 
@@ -3398,6 +3398,88 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(response.body.error, "invalid_job_type");
   assert.equal(state.DB.events.some(event => event.code === "console_job_create"), true);
   assert.equal(state.DB.consoleJobs.get(jobId).status, "queued");
+}
+
+// Enabled PV viewers can read screens but every sensitive callback and follow-up text event rechecks the owner role.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.consoleOwners.set(2, {
+      id: 2, chat_id: "b0viewer", role: "viewer", enabled: 1,
+    });
+    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_mid", "viewer-sensitive-panel-001");
+    state.DB.state.set("panel_mob_pending_link_id", "1");
+    state.DB.state.set("mode", "waiting_mob_caption_edit");
+    state.DB.state.set("panel_mob_edit_job_id", "job_abcdef1234567890");
+    state.DB.consoleJobs.set("job_abcdef1234567890", {
+      id: "job_abcdef1234567890", type: "mob_x_link", status: "ready_for_review",
+      panel_link_id: 1,
+      result_json: JSON.stringify({
+        item_id: "mob_official:2107878755079213476",
+        rubika_file_id: "preview-file-id", preview_sent: true, caption: "before",
+      }),
+      params_json: "{}",
+    });
+    state.DB.links.push({
+      id: 1, url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+      status: "pending", created_at: new Date().toISOString(),
+    });
+    const originalResult = state.DB.consoleJobs.get("job_abcdef1234567890").result_json;
+    const secret = await panel.hookSecret(state);
+    const click = async button => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0viewer", new_message: {
+        message_id: state.DB.state.get("panel_mid"),
+        chat_id: "b0viewer", text: "", aux_data: { button_id: button },
+      } },
+    }, secret);
+
+    for (const button of [
+      "p_mob_confirm",
+      "p_mob_cancel",
+      "p_mob_publish_job_abcdef1234567890",
+      "p_mob_edit_job_abcdef1234567890",
+      "p_mob_reject_job_abcdef1234567890",
+      "p_mob_manualconfirm_job_abcdef1234567890",
+      "p_links_clear_yes",
+      "p_failall_yes",
+      "p_failgo_1_abcde",
+      "p_lseldel_1_abcde",
+      "p_set_cap_7",
+    ]) {
+      await click(button);
+    }
+
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0viewer", new_message: {
+        message_id: "viewer-caption-followup-001", chat_id: "b0viewer",
+        text: "caption must not be saved by viewer",
+      } },
+    }, secret);
+    assert.equal(state.DB.consoleJobs.get("job_abcdef1234567890").result_json, originalResult,
+      "a viewer demoted after opening the edit flow must not save a caption");
+    assert.equal(calls.some(call => call.method === "sendFile"), false,
+      "viewer callback must not resend a Mob X preview");
+    assert.equal(state.DB.consoleJobs.get("job_abcdef1234567890").status, "ready_for_review");
+    assert.equal(state.DB.links.length, 1, "viewer must not clear or mutate saved links");
+    assert.equal(state.DB.linkDeleteCalls, 0);
+    assert.equal(state.DB.consoleRules.version, 1, "viewer must not change protected settings");
+    assert.equal(state.DB.state.get("panel_sync_mode"), "atomic");
+    assert.equal(state.DB.state.get("panel_seq") || "0", "0",
+      "unauthorized callbacks must not advance the global panel event sequence");
+
+    state.DB.state.set("mode", "waiting_link");
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0viewer", new_message: {
+        message_id: "viewer-link-submission-001", chat_id: "b0viewer",
+        text: "https://x.com/mobgamesstudios/status/2107878755079213477",
+      } },
+    }, secret);
+    assert.equal(state.DB.links.length, 1, "viewer cannot submit a new Mob X link from the waiting-link state");
+    assert.equal(calls.some(call => call.method === "updateBotEndpoints"), false,
+      "viewer must not register or change the webhook");
+  });
 }
 
 console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
