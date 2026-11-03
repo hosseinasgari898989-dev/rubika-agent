@@ -17,9 +17,9 @@ from urllib.parse import urlparse
 
 from agent.brain.owner_health import (
     build_health_snapshot,
+    get_daily_usage_snapshot,
     render_health_section,
     should_reduce_nonessential_writes,
-    unavailable_daily_usage,
     unavailable_health_snapshot,
 )
 
@@ -580,7 +580,7 @@ def send_owner_notification(
     # Quota counters are currently unavailable to this job. If an approved
     # telemetry source supplies them later, only low-priority event inserts are
     # suppressed at 70%; error events and the digest/message path remain intact.
-    daily_usage = unavailable_daily_usage()
+    daily_usage = get_daily_usage_snapshot()
     reduce_low_priority = (
         picked_category in {"info", "success", "ai_success"}
         and should_reduce_nonessential_writes({"daily_usage": daily_usage})
