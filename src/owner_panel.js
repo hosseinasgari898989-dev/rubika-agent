@@ -81,6 +81,7 @@ const esc = (s) => String(s ?? "").replace(/\*\*|__|--|~~|\|\||`|\[|\]/g, "");
 const kb = (rows) => ({ rows: rows.map((r) => ({ buttons: r.map(([t, id]) => ({ id, type: "Simple", button_text: t })) })) });
 const HOME_ONLY = [[["🏠 منوی اصلی", "p_home"]]];
 const HOME_KB = kb(HOME_ROWS);
+const LOADING_KB = kb([[['🏠 منوی اصلی', 'p_home']]]);
 const refreshKb = (id) => kb([[["🔄 تازه‌سازی", id], ["🏠 منوی اصلی", "p_home"]]]);
 const BACK_KB = refreshKb("p_help");
 const CANCEL_KB = kb([
@@ -325,28 +326,7 @@ async function edit(env, chat, mid, src, keypad) {
   const base = { chat_id: chat, message_id: targetMid, text: f.text };
   const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
     keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
-  const syncMode = await getState(env, "panel_sync_mode", "inplace");
-  // In-place editing is the default; explicit "atomic" remains an owner-selected compatibility mode.
-  if (syncMode !== "inplace") {
-    try {
-      const replacement = await send(env, chat, src, hasKeypad ? keypad : undefined);
-      const replacementMid = responseMessageId(replacement);
-      await assertPanelEventCurrent(env);
-      await deletePreviousPanel(env, chat, targetMid, replacementMid);
-      try { await bumpCounter(env, "panel_edit_ok"); } catch { /* metrics must never block panel sync */ }
-      try { await bumpCounter(env, "atomic_ok"); } catch { /* metrics must never block panel sync */ }
-      return replacementMid;
-    } catch (error) {
-      if (error instanceof StalePanelEvent) throw error;
-      const code = error && typeof error.code === "string" && /^[a-z0-9_-]{1,80}$/i.test(error.code)
-        ? error.code.toLowerCase() : "panel_atomic_failed";
-      try { await setState(env, "last_error", code); } catch { /* best effort diagnostics */ }
-      try { await bumpCounter(env, "panel_edit_fail"); } catch { /* best effort diagnostics */ }
-      try { await bumpCounter(env, "atomic_fail"); } catch { /* best effort diagnostics */ }
-      // Do not fall back to in-place edits: the current panel remains intact on send failure.
-      return targetMid;
-    }
-  }
+  // Ignore legacy panel_sync_mode values: normal panel navigation always edits this message.
   try {
     const updateKeypad = async () => {
       if (!hasKeypad) return;
@@ -429,6 +409,13 @@ const isOwnerOnlyPanelAction = (id) => {
     value === "p_failall_yes" ||
     /^p_(?:failgo|lseldel)_\d{1,2}_[0-9a-f]{0,5}$/.test(value);
 };
+
+// Screen callbacks are rendered back into the tracked main message; show a loading state
+// before their D1-backed screen builders or settings actions start.
+const isMainPanelScreenClick = (id) =>
+  ["p_home", "p_help", "p_debug", "p_status", "p_queue", "p_ai", "p_report"].includes(String(id || "")) ||
+  isScreenId(String(id || "")) ||
+  isSettingsId(String(id || ""));
 const sha256Hex = async (value) => {
   const digest = await crypto.subtle.digest("SHA-256", te.encode(value));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -676,8 +663,7 @@ async function debugText(env) {
   const staleSkip = await readCounter("panel_stale_skip");
   const atomicOk = await readCounter("atomic_ok");
   const atomicFail = await readCounter("atomic_fail");
-  const storedMode = await getState(env, "panel_sync_mode", "inplace");
-  const panelSyncMode = storedMode === "atomic" ? "atomic" : "inplace";
+  const panelSyncMode = "inplace";
   let timings = [];
   try {
     const parsed = JSON.parse(await getState(env, "last_timings", "[]"));
@@ -1176,8 +1162,14 @@ async function processEvent(env, selfFetch, origin, ev) {
           !["p_home", "p_status", "p_queue", "p_qs", "p_ai", "p_report", "p_mob", "p_help", "p_debug"].includes(staleButton)) {
           refreshId = "p_home";
         }
-        await render(ui, refreshId, { fresh: true });
+        if (currentPanelMid) {
+          await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB);
+        }
+        await render(ui, refreshId, { clickedMid: currentPanelMid });
         return;
+      }
+      if (isMainPanelScreenClick(ev.button) && currentPanelMid) {
+        await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB);
       }
       await render(ui, ev.button, { clickedMid: ev.mid });
       return;
@@ -1185,21 +1177,17 @@ async function processEvent(env, selfFetch, origin, ev) {
     const word = ev.text.split(/\s+/)[0].split("@")[0].toLowerCase();
     if (word === "/register") { await registerWebhook(timedEnv, origin); await send(timedEnv, ev.chat, "✅ اتصال لحظه‌ای دوباره ثبت شد."); return; }
     if (word === "/panelmode") {
-      const match = /^\/panelmode\s+(atomic|inplace)\s*$/i.exec(ev.text);
       if (!(await hasOwnerRole(timedEnv, ev.chat, owner))) {
-        try { await rubika(timedEnv, "sendMessage", { chat_id: ev.chat, text: "فقط نقش مالک اجازهٔ تغییر حالت پنل را دارد." }); } catch {}
+        try { await rubika(timedEnv, "sendMessage", { chat_id: ev.chat, text: "فقط نقش مالک اجازهٔ مشاهدهٔ حالت پنل را دارد." }); } catch {}
         return;
       }
-      if (!match) {
-        const currentMode = (await getState(timedEnv, "panel_sync_mode", "inplace")) === "atomic" ? "atomic" : "inplace";
-        const currentMid = await getState(timedEnv, "panel_mid", "");
-        await sendFreshPanel(ui, "حالت فعلی پنل: " + currentMode + "\nاستفاده: /panelmode atomic یا /panelmode inplace", HOME_KB, currentMid);
-        return;
-      }
-      const mode = match[1].toLowerCase();
-      await setState(timedEnv, "panel_sync_mode", mode);
       const currentMid = await getState(timedEnv, "panel_mid", "");
-      await sendFreshPanel(ui, "✅ حالت همگام‌سازی پنل تغییر کرد: **" + mode + "**", HOME_KB, currentMid);
+      const requestedInplace = /^\/panelmode\s+inplace\s*$/i.test(ev.text);
+      const notice = requestedInplace
+        ? "✅ پنل همیشه متن و دکمه‌ها را روی همان پیام ویرایش می‌کند."
+        : "حالت atomic غیرفعال است؛ پنل همیشه با حالت inplace ویرایش می‌شود. برای بررسی: /panelmode inplace";
+      if (currentMid) await edit(timedEnv, ev.chat, currentMid, notice, HOME_KB);
+      else await send(timedEnv, ev.chat, notice, HOME_KB);
       return;
     }
     if (COMMANDS[word]) { await render(ui, COMMANDS[word], { fresh: true }); return; }
@@ -1269,6 +1257,19 @@ async function processEvent(env, selfFetch, origin, ev) {
     await send(timedEnv, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
   } catch (e) {
     if (e instanceof StalePanelEvent) return;
+    if (ev.kind === "click" && isMainPanelScreenClick(ev.button)) {
+      const currentMid = await getState(timedEnv, "panel_mid", "");
+      // Settings writes must not be repeated blindly after a partial failure; refresh the settings screen instead.
+      const retryId = isSettingsId(ev.button) ? "p_set" : ev.button;
+      const errorText = "❌ نمایش صفحه انجام نشد. خطا: " + esc(e && e.code || "unknown") + "\nمی‌توانی دوباره تلاش کنی.";
+      const errorKb = kb([[["🔄 تلاش مجدد", retryId], ["🏠 منوی اصلی", "p_home"]]]);
+      if (currentMid) {
+        try {
+          await edit(timedEnv, ev.chat, currentMid, errorText, errorKb);
+          return;
+        } catch { /* use the ordinary response only if both edit and its delivery fallback failed */ }
+      }
+    }
     try { await send(timedEnv, ev.chat, "❌ خطا: " + esc(e && e.code || "unknown"), BACK_KB); } catch { /* ignore */ }
   } finally {
     await recordPanelTiming(timedEnv, timing, msgAge);
