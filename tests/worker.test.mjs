@@ -4709,7 +4709,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     }, ownerSecret);
     const ownerNotice = calls.find(call => call.method === "sendMessage" && String(call.payload.text).includes("مالک ثبت شد"));
     assert.ok(ownerNotice);
-    assert.ok(ownerNotice.payload.text.includes("چت تأییدشده به پنل دسترسی دارد.\n\n🤖 **پنل مدیریت"),
+    assert.ok(ownerNotice.payload.text.includes("چت تأییدشده به پنل دسترسی دارد.\n\n🤖 پنل مدیریت"),
       "owner claim must use real line breaks immediately before the main panel text");
     assert.equal(ownerNotice.payload.text.includes("\\n"), false, "owner claim notice must not contain literal backslash-n");
 
@@ -4733,7 +4733,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     }, inviteSecret);
     const inviteNotice = calls.find(call => call.method === "sendMessage" && String(call.payload.text).includes("دعوت پذیرفته شد"));
     assert.ok(inviteNotice);
-    assert.ok(inviteNotice.payload.text.includes("دسترسی شما ثبت شد.\n\n🤖 **پنل مدیریت"),
+    assert.ok(inviteNotice.payload.text.includes("دسترسی شما ثبت شد.\n\n🤖 پنل مدیریت"),
       "invite claim must use real line breaks immediately before the main panel text");
     assert.equal(inviteNotice.payload.text.includes("\\n"), false, "invite claim notice must not contain literal backslash-n");
   });
