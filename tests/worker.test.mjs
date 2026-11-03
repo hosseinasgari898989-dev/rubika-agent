@@ -250,7 +250,7 @@ class FakeStatement {
       for (const row of this.db.ownerDigestEvents) {
         if (row.window_id === windowId) totals.set(row.category, (totals.get(row.category) || 0) + 1);
       }
-      return { results: [...totals.entries()].map(([category, total]) => ({ category, total })) };
+      return { meta: { size_after: this.db.sizeAfter }, results: [...totals.entries()].map(([category, total]) => ({ category, total })) };
     }
     if (this.sql.includes("FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 100")) {
       const windowId = this.values[0];
