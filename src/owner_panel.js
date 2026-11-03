@@ -872,7 +872,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         if (!dispatchResult.ok && !dispatchResult.skipped) {
           await updateMobMain(ui, "⚠️ تأیید قبلاً ثبت شده، اما اجرای خودکار شروع نشد (" +
             dispatchResult.error + ")." +
-            (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
+            (dispatchResult.error_detail ? "\n" + dispatchResult.error_detail : "") +
             " مقصد همچنان فقط کانال تست است.", HOME_KB);
         } else {
           await updateMobMain(ui, "✅ تأیید قبلاً ثبت شده است؛ اجرای خودکار برای کانال تست " +
@@ -913,12 +913,12 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       if (!dispatchResult.ok && !dispatchResult.skipped) {
         await updateMobMain(ui, "✅ تأیید مالک ثبت شد؛ اما اجرای خودکار شروع نشد (" +
           dispatchResult.error + ")." +
-          (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
+          (dispatchResult.error_detail ? "\n" + dispatchResult.error_detail : "") +
           " مقصد فقط کانال تست است؛ ارسال زمان‌بندی‌شده همچنان فعال می‌ماند.", HOME_KB);
         return;
       }
-      await send(
-        env, chat,
+      await updateMobMain(
+        ui,
         "✅ تأیید مالک ثبت شد و اجرای خودکار " +
           (dispatchResult.skipped ? "قبلاً راه‌اندازی شده است." : "درخواست شد.") +
           " مقصد فقط کانال تست است؛ اگر نتیجهٔ ارسال نامشخص شود، ارسال دوباره انجام نمی‌شود.",
@@ -1002,7 +1002,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     await setState(env, "panel_mob_pending_link_id", "");
     if (!dispatchResult.ok && !dispatchResult.skipped) {
       await updateMobMain(ui, "⚠️ راه‌اندازی خودکار پردازش انجام نشد (" + dispatchResult.error +
-        ")." + (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
+        ")." + (dispatchResult.error_detail ? "\n" + dispatchResult.error_detail : "") +
         " پردازش زمان‌بندی‌شده همچنان فعال است.", HOME_KB);
       return;
     }
@@ -1099,7 +1099,7 @@ async function tryClaim(env, ev) {
       ]);
     } catch { /* migration 0010 may not be applied yet; panel_owner remains the compatibility fallback */ }
     try { await rubika(env, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch { /* best effort */ }
-    await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا چت تأییدشده به پنل دسترسی دارد.\\n\\n" + HOME_TEXT, HOME_KB);
+    await send(env, ev.chat, "✅ **مالک ثبت شد.** از حالا چت تأییدشده به پنل دسترسی دارد.\n\n" + HOME_TEXT, HOME_KB);
     return;
   }
 
@@ -1138,7 +1138,7 @@ async function tryClaim(env, ev) {
       return;
     }
     try { await rubika(env, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch { /* best effort */ }
-    await send(env, ev.chat, "✅ **دعوت پذیرفته شد.** دسترسی شما ثبت شد.\\n\\n" + HOME_TEXT, HOME_KB);
+    await send(env, ev.chat, "✅ **دعوت پذیرفته شد.** دسترسی شما ثبت شد.\n\n" + HOME_TEXT, HOME_KB);
   } catch {
     await send(env, ev.chat, "⚠️ امکان بررسی کد دعوت نیست؛ پایگاه داده یا migration لازم آماده نیست.");
   }
@@ -1312,6 +1312,20 @@ async function processEvent(env, selfFetch, origin, ev) {
       await timedEnv.DB.prepare("INSERT OR IGNORE INTO panel_links (url, external_id, status) VALUES (?, ?, 'pending')").bind(link, externalId).run();
       const saved = await timedEnv.DB.prepare("SELECT id, url, external_id, status FROM panel_links WHERE external_id = ?").bind(externalId).first();
       if (!saved) throw new PanelError("mob_x_link_save_failed");
+      if (saved.status === "rejected") {
+        // A cancel on the confirmation prompt rejects the link before any job exists.
+        // Reopen only that case; links rejected after a real review (a job exists) stay blocked.
+        const hasJob = await timedEnv.DB.prepare(
+          "SELECT id FROM console_jobs WHERE panel_link_id = ? AND type = 'mob_x_link'"
+        ).bind(saved.id).first();
+        if (!hasJob) {
+          const reopened = await timedEnv.DB.prepare(
+            "UPDATE panel_links SET status = 'pending', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
+            "WHERE id = ? AND status = 'rejected'"
+          ).bind(saved.id).run();
+          if (reopened?.meta?.changes) saved.status = "pending";
+        }
+      }
       if (saved.status !== "pending") {
         await setState(timedEnv, "mode", "idle");
         await updateMobMain(ui, "این پست قبلاً ثبت شده است؛ وضعیت فعلی: " + esc(saved.status) + ".", HOME_KB);

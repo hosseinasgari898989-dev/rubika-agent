@@ -1854,6 +1854,12 @@ class PanelFakeStatement {
       this.db.links.push({ id, url, external_id: String(externalId), status: "pending", created_at: new Date().toISOString(), confirmed_at: null, updated_at: new Date().toISOString() });
       return { meta: { changes: 1, last_row_id: id } };
     }
+    if (this.sql.startsWith("UPDATE panel_links SET status = 'pending'")) {
+      const row = this.db.links.find(item => Number(item.id) === Number(this.values[0]));
+      if (!row || row.status !== "rejected") return { meta: { changes: 0 } };
+      Object.assign(row, { status: "pending", updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
     if (this.sql.startsWith("UPDATE panel_links SET status = 'rejected'")) {
       const row = this.db.links.find(item => Number(item.id) === Number(this.values[0]));
       if (!row || row.status !== "pending") return { meta: { changes: 0 } };
@@ -4567,5 +4573,170 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.failedMedia.has(id), false);
 }
 
-console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
 
+
+
+
+// PV publish approval updates the tracked main panel rather than sending a new main message.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    const mainMid = "pv-publish-main-001";
+    state.DB.state.set("panel_mid", mainMid);
+    const jobId = "job_abcdef1234567890";
+    const itemId = "mob_official:2107878755079213476";
+    state.DB.consoleJobs.set(jobId, {
+      id: jobId, type: "mob_x_link", status: "ready_for_review", panel_link_id: 1,
+      params_json: "{}", result_json: JSON.stringify({
+        item_id: itemId, rubika_file_id: "mock-preview-file", preview_sent: true,
+      }),
+    });
+    state.DB.items.set(itemId, {
+      id: itemId, platform: "mob_official", status: "ready", review_state: "pending",
+    });
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "pv-publish-preview-001", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: "p_mob_publish_" + jobId },
+      } },
+    }, secret);
+
+    assert.equal(state.DB.state.get("panel_mid"), mainMid, "publish approval must preserve panel_mid");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0,
+      "publish approval result must not create a new main message");
+    const mainEdits = calls.filter(call => call.method === "editMessageText" && call.payload.message_id === mainMid);
+    assert.ok(mainEdits.length >= 2, "the main message must receive Loading and the final result");
+    assert.match(mainEdits[0].payload.text, /در حال انجام/);
+    assert.ok(mainEdits.at(-1).payload.text.includes("تأیید مالک ثبت شد"));
+    assert.equal(calls.filter(call => call.method === "editMessageText").every(call => call.payload.message_id === mainMid), true);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").every(call => call.payload.message_id === mainMid), true);
+  });
+}
+
+// A link canceled before a job exists can be submitted again; reviewed/confirmed/sent links stay blocked.
+{
+  await withMockRubikaFetch(async calls => {
+    const chat = "b0actualowner";
+    const urlFor = id => "https://x.com/mobgamesstudios/status/" + id;
+    const secretFor = async state => panel.hookSecret(state);
+    const postText = (state, secret, text, messageId) => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: chat, new_message: {
+        message_id: messageId, chat_id: chat, text,
+      } },
+    }, secret);
+    const click = (state, secret, button, messageId) => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: chat, new_message: {
+        message_id: messageId, chat_id: chat, text: "", aux_data: { button_id: button },
+      } },
+    }, secret);
+
+    // Exercise the real cancel callback first: pending -> rejected with no job.
+    const canceled = panelEnv();
+    canceled.DB.ownerChat = chat;
+    canceled.DB.state.set("panel_mid", "pv-reopen-main");
+    canceled.DB.state.set("panel_mob_pending_link_id", "1");
+    canceled.DB.state.set("panel_mob_temp_mid", "pv-reopen-prompt");
+    canceled.DB.links.push({
+      id: 1, url: urlFor("2107878755079213476"), external_id: "2107878755079213476",
+      status: "pending", created_at: new Date().toISOString(),
+    });
+    canceled.DB.nextPanelLinkId = 2;
+    const canceledSecret = await secretFor(canceled);
+    await click(canceled, canceledSecret, "p_mob_cancel", "pv-reopen-prompt");
+    assert.equal(canceled.DB.links[0].status, "rejected");
+    assert.equal(canceled.DB.consoleJobs.size, 0);
+    assert.equal(canceled.DB.state.get("panel_mob_temp_mid"), "");
+    await click(canceled, canceledSecret, "p_mob", "pv-reopen-main");
+    await postText(canceled, canceledSecret, urlFor("2107878755079213476"), "pv-reopen-text");
+    assert.equal(canceled.DB.links[0].status, "pending",
+      "a rejected link with no Mob X job must reopen after the owner submits it again");
+    const reopenedPrompt = calls.filter(call => call.method === "sendMessage" && call.payload.text.includes("این لینک است؟"));
+    assert.equal(reopenedPrompt.length, 1, "the reopened link must receive a fresh confirmation prompt");
+    assert.equal(canceled.DB.state.get("panel_mid"), "pv-reopen-main",
+      "reopening a link must not replace the main panel message");
+
+    const blocked = async ({ status, id, withJob = false }) => {
+      const state = panelEnv();
+      state.DB.ownerChat = chat;
+      const mainMid = "pv-blocked-main-" + status;
+      state.DB.state.set("panel_mid", mainMid);
+      state.DB.state.set("mode", "waiting_link");
+      const externalId = id;
+      state.DB.links.push({
+        id: 1, url: urlFor(externalId), external_id: externalId, status,
+        created_at: new Date().toISOString(),
+      });
+      if (withJob) {
+        state.DB.consoleJobs.set("job_existing_" + status, {
+          id: "job_existing_" + status, type: "mob_x_link", status: "failed",
+          panel_link_id: 1, params_json: "{}", result_json: null,
+        });
+      }
+      const secret = await secretFor(state);
+      const beforePrompts = calls.filter(call => call.method === "sendMessage" && call.payload.text.includes("این لینک است؟")).length;
+      await postText(state, secret, urlFor(externalId), "pv-resubmit-" + status);
+      assert.equal(state.DB.links[0].status, status, status + " link status must not be reopened");
+      assert.equal(state.DB.state.get("panel_mob_temp_mid") || "", "", status + " link must not get a new confirmation prompt");
+      const afterPrompts = calls.filter(call => call.method === "sendMessage" && call.payload.text.includes("این لینک است؟")).length;
+      assert.equal(afterPrompts, beforePrompts, status + " link must remain blocked");
+      assert.ok(calls.some(call => call.method === "editMessageText" && call.payload.message_id === mainMid),
+        status + " outcome must be rendered on the existing main panel");
+    };
+
+    await blocked({ status: "rejected", id: "2107878755079213477", withJob: true });
+    await blocked({ status: "confirmed", id: "2107878755079213478" });
+    await blocked({ status: "sent", id: "2107878755079213479" });
+  });
+}
+
+// User-facing PV messages render real line breaks, never a literal backslash followed by n.
+{
+  const ownerPanelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8");
+  assert.equal(ownerPanelSource.includes("\\\\n"), false,
+    "all seven known double-backslash-n message escapes must be removed from owner_panel.js");
+  assert.equal(ownerPanelSource.split('error_detail ? "\\n"').length - 1, 3,
+    "all three error_detail suffixes must use a real newline escape");
+
+  await withMockRubikaFetch(async calls => {
+    const ownerState = panelEnv();
+    const ownerSecret = await panel.hookSecret(ownerState);
+    await postPanelUpdate(ownerState, {
+      update: { type: "NewMessage", chat_id: "b0newowner", new_message: {
+        message_id: "pv-claim-owner-001", chat_id: "b0newowner", text: "/claim correct-setup-code",
+      } },
+    }, ownerSecret);
+    const ownerNotice = calls.find(call => call.method === "sendMessage" && String(call.payload.text).includes("مالک ثبت شد"));
+    assert.ok(ownerNotice);
+    assert.ok(ownerNotice.payload.text.includes("چت تأییدشده به پنل دسترسی دارد.\n\n🤖 پنل مدیریت"),
+      "owner claim must use real line breaks immediately before the main panel text");
+    assert.equal(ownerNotice.payload.text.includes("\\n"), false, "owner claim notice must not contain literal backslash-n");
+
+    const inviteState = panelEnv();
+    inviteState.DB.ownerChat = "b0existingowner";
+    inviteState.DB.consoleOwners.set(1, {
+      id: 1, chat_id: "b0existingowner", label: "مالک اصلی", role: "owner", enabled: 1,
+      claimed_at: new Date().toISOString(), last_seen_at: null,
+    });
+    const inviteCode = "INV-" + "B".repeat(32);
+    const codeHash = createHash("sha256").update(inviteCode).digest("hex");
+    inviteState.DB.consoleInvites.set(1, {
+      id: 1, code_hash: codeHash, created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(), used_at: null, used_by: null,
+    });
+    const inviteSecret = await panel.hookSecret(inviteState);
+    await postPanelUpdate(inviteState, {
+      update: { type: "NewMessage", chat_id: "b0invitedviewer", new_message: {
+        message_id: "pv-claim-invite-001", chat_id: "b0invitedviewer", text: "/claim " + inviteCode,
+      } },
+    }, inviteSecret);
+    const inviteNotice = calls.find(call => call.method === "sendMessage" && String(call.payload.text).includes("دعوت پذیرفته شد"));
+    assert.ok(inviteNotice);
+    assert.ok(inviteNotice.payload.text.includes("دسترسی شما ثبت شد.\n\n🤖 پنل مدیریت"),
+      "invite claim must use real line breaks immediately before the main panel text");
+    assert.equal(inviteNotice.payload.text.includes("\\n"), false, "invite claim notice must not contain literal backslash-n");
+  });
+}
+
+console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
