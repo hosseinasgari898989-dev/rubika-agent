@@ -2704,7 +2704,7 @@ async function withDispatchFetch(responder, fn) {
     assert.notEqual(textEdits[1].payload.text, "⏳ در حال انجام…");
     assert.equal(textEdits.every(call => call.payload.message_id === "primary-panel-default-001"), true);
     assert.equal(keypadEdits.every(call => call.payload.message_id === "primary-panel-default-001"), true);
-    assert.equal(keypadEdits[0].payload.inline_keypad.rows.flat().map(button => button.id).join(","), "p_home");
+    assert.equal(keypadEdits[0].payload.inline_keypad.rows.flatMap(row => row.buttons || []).map(button => button.id).join(","), "p_home");
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "primary-panel-default-001"), false);
     assert.equal(state.DB.state.get("panel_mid"), "primary-panel-default-001");
     assert.equal(state.DB.state.has("panel_sync_mode"), false);
@@ -2737,7 +2737,7 @@ async function withDispatchFetch(responder, fn) {
     const firstKeypad = calls.filter(call => call.method === "editMessageKeypad");
     assert.equal(firstText[0].payload.text, "⏳ در حال انجام…");
     assert.equal(firstText.at(-1).payload.text.includes("انتخاب لینک‌های غیرفعال"), true);
-    const firstButtons = firstKeypad.at(-1).payload.inline_keypad.rows.flat().map(button => button.id);
+    const firstButtons = firstKeypad.at(-1).payload.inline_keypad.rows.flatMap(row => row.buttons || []).map(button => button.id);
     assert.ok(firstButtons.some(id => id === "p_lsel_1_12"), "first inactive link needs a selectable glass button");
     assert.ok(firstButtons.some(id => id === "p_lsel_2_12"), "second inactive link needs a selectable glass button");
     assert.equal(state.DB.state.get("panel_mid"), "inactive-link-select-main");
@@ -2745,7 +2745,7 @@ async function withDispatchFetch(responder, fn) {
 
     await click("p_lsel_1_12");
     const finalText = calls.filter(call => call.method === "editMessageText").at(-1);
-    const finalButtons = calls.filter(call => call.method === "editMessageKeypad").at(-1).payload.inline_keypad.rows.flat().map(button => button.id);
+    const finalButtons = calls.filter(call => call.method === "editMessageKeypad").at(-1).payload.inline_keypad.rows.flatMap(row => row.buttons || []).map(button => button.id);
     assert.equal(finalText.payload.message_id, "inactive-link-select-main");
     assert.equal(finalText.payload.text.includes("☑️ 1)"), true);
     assert.ok(finalButtons.includes("p_lseldel_1_12"), "selecting one row must reveal the matching delete action");
@@ -2776,7 +2776,7 @@ async function withDispatchFetch(responder, fn) {
     const finalText = calls.filter(call => call.method === "editMessageText").at(-1);
     assert.equal(sends.length, 1);
     assert.equal(sends[0].payload.text, "⏳ در حال انجام…");
-    assert.ok(sends[0].payload.inline_keypad.rows.flat().some(button => button.id === "p_home"));
+    assert.ok(sends[0].payload.inline_keypad.rows.flatMap(row => row.buttons || []).some(button => button.id === "p_home"));
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "rate-limited-loading-main"), true);
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
     assert.equal(finalText.payload.message_id, "mock-reply-1");
