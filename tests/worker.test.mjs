@@ -828,6 +828,95 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(actionClaim.body.claimed, false);
 }
 
+// Mob X no-caption updates are scoped to one ready-for-review job and are idempotent.
+{
+  const state = env();
+  const jobId = "job_abcdef1234567890";
+  const secondJobId = "job_fedcba0987654321";
+  const itemId = "mob_official:2107878755079213476";
+  const secondItemId = "mob_official:2107878755079213477";
+  const firstResult = {
+    item_id: itemId, rubika_file_id: "file-one", caption: "Old English caption",
+    original_caption: "Original English post", persian_translation: "ترجمهٔ فارسی",
+    preview_sent: true, preview_message_id: "preview-one",
+  };
+  const secondResult = {
+    item_id: secondItemId, rubika_file_id: "file-two", caption: "Second job caption",
+    original_caption: "Second original", persian_translation: "ترجمهٔ دوم",
+    preview_sent: true, preview_message_id: "preview-two",
+  };
+  const firstJson = JSON.stringify(firstResult);
+  const secondJson = JSON.stringify(secondResult);
+  state.DB.consoleJobs.set(jobId, {
+    id: jobId, type: "mob_x_link", status: "ready_for_review", result_json: firstJson,
+    panel_link_id: 1, created_at: "2026-11-03T00:00:00Z", updated_at: "2026-11-03T00:00:00Z",
+  });
+  state.DB.consoleJobs.set(secondJobId, {
+    id: secondJobId, type: "mob_x_link", status: "ready_for_review", result_json: secondJson,
+    panel_link_id: 2, created_at: "2026-11-03T00:01:00Z", updated_at: "2026-11-03T00:01:00Z",
+  });
+  state.DB.items.set(itemId, { id: itemId, platform: "mob_official", status: "ready", review_state: "pending", caption: "Old English caption" });
+  state.DB.items.set(secondItemId, { id: secondItemId, platform: "mob_official", status: "ready", review_state: "pending", caption: "Second job caption" });
+
+  const sends = [];
+  const deletes = [];
+  const sendPreview = async (...args) => { sends.push(args); return "preview-new"; };
+  const deletePreview = async (...args) => { deletes.push(args); };
+  const fixed = "ماب انترتینمنت در پیج خود پستی منتشر کرد.";
+  const first = await panel.updateMobXJobCaption(state, "owner-chat", jobId, fixed, { fixedNoCaption: true, sendPreview, deletePreview, maxChars: 4000 });
+  assert.equal(first.ok, true);
+  assert.equal(first.already, false);
+  assert.deepEqual(sends, [["owner-chat", jobId, "file-one", "**" + fixed + "**"]]);
+  assert.deepEqual(deletes, [["owner-chat", "preview-one"]]);
+  const updatedFirst = JSON.parse(state.DB.consoleJobs.get(jobId).result_json);
+  assert.equal(updatedFirst.caption, "**" + fixed + "**");
+  assert.equal(updatedFirst.original_caption, "Original English post");
+  assert.equal(updatedFirst.persian_translation, "ترجمهٔ فارسی");
+  assert.equal(updatedFirst.preview_sent, true);
+  assert.equal(updatedFirst.preview_message_id, "preview-new");
+  assert.equal(state.DB.items.get(itemId).caption, "**" + fixed + "**");
+  assert.equal(state.DB.consoleJobs.get(secondJobId).result_json, secondJson);
+  assert.equal(state.DB.items.get(secondItemId).caption, "Second job caption");
+
+  const repeated = await panel.updateMobXJobCaption(state, "owner-chat", jobId, fixed, { fixedNoCaption: true, sendPreview, deletePreview, maxChars: 4000 });
+  assert.equal(repeated.ok, true);
+  assert.equal(repeated.already, true);
+  assert.equal(sends.length, 1, "a repeated button press must not send another preview");
+  assert.equal(state.DB.consoleJobs.get(secondJobId).result_json, secondJson);
+
+  const invalidState = env();
+  const invalidId = "job_abcdef1234567899";
+  invalidState.DB.consoleJobs.set(invalidId, { id: invalidId, type: "mob_x_link", status: "rejected", result_json: firstJson });
+  invalidState.DB.items.set(itemId, { id: itemId, platform: "mob_official", status: "ready", caption: "Old English caption" });
+  const denied = await panel.updateMobXJobCaption(invalidState, "owner-chat", invalidId, "کپشن فارسی", { sendPreview, deletePreview, maxChars: 4000 });
+  assert.equal(denied.error, "mob_x_job_not_editable");
+  assert.equal(sends.length, 1);
+
+  const blank = await panel.updateMobXJobCaption(state, "owner-chat", secondJobId, "   ", { sendPreview, deletePreview, maxChars: 4000 });
+  assert.equal(blank.error, "caption_required");
+  const long = await panel.updateMobXJobCaption(state, "owner-chat", secondJobId, "x".repeat(4001), { sendPreview, deletePreview, maxChars: 4000 });
+  assert.equal(long.error, "caption_too_long");
+  assert.equal(state.DB.consoleJobs.get(secondJobId).result_json, secondJson);
+  assert.equal(sends.length, 1, "invalid text must never refresh a preview");
+
+  const concurrentState = env();
+  const concurrentId = "job_abcdef1234567891";
+  const concurrentJson = JSON.stringify({ ...firstResult, preview_message_id: "old-concurrent" });
+  concurrentState.DB.consoleJobs.set(concurrentId, { id: concurrentId, type: "mob_x_link", status: "ready_for_review", result_json: concurrentJson });
+  concurrentState.DB.items.set(itemId, { id: itemId, platform: "mob_official", status: "ready", caption: "Old English caption" });
+  const concurrentSends = [];
+  const parallel = await Promise.all([
+    panel.updateMobXJobCaption(concurrentState, "owner-chat", concurrentId, "Caption in English", { sendPreview: async (...args) => { concurrentSends.push(args); return "new-concurrent"; }, deletePreview, maxChars: 4000 }),
+    panel.updateMobXJobCaption(concurrentState, "owner-chat", concurrentId, "Caption in English", { sendPreview: async (...args) => { concurrentSends.push(args); return "new-concurrent"; }, deletePreview, maxChars: 4000 }),
+  ]);
+  assert.equal(concurrentSends.length, 1, "overlapping duplicate clicks may refresh only once");
+  assert.equal(parallel.filter(x => x.ok).length, 1);
+  assert.equal(parallel.filter(x => x.error === "mob_x_caption_update_in_progress").length, 1);
+}
+
+// The no-caption callback is an owner-only PV action, never a viewer action.
+assert.equal(panel.isOwnerOnlyPanelAction("p_mob_nocaption_job_abcdef1234567890"), true);
+
 // POST /sources accepts X but stores it under the schema-supported mob_official platform.
 {
   const state = env();
