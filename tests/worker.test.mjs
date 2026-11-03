@@ -4696,6 +4696,8 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
   const ownerPanelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8");
   assert.equal(ownerPanelSource.includes("\\\\n"), false,
     "all seven known double-backslash-n message escapes must be removed from owner_panel.js");
+  assert.equal(ownerPanelSource.split('error_detail ? "\\n"').length - 1, 3,
+    "all three error_detail suffixes must use a real newline escape");
 
   await withMockRubikaFetch(async calls => {
     const ownerState = panelEnv();
@@ -4707,7 +4709,8 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     }, ownerSecret);
     const ownerNotice = calls.find(call => call.method === "sendMessage" && String(call.payload.text).includes("مالک ثبت شد"));
     assert.ok(ownerNotice);
-    assert.ok(ownerNotice.payload.text.includes("\n\n"), "owner claim notice should contain real blank lines");
+    assert.ok(ownerNotice.payload.text.includes("چت تأییدشده به پنل دسترسی دارد.\n\n🤖 **پنل مدیریت"),
+      "owner claim must use real line breaks immediately before the main panel text");
     assert.equal(ownerNotice.payload.text.includes("\\n"), false, "owner claim notice must not contain literal backslash-n");
 
     const inviteState = panelEnv();
@@ -4730,7 +4733,8 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     }, inviteSecret);
     const inviteNotice = calls.find(call => call.method === "sendMessage" && String(call.payload.text).includes("دعوت پذیرفته شد"));
     assert.ok(inviteNotice);
-    assert.ok(inviteNotice.payload.text.includes("\n\n"), "invite claim notice should contain real blank lines");
+    assert.ok(inviteNotice.payload.text.includes("دسترسی شما ثبت شد.\n\n🤖 **پنل مدیریت"),
+      "invite claim must use real line breaks immediately before the main panel text");
     assert.equal(inviteNotice.payload.text.includes("\\n"), false, "invite claim notice must not contain literal backslash-n");
   });
 }
