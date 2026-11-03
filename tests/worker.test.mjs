@@ -522,12 +522,7 @@ class FakeStatement {
       this.db.events.push({ item_id: itemId, level: "info", code, details_json: details, created_at: new Date().toISOString(), sql });
       return { meta: { changes: 1 } };
     }
-    if (sql.startsWith("INSERT INTO brain_events (item_id, level, code, details_json) SELECT ?, 'info', 'console_mob_x_reject'")) {
-      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
-      const [itemId, details] = v;
-      this.db.events.push({ item_id: itemId, level: "info", code: "console_mob_x_reject", details_json: details, created_at: new Date().toISOString(), sql });
-      return { meta: { changes: 1 } };
-    }
+
     if (sql.startsWith("UPDATE console_jobs SET status = 'processing'")) {
       const [updatedAt, jobId, panelLinkId, existsLinkId] = v;
       const job = this.db.consoleJobs.get(jobId);
@@ -3771,7 +3766,6 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 
   const missingSecret = env();
   delete missingSecret.OWNER_WEB_TOKEN;
-  addReadyJob; // Fixture helper is intentionally scoped to the main test DB only.
   missingSecret.DB.consoleJobs.set(firstJobId, { ...state.DB.consoleJobs.get(firstJobId), status: "ready_for_review" });
   missingSecret.DB.panelLinks.set(101, { id: 101, status: "ready_for_review" });
   missingSecret.DB.items.set(firstItemId, { ...state.DB.items.get(firstItemId), status: "ready", review_state: "pending" });
