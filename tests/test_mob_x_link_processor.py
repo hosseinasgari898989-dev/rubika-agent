@@ -376,6 +376,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         cloud.get_seen_index.return_value = {"ids": set()}
         cloud.upsert_item.return_value = {"item_id": "mob_official:" + POST_ID}
         client = Mock()
+        client.transition.side_effect = lambda *args, **kwargs: events.append(("transition", kwargs["result"]))
         client.rules.side_effect = lambda: events.append(("rules",)) or {
             "translate_enabled": False, "caption_max_chars": 900,
         }
@@ -520,7 +521,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         )
 
         fixed = "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
-        staged_result = client.transition.call_args.kwargs["result"]
+        staged_result = next(event[1] for event in events if event[0] == "transition")
         self.assertEqual(result["status"], "ready_for_review")
         self.assertEqual(staged_result["caption"], fixed)
         self.assertEqual(staged_result["caption_mode"], "no_caption")
