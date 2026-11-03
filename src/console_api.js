@@ -867,8 +867,8 @@ export async function handleConsoleApi(request, env, h) {
             "UPDATE items SET review_state = 'rejected' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0"
           ).bind(result.item_id),
           env.DB.prepare(
-            "INSERT INTO brain_events (item_id, level, code, details_json) SELECT ?, 'info', 'console_mob_x_reject', ? WHERE changes() > 0"
-          ).bind(result.item_id, detail),
+            "INSERT INTO brain_events (item_id, level, code, details_json) SELECT ?, 'info', ?, ? WHERE changes() > 0"
+          ).bind(result.item_id, "console_mob_x_reject", detail),
         ]);
         if (!results?.[0]?.meta?.changes || !results?.[1]?.meta?.changes || !results?.[2]?.meta?.changes) {
           return fail("invalid_state_for_action", 409);
