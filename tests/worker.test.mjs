@@ -1761,6 +1761,7 @@ class PanelFakeStatement {
     return null;
   }
   async all() {
+    if (this.db.failPanelReads) throw new Error("mock_panel_read_failed");
     if (this.sql.includes("FROM panel_links WHERE status NOT IN")) {
       const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
       const limit = Number(this.values[0]) || 50;
@@ -1954,6 +1955,7 @@ class PanelFakeDB {
     this.brainEvents = [];
     this.lastChanges = 0;
     this.failReadOnlyBatch = false;
+    this.failPanelReads = false;
   }
   prepare(sql) { return new PanelFakeStatement(this, sql); }
   async batch(statements) {
@@ -2753,6 +2755,36 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
     assert.equal(calls.some(call => call.method === "sendFile"), false, "selection screens do not create temporary media messages");
     assert.equal(calls.some(call => call.method === "deleteMessage"), false);
+  });
+}
+
+// A screen-read error is rendered on the same primary message with a safe retry button, not a side message.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "panel-read-error-main");
+    state.DB.failPanelReads = true;
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "panel-read-error-main", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: "p_lsel" },
+      } },
+    }, secret);
+    const texts = calls.filter(call => call.method === "editMessageText");
+    const keypads = calls.filter(call => call.method === "editMessageKeypad");
+    assert.equal(texts.length, 2);
+    assert.equal(keypads.length, 2);
+    assert.equal(texts[0].payload.text, "⏳ در حال انجام…");
+    assert.equal(texts[1].payload.text.includes("❌ نمایش صفحه انجام نشد"), true);
+    assert.equal(texts[1].payload.message_id, "panel-read-error-main");
+    const retryIds = keypads.at(-1).payload.inline_keypad.rows.flatMap(row => row.buttons || []).map(button => button.id);
+    assert.ok(retryIds.includes("p_lsel"));
+    assert.ok(retryIds.includes("p_home"));
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "deleteMessage").length, 0);
+    assert.equal(state.DB.state.get("panel_mid"), "panel-read-error-main");
   });
 }
 
