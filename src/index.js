@@ -131,7 +131,7 @@ async function ownerTokenMatches(provided, expected) {
 async function ownerAuthorized(request, env) {
   const expected = typeof env.OWNER_WEB_TOKEN === "string" ? env.OWNER_WEB_TOKEN : "";
   const match = /^Bearer ([^\s]+)$/.exec(request.headers.get("authorization") || "");
-  if (!expected || expected.length < 32 || !match) return false;
+  if (!expected || expected.length < 32 || expected === env.AGENT_API_TOKEN || !match) return false;
   return ownerTokenMatches(match[1], expected);
 }
 
@@ -146,9 +146,9 @@ const ACTIONS_RUNNER_POSTS = new Set([
 ]);
 function requiresOwnerConsoleToken(path, method) {
   if (!path.startsWith("/api/console/") || ["GET", "HEAD", "OPTIONS"].includes(method)) return false;
-  const sub = path.replace(/\\/+$/, "").slice("/api/console".length);
+  const sub = path.replace(/\/+$/, "").slice("/api/console".length);
   if (ACTIONS_RUNNER_POSTS.has(sub)) return false;
-  if (/^\\/mob-x\\/jobs\\/[A-Za-z0-9_-]{1,100}\\/(?:transition|preview|delivery)$/.test(sub)) return false;
+  if (/^\/mob-x\/jobs\/[A-Za-z0-9_-]{1,100}\/(?:transition|preview|delivery)$/.test(sub)) return false;
   return true;
 }
 
