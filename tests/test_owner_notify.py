@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from agent.brain import owner_notify
+from agent.brain import owner_health
 
 
 class FakeRubikaBot:
@@ -61,6 +62,12 @@ class OwnerNotifyTests(unittest.TestCase):
         })
         self.env.start()
         self.addCleanup(self.env.stop)
+        self.health_patch = patch.object(
+            owner_notify, "build_health_snapshot",
+            return_value=owner_health.unavailable_health_snapshot(),
+        )
+        self.health_patch.start()
+        self.addCleanup(self.health_patch.stop)
 
     def test_first_event_creates_one_message_and_persists_message_id(self):
         bot = FakeRubikaBot()
@@ -239,6 +246,47 @@ class OwnerNotifyTests(unittest.TestCase):
         self.assertFalse(result["updated"])
         self.assertEqual(bot.sent, [])
         self.assertEqual(bot.edited, [])
+
+    def test_nonessential_event_write_is_suppressed_at_seventy_percent(self):
+        bot = FakeRubikaBot()
+        with (
+            patch.object(owner_notify, "get_daily_usage_snapshot", return_value={
+                "d1_rows_written": 70_000,
+                "d1_rows_read": None,
+                "worker_requests": None,
+                "workers_ai_neurons": None,
+            }),
+            patch.object(owner_notify, "_worker_post") as worker_post,
+            patch.object(owner_notify, "refresh_daily_digest", return_value={"sent": True}) as refresh,
+        ):
+            result = owner_notify.send_owner_notification(
+                "✅ An optional successful refresh completed",
+                category="success",
+                source="optional_refresh",
+            )
+        self.assertTrue(result["sent"])
+        worker_post.assert_not_called()
+        refresh.assert_called_once_with()
+
+    def test_error_event_is_never_suppressed_at_seventy_percent(self):
+        with (
+            patch.object(owner_notify, "get_daily_usage_snapshot", return_value={
+                "d1_rows_written": 100_000,
+                "d1_rows_read": 5_000_000,
+                "worker_requests": 100_000,
+                "workers_ai_neurons": 10_000,
+            }),
+            patch.object(owner_notify, "_worker_post", return_value={"ok": True}) as worker_post,
+            patch.object(owner_notify, "refresh_daily_digest", return_value={"sent": True}),
+        ):
+            result = owner_notify.send_owner_notification(
+                "🚨 A required workflow failed",
+                category="error",
+                source="required_workflow",
+            )
+        self.assertTrue(result["sent"])
+        worker_post.assert_called_once()
+        self.assertTrue(worker_post.call_args.args[0].endswith("/events"))
 
     def test_digest_redacts_urls_and_counts_ai_failures(self):
         state = digest_state(events=[
