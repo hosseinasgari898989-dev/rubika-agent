@@ -78,7 +78,7 @@ const typed=prompt('Worker '+count+' مورد را برای حذف آماده ک
 if(typed!=='DELETE')return toast('لغو شد؛ هیچ فایلی برای حذف علامت نخورد','bad');
 const result=await api('/api/console/failed-media/delete-request',{method:'POST',body:{confirmation:challenge.confirmation}});
 SEL.clear();
-const extra=challenge.limited?' · هر مرحله حداکثر ۵۰ مورد':''+(result.requested&&!result.dispatched?' · شروع خودکار حذف انجام نشد':'');
+const extra=(challenge.limited?' · هر مرحله حداکثر ۵۰ مورد':'')+(result.requested&&!result.dispatched?' · شروع خودکار حذف انجام نشد':'');
 toast(label+N(result.requested)+extra,result.requested&&result.dispatched?'ok':'bad');
 R.go('unsent')
 }catch(e){toast('خطا: '+e.message,'bad')}};
