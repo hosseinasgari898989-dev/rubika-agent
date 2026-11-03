@@ -716,6 +716,10 @@ async function ownerDigestSnapshot(env, state) {
       "SELECT id, occurred_at, category, source, title, detail FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 100"
     ).bind(state.window_id).all()
   ]);
+  const d1SizeAfter = counts && counts.meta && counts.meta.size_after;
+  const d1SizeBytes = typeof d1SizeAfter === "number" && Number.isFinite(d1SizeAfter) && d1SizeAfter >= 0
+    ? d1SizeAfter
+    : null;
   return {
     window_id: state.window_id,
     window_started_at: state.window_started_at,
@@ -725,6 +729,14 @@ async function ownerDigestSnapshot(env, state) {
     message_creation_uncertain: Number(state.message_creation_uncertain || 0) === 1,
     counts: Object.fromEntries((counts.results || []).map(row => [row.category, Number(row.total || 0)])),
     total_event_count: (counts.results || []).reduce((sum, row) => sum + Number(row.total || 0), 0),
+    health: {
+      d1_size_bytes: d1SizeBytes,
+      daily_d1_reads: null,
+      daily_d1_writes: null,
+      daily_worker_requests: null,
+      workers_ai_neurons: null,
+      mega_used_bytes: null
+    },
     events: (events.results || []).reverse()
   };
 }

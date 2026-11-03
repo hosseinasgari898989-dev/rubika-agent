@@ -13,12 +13,32 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 
 DIGEST_MAX_CHARS = 3400
 DIGEST_CLAIM_ATTEMPTS = 8
 DIGEST_CLAIM_DELAY_SECONDS = 0.35
+
+D1_FREE_SIZE_BYTES = 500 * 1024 * 1024
+D1_SIZE_WARNING_BYTES = 50 * 1024 * 1024
+D1_SIZE_ALERT_BYTES = 250 * 1024 * 1024
+D1_DAILY_WRITES_LIMIT = 100_000
+D1_DAILY_READS_LIMIT = 5_000_000
+WORKER_DAILY_REQUESTS_LIMIT = 100_000
+WORKERS_AI_DAILY_NEURONS_LIMIT = 10_000
+MEGA_WATCH_LIMIT_BYTES = 20_000_000_000
+GITHUB_REPOSITORY = "hosseinasgari898989-dev/rubika-agent"
+GITHUB_WORKFLOW_MONITORS = (
+    ("termux", "termux-docker-discovery.yml", True),
+    ("daily_queue", "daily-queue-processor.yml", True),
+    ("mob_x", "mob-x-link-processor.yml", True),
+    # Deploy is push-triggered, not scheduled; include its latest main workflow runs.
+    ("deploy", "deploy-worker.yml", False),
+)
+FAILED_WORKFLOW_CONCLUSIONS = {
+    "failure", "timed_out", "action_required", "startup_failure", "stale",
+}
 
 
 def _safe_diagnostic_value(value: Any, secrets: list[str]) -> str | None:
@@ -188,6 +208,146 @@ def _make_rubika_bot(token: str) -> Any:
     return Bot(token=token, timeout=25, show_progress=False)
 
 
+
+def _github_workflow_runs(workflow_file: str) -> list[dict[str, Any]] | None:
+    allowed = {entry[1] for entry in GITHUB_WORKFLOW_MONITORS}
+    if workflow_file not in allowed:
+        return None
+    url = (
+        "https://api.github.com/repos/" + GITHUB_REPOSITORY
+        + "/actions/workflows/" + quote(workflow_file, safe="")
+        + "/runs?per_page=50&exclude_pull_requests=true"
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Rubika-Agent-Health-Monitor/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=6) as response:
+            raw = response.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            return None
+        payload = json.loads(raw.decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    return runs if isinstance(runs, list) else None
+
+
+def collect_workflow_failures() -> dict[str, int | None]:
+    """Read consecutive workflow failures from public GitHub run metadata only."""
+    result: dict[str, int | None] = {}
+    for key, workflow_file, scheduled_only in GITHUB_WORKFLOW_MONITORS:
+        runs = _github_workflow_runs(workflow_file)
+        if runs is None:
+            result[key] = None
+            continue
+        candidates = [
+            row for row in runs
+            if isinstance(row, dict)
+            and row.get("status") == "completed"
+            and row.get("head_branch") == "main"
+            and (not scheduled_only or row.get("event") == "schedule")
+        ]
+        candidates.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+        if not candidates:
+            result[key] = None
+            continue
+        failures = 0
+        for row in candidates:
+            conclusion = str(row.get("conclusion") or "")
+            if conclusion == "success":
+                break
+            if conclusion in FAILED_WORKFLOW_CONCLUSIONS:
+                failures += 1
+                continue
+            if conclusion in {"cancelled", "skipped", "neutral"}:
+                continue
+            break
+        result[key] = failures
+    return result
+
+
+def _daily_usage_line(label: str, value: Any, limit: int, unit: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return f"{label}: نامشخص / {limit:,} {unit} (مجموع روزانه در runtime در دسترس نیست)"
+    percent = (float(value) / limit) * 100 if limit else 0.0
+    warning = "⚠️ " if percent >= 70 else ""
+    return f"{warning}{label}: {int(value):,}/{limit:,} {unit} ({percent:.1f}%)"
+
+
+def _health_section_lines(state: dict[str, Any]) -> list[str]:
+    health = state.get("health") if isinstance(state.get("health"), dict) else {}
+    size = health.get("d1_size_bytes")
+    lines: list[str] = []
+    if isinstance(size, (int, float)) and not isinstance(size, bool) and size >= 0:
+        size_bytes = int(size)
+        percent = size_bytes * 100 / D1_FREE_SIZE_BYTES
+        if size_bytes >= D1_SIZE_ALERT_BYTES:
+            label = "🚨 هشدار PV در اندازهٔ D1"
+        elif size_bytes >= D1_SIZE_WARNING_BYTES:
+            label = "⚠️ هشدار اندازهٔ D1"
+        else:
+            label = "D1"
+        lines.append(
+            f"{label}: {size_bytes / (1024 * 1024):.2f}/500 MiB ({percent:.1f}%)"
+        )
+    else:
+        lines.append("D1 storage: اندازهٔ فعلی از metadata query قابل‌خواندن نیست.")
+
+    lines.append(_daily_usage_line(
+        "D1 writes/day", health.get("daily_d1_writes"), D1_DAILY_WRITES_LIMIT, "rows"
+    ))
+    lines.append(_daily_usage_line(
+        "D1 reads/day", health.get("daily_d1_reads"), D1_DAILY_READS_LIMIT, "rows"
+    ))
+    lines.append(_daily_usage_line(
+        "Worker requests/day", health.get("daily_worker_requests"),
+        WORKER_DAILY_REQUESTS_LIMIT, "requests"
+    ))
+    lines.append(_daily_usage_line(
+        "Workers AI neurons/day", health.get("workers_ai_neurons"),
+        WORKERS_AI_DAILY_NEURONS_LIMIT, "neurons"
+    ))
+
+    mega_used = health.get("mega_used_bytes")
+    if isinstance(mega_used, (int, float)) and not isinstance(mega_used, bool) and mega_used >= 0:
+        mega_percent = float(mega_used) * 100 / MEGA_WATCH_LIMIT_BYTES
+        warning = "⚠️ " if mega_percent >= 70 else ""
+        lines.append(
+            f"{warning}Mega: {int(mega_used) / 1_000_000_000:.2f}/20 GB "
+            f"({mega_percent:.1f}%)"
+        )
+    else:
+        lines.append(
+            "Mega: مصرف و فضای آزاد قابل‌خواندن نیست؛ دسترسی quota حساب در digest وجود ندارد."
+        )
+
+    failures = state.get("workflow_failures")
+    if not isinstance(failures, dict):
+        failures = {}
+    labels = (
+        ("termux", "Termux"),
+        ("daily_queue", "Daily queue"),
+        ("mob_x", "Mob X"),
+        ("deploy", "Deploy"),
+    )
+    values = []
+    for key, label in labels:
+        count = failures.get(key)
+        rendered = str(count) if type(count) is int and count >= 0 else "نامشخص"
+        values.append(f"{label}={rendered}")
+    lines.append("خطای پیاپی workflowها: " + " | ".join(values))
+    lines.append(
+        "در صورت قابل‌سنجش شدن سقف ۷۰٪، فقط log/refresh غیرضروری کاهش می‌یابد؛ صف، dedupe و ارسال هرگز محدود نمی‌شوند. "
+        "چون مجموع‌های روزانه در runtime در دسترس نیستند، trigger خودکار هنوز فعال نشده است."
+    )
+    return lines
+
+
 def render_daily_digest(state: dict[str, Any]) -> str:
     counts = state.get("counts") if isinstance(state.get("counts"), dict) else {}
     successful = int(counts.get("success", 0) or 0) + int(counts.get("ai_success", 0) or 0)
@@ -202,6 +362,7 @@ def render_daily_digest(state: dict[str, Any]) -> str:
         "━━━━━━━━━━━━━━━━━━",
     ]
 
+    health_lines = _health_section_lines(state)
     events = state.get("events") if isinstance(state.get("events"), list) else []
     event_lines: list[str] = []
     for event in events:
@@ -230,6 +391,9 @@ def render_daily_digest(state: dict[str, Any]) -> str:
 
     def build() -> str:
         rows = list(header)
+        rows.append("🩺 پایش سلامت (فقط‌خواندنی)")
+        rows.extend(health_lines)
+        rows.append("━━━━━━━━━━━━━━━━━━")
         rows.extend(event_lines)
         if omitted:
             rows.append(f"… {omitted} رویداد قدیمی‌تر در سوابق همین بازه نگهداری می‌شود.")
@@ -304,6 +468,7 @@ def refresh_daily_digest() -> dict[str, Any]:
         old_message_id = str(old_message_id) if old_message_id else None
         old_body = str(state.get("message_body") or "")
         uncertain = state.get("message_creation_uncertain") is True
+        state["workflow_failures"] = collect_workflow_failures()
         new_body = render_daily_digest(state)
 
         if not window_id or not lock_token:
