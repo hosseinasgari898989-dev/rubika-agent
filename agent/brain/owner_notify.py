@@ -592,8 +592,8 @@ def send_owner_notification(
                 "/api/brain/owner-digest/events",
                 {
                     "category": picked_category,
-                "source": re.sub(r"[^A-Za-z0-9_.:-]", "_", source)[:64] or "automation",
-                "title": title,
+                    "source": re.sub(r"[^A-Za-z0-9_.:-]", "_", source)[:64] or "automation",
+                    "title": title,
                     "detail": detail,
                 },
             )
