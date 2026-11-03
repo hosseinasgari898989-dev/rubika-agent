@@ -227,8 +227,8 @@ def _github_workflow_runs(workflow_file: str) -> list[dict[str, Any]] | None:
     )
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
-            raw = response.read(256 * 1024 + 1)
-        if len(raw) > 256 * 1024:
+            raw = response.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
             return None
         payload = json.loads(raw.decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
@@ -342,8 +342,8 @@ def _health_section_lines(state: dict[str, Any]) -> list[str]:
         values.append(f"{label}={rendered}")
     lines.append("خطای پیاپی workflowها: " + " | ".join(values))
     lines.append(
-        "قاعدهٔ ۷۰٪: فقط log/refresh غیرضروری کاهش می‌یابد؛ صف، dedupe و ارسال هرگز محدود نمی‌شوند. "
-        "مجموع روزانه فعلاً قابل‌سنجش نیست، پس trigger خودکار فعال نیست."
+        "در صورت قابل‌سنجش شدن سقف ۷۰٪، فقط log/refresh غیرضروری کاهش می‌یابد؛ صف، dedupe و ارسال هرگز محدود نمی‌شوند. "
+        "چون مجموع‌های روزانه در runtime در دسترس نیستند، trigger خودکار هنوز فعال نشده است."
     )
     return lines
 
