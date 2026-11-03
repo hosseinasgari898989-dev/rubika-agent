@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 
 
 MOCK_BASE = "https://mock-worker.test"
-CONSOLE_URL = "http://127.0.0.1:8765/docs/console/"
+CONSOLE_URL = "http://127.0.0.1:8765/console/"
 LEGACY_URL = "http://127.0.0.1:8765/docs/console/legacy.html"
 PAGES = [
     ("dash", "داشبورد"),
