@@ -2558,16 +2558,26 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "old-live-panel-4321"), true);
     const failedEdit = calls.find(call => call.method === "editMessageText");
-    const fallbackSend = calls.filter(call => call.method === "sendMessage").at(-1);
+    const fallbackSend = calls.find(call => call.method === "sendMessage");
+    assert.equal(failedEdit.payload.text, "⏳ در حال انجام…");
     assert.equal(fallbackSend.payload.text, failedEdit.payload.text);
     assert.equal(Array.isArray(fallbackSend.payload.inline_keypad.rows), true);
     assert.equal(fallbackSend.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0), true);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("وضعیت"), true);
     assert.equal(calls.some(call => call.method === "editMessageKeypad" &&
       (!call.payload.inline_keypad.rows.length ||
        !call.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0))), false);
-  }, ({ method }) => method === "editMessageText"
-    ? new Response(JSON.stringify({ status: "EDIT_FAILED" }), { status: 200 })
-    : null);
+  }, (() => {
+    let first = true;
+    return ({ method }) => {
+      if (method === "editMessageText" && first) {
+        first = false;
+        return new Response(JSON.stringify({ status: "EDIT_FAILED" }), { status: 200 });
+      }
+      return null;
+    };
+  })());
 }
 
 // HTTP failures from the edit API include both the method and HTTP status in last_error.
@@ -2586,9 +2596,18 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(state.DB.state.get("panel_edit_fail"), "1");
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
-  }, ({ method }) => method === "editMessageText"
-    ? new Response(JSON.stringify({ status: "UNAVAILABLE" }), { status: 503 })
-    : null);
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(0).payload.text, "⏳ در حال انجام…");
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("وضعیت"), true);
+  }, (() => {
+    let first = true;
+    return ({ method }) => {
+      if (method === "editMessageText" && first) {
+        first = false;
+        return new Response(JSON.stringify({ status: "UNAVAILABLE" }), { status: 503 });
+      }
+      return null;
+    };
+  })());
 }
 
 // HTTP rate limiting on an edit falls back for that click to a replacement panel and deletes the old message.
@@ -2862,14 +2881,17 @@ async function withDispatchFetch(responder, fn) {
       } },
     }, secret);
     assert.equal(state.DB.state.get("panel_mid"), "atomic-send-failure-old");
-    assert.equal(state.DB.state.get("last_error"), "rubika_sendmessage_send_failed");
+    assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_http_503");
     assert.equal(state.DB.state.get("panel_edit_fail"), "1");
     assert.ok(calls.some(call => call.method === "editMessageText"));
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 2,
+      "one failed fallback plus the best-effort Persian error response were attempted");
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "atomic-send-failure-old"), false);
-  }, ({ method }) => method === "sendMessage"
-    ? new Response(JSON.stringify({ status: "SEND_FAILED" }), { status: 200 })
-    : null);
+  }, ({ method }) => {
+    if (method === "editMessageText") return new Response(JSON.stringify({ status: "UNAVAILABLE" }), { status: 503 });
+    if (method === "sendMessage") return new Response(JSON.stringify({ status: "SEND_FAILED" }), { status: 200 });
+    return null;
+  });
 }
 
 // The retired atomic setting is ignored; successful navigation edits the main text and keypad in place.
@@ -2990,7 +3012,8 @@ async function withDispatchFetch(responder, fn) {
     const keypadIndex = calls.findIndex(call => call.method === "editMessageKeypad");
     assert.equal(textIndex >= 0, true);
     assert.equal(keypadIndex > textIndex, true);
-    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+    assert.equal(state.DB.state.get("panel_edit_ok"), "2");
+    assert.equal(calls.filter(call => call.method === "editMessageText")[0].payload.text, "⏳ در حال انجام…");
   });
 }
 
@@ -3007,23 +3030,34 @@ async function withDispatchFetch(responder, fn) {
         text: "", aux_data: { button_id: "p_links" },
       } },
     }, secret);
-    const textIndex = calls.findIndex(call => call.method === "editMessageText");
+    const textIndexes = calls.map((call, index) => call.method === "editMessageText" ? index : -1).filter(index => index >= 0);
     const keypadIndexes = calls.map((call, index) => call.method === "editMessageKeypad" ? index : -1).filter(index => index >= 0);
     const sendIndex = calls.findIndex(call => call.method === "sendMessage");
-    assert.equal(keypadIndexes.length, 2);
-    assert.equal(textIndex >= 0 && keypadIndexes[0] > textIndex, true);
+    assert.equal(keypadIndexes.length, 3, "loading keypad failure retries once, then the final keyboard is installed");
+    assert.equal(textIndexes.length, 2);
+    assert.equal(keypadIndexes[0] > textIndexes[0], true);
     assert.equal(keypadIndexes[1] > keypadIndexes[0], true);
     assert.equal(sendIndex > keypadIndexes[1], true);
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagekeypad_edit_failed");
     assert.equal(state.DB.state.get("panel_edit_fail"), "1");
     assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
     const fallback = calls[sendIndex];
+    assert.equal(fallback.payload.text, "⏳ در حال انجام…");
     assert.equal(Array.isArray(fallback.payload.inline_keypad.rows), true);
     assert.equal(fallback.payload.inline_keypad.rows.some(row => row.buttons && row.buttons.length > 0), true);
+    assert.equal(textIndexes.every(index => calls[index].payload.message_id === "mock-reply-1"), false,
+      "the loading edit targets the old panel; the final text edits the replacement");
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "old-keypad-panel-1357"), true);
-  }, ({ method }) => method === "editMessageKeypad"
-    ? new Response(JSON.stringify({ status: "EDIT_FAILED" }), { status: 200 })
-    : null);
+  }, (() => {
+    let fails = 2;
+    return ({ method }) => {
+      if (method === "editMessageKeypad" && fails > 0) {
+        fails -= 1;
+        return new Response(JSON.stringify({ status: "EDIT_FAILED" }), { status: 200 });
+      }
+      return null;
+    };
+  })());
 }
 
 // p_home still renders its fallback text and main-menu buttons when the read-only D1 batch fails.
