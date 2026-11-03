@@ -31,7 +31,7 @@ from agent.brain.rubika_publisher import RubikaPublisher, assert_test_channel_de
 from agent.brain.vision_moderator import CloudflareVideoModerator
 from agent.storage.mega import MegaStorage
 from agent.brain.edit_caption import EDIT_CAPTION
-from agent.source_policy import delivery_enabled
+from agent.source_policy import delivery_enabled, has_required_any_keyword
 
 
 DEFAULT_CLOUD_API = "https://rubika-agent.h98609294.workers.dev"
@@ -58,6 +58,19 @@ def _response_dict(value: Any) -> dict[str, Any]:
 def _safe_error(exc: Exception) -> str:
     value = getattr(exc, "code", type(exc).__name__)
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value))[:80] or "unknown_error"
+
+
+def _tiktok_publish_checks_pass(
+    candidate: Candidate, validation: Any, moderation: Any,
+) -> bool:
+    """Require selected TikTok content keywords, a validated audio stream and music."""
+    if candidate.platform != "tiktok":
+        return False
+    if has_required_any_keyword(candidate.caption, candidate.hashtags) is not True:
+        return False
+    if not isinstance(validation, Mapping) or validation.get("has_audio") is not True:
+        return False
+    return isinstance(moderation, Mapping) and moderation.get("has_music") is True
 
 
 def _stage_failure_summary(stage_result: Mapping[str, Any]) -> dict[str, Any]:
@@ -498,21 +511,34 @@ def run_one(
         )
         policy = staged_candidate.source_policy or {}
         required_checks = {"has_music": True}
-        if policy.get("require_poppy_relevance_check") is True:
-            required_checks["is_poppy_playtime"] = True
         if policy.get("require_edit_signal_check") is True:
             required_checks["is_edit"] = True
         if policy.get("require_brain_quality_check") is True:
             required_checks["high_quality_edit"] = True
-        if not isinstance(moderation, dict) or any(
-            moderation.get(name) is not expected
+        # The legacy visual flag predates the 2026-10-23 selected-source policy.
+        # TikTok relevance is checked from caption/hashtags by policy.py instead.
+        if platform != "tiktok" and policy.get("require_poppy_relevance_check") is True:
+            required_checks["is_poppy_playtime"] = True
+
+        moderation_fields_pass = isinstance(moderation, Mapping) and all(
+            moderation.get(name) is expected
             for name, expected in required_checks.items()
-        ):
+        )
+        if platform == "tiktok":
+            checks_pass = _tiktok_publish_checks_pass(
+                staged_candidate, payload.get("validation"), moderation,
+            ) and moderation_fields_pass
+            rejection_reason = "required_tiktok_keyword_audio_music_check_not_passed"
+        else:
+            checks_pass = moderation_fields_pass
+            rejection_reason = "required_visual_or_music_check_not_passed"
+
+        if not checks_pass:
             return {
                 "ok": False, "status": "brain_checks_not_publishable",
                 "platform": platform, "item_id": item_id, "publishing": False,
                 "moderation": moderation,
-                "reason": "required_visual_or_music_check_not_passed",
+                "reason": rejection_reason,
             }
 
         candidate_id = str(item.get("external_id"))
