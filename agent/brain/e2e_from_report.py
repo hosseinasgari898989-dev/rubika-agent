@@ -19,6 +19,7 @@ from typing import Any, Mapping
 from agent.brain.authorization import SourceRegistry
 from agent.brain.cloud_state import CloudState
 from agent.brain.delivery import deliver_with_retry
+from agent.brain.failed_media import preserve_failed_media
 from agent.brain.deduplication import blocking_ledger_entries
 from agent.brain.downloaders import CobaltDownloader, YouTubeRelayDownloader
 from agent.brain.ledger import MegaLedger
@@ -203,6 +204,62 @@ def _find_staged_media(output_dir: Path, external_id: str) -> Path:
     if not choices:
         raise RuntimeError("staged_media_file_missing")
     return sorted(choices)[0]
+
+
+def _find_original_tiktok_media(
+    output_dir: Path, candidate: Candidate, staged_media: Path,
+) -> Path | None:
+    """Return the untouched Cobalt download, never a normalized publish derivative."""
+    if candidate.platform != "tiktok":
+        return None
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", candidate.external_id)[:80]
+    downloaded = output_dir / "raw" / f"tiktok_{safe_id}.mp4"
+    if downloaded.is_file() and downloaded.stat().st_size > 0:
+        return downloaded
+
+    # A reused preserve_source object is byte-for-byte copied from the original by
+    # stage_edit_batch. A square-normalized reusable object is not the original.
+    policy = candidate.source_policy or {}
+    if policy.get("output_format") == "preserve_source" and staged_media.is_file():
+        return staged_media
+    return None
+
+
+def _preserve_failed_tiktok_original(
+    client: Any,
+    storage: Any,
+    original_path: Path | None,
+    item_id: str,
+    caption: str,
+    delivery: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Best-effort archive after failed/uncertain Rubika delivery; never mask delivery."""
+    status = str(delivery.get("status") or "")
+    if status == "sent":
+        return {"attempted": False, "reason": "delivery_confirmed"}
+    if status not in {"failed", "uncertain"}:
+        return {"attempted": False, "reason": "delivery_not_failed"}
+    if original_path is None or not original_path.is_file() or original_path.stat().st_size <= 0:
+        return {"attempted": False, "error": "failed_media_original_unavailable"}
+
+    reason = _safe_error(delivery.get("error") or status)
+    try:
+        result = preserve_failed_media(
+            client, storage, "tiktok", "video", original_path, caption, reason,
+            job_id=None, item_id=item_id,
+        )
+    except Exception:
+        # The helper is designed never to raise, but this boundary protects the
+        # original Rubika outcome even if a future helper implementation regresses.
+        return {"attempted": True, "ok": False, "stored": False, "recorded": False,
+                "error": "failed_media_internal_error"}
+    return {
+        "attempted": True,
+        "ok": bool(result.get("ok")),
+        "stored": bool(result.get("stored")),
+        "recorded": bool(result.get("recorded")),
+        "error": _safe_error(result.get("error")) if result.get("error") else None,
+    }
 
 
 def run_one(
@@ -410,6 +467,9 @@ def run_one(
 
         candidate_id = str(item.get("external_id"))
         media_path = _find_staged_media(output_dir, candidate_id)
+        original_media_path = _find_original_tiktok_media(
+            output_dir, staged_candidate, media_path,
+        )
         payload["status"] = "ready"
         payload["review_state"] = "approved"
         cloud.upsert_item(payload)
@@ -431,14 +491,21 @@ def run_one(
 
         publish_run_id = uuid.uuid4().hex
         cloud.create_run(trigger_type="e2e_publish_smoke", run_id=publish_run_id)
-        publisher = RubikaPublisher(
-            os.getenv("RUBIKA_TOKEN", ""),
-            channel_guid,
-        )
         last_response: dict[str, Any] = {}
+        publisher = None
+        publisher_error = None
+        try:
+            publisher = RubikaPublisher(
+                os.getenv("RUBIKA_TOKEN", ""),
+                channel_guid,
+            )
+        except Exception as exc:
+            publisher_error = _safe_error(exc)
 
         def send() -> Any:
             nonlocal last_response
+            if publisher is None:
+                raise RuntimeError(publisher_error or "rubika_publisher_unavailable")
             raw = publisher.send_media(
                 media_path, "video", caption=EDIT_CAPTION
             )
@@ -470,13 +537,41 @@ def run_one(
             )
             ledger.save(current_state)
 
-        delivery = deliver_with_retry(
-            item_id=item_id,
-            send=send,
-            record_attempt=record_attempt,
-            delete_local=lambda: media_path.unlink(missing_ok=True),
-            max_attempts=3,
-            sleep_seconds=1,
+        if publisher is None:
+            delivery = {
+                "item_id": item_id, "status": "failed", "attempts": 0,
+                "error": publisher_error or "rubika_publisher_unavailable",
+                "cleanup": "retained",
+            }
+        else:
+            try:
+                delivery = deliver_with_retry(
+                    item_id=item_id,
+                    send=send,
+                    record_attempt=record_attempt,
+                    delete_local=lambda: media_path.unlink(missing_ok=True),
+                    max_attempts=3,
+                    sleep_seconds=1,
+                )
+            except Exception as exc:
+                # A failed initial D1 attempt record occurs before send. If Rubika
+                # already returned OK, never reclassify that confirmed send as failed.
+                if last_response.get("status") == "OK":
+                    data = last_response.get("data") if isinstance(last_response.get("data"), dict) else {}
+                    message_id = data.get("message_id") or last_response.get("message_id")
+                    delivery = {
+                        "item_id": item_id, "status": "sent", "attempts": 1,
+                        "message_id": str(message_id) if message_id is not None else None,
+                        "cleanup": "pending", "state_record_error": _safe_error(exc),
+                    }
+                else:
+                    delivery = {
+                        "item_id": item_id, "status": "failed", "attempts": 0,
+                        "error": _safe_error(exc), "cleanup": "retained",
+                    }
+
+        failed_media = _preserve_failed_tiktok_original(
+            cloud, storage, original_media_path, item_id, EDIT_CAPTION, delivery,
         )
         sent = delivery.get("status") == "sent"
         try:
@@ -501,6 +596,7 @@ def run_one(
             "title": item.get("title", ""),
             "media_path": media_path.name,
             "delivery": delivery,
+            "failed_media_preservation": failed_media,
             "moderation": moderation,
             "storage_key": item.get("storage_key"),
             "publishing": sent,
