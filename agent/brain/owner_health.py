@@ -248,7 +248,7 @@ def render_health_section(snapshot: Mapping[str, Any] | None) -> list[str]:
         pct = sample_bytes / D1_LIMIT_BYTES * 100
         lines.append(
             f"• D1: آخرین نمونهٔ ثبت‌شده در {sample_date}، {_format_bytes(sample_bytes)} "
-            f"از 500 MiB ({pct:.2f}٪)؛ اندازهٔ زنده در digest قابل خواندن نیست."
+            f"از 500 MiB ({pct:.2f}٪)؛ حدود هشدار 50 MiB و PV برابر 250 MiB؛ اندازهٔ زنده در digest قابل خواندن نیست."
         )
         if sample_bytes >= D1_PV_ALERT_BYTES:
             lines.append("🚨 هشدار PV: اندازهٔ D1 از 250 MiB عبور کرده است.")
@@ -272,7 +272,7 @@ def render_health_section(snapshot: Mapping[str, Any] | None) -> list[str]:
             if value >= limit * 0.70:
                 lines.append(f"⚠️ هشدار سهمیه: {label} به آستانهٔ 70٪ رسیده است.")
         else:
-            usage_parts.append(f"{label}: ناموجود")
+            usage_parts.append(f"{label}: ناموجود (سقف {limit:,})")
     lines.append("• مصرف روزانه: " + " | ".join(usage_parts) + "؛ هشدار از 70٪.")
 
     workflows = data.get("workflows") if isinstance(data.get("workflows"), Mapping) else {}
