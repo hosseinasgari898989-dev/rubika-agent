@@ -2632,9 +2632,16 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(fallbackSend.payload.text, failedEdit.payload.text);
     assert.equal(Array.isArray(fallbackSend.payload.inline_keypad.rows), true);
     assert.equal(fallbackSend.payload.inline_keypad.rows.some(row => row.buttons?.length), true);
-  }, ({ method }) => method === "editMessageText"
-    ? new Response(JSON.stringify({ status: "RATE_LIMITED" }), { status: 429 })
-    : null);
+  }, (() => {
+    let first = true;
+    return ({ method }) => {
+      if (method === "editMessageText" && first) {
+        first = false;
+        return new Response(JSON.stringify({ status: "RATE_LIMITED" }), { status: 429 });
+      }
+      return null;
+    };
+  })());
 }
 
 // /debug is owner-only and prints only error codes and last-four-character identifier tails.
