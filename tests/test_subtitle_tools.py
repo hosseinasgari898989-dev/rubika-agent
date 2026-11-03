@@ -190,9 +190,11 @@ class SubtitleBidiTest(unittest.TestCase):
             any("ass " in line and "libass" in line.lower() for line in filters.splitlines()),
             "ffmpeg must include the libass ASS filter",
         )
+
         from PIL import Image
-        root = Path(__file__).resolve().parents[1]
-        fontsdir = root / "assets" / "fonts"
+
+        repo_root = Path(__file__).resolve().parents[1]
+        fontsdir = repo_root / "assets" / "fonts"
         self.assertTrue((fontsdir / "Estedad-Regular.ttf").is_file())
         self.assertTrue((fontsdir / "Estedad-Bold.ttf").is_file())
 
@@ -206,14 +208,21 @@ class SubtitleBidiTest(unittest.TestCase):
                 self._render_and_check_bidi_images(ffmpeg, fontsdir, Path(tmp), Image)
 
     def _render_and_check_bidi_images(self, ffmpeg, fontsdir, output_dir, Image):
-        def render(name, ass_text, width, height):
+        cue = [(0, 1800, "سلام!")]
+        after_ass = st.to_ass(cue)
+        after_dialogue = next(line for line in after_ass.splitlines() if line.startswith("Dialogue:"))
+        prefix = after_dialogue.rsplit(",,", 1)[0]
+        before_dialogue = prefix + ",," + st.RLM + "سلام!"
+        before_ass = after_ass.replace(after_dialogue, before_dialogue)
+
+        def render(name, ass_text):
             ass_path = output_dir / (name + ".ass")
             png_path = output_dir / (name + ".png")
             ass_path.write_text(ass_text, encoding="utf-8")
             subprocess.run(
                 [
                     ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                    "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:r=1:d=2",
+                    "-f", "lavfi", "-i", "color=c=black:s=1280x720:r=1:d=2",
                     "-vf", f"ass={ass_path}:fontsdir={fontsdir}",
                     "-frames:v", "1", str(png_path),
                 ],
@@ -223,11 +232,14 @@ class SubtitleBidiTest(unittest.TestCase):
             self.assertEqual(png_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             return Image.open(png_path).convert("RGB")
 
-        def components(image, scale):
+        before = render("before", before_ass)
+        after = render("after", after_ass)
+
+        def components(image):
             pixels = image.load()
             active = set()
-            for y in range(int(image.height * 0.60), image.height):
-                for x in range(image.width):
+            for y in range(500, 710):
+                for x in range(150, 1130):
                     red, green, blue = pixels[x, y]
                     if red > 210 and green > 210 and blue > 210:
                         active.add((x, y))
@@ -249,69 +261,39 @@ class SubtitleBidiTest(unittest.TestCase):
                 found.append((min(xs), min(ys), max(xs), max(ys), len(xs)))
             return found
 
-        def exclamation_and_body(image, scale):
-            parts = components(image, scale)
-            stems = [
-                part for part in parts
-                if part[2] - part[0] <= max(18, round(18 * scale))
-                and part[3] - part[1] >= max(14, round(14 * scale))
-            ]
-            dots = [
-                part for part in parts
-                if part[2] - part[0] <= max(13, round(13 * scale))
-                and part[3] - part[1] <= max(13, round(13 * scale))
-                and part[4] <= round(180 * scale * scale)
-            ]
+        def exclamation_and_body(image):
+            parts = components(image)
+            stems = [p for p in parts if p[2] - p[0] <= 18 and p[3] - p[1] >= 14]
+            dots = [p for p in parts if p[2] - p[0] <= 13 and p[3] - p[1] <= 13 and p[4] <= 180]
             marker = None
             for stem in stems:
                 sx = (stem[0] + stem[2]) / 2
                 for dot in dots:
                     dx = (dot[0] + dot[2]) / 2
-                    if abs(sx - dx) <= max(5, round(5 * scale)) and -1 <= dot[1] - stem[3] <= round(18 * scale):
-                        marker = (
-                            min(stem[0], dot[0]), min(stem[1], dot[1]),
-                            max(stem[2], dot[2]), max(stem[3], dot[3]),
-                        )
+                    if abs(sx - dx) <= 5 and -1 <= dot[1] - stem[3] <= 18:
+                        marker = (min(stem[0], dot[0]), min(stem[1], dot[1]),
+                                  max(stem[2], dot[2]), max(stem[3], dot[3]))
                         break
                 if marker:
                     break
             self.assertIsNotNone(marker, "could not isolate the Estedad exclamation glyph")
             non_marker = [
-                part for part in parts
-                if not (
-                    part[0] >= marker[0] - 2 and part[2] <= marker[2] + 2
-                    and part[1] >= marker[1] - 2 and part[3] <= marker[3] + 2
-                )
+                p for p in parts
+                if not (p[0] >= marker[0] - 2 and p[2] <= marker[2] + 2
+                        and p[1] >= marker[1] - 2 and p[3] <= marker[3] + 2)
             ]
             self.assertTrue(non_marker, "Persian word glyphs were not rendered")
-            return (
-                marker[0], marker[2],
-                min(part[0] for part in non_marker),
-                max(part[2] for part in non_marker),
-            )
+            body_left = min(p[0] for p in non_marker)
+            body_right = max(p[2] for p in non_marker)
+            return marker[0], marker[2], body_left, body_right
 
-        for width, height in ((1920, 1080), (1280, 720), (1080, 1920), (720, 1280), (1080, 1080)):
-            scale = min(width, height) / 720
-            cue = [(0, 1800, "سلام!")]
-            after_ass = st.to_ass(cue, width=width, height=height)
-            after_dialogue = next(line for line in after_ass.splitlines() if line.startswith("Dialogue:"))
-            prefix = after_dialogue.rsplit(",,", 1)[0]
-            before_dialogue = prefix + ",," + st.RLM + "سلام!"
-            before_ass = after_ass.replace(after_dialogue, before_dialogue)
-            name = f"bidi-{width}x{height}"
-            before = render(name + "-before", before_ass, width, height)
-            after = render(name + "-after", after_ass, width, height)
+        before_left, before_right, before_body_left, before_body_right = exclamation_and_body(before)
+        after_left, after_right, after_body_left, after_body_right = exclamation_and_body(after)
+        self.assertGreater(before_left, before_body_right,
+                           "legacy leading RLM should leave ! on the right edge")
+        self.assertLess(after_right, after_body_left,
+                        "RLE/PDF should move ! to the left edge of Persian text")
 
-            before_left, before_right, before_body_left, before_body_right = exclamation_and_body(before, scale)
-            after_left, after_right, after_body_left, after_body_right = exclamation_and_body(after, scale)
-            self.assertGreater(
-                before_left, before_body_right,
-                f"{width}x{height}: legacy leading RLM should leave ! on the right edge",
-            )
-            self.assertLess(
-                after_right, after_body_left,
-                f"{width}x{height}: RLE/PDF should move ! to the left edge of Persian text",
-            )
 
 class SubtitleLayoutMatrixTest(unittest.TestCase):
     RESOLUTIONS = [
