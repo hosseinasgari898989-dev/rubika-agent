@@ -3612,6 +3612,198 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.consoleJobs.size, 1, "cancellation must not enqueue work");
 }
 
+// Owner-web Mob X caption actions are per-job, guarded, audited and have no publish/preview path.
+{
+  const state = env();
+  const addReadyJob = (jobId, panelLinkId, itemId, overrides = {}) => {
+    const result = {
+      item_id: itemId, external_id: String(panelLinkId).padStart(16, "0"),
+      rubika_file_id: "rubika-file-" + panelLinkId, media_type: "image",
+      caption: "Initial caption " + panelLinkId, original_caption: "Original " + panelLinkId,
+      persian_translation: "ترجمهٔ اولیه " + panelLinkId, caption_mode: "generated",
+      preview_sent: true, preview_message_id: "preview-" + panelLinkId, ...overrides.result,
+    };
+    state.DB.consoleJobs.set(jobId, {
+      id: jobId, type: "mob_x_link", status: overrides.status || "ready_for_review",
+      progress: 100, panel_link_id: panelLinkId, result_json: JSON.stringify(result),
+      error: null, created_at: NOW, updated_at: NOW,
+    });
+    state.DB.panelLinks.set(panelLinkId, {
+      id: panelLinkId, status: overrides.linkStatus || "ready_for_review",
+      url: "https://x.com/mobgamesstudios/status/" + result.external_id,
+    });
+    state.DB.items.set(itemId, {
+      id: itemId, platform: "mob_official", status: "ready", review_state: "pending",
+      caption: result.caption, original_caption: result.original_caption,
+      persian_translation: result.persian_translation,
+    });
+    return { result, item: state.DB.items.get(itemId) };
+  };
+  const firstJobId = "job_abcdef1234567890";
+  const secondJobId = "job_bcdef1234567890";
+  const noCaptionJobId = "job_cdefab1234567890";
+  const englishJobId = "job_defabc1234567890";
+  const rejectJobId = "job_efabcd1234567890";
+  const invalidStateJobId = "job_fabcde1234567890";
+  const firstItemId = "mob_official:review-caption-1";
+  const secondItemId = "mob_official:review-caption-2";
+  const noCaptionItemId = "mob_official:review-caption-3";
+  const englishItemId = "mob_official:review-caption-4";
+  const rejectItemId = "mob_official:review-caption-5";
+  const invalidItemId = "mob_official:review-caption-6";
+
+  addReadyJob(firstJobId, 101, firstItemId);
+  addReadyJob(secondJobId, 102, secondItemId);
+  addReadyJob(noCaptionJobId, 103, noCaptionItemId);
+  addReadyJob(englishJobId, 104, englishItemId);
+  addReadyJob(rejectJobId, 105, rejectItemId);
+  addReadyJob(invalidStateJobId, 106, invalidItemId, { status: "queued" });
+
+  const secondJobBefore = JSON.stringify(state.DB.consoleJobs.get(secondJobId));
+  const secondItemBefore = JSON.stringify(state.DB.items.get(secondItemId));
+  const tiktokBefore = {
+    id: "tiktok:review-caption-control",
+    platform: "tiktok", status: "ready", review_state: "pending",
+    caption: "TikTok caption must stay unchanged",
+  };
+  state.DB.items.set(tiktokBefore.id, { ...tiktokBefore });
+  const rulesBefore = JSON.stringify(state.DB.consoleRules);
+  const writesBefore = state.DB.events.length;
+
+  let response = await read(await worker.fetch(request("/api/console/jobs/" + firstJobId + "/mob-x-review", {
+    method: "POST", body: { action: "edit_caption", caption: "   " },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "caption_empty");
+
+  response = await read(await worker.fetch(request("/api/console/jobs/" + firstJobId + "/mob-x-review", {
+    method: "POST", body: { action: "edit_caption", caption: "x".repeat(901) },
+  }), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "caption_too_long");
+
+  response = await read(await worker.fetch(request("/api/console/jobs/" + firstJobId + "/mob-x-review", {
+    method: "POST", body: { action: "edit_caption", caption: "سلام دنیا؛ خبر تازه" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.caption, "سلام دنیا؛ خبر تازه");
+  assert.equal(state.DB.items.get(firstItemId).caption, "سلام دنیا؛ خبر تازه");
+  let editedResult = JSON.parse(state.DB.consoleJobs.get(firstJobId).result_json);
+  assert.equal(editedResult.caption, "سلام دنیا؛ خبر تازه");
+  assert.equal(editedResult.caption_mode, "edited");
+  assert.equal(editedResult.original_caption, "Original 101");
+  assert.equal(editedResult.persian_translation, "ترجمهٔ اولیه 101");
+  assert.equal(editedResult.preview_sent, true);
+  assert.equal(editedResult.preview_message_id, "preview-101");
+  assert.equal(JSON.stringify(state.DB.consoleJobs.get(secondJobId)), secondJobBefore,
+    "editing one Mob X job must not touch a second job");
+  assert.equal(JSON.stringify(state.DB.items.get(secondItemId)), secondItemBefore,
+    "editing one Mob X job must not touch a second job's item/caption");
+  assert.deepEqual(state.DB.items.get(tiktokBefore.id), tiktokBefore,
+    "Mob X web caption actions must not modify TikTok items");
+
+  const auditsAfterPersian = state.DB.events.length;
+  response = await read(await worker.fetch(request("/api/console/jobs/" + firstJobId + "/mob-x-review", {
+    method: "POST", body: { action: "edit_caption", caption: "سلام دنیا؛ خبر تازه" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.unchanged, true);
+  assert.equal(state.DB.events.length, auditsAfterPersian, "repeat edit must be idempotent and must not duplicate audit");
+
+  response = await read(await worker.fetch(request("/api/console/jobs/" + englishJobId + "/mob-x-review", {
+    method: "POST", body: { action: "edit_caption", caption: "**English update**" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.items.get(englishItemId).caption, "English update");
+  assert.equal(JSON.parse(state.DB.consoleJobs.get(englishJobId).result_json).caption, "English update");
+
+  const noCaptionFixed = mobXCaption.buildMobXNoCaptionCaption();
+  assert.equal(noCaptionFixed, "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**");
+  response = await read(await worker.fetch(request("/api/console/jobs/" + noCaptionJobId + "/mob-x-review", {
+    method: "POST", body: { action: "no_caption" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.caption, noCaptionFixed);
+  const noCaptionResult = JSON.parse(state.DB.consoleJobs.get(noCaptionJobId).result_json);
+  const noCaptionItem = state.DB.items.get(noCaptionItemId);
+  assert.equal(noCaptionResult.caption_mode, "no_caption");
+  assert.equal(noCaptionResult.caption, noCaptionFixed);
+  assert.equal(noCaptionResult.original_caption, "");
+  assert.equal(noCaptionResult.persian_translation, "");
+  assert.equal(noCaptionItem.caption, noCaptionFixed);
+  assert.equal(noCaptionItem.original_caption, "");
+  assert.equal(noCaptionItem.persian_translation, "");
+  const noCaptionAuditCount = state.DB.events.filter(event => event.code === "console_mob_x_no_caption").length;
+  response = await read(await worker.fetch(request("/api/console/jobs/" + noCaptionJobId + "/mob-x-review", {
+    method: "POST", body: { action: "no_caption" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.unchanged, true);
+  assert.equal(state.DB.events.filter(event => event.code === "console_mob_x_no_caption").length, noCaptionAuditCount);
+
+  response = await read(await worker.fetch(request("/api/console/jobs/" + rejectJobId + "/mob-x-review", {
+    method: "POST", body: { action: "reject" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "rejected");
+  assert.equal(state.DB.consoleJobs.get(rejectJobId).status, "rejected");
+  assert.equal(state.DB.panelLinks.get(105).status, "rejected");
+  assert.equal(state.DB.items.get(rejectItemId).review_state, "rejected");
+  const rejectAuditCount = state.DB.events.filter(event => event.code === "console_mob_x_reject").length;
+  response = await read(await worker.fetch(request("/api/console/jobs/" + rejectJobId + "/mob-x-review", {
+    method: "POST", body: { action: "reject" },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.unchanged, true);
+  assert.equal(state.DB.events.filter(event => event.code === "console_mob_x_reject").length, rejectAuditCount);
+
+  response = await read(await worker.fetch(request("/api/console/jobs/" + invalidStateJobId + "/mob-x-review", {
+    method: "POST", body: { action: "reject" },
+  }), state));
+  assert.equal(response.status, 409);
+  assert.equal(state.DB.consoleJobs.get(invalidStateJobId).status, "queued");
+
+  response = await read(await worker.fetch(request("/api/console/jobs/" + firstJobId + "/mob-x-review", {
+    method: "POST", body: { action: "edit_caption", caption: "Viewer must be rejected" }, token: TOKEN,
+  }), state));
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error, "owner_required");
+
+  const missingSecret = env();
+  delete missingSecret.OWNER_WEB_TOKEN;
+  addReadyJob; // Fixture helper is intentionally scoped to the main test DB only.
+  missingSecret.DB.consoleJobs.set(firstJobId, { ...state.DB.consoleJobs.get(firstJobId), status: "ready_for_review" });
+  missingSecret.DB.panelLinks.set(101, { id: 101, status: "ready_for_review" });
+  missingSecret.DB.items.set(firstItemId, { ...state.DB.items.get(firstItemId), status: "ready", review_state: "pending" });
+  response = await read(await worker.fetch(request("/api/console/jobs/" + firstJobId + "/mob-x-review", {
+    method: "POST", body: { action: "edit_caption", caption: "must fail closed" },
+  }), missingSecret));
+  assert.equal(response.status, 403);
+
+  const shortSecret = env();
+  shortSecret.OWNER_WEB_TOKEN = "short";
+  response = await read(await worker.fetch(request("/api/console/jobs/" + firstJobId + "/mob-x-review", {
+    method: "POST", body: { action: "edit_caption", caption: "must fail closed" }, token: "short",
+  }), shortSecret));
+  assert.equal(response.status, 403);
+
+  const runner = await read(await worker.fetch(request("/api/console/mob-x/claim", {
+    method: "POST", body: {}, token: TOKEN,
+  }), state));
+  assert.equal(runner.status, 200, "Actions/runner token path must remain unchanged");
+  assert.equal(runner.body.claimed, false);
+  const viewerGet = await read(await worker.fetch(request("/api/console/jobs/" + firstJobId, { token: TOKEN }), state));
+  assert.equal(viewerGet.status, 200, "read-only job detail remains viewer-readable");
+
+  assert.equal(JSON.stringify(state.DB.consoleRules), rulesBefore, "no global caption/rules setting may change");
+  assert.equal(state.DB.events.length > writesBefore, true);
+  assert.equal(state.DB.events.filter(event => event.code === "console_mob_x_caption_edit").length, 2);
+  assert.equal(state.DB.events.filter(event => event.code === "console_mob_x_no_caption").length, 1);
+  assert.equal(state.DB.events.filter(event => event.code === "console_mob_x_reject").length, 1);
+  assert.equal([...state.DB.consoleJobs.values()].some(job => job.status === "approved"), false,
+    "web caption actions must never approve or publish");
+}
+
 // The five-minute processor claims a single Mob X job and transitions it to pending review.
 {
   const state = env();
