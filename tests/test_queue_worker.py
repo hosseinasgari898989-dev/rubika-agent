@@ -96,6 +96,57 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(report["results"][0]["status"], "staging_failed")
         self.assertEqual(sum(1 for result in report["results"] if result["status"] == "sent"), 4)
 
+    def test_report_keeps_music_diagnostics_for_pass_ambiguous_no_audio_and_error(self):
+        outcomes = [
+            {
+                "ok": True, "status": "sent", "music_probability": 0.91,
+                "has_audio_stream": True,
+            },
+            {
+                "ok": False, "status": "staging_failed",
+                "reason": "music_probability_ambiguous",
+                "music_probability": 0.42, "has_audio_stream": True,
+            },
+            {
+                "ok": False, "status": "staging_failed", "reason": "no_audio",
+                "music_probability": None, "has_audio_stream": False,
+            },
+            RuntimeError("mocked pipeline error"),
+        ]
+        calls = {"count": 0}
+        def fake_run_one(*_args, **_kwargs):
+            index = calls["count"]
+            calls["count"] += 1
+            outcome = outcomes[index]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        with (
+            patch.object(queue_worker, "CloudState", FakeCloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(daily_limit=4, max_attempts=4)
+
+        self.assertEqual(calls["count"], 4)
+        self.assertEqual(len(report["results"]), 4)
+        passed, ambiguous, no_audio, errored = report["results"]
+        for row in report["results"]:
+            self.assertIn("music_probability", row)
+            self.assertIn("has_audio_stream", row)
+        self.assertEqual(passed["music_probability"], 0.91)
+        self.assertIs(type(passed["music_probability"]), float)
+        self.assertIs(passed["has_audio_stream"], True)
+        self.assertEqual(ambiguous["music_probability"], 0.42)
+        self.assertIs(type(ambiguous["music_probability"]), float)
+        self.assertIs(ambiguous["has_audio_stream"], True)
+        self.assertIsNone(no_audio["music_probability"])
+        self.assertIs(no_audio["has_audio_stream"], False)
+        self.assertIsNone(errored["music_probability"])
+        self.assertIsNone(errored["has_audio_stream"])
+
     def test_failure_report_preserves_sanitized_staging_diagnostics(self):
         def fake_run_one(*args, **kwargs):
             return {
