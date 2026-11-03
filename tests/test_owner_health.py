@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import unittest
-from datetime import datetime, timezone
-from unittest.mock import patch
 
 from agent.brain import owner_health
 
@@ -136,7 +134,7 @@ class OwnerHealthTests(unittest.TestCase):
         self.assertIn("MEGA", rendered)
         self.assertIn("قابل خواندن نیست", rendered)
         self.assertIn("2 شکست متوالی", rendered)
-        self.assertIn("شمارنده‌های روزانهٔ مصرف", rendered)
+        self.assertIn("مصرف روزانه", rendered)
         self.assertIn("کاهش بار خودکار فعال نیست", rendered)
         self.assertEqual(sum("MEGA:" in line for line in lines), 1)
 
