@@ -3699,6 +3699,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
       "p_mob_cancel",
       "p_mob_publish_job_abcdef1234567890",
       "p_mob_edit_job_abcdef1234567890",
+      "p_mob_nocap_job_abcdef1234567890",
       "p_mob_reject_job_abcdef1234567890",
       "p_mob_manualconfirm_job_abcdef1234567890",
       "p_links_clear_yes",
