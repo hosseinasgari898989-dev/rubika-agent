@@ -83,6 +83,57 @@ export async function handleConsoleApi(request, env, h) {
     if (retryRes) return retryRes;
     const failedMediaRes = await handleFailedMedia(request, env, h, sub, m);
     if (failedMediaRes) return failedMediaRes;
+    // ---------- read-only 24-hour owner digest ----------
+    if (m === "GET" && sub === "/digest") {
+      const state = await first(
+        "SELECT id, window_id, window_started_at, window_ends_at FROM owner_digest_state WHERE id = 1"
+      );
+      if (!state || !state.window_id) {
+        return json({ ok: true, window: null, counts: [], events: [] });
+      }
+      const [countRows, eventRows] = await Promise.all([
+        all(
+          "SELECT category, COUNT(*) AS total FROM owner_digest_events WHERE window_id = ? GROUP BY category",
+          state.window_id
+        ),
+        all(
+          "SELECT id, occurred_at, category, source, title, detail FROM owner_digest_events WHERE window_id = ? ORDER BY id DESC LIMIT 100",
+          state.window_id
+        ),
+      ]);
+      const allowed = ["info", "success", "error", "ai_success", "ai_error"];
+      const totals = new Map(
+        (countRows || []).filter(row => allowed.includes(row.category))
+          .map(row => [row.category, Number(row.total || 0)])
+      );
+      const counts = allowed
+        .map(category => ({ category, count: totals.get(category) || 0 }))
+        .filter(row => row.count > 0);
+      const safeDigestText = (value, max) => String(value ?? "")
+        .replace(/[\\u0000-\\u001f\\u007f]/g, " ")
+        .replace(/\\*\\*|__|--|~~|\\|\\||\`|\\[|\\]/g, "")
+        .replace(/\\s+/g, " ").trim().slice(0, max);
+      const events = (eventRows || [])
+        .filter(row => allowed.includes(row.category))
+        .reverse()
+        .slice(0, 32)
+        .map(row => ({
+          occurred_at: row.occurred_at,
+          category: row.category,
+          source: safeDigestText(row.source, 64),
+          title: safeDigestText(row.title, 180),
+        }));
+      return json({
+        ok: true,
+        window: {
+          started_at: state.window_started_at,
+          ends_at: state.window_ends_at,
+        },
+        counts,
+        events,
+      });
+    }
+
     // ---------- read-only history ----------
     if (m === "GET" && sub === "/events") {
       const { limit, offset } = page();
