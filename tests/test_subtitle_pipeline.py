@@ -21,6 +21,12 @@ def make_run(out_size=10, dur_in=5000, dur_out=5000, rc=0):
     def run(cmd, **kw):
         calls.append(cmd)
         if cmd[0] == "ffprobe":
+            if "stream=width,height" in " ".join(cmd):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps({"streams": [{"width": 1280, "height": 720}]}),
+                    stderr="",
+                )
             d = dur_out if cmd[-1].endswith("subtitled.mp4") else dur_in
             return SimpleNamespace(returncode=0, stdout=json.dumps({"format": {"duration": d / 1000}}), stderr="")
         if rc == 0:
@@ -32,6 +38,27 @@ def make_run(out_size=10, dur_in=5000, dur_out=5000, rc=0):
 
 
 CUES = [(0, 1500, "Hello there"), (1600, 3000, "Welcome to the show"), (3100, 4800, "Goodbye")]
+
+
+class ProbeDimensions(unittest.TestCase):
+    def test_reads_actual_first_video_stream_dimensions(self):
+        def run(cmd, **kwargs):
+            self.assertIn("stream=width,height", " ".join(cmd))
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"streams": [{"width": 720, "height": 1280}]}),
+                stderr="",
+            )
+        self.assertEqual(sp.probe_video_dimensions("portrait.mp4", run), (720, 1280))
+
+    def test_rejects_missing_or_invalid_video_dimensions(self):
+        for payload in ({"streams": []}, {"streams": [{"width": 0, "height": 720}]}):
+            with self.subTest(payload=payload):
+                def run(_cmd, **_kwargs):
+                    return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+                with self.assertRaises(sp.SubtitleError) as caught:
+                    sp.probe_video_dimensions("bad.mp4", run)
+                self.assertEqual(caught.exception.code, "probe_failed")
 
 
 class CleanCues(unittest.TestCase):

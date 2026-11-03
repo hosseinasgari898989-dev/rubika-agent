@@ -67,6 +67,7 @@ jobs:
       - name: Run subtitle tools tests
         env:
           SUBTITLE_BIDI_ARTIFACT_DIR: ${{ runner.temp }}/subtitle-bidi
+          SUBTITLE_LAYOUT_ARTIFACT_DIR: ${{ runner.temp }}/subtitle-layout-matrix
         run: python tests/test_subtitle_tools.py
       - name: Upload before/after libass PNGs
         if: always()
@@ -75,6 +76,13 @@ jobs:
           name: subtitle-bidi-before-after
           path: ${{ runner.temp }}/subtitle-bidi/*.png
           if-no-files-found: warn
+      - name: Upload real libass subtitle layout matrix PNGs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-layout-matrix
+          path: ${{ runner.temp }}/subtitle-layout-matrix/*.png
+          if-no-files-found: error
       - name: Run Mob X subtitle pipeline tests
         run: python tests/test_subtitle_pipeline.py
       - name: Run audio decode tests
