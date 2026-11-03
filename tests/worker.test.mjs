@@ -2923,14 +2923,24 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_http_503");
     assert.equal(state.DB.state.get("panel_edit_fail"), "1");
     assert.ok(calls.some(call => call.method === "editMessageText"));
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 2,
-      "one failed fallback plus the best-effort Persian error response were attempted");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1,
+      "only the failed final-screen fallback send is attempted");
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("❌ نمایش صفحه انجام نشد"), true);
+    const retryIds = calls.filter(call => call.method === "editMessageKeypad").at(-1).payload.inline_keypad.rows
+      .flatMap(row => row.buttons || []).map(button => button.id);
+    assert.ok(retryIds.includes("p_status"), "the error screen must contain a same-screen retry button");
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "atomic-send-failure-old"), false);
-  }, ({ method }) => {
-    if (method === "editMessageText") return new Response(JSON.stringify({ status: "UNAVAILABLE" }), { status: 503 });
-    if (method === "sendMessage") return new Response(JSON.stringify({ status: "SEND_FAILED" }), { status: 200 });
-    return null;
-  });
+  }, (() => {
+    let textEdits = 0;
+    return ({ method }) => {
+      if (method === "editMessageText") {
+        textEdits += 1;
+        if (textEdits === 2) return new Response(JSON.stringify({ status: "UNAVAILABLE" }), { status: 503 });
+      }
+      if (method === "sendMessage") return new Response(JSON.stringify({ status: "SEND_FAILED" }), { status: 200 });
+      return null;
+    };
+  })());
 }
 
 // The retired atomic setting is ignored; successful navigation edits the main text and keypad in place.
