@@ -53,11 +53,16 @@ def _keypad(button_rows: list[list[tuple[str, str]]]) -> dict:
 def owner_preview_keypad(job_id: str) -> dict:
     if not re.fullmatch(r"job_[A-Fa-f0-9]{8,80}", str(job_id or "")):
         raise ValueError("mob_x_job_id_invalid")
-    return _keypad([[
-        ("✅ انتشار در کانال تست", "p_mob_publish_" + job_id),
-        ("✏️ ویرایش کپشن", "p_mob_edit_" + job_id),
-        ("✖️ رد", "p_mob_reject_" + job_id),
-    ]])
+    return _keypad([
+        [
+            ("✅ انتشار در کانال تست", "p_mob_publish_" + job_id),
+            ("✏️ ویرایش کپشن", "p_mob_edit_" + job_id),
+        ],
+        [
+            ("🚫 بدون کپشن", "p_mob_nocap_" + job_id),
+            ("✖️ رد", "p_mob_reject_" + job_id),
+        ],
+    ])
 
 
 def upload_preview_media(
