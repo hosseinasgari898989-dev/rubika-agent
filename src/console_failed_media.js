@@ -1,10 +1,10 @@
 // Failed-media console routes (auth is enforced by index.js before handleConsoleApi). All POST:
-//   /failed-media/record          runner records a preserved original (upsert on storage_key)
+//   /failed-media/record          Actions runner records a preserved original (upsert on storage_key)
 //   /failed-media/list            viewer/owner console reads items {limit?, offset?} with AGENT_API_TOKEN
-//   /failed-media/delete-request  requires OWNER_WEB_TOKEN; AGENT_API_TOKEN remains the server-side
-//                                 HMAC key for its signed challenge, never an owner bearer
-//   /failed-media/delete-request  phase 1 {ids:[...]} or {all:true} returns a short-lived signed challenge;
-//                                 phase 2 {confirmation:"..."} marks at most 50 rows and dispatches the workflow
+//   /failed-media/delete-request  requires OWNER_WEB_TOKEN; phase 1 {ids:[...]} or {all:true} returns a
+//                                 short-lived signed challenge; phase 2 {confirmation:"..."} marks at most
+//                                 50 rows and dispatches the workflow. AGENT_API_TOKEN remains the
+//                                 server-side HMAC key for this challenge, never an owner bearer.
 //   /failed-media/pending-delete  delete runner reads rows waiting for deletion
 //   /failed-media/delete-result   delete runner reports {id, ok}: ok removes the row (only AFTER mega-rm succeeded),
 //                                 failure sets status 'delete_failed'
