@@ -44,6 +44,11 @@ CORS = {
 }
 
 
+MOB_REVIEW_JOBS: dict[str, dict] = {}
+MOB_REVIEW_ACTIONS: list[dict] = []
+MOB_NO_CAPTION = "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
+
+
 def fixture_api(path: str, method: str, body: dict) -> dict:
     """Deterministic mock responses matching the console's API contracts."""
     if path == "/api/status":
@@ -195,19 +200,58 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
                 "enabled": 1, "created_at": NOW,
             }]}
         return {"ok": True, "id": 2}
+    if path.startswith("/api/console/jobs/") and path.endswith("/mob-x-review") and method == "POST":
+        job_id = path.split("/")[-2]
+        job = MOB_REVIEW_JOBS.get(job_id)
+        if not job or job["status"] != "ready_for_review":
+            return {"ok": False, "error": "invalid_state_for_action"}
+        action = body.get("action")
+        if action == "edit_caption" and isinstance(body.get("caption"), str) and body["caption"].strip():
+            job["result"]["caption"] = body["caption"].strip()
+            job["result"]["caption_mode"] = "edited"
+        elif action == "no_caption":
+            job["result"]["caption"] = MOB_NO_CAPTION
+            job["result"]["caption_mode"] = "no_caption"
+            job["result"]["original_caption"] = ""
+            job["result"]["persian_translation"] = ""
+        elif action == "reject":
+            job["status"] = "rejected"
+            job["link_status"] = "rejected"
+            job["item_review_state"] = "rejected"
+        else:
+            return {"ok": False, "error": "invalid_action"}
+        if action in ("edit_caption", "no_caption"):
+            job["result"]["preview_sent"] = False
+            job["result"]["caption_refresh_state"] = "not_refreshed"
+        MOB_REVIEW_ACTIONS.append({"job_id": job_id, "action": action, "caption": body.get("caption")})
+        return {"ok": True, "action": action, "status": job["status"], "caption": job["result"].get("caption")}
     if path == "/api/console/jobs":
         if method == "GET":
-            return {"ok": True, "items": [{
-                "id": "fixture-job-1", "type": "mob_x_link", "status": "queued",
-                "progress": 0, "created_at": NOW, "error": None,
-                "panel_link_id": 1, "result": {},
-            }]}
+            return {"ok": True, "items": [
+                {
+                    "id": "fixture-job-1", "type": "mob_x_link", "status": "queued",
+                    "progress": 0, "created_at": NOW, "error": None,
+                    "panel_link_id": 1, "result": {},
+                },
+                {
+                    "id": "fixture-mob-ready", "type": "mob_x_link", "status": "ready_for_review",
+                    "progress": 100, "created_at": NOW, "error": None,
+                    "panel_link_id": 2, "result": MOB_REVIEW_JOBS["fixture-mob-ready"]["result"],
+                },
+            ]}
         return {"ok": True, "job": {"id": "fixture-job-2", "status": "queued"}}
     if path.startswith("/api/console/jobs/"):
+        job_id = path.rsplit("/", 1)[-1]
+        job = MOB_REVIEW_JOBS.get(job_id)
+        if job:
+            return {"ok": True, "job": {
+                "id": job_id, "type": job["type"], "status": job["status"],
+                "progress": job["progress"], "created_at": NOW, "error": None,
+                "panel_link_id": job["panel_link_id"], "result": job["result"],
+            }}
         return {"ok": True, "job": {
-            "id": path.rsplit("/", 1)[-1], "type": "mob_x_link",
-            "status": "queued", "progress": 0, "created_at": NOW,
-            "error": None, "panel_link_id": 1, "result": {},
+            "id": job_id, "type": "mob_x_link", "status": "queued", "progress": 0,
+            "created_at": NOW, "error": None, "panel_link_id": 1, "result": {},
         }}
     if path == "/api/console/failed-media/list":
         return {"ok": True, "total": 2, "items": [
@@ -235,6 +279,21 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
 
 
 def main() -> int:
+    global MOB_REVIEW_JOBS, MOB_REVIEW_ACTIONS
+    MOB_REVIEW_ACTIONS = []
+    MOB_REVIEW_JOBS = {
+        "fixture-mob-ready": {
+            "type": "mob_x_link", "status": "ready_for_review", "progress": 100,
+            "panel_link_id": 2, "link_status": "ready_for_review", "item_review_state": "pending",
+            "result": {
+                "item_id": "mob_official:playwright-review", "external_id": "2107878755079213476",
+                "rubika_file_id": "mock-rubika-file", "media_type": "image",
+                "caption": "Original mocked caption", "caption_mode": "generated",
+                "original_caption": "Original text", "persian_translation": "ترجمهٔ اولیه",
+                "preview_sent": True,
+            },
+        },
+    }
     failures: list[str] = []
     browser_errors: list[str] = []
     failed_requests: list[str] = []
@@ -501,25 +560,58 @@ def main() -> int:
             active_page[0] = "jobs"
             try:
                 page.locator('#nav button[data-id="jobs"]').click()
-                page.locator('#view button[data-a="jView"]').first.click()
-                # The detail request is async: wait for its modal instead of a fixed short sleep,
-                # otherwise the modal can open after the next navigation click and intercept it.
-                page.wait_for_function(
-                    "() => document.querySelector('#modal')?.classList.contains('on')",
-                    timeout=5000,
-                )
-                click_action(page, '#modal button[data-a="close"]', "close job details")
-                page.wait_for_function(
-                    "() => !document.querySelector('#modal')?.classList.contains('on')",
-                    timeout=3000,
-                )
-                page.locator('#nav button[data-id="jobs"]').click()
+                # The queued fixture is not eligible and must not expose any Mob X review actions.
+                page.locator('#view button[data-a="jView"][data-id="fixture-job-1"]').click()
+                page.wait_for_function("() => document.querySelector('#modal')?.classList.contains('on')", timeout=5000)
+                if page.locator('#modal button[data-a^="jMob"]').count() != 0:
+                    failures.append("jobs: review controls appeared for a queued job")
+                click_action(page, '#modal button[data-a="close"]', "close queued job details")
+                page.wait_for_function("() => !document.querySelector('#modal')?.classList.contains('on')", timeout=3000)
+
+                # The eligible Mob X job exposes edit, no-caption and reject in its existing detail modal.
+                page.locator('#view button[data-a="jView"][data-id="fixture-mob-ready"]').click()
+                page.wait_for_function("() => document.querySelector('#modal')?.classList.contains('on')", timeout=5000)
+                for action in ("jMobEdit", "jMobNoCaption", "jMobReject"):
+                    if page.locator('#modal button[data-a="' + action + '"]').count() != 1:
+                        failures.append(f"jobs: expected eligible Mob X control {action}")
+                if page.locator('#modal button[data-a*="publish"], #modal button[data-a*="approve"]').count():
+                    failures.append("jobs: web review details exposed an approval/publish control")
+                if page.locator('#modal iframe, #modal video').count():
+                    failures.append("jobs: web review details exposed a video preview")
+
+                page.locator('#modal button[data-a="jMobEdit"]').click()
+                page.wait_for_selector("#j_mob_caption", timeout=5000)
+                page.locator("#j_mob_caption").fill("کپشن فارسی فقط برای همین کار")
+                click_action(page, '#modal button[data-a="jMobSaveCaption"]', "save Persian Mob X caption")
+                page.wait_for_function("() => document.querySelector('#modal')?.classList.contains('on')", timeout=5000)
+
+                click_action(page, '#modal button[data-a="jMobNoCaption"]', "apply no-caption to this Mob X job")
+                page.wait_for_function("() => document.querySelector('#modal')?.innerText.includes('ماب انترتینمنت')", timeout=5000)
+                if "پیش‌نمایش تازه را در PV آماده کن" not in page.locator("#modal").inner_text():
+                    failures.append("jobs: stale preview was not clearly marked as requiring PV refresh")
+
+                page.once("dialog", lambda dialog: dialog.accept())
+                click_action(page, '#modal button[data-a="jMobReject"]', "reject this Mob X job")
+                page.wait_for_function("() => { const m = document.querySelector('#modal'); return !!m && m.querySelectorAll('button[data-a^=jMob]').length === 0; }", timeout=5000)
+                if page.locator('#modal button[data-a^="jMob"]').count() != 0:
+                    failures.append("jobs: review controls remained visible after rejection")
+                if [x["action"] for x in MOB_REVIEW_ACTIONS] != ["edit_caption", "no_caption", "reject"]:
+                    failures.append("jobs: mocked Worker did not receive all three caption/reject actions in order")
+                if MOB_REVIEW_ACTIONS and MOB_REVIEW_ACTIONS[0]["caption"] != "کپشن فارسی فقط برای همین کار":
+                    failures.append("jobs: Persian caption was not sent unchanged to the Worker")
+                if len(MOB_REVIEW_ACTIONS) > 1 and MOB_REVIEW_ACTIONS[1]["caption"] != None:
+                    failures.append("jobs: no-caption action unexpectedly sent a duplicate caption value")
+                if MOB_REVIEW_ACTIONS and any(action["job_id"] != "fixture-mob-ready" for action in MOB_REVIEW_ACTIONS):
+                    failures.append("jobs: a review action targeted a different job")
+
+                click_action(page, '#modal button[data-a="close"]', "close Mob X job details")
+                page.wait_for_function("() => !document.querySelector('#modal')?.classList.contains('on')", timeout=3000)
                 page.locator('#view button[data-a="jAdd"]').click()
                 page.wait_for_timeout(120)
                 if page.locator("#toast .t.bad").count():
                     failures.append("jobs: add job returned an error toast")
             except Exception as exc:
-                failures.append(f"jobs: details/create action failed: {exc}")
+                failures.append(f"jobs: Mob X caption/reject Playwright smoke failed: {exc}")
 
             active_page[0] = "inst"
             try:
@@ -550,6 +642,10 @@ def main() -> int:
             context.close()
             browser.close()
 
+    if len(MOB_REVIEW_ACTIONS) != 3:
+        failures.append(f"jobs: expected three owner-only mocked review mutations, found {len(MOB_REVIEW_ACTIONS)}")
+    if any("publish" in str(action.get("action", "")) for action in MOB_REVIEW_ACTIONS):
+        failures.append("jobs: mocked review flow reached a publish action")
     failures.extend(browser_errors)
     failures.extend(failed_requests)
     report = {

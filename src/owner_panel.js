@@ -3,13 +3,13 @@
 import { homeSummary } from "./panel_screens.js";
 import { isScreenIdExt as isScreenId, buildScreenExt as buildScreen, HOME_ROWS_EXT as HOME_ROWS } from "./panel_screens_ext.js";
 import { isSettingsId, applySettingsAction, settingsScreen } from "./panel_settings.js";
+import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
 const MAX_BODY = 64 * 1024;
 const PRIVATE_TYPES = new Set(["private", "privatechat", "user", "userchat", "personal"]);
 const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
-const MOB_X_NO_CAPTION = "ماب انترتینمنت در پیج خود پستی منتشر کرد.";
 const te = new TextEncoder();
 const PANEL_TIMING = Symbol("panel_timing");
 const PANEL_SEQ = Symbol("panel_seq");
@@ -787,7 +787,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         return;
       }
       if (result.caption_mode === "no_caption" &&
-          result.caption === "**" + MOB_X_NO_CAPTION + "**" &&
+          result.caption === buildMobXNoCaptionCaption() &&
           result.preview_sent === true) {
         await send(env, chat, "این کپشن قبلاً برای همین پست اعمال شده است؛ تأیید انتشار همچنان جداگانه انجام می‌شود.", HOME_KB);
         return;
@@ -797,7 +797,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         return;
       }
       await saveMobCaptionAndRefresh(
-        ui, jobId, row, result, "**" + MOB_X_NO_CAPTION + "**",
+        ui, jobId, row, result, buildMobXNoCaptionCaption(),
         { clearSource: true, successText: "✅ کپشن حذف و متن ثابت فقط برای همین پست جایگزین شد؛ پیش‌نمایش جدید آمادهٔ بررسی است." },
       );
       return;
@@ -1229,9 +1229,8 @@ async function processEvent(env, selfFetch, origin, ev) {
       const rulesRow = await timedEnv.DB.prepare("SELECT rules_json FROM console_rules WHERE id = 1").first();
       let rules = {};
       try { rules = rulesRow?.rules_json ? JSON.parse(rulesRow.rules_json) : {}; } catch {}
-      const rawLimit = Number(rules.caption_max_chars ?? 900);
-      const captionMax = Number.isFinite(rawLimit) ? Math.max(1, Math.min(4000, Math.trunc(rawLimit))) : 900;
-      const caption = String(ev.text || "").replace(/[*_~]/g, "").replaceAll(String.fromCharCode(96), "").replace(/\u0000/g, "").trim();
+      const captionMax = maxMobXCaptionChars(rules.caption_max_chars);
+      const caption = normalizeMobXCaption(ev.text);
       if (!caption) {
         await send(timedEnv, ev.chat, "کپشن خالی است؛ متن سادهٔ کپشن را بفرست.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
         return;
