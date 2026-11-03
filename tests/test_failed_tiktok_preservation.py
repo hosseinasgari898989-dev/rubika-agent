@@ -26,6 +26,38 @@ class PreservationSummaryTests(unittest.TestCase):
             delivery=delivery,
         )
 
+    def test_staging_failure_selection_includes_d1_sync_failure_only(self):
+        first = mock.Mock(platform="tiktok", external_id="7616247520657771796")
+        second = mock.Mock(platform="tiktok", external_id="7616247520657771797")
+        successful = mock.Mock(platform="tiktok", external_id="7616247520657771798")
+
+        no_stage = mock.Mock(staged_count=0, cloud_sync_errors=())
+        self.assertEqual(
+            e2e_from_report._tiktok_candidates_with_preservable_staging_failure(
+                [first, second], no_stage,
+            ),
+            [first, second],
+        )
+
+        partial = mock.Mock(
+            staged_count=1,
+            cloud_sync_errors=("tiktok:7616247520657771797:CloudStateError",),
+        )
+        self.assertEqual(
+            e2e_from_report._tiktok_candidates_with_preservable_staging_failure(
+                [first, second, successful], partial,
+            ),
+            [second],
+        )
+
+        complete = mock.Mock(staged_count=1, cloud_sync_errors=())
+        self.assertEqual(
+            e2e_from_report._tiktok_candidates_with_preservable_staging_failure(
+                [first, second], complete,
+            ),
+            [],
+        )
+
     def test_rubika_upload_failure_preserves_untouched_original(self):
         delivery = {
             "status": "uncertain",
