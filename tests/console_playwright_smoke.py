@@ -14,7 +14,8 @@ from playwright.sync_api import sync_playwright
 
 
 MOCK_BASE = "https://mock-worker.test"
-CONSOLE_URL = "http://127.0.0.1:8765/docs/console/v2.html"
+CONSOLE_URL = "http://127.0.0.1:8765/docs/console/"
+LEGACY_URL = "http://127.0.0.1:8765/docs/console/legacy.html"
 PAGES = [
     ("dash", "داشبورد"),
     ("items", "آیتم‌ها"),
@@ -390,8 +391,13 @@ def main() -> int:
         )
 
         try:
-            page.goto(CONSOLE_URL, wait_until="domcontentloaded", timeout=15000)
+            page.goto(f"{CONSOLE_URL}#/dash", wait_until="domcontentloaded", timeout=15000)
             page.wait_for_function("() => !!window.RC && !!window.RC.A && !!window.RC.V", timeout=10000)
+            entry_path, entry_hash = page.evaluate("() => [location.pathname, location.hash]")
+            if not entry_path.endswith("/docs/console/v2.html"):
+                failures.append(f"console entrypoint did not redirect to v2.html: {entry_path}")
+            if entry_hash != "#/dash":
+                failures.append(f"console entrypoint did not preserve the requested hash: {entry_hash}")
             page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && !!v.querySelector('.card') && (v.innerText || '').trim().length > 0; }", timeout=10000)
 
             # Leave the auto-selected startup route so every page check exercises a real navigation event.
@@ -422,6 +428,10 @@ def main() -> int:
                         failures.append(f"{page_id}: page rendered empty content")
                     if "⚠ خطا" in page.locator("#view").inner_text():
                         failures.append(f"{page_id}: page rendered the console error panel")
+                    if page_id == "soon":
+                        legacy_link = page.locator('#view a[href="legacy.html"]')
+                        if legacy_link.count() != 1 or legacy_link.inner_text().strip() != "نسخهٔ قدیمی کنسول (legacy)":
+                            failures.append("soon: the legacy link is missing or misplaced")
 
                     # Every enabled control advertised as an action must have a real handler.
                     controls = page.locator("#view [data-a]:not(:disabled)")
@@ -764,6 +774,24 @@ def main() -> int:
                 click_action(page, '#view button[data-a="sTest"]', "test mocked Worker connection")
             except Exception as exc:
                 failures.append(f"set: connection test failed: {exc}")
+
+            # The former directory index remains reachable at the explicit legacy URL.
+            active_page[0] = "legacy"
+            legacy_page = context.new_page()
+            try:
+                # All external requests are blocked or mocked; the legacy page is only opened, not exercised.
+                legacy_page.route("https://**/*", lambda route: route.abort())
+                legacy_page.route(f"{MOCK_BASE}/**", mock_worker)
+                legacy_page.route("https://rubika-agent.h98609294.workers.dev/**", mock_worker)
+                legacy_page.goto(LEGACY_URL, wait_until="domcontentloaded", timeout=15000)
+                if legacy_page.title() != "کنسول مالک — Rubika-Agent":
+                    failures.append(f"legacy: unexpected page title: {legacy_page.title()}")
+                if legacy_page.locator("#app").count() != 1:
+                    failures.append("legacy: former console application root did not open")
+            except Exception as exc:
+                failures.append(f"legacy: could not open legacy.html: {exc}")
+            finally:
+                legacy_page.close()
 
             page.wait_for_timeout(150)
         finally:
