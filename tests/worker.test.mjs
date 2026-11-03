@@ -785,6 +785,64 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.body.error, "not_found");
 }
 
+// The web report is GET-only, AGENT-token readable, and exposes only sanitized 24h digest fields.
+{
+  const state = env();
+  delete state.OWNER_WEB_TOKEN;
+  state.DB.ownerDigestState = {
+    id: 1, window_id: "window-private-id", window_started_at: "2026-11-02T07:05:00.000Z",
+    window_ends_at: "2026-11-03T07:05:00.000Z", updated_at: "2026-11-03T07:05:02.000Z",
+  };
+  state.DB.ownerDigestEvents = [
+    { id: 1, window_id: "window-private-id", occurred_at: "2026-11-03T06:00:00.000Z", category: "success", source: "x", title: "پست ثبت شد **موفق**", detail: "private details must not leak" },
+    { id: 2, window_id: "window-private-id", occurred_at: "2026-11-03T06:10:00.000Z", category: "ai_error", source: "openrouter", title: "translation failed", detail: "secret api key must not leak" },
+    { id: 3, window_id: "window-private-id", occurred_at: "2026-11-03T06:20:00.000Z", category: "unknown_private_category", source: "internal-secret", title: "private event", detail: "must be omitted" },
+    { id: 4, window_id: "other-window", occurred_at: "2026-11-02T01:00:00.000Z", category: "error", source: "worker", title: "outside active window", detail: "omitted" },
+  ];
+  const digestSnapshot = JSON.stringify(state.DB.ownerDigestState);
+  const eventsSnapshot = JSON.stringify(state.DB.ownerDigestEvents);
+  const writesBefore = state.DB.events.length;
+
+  const response = await read(await worker.fetch(request("/api/console/digest"), state));
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.window, {
+    started_at: "2026-11-02T07:05:00.000Z",
+    ends_at: "2026-11-03T07:05:00.000Z",
+  });
+  assert.deepEqual(response.body.counts, [
+    { category: "success", count: 1 },
+    { category: "ai_error", count: 1 },
+  ]);
+  assert.equal(response.body.events.length, 2);
+  assert.deepEqual(Object.keys(response.body.events[0]).sort(), ["category", "occurred_at", "source", "title"]);
+  assert.equal(response.body.events[0].title, "پست ثبت شد موفق");
+  assert.equal(JSON.stringify(response.body).includes("private details"), false);
+  assert.equal(JSON.stringify(response.body).includes("secret api key"), false);
+  assert.equal(JSON.stringify(response.body).includes("window-private-id"), false);
+  assert.equal(JSON.stringify(response.body).includes("unknown_private_category"), false);
+  assert.equal(JSON.stringify(state.DB.ownerDigestState), digestSnapshot);
+  assert.equal(JSON.stringify(state.DB.ownerDigestEvents), eventsSnapshot);
+  assert.equal(state.DB.events.length, writesBefore, "GET digest must not write/audit D1");
+  
+  const denied = await read(await worker.fetch(request("/api/console/digest", { token: OWNER_TOKEN }), state));
+  assert.equal(denied.status, 401, "OWNER_WEB_TOKEN is not a viewer/read token");
+  const anonymous = await read(await worker.fetch(request("/api/console/digest", { token: null }), state));
+  assert.equal(anonymous.status, 401);
+
+  const methodDenied = await read(await worker.fetch(request("/api/console/digest", {
+    method: "POST", body: {}, token: TOKEN,
+  }), state));
+  assert.equal(methodDenied.status, 403, "non-GET report requests remain owner-gated");
+  assert.equal(JSON.stringify(state.DB.ownerDigestState), digestSnapshot);
+  assert.equal(JSON.stringify(state.DB.ownerDigestEvents), eventsSnapshot);
+}
+{
+  const state = env();
+  const response = await read(await worker.fetch(request("/api/console/digest"), state));
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { ok: true, window: null, counts: [], events: [] });
+}
+
 // Owner-only web mutations require OWNER_WEB_TOKEN; the AGENT token remains viewer/runner-only.
 {
   const state = env();
