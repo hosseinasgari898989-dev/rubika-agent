@@ -1025,7 +1025,7 @@ async function processEvent(env, selfFetch, origin, ev) {
       : "t|" + ev.chat + "|" + ev.mid;
     if (!(await firstSeen(timedEnv, key))) return;
     const commandWord = ev.kind === "text"
-      ? ev.text.split(/\\s+/)[0].split("@")[0].toLowerCase()
+      ? ev.text.split(/\s+/)[0].split("@")[0].toLowerCase()
       : "";
     const activeMode = ev.kind === "text" ? await getState(timedEnv, "mode", "idle") : "idle";
     const sensitiveCallback = ev.kind === "click" && isOwnerOnlyPanelAction(ev.button);
