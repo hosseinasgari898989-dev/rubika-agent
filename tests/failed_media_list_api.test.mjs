@@ -6,6 +6,7 @@ const src = readFileSync(new URL("../src/console_failed_media.js", import.meta.u
 const { handleFailedMedia } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 
 const OWNER_TOKEN = "test-owner-web-token-with-at-least-thirty-two-characters";
+const AGENT_TOKEN = "test-agent-api-token-with-at-least-thirty-two-characters";
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
 const readJson = async (req) => {
   try { return { ok: true, value: await req.json() }; } catch { return { ok: false, error: "invalid_json", status: 400 }; }
@@ -31,7 +32,8 @@ function makeEnv({ fail = false, changes = null, token = "", allCount = 7 } = {}
   }
   return {
     calls,
-    AGENT_API_TOKEN: OWNER_TOKEN,
+    AGENT_API_TOKEN: AGENT_TOKEN,
+    OWNER_WEB_TOKEN: OWNER_TOKEN,
     GITHUB_DISPATCH_TOKEN: token,
     DB: {
       prepare(sql) {
