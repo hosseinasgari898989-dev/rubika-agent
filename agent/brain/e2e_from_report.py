@@ -68,7 +68,13 @@ def _preserve_failed_tiktok_delivery(
         return None
 
     original = Path(original_path)
-    if not original.is_file() or original.stat().st_size <= 0:
+    try:
+        if not original.is_file() or original.stat().st_size <= 0:
+            return {
+                "ok": False, "stored": False, "recorded": False,
+                "error": "failed_media_original_unavailable",
+            }
+    except OSError:
         return {
             "ok": False, "stored": False, "recorded": False,
             "error": "failed_media_original_unavailable",
