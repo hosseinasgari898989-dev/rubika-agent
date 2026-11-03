@@ -903,7 +903,7 @@ export async function handleConsoleApi(request, env, h) {
         return json({ ok: true, action, status: row.status, unchanged: true });
       }
 
-      const nextResult = { ...result, caption, caption_mode: captionMode };
+      const nextResult = { ...result, caption, caption_mode: captionMode, caption_refresh_state: "not_refreshed", preview_sent: false };
       if (action === "no_caption") {
         nextResult.original_caption = "";
         nextResult.persian_translation = "";
