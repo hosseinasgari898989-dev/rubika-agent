@@ -1257,6 +1257,19 @@ async function processEvent(env, selfFetch, origin, ev) {
     await send(timedEnv, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
   } catch (e) {
     if (e instanceof StalePanelEvent) return;
+    if (ev.kind === "click" && isMainPanelScreenClick(ev.button)) {
+      const currentMid = await getState(timedEnv, "panel_mid", "");
+      // Settings writes must not be repeated blindly after a partial failure; refresh the settings screen instead.
+      const retryId = isSettingsId(ev.button) ? "p_set" : ev.button;
+      const errorText = "❌ نمایش صفحه انجام نشد. خطا: " + esc(e && e.code || "unknown") + "\nمی‌توانی دوباره تلاش کنی.";
+      const errorKb = kb([[["🔄 تلاش مجدد", retryId], ["🏠 منوی اصلی", "p_home"]]]);
+      if (currentMid) {
+        try {
+          await edit(timedEnv, ev.chat, currentMid, errorText, errorKb);
+          return;
+        } catch { /* use the ordinary response only if both edit and its delivery fallback failed */ }
+      }
+    }
     try { await send(timedEnv, ev.chat, "❌ خطا: " + esc(e && e.code || "unknown"), BACK_KB); } catch { /* ignore */ }
   } finally {
     await recordPanelTiming(timedEnv, timing, msgAge);
