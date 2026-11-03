@@ -26,7 +26,7 @@ const randomHex = (size = 12) =>
 const encodeBase64Url = (bytes) => {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 };
 const decodeBase64Url = (value) => {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
@@ -43,7 +43,7 @@ const decodeBase64Url = (value) => {
 // The later owner/viewer token split is deliberately not simulated by an untrusted header here.
 function hasOwnerBearer(request, env) {
   const expected = typeof env.AGENT_API_TOKEN === "string" ? env.AGENT_API_TOKEN : "";
-  const match = /^Bearer ([^\\s]+)$/.exec(request.headers.get("authorization") || "");
+  const match = /^Bearer ([^\s]+)$/.exec(request.headers.get("authorization") || "");
   if (!expected || !match || match[1].length !== expected.length) return false;
   const a = new TextEncoder().encode(match[1]);
   const b = new TextEncoder().encode(expected);
