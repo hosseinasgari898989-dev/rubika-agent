@@ -326,7 +326,8 @@ async function edit(env, chat, mid, src, keypad) {
   const base = { chat_id: chat, message_id: targetMid, text: f.text };
   const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
     keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
-  // Ignore legacy panel_sync_mode values: normal panel navigation always edits this message.\n  try {
+  // Ignore legacy panel_sync_mode values: normal panel navigation always edits this message.
+  try {
     const updateKeypad = async () => {
       if (!hasKeypad) return;
       try {
