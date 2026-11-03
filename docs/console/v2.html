@@ -408,9 +408,54 @@ const JL=Object.fromEntries(JT.concat([['mob_x_link','لینک X خبر Mob']]))
 V.jobs=async()=>{const r=await api('/api/console/jobs?limit=30');
 return card('ثبت کار جدید',`<div class="row"><div><label>نوع کار</label><select id="j_t">${opts(JT)}</select></div><button class="btn" data-a="jAdd">ثبت در صف</button><button class="btn g" data-a="reload">↻ تازه‌سازی</button></div><div class="s">فقط رکورد ثبت می‌شود؛ موتور اجرای کارها هنوز وجود ندارد (وضعیت «در انتظار» یعنی اجرا نشده). کار لینک X از «حالت فوری» ساخته می‌شود.</div>`)
 +card('',tbl([['شناسه',x=>`<code>${cut(x.id,16)}</code>`],['نوع',x=>E(JL[x.type]||x.type)],['وضعیت',x=>badge(x.status)],['پیشرفت',x=>`<div class="bar" style="min-width:90px"><i data-w="${N(x.progress)}"></i></div>`],['ثبت',x=>fmt(x.created_at)],['خطا',x=>E(x.error||'—')],['',x=>`<button class="btn g sm" data-a="jView" data-id="${E(x.id)}">جزئیات</button>`]],r.items||[]))};
-A.jView=async el=>{const r=await api('/api/console/jobs/'+encodeURIComponent(el.dataset.id)),j=r.job,x=j.result||{};
-const row=(k,v)=>`<div class="br" style="grid-template-columns:150px 1fr"><span class="s">${k}</span><b style="text-align:right">${v}</b></div>`;
-modal(`<h3 style="margin-bottom:8px">جزئیات کار</h3>${row('نوع',E(JL[j.type]||j.type))}${row('وضعیت',badge(j.status))}${row('پیشرفت',N(j.progress)+'٪')}${row('شناسهٔ پست (۶ رقم آخر)',E(String(x.external_id||'').slice(-6)||'—'))}${row('رسانه',E(x.media_type||'—'))}${row('پیش‌نمایش در PV',x.preview_sent?'<span class="bd ok">ارسال شد</span>':'—')}${row('وضعیت ارسال',E(x.delivery_status||'—'))}${row('خطا',E(j.error||x.delivery_error||'—'))}<div class="s" style="margin-top:10px">تأیید نهایی و ارسال فقط از PV انجام می‌شود (فقط کانال تست). پیش‌نمایش ویدیو در وب وجود ندارد.</div><div class="row" style="margin-top:14px"><button class="btn g" data-a="close">بستن</button></div>`)};
+A.jView=async el=>{
+const r=await api('/api/console/jobs/'+encodeURIComponent(el.dataset.id)),j=r.job,x=j.result||{};
+const row=(k,v)=>'<div class="br" style="grid-template-columns:150px 1fr"><span class="s">'+k+'</span><b style="text-align:right">'+v+'</b></div>';
+const eligible=j.type==='mob_x_link'&&j.status==='ready_for_review'&&!!x.item_id;
+const actions=eligible?('<div class="row" style="margin-top:14px">'+
+ (x.rubika_file_id?'<button class="btn" data-a="jMobEdit" data-id="'+E(j.id)+'">✏️ ویرایش کپشن</button><button class="btn g" data-a="jMobNoCaption" data-id="'+E(j.id)+'">🚫 بدون کپشن</button>':'')+
+ '<button class="btn danger" data-a="jMobReject" data-id="'+E(j.id)+'">✖ رد پست</button></div>'):'';
+modal('<h3 style="margin-bottom:8px">جزئیات کار</h3>'+
+ row('نوع',E(JL[j.type]||j.type))+row('وضعیت',badge(j.status))+row('پیشرفت',N(j.progress)+'٪')+
+ row('شناسهٔ پست (۶ رقم آخر)',E(String(x.external_id||'').slice(-6)||'—'))+
+ row('رسانه',E(x.media_type||'—'))+row('کپشن',E(cut(String(x.caption||''),240)||'—'))+
+ row('پیش‌نمایش در PV',x.preview_sent?'<span class="bd ok">ارسال شد</span>':'—')+
+ row('وضعیت ارسال',E(x.delivery_status||'—'))+row('خطا',E(j.error||x.delivery_error||'—'))+
+ '<div class="s" style="margin-top:10px">این سه اقدام فقط روی همین کار Mob X و فقط در وضعیت آمادهٔ بررسی اعمال می‌شوند. تأیید و انتشار همچنان فقط از PV انجام می‌شود؛ پیش‌نمایش ویدیو و انتشار از وب وجود ندارد.</div>'+
+ actions+
+ '<div class="row" style="margin-top:14px"><button class="btn g" data-a="close">بستن</button></div>');
+};
+A.jMobEdit=async el=>{
+ const id=String(el.dataset.id||'');
+ const r=await api('/api/console/jobs/'+encodeURIComponent(id));
+ const j=r.job||{},x=j.result||{};
+ if(j.type!=='mob_x_link'||j.status!=='ready_for_review'||!x.item_id||!x.rubika_file_id)return toast('این کار دیگر برای ویرایش کپشن آماده نیست','bad');
+ const caption=String(x.caption||'').replace(/\*\*/g,'');
+ modal('<h3 style="margin-bottom:8px">ویرایش کپشن Mob X</h3>'+
+  '<label for="j_mob_caption">کپشن همین پست</label><textarea id="j_mob_caption" rows="6" maxlength="4000" style="width:100%;margin-top:8px">'+E(caption)+'</textarea>'+
+  '<div class="s">این تغییر فقط روی همین job اعمال می‌شود؛ انتشار از وب انجام نمی‌شود.</div>'+
+  '<div class="row" style="margin-top:12px"><button class="btn" data-a="jMobSaveCaption" data-id="'+E(id)+'">ذخیرهٔ کپشن</button><button class="btn g" data-a="close">لغو</button></div>');
+};
+A.jMobSaveCaption=async el=>{
+ const id=String(el.dataset.id||''),field=document.getElementById('j_mob_caption');
+ if(!field)return toast('کادر کپشن پیدا نشد','bad');
+ const r=await api('/api/console/jobs/'+encodeURIComponent(id)+'/mob-x-review',{method:'POST',body:{action:'edit_caption',caption:field.value}});
+ toast(r.unchanged?'این کپشن قبلاً برای همین پست ثبت شده است':'کپشن همین پست ذخیره شد','ok');
+ closeModal();await A.jView({dataset:{id}});
+};
+A.jMobNoCaption=async el=>{
+ const id=String(el.dataset.id||'');
+ const r=await api('/api/console/jobs/'+encodeURIComponent(id)+'/mob-x-review',{method:'POST',body:{action:'no_caption'}});
+ toast(r.unchanged?'متن ثابت از قبل برای همین پست ثبت شده است':'متن ثابت فقط برای همین پست ثبت شد','ok');
+ await A.jView({dataset:{id}});
+};
+A.jMobReject=async el=>{
+ const id=String(el.dataset.id||'');
+ if(!confirm('این پست Mob X رد شود؟ این اقدام فقط همین job را رد می‌کند و هیچ چیزی منتشر نمی‌کند.'))return;
+ const r=await api('/api/console/jobs/'+encodeURIComponent(id)+'/mob-x-review',{method:'POST',body:{action:'reject'}});
+ toast(r.unchanged?'این پست قبلاً رد شده است':'پست همین job رد شد و منتشر نخواهد شد','ok');
+ await A.jView({dataset:{id}});
+};
 
 /* ---------- دیتابیس (رفع باگ data-n) ---------- */
 V.d1=async()=>{const t=await api('/api/console/d1/tables');
