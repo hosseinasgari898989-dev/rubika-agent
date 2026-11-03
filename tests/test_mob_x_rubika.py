@@ -39,15 +39,45 @@ class MobXRubikaTests(unittest.TestCase):
         keyboard = owner_preview_keypad("job_abcdef1234567890")
         buttons = keyboard["rows"][0]["buttons"]
         self.assertEqual(
-            [item["id"] for item in buttons],
+            [[item["id"] for item in row["buttons"]] for row in keyboard["rows"]],
             [
-                "p_mob_publish_job_abcdef1234567890",
-                "p_mob_edit_job_abcdef1234567890",
-                "p_mob_reject_job_abcdef1234567890",
+                [
+                    "p_mob_publish_job_abcdef1234567890",
+                    "p_mob_edit_job_abcdef1234567890",
+                ],
+                [
+                    "p_mob_nocaption_job_abcdef1234567890",
+                    "p_mob_reject_job_abcdef1234567890",
+                ],
             ],
         )
         with self.assertRaises(ValueError):
             owner_preview_keypad("not-a-job")
+
+    def test_owner_preview_keypad_offers_no_caption_for_the_same_job(self):
+        keyboard = owner_preview_keypad("job_abcdef1234567890")
+        ids = [button["id"] for row in keyboard["rows"] for button in row["buttons"]]
+        self.assertIn("p_mob_nocaption_job_abcdef1234567890", ids)
+
+    def test_owner_preview_sends_fixed_no_caption_with_native_bold_metadata(self):
+        from src.owner_panel import MOB_X_NO_CAPTION
+
+        holder = {}
+        def factory(**kwargs):
+            holder["bot"] = RubikaMediaMock(**kwargs)
+            return holder["bot"]
+        send_owner_preview(
+            "test-token", "owner-chat", "rubika-file-001", MOB_X_NO_CAPTION,
+            "job_abcdef1234567890", bot_factory=factory,
+        )
+        _, payload = holder["bot"]._post.call_args.args
+        self.assertEqual(payload["text"], "ماب انترتینمنت در پیج خود پستی منتشر کرد.")
+        self.assertEqual(
+            [part["type"] for part in payload["metadata"]["meta_data_parts"]],
+            ["Bold"],
+        )
+        self.assertNotIn("source", payload["text"].lower())
+        self.assertNotIn("ترجمه", payload["text"])
 
     def test_upload_is_not_a_send_and_returns_rubika_file_id(self):
         with tempfile.TemporaryDirectory() as folder:
