@@ -170,6 +170,9 @@ test("delete-request requires a valid owner bearer before creating a challenge",
   assert.equal(viewer.status, 403);
   const missing = await post("/failed-media/delete-request", { ids: [ID] }, null);
   assert.equal(missing.status, 403);
+  env.AGENT_API_TOKEN = "short";
+  const shortSecret = await post("/failed-media/delete-request", { ids: [ID] }, "short");
+  assert.equal(shortSecret.status, 403, "the internal guard rejects short configured owner tokens");
   assert.equal(env.calls.length, 0);
   assert.equal(env.rows.get(ID).status, "stored");
 });
