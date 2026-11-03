@@ -1027,14 +1027,14 @@ async function processEvent(env, selfFetch, origin, ev) {
     const commandWord = ev.kind === "text"
       ? ev.text.split(/\s+/)[0].split("@")[0].toLowerCase()
       : "";
-    const activeMode = ev.kind === "text" ? await getState(timedEnv, "mode", "idle") : "idle";
+    const sensitiveFlowMode = ev.kind === "text" ? await getState(timedEnv, "mode", "idle") : "idle";
     const sensitiveCallback = ev.kind === "click" && isOwnerOnlyPanelAction(ev.button);
     const sensitiveText = ev.kind === "text" && (
       commandWord === "/register" ||
       commandWord === "/panelmode" ||
       isOwnerOnlyPanelAction(COMMANDS[commandWord]) ||
-      activeMode === "waiting_link" ||
-      activeMode === "waiting_mob_caption_edit"
+      sensitiveFlowMode === "waiting_link" ||
+      sensitiveFlowMode === "waiting_mob_caption_edit"
     );
     if ((sensitiveCallback || sensitiveText) && !(await hasOwnerRole(timedEnv, ev.chat, owner))) {
       try {
