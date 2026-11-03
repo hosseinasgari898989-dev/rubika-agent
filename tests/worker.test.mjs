@@ -3068,7 +3068,7 @@ async function withDispatchFetch(responder, fn) {
 }
 
 
-// Non-report pages fetch data before rendering and only edit the existing live panel once.
+// Non-report screen callbacks first show loading, then replace both text and keypad on the same main message.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -3081,11 +3081,17 @@ async function withDispatchFetch(responder, fn) {
         text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
+    const textEdits = calls.filter(call => call.method === "editMessageText");
+    const keypadEdits = calls.filter(call => call.method === "editMessageKeypad");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
-    assert.equal(calls.filter(call => call.method === "editMessageText").length, 1);
-    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 1);
-    assert.equal(calls.every(call => !("message_id" in call.payload) || call.payload.message_id === "existing-live-status-4321"), true);
-    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+    assert.equal(textEdits.length, 2);
+    assert.equal(keypadEdits.length, 2);
+    assert.equal(textEdits[0].payload.text, "⏳ در حال انجام…");
+    assert.equal(textEdits[1].payload.text.includes("وضعیت"), true);
+    assert.equal(textEdits.every(call => call.payload.message_id === "existing-live-status-4321"), true);
+    assert.equal(keypadEdits.every(call => call.payload.message_id === "existing-live-status-4321"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "existing-live-status-4321");
+    assert.equal(state.DB.state.get("panel_edit_ok"), "2");
   });
 }
 
@@ -3382,7 +3388,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   });
 }
 
-// PV settings are wired from the owner home menu and apply the existing optimistic-lock console_rules contract.
+// PV settings keep the same tracked panel and show loading before D1 writes/reads.
 {
   assert.equal(screens.HOME_ROWS.flat().some(([label, id]) => label === "⚙️ تنظیمات" && id === "p_set"), true,
     "owner home menu must include the settings entry");
@@ -3390,7 +3396,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
-    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_sync_mode", "atomic"); // Old stored mode must not re-enable replacement behavior.
     state.DB.state.set("panel_mid", "settings-panel-initial");
     const secret = await panel.hookSecret(state);
     const click = async button => {
@@ -3404,33 +3410,40 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     const rules = () => JSON.parse(state.DB.consoleRules.rules_json);
 
     await click("p_set_cap_inc");
-    assert.equal(rules().daily_success_cap, 5, "➕ raises the cap by one");
-    assert.equal(state.DB.consoleRules.version, 2, "successful change increments the rules version once");
+    assert.equal(rules().daily_success_cap, 5);
+    assert.equal(state.DB.consoleRules.version, 2);
     assert.equal(rules().publishing_enabled, false);
     assert.equal(rules().test_channel_only, true);
 
     await click("p_set_cap_dec");
-    assert.equal(rules().daily_success_cap, 4, "➖ lowers the cap by one");
-    assert.equal(state.DB.consoleRules.version, 3, "second successful change increments version once");
+    assert.equal(rules().daily_success_cap, 4);
+    assert.equal(state.DB.consoleRules.version, 3);
 
     await click("p_set_cap_7");
-    assert.equal(rules().daily_success_cap, 7, "preset button sets the selected cap");
-    assert.equal(state.DB.consoleRules.version, 4, "preset increments version once");
-    assert.equal(rules().publishing_enabled, false, "settings must never enable publishing");
-    assert.equal(rules().test_channel_only, true, "settings must preserve test-channel-only mode");
+    assert.equal(rules().daily_success_cap, 7);
+    assert.equal(state.DB.consoleRules.version, 4);
+    assert.equal(rules().publishing_enabled, false);
+    assert.equal(rules().test_channel_only, true);
     assert.deepEqual(state.DB.brainEvents.map(event => event.code), [
       "console_rules_update", "console_rules_update", "console_rules_update",
-    ], "every successful setting change is audited");
+    ]);
     const details = JSON.parse(state.DB.brainEvents[0].details_json);
     assert.deepEqual(details.fields, ["daily_success_cap"]);
     assert.equal(details.source, "pv");
-    assert.equal(calls.some(call => call.method === "editMessageKeypad"), false,
-      "atomic settings navigation must not edit the keypad separately");
-    assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("سقف ارسال موفق امروز")), true);
+    const textEdits = calls.filter(call => call.method === "editMessageText");
+    const keypadEdits = calls.filter(call => call.method === "editMessageKeypad");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(textEdits.length, 6, "each settings button has loading and final text");
+    assert.equal(keypadEdits.length, 6, "each settings button replaces loading and final keyboard");
+    assert.equal(textEdits[0].payload.text, "⏳ در حال انجام…");
+    assert.equal(textEdits.at(-1).payload.text.includes("سقف ارسال موفق امروز"), true);
+    assert.equal(textEdits.every(call => call.payload.message_id === "settings-panel-initial"), true);
+    assert.equal(keypadEdits.every(call => call.payload.message_id === "settings-panel-initial"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "settings-panel-initial");
   });
 }
 
-// The settings cap rejects both boundaries (0 and 50) without changing the value/version or writing audit events.
+// Settings boundary errors update the same panel after their loading state; they do not send side messages.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -3440,29 +3453,31 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     state.DB.consoleRules.version = 7;
     state.DB.consoleRules.rules_json = JSON.stringify({ daily_success_cap: 0, publishing_enabled: false, test_channel_only: true });
     const secret = await panel.hookSecret(state);
-    const click = async button => {
-      await postPanelUpdate(state, {
-        update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-          message_id: state.DB.state.get("panel_mid"), chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
-        } },
-      }, secret);
-    };
+    const click = async button => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: state.DB.state.get("panel_mid"), chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+      } },
+    }, secret);
     await click("p_set_cap_dec");
     assert.equal(JSON.parse(state.DB.consoleRules.rules_json).daily_success_cap, 0);
     assert.equal(state.DB.consoleRules.version, 7);
     assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
-    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("عدد خارج از محدوده"), true);
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("عدد خارج از محدوده"), true);
 
     state.DB.consoleRules.rules_json = JSON.stringify({ daily_success_cap: 50, publishing_enabled: false, test_channel_only: true });
     await click("p_set_cap_inc");
     assert.equal(JSON.parse(state.DB.consoleRules.rules_json).daily_success_cap, 50);
     assert.equal(state.DB.consoleRules.version, 7);
     assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
-    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("عدد خارج از محدوده"), true);
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("عدد خارج از محدوده"), true);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 4);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 4);
+    assert.equal(state.DB.state.get("panel_mid"), "settings-boundary-panel");
   });
 }
 
-// Optimistic-lock conflict shows the existing Persian conflict notice, leaves the new concurrent version untouched, and writes no audit.
+// Optimistic-lock conflicts are rendered on the existing panel after a loading state.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -3477,10 +3492,13 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
         aux_data: { button_id: "p_set_cap_7" },
       } },
     }, secret);
-    assert.equal(state.DB.consoleRules.version, 2, "mock concurrent write owns the newer version");
-    assert.equal(JSON.parse(state.DB.consoleRules.rules_json).daily_success_cap, 4, "conflicting update must not overwrite the value");
+    assert.equal(state.DB.consoleRules.version, 2);
+    assert.equal(JSON.parse(state.DB.consoleRules.rules_json).daily_success_cap, 4);
     assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
-    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("هم‌زمان تغییر کرد"), true);
+    assert.equal(calls.filter(call => call.method === "editMessageText")[0].payload.text, "⏳ در حال انجام…");
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("هم‌زمان تغییر کرد"), true);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(state.DB.state.get("panel_mid"), "settings-version-conflict");
   });
 }
 
