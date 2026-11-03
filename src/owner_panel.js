@@ -1161,6 +1161,9 @@ async function processEvent(env, selfFetch, origin, ev) {
           !["p_home", "p_status", "p_queue", "p_qs", "p_ai", "p_report", "p_mob", "p_help", "p_debug"].includes(staleButton)) {
           refreshId = "p_home";
         }
+        if (currentPanelMid) {
+          await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB);
+        }
         await render(ui, refreshId, { clickedMid: currentPanelMid });
         return;
       }
