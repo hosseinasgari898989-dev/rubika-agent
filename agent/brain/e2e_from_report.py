@@ -570,8 +570,12 @@ def run_one(
                         "error": _safe_error(exc), "cleanup": "retained",
                     }
 
-        failed_media = _preserve_failed_tiktok_original(
-            cloud, storage, original_media_path, item_id, EDIT_CAPTION, delivery,
+        failed_media = (
+            _preserve_failed_tiktok_original(
+                cloud, storage, original_media_path, item_id, EDIT_CAPTION, delivery,
+            )
+            if platform == "tiktok"
+            else {"attempted": False, "reason": "platform_not_supported"}
         )
         sent = delivery.get("status") == "sent"
         try:
