@@ -20,6 +20,7 @@ from agent.brain.authorization import SourceRegistry
 from agent.brain.cloud_state import CloudState
 from agent.brain.delivery import deliver_with_retry
 from agent.brain.deduplication import blocking_ledger_entries
+from agent.brain.failed_media import preserve_failed_media
 from agent.brain.downloaders import CobaltDownloader, YouTubeRelayDownloader
 from agent.brain.ledger import MegaLedger
 from agent.brain.inspector import inspect_media
@@ -57,6 +58,47 @@ def _response_dict(value: Any) -> dict[str, Any]:
 def _safe_error(exc: Exception) -> str:
     value = getattr(exc, "code", type(exc).__name__)
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value))[:80] or "unknown_error"
+
+def _preserve_failed_tiktok_delivery(
+    *, platform: str, client: Any, storage: Any, original_path: str | Path,
+    caption: object, item_id: str, delivery: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Keep the untouched Cobalt download only when a TikTok Rubika delivery did not succeed."""
+    if platform != "tiktok" or delivery.get("status") == "sent":
+        return None
+
+    original = Path(original_path)
+    if not original.is_file() or original.stat().st_size <= 0:
+        return {
+            "ok": False, "stored": False, "recorded": False,
+            "error": "failed_media_original_unavailable",
+        }
+
+    raw_reason = delivery.get("error") or delivery.get("status") or "rubika_delivery_failed"
+    reason = re.sub(r"[^a-z0-9_-]+", "_", str(raw_reason).lower()).strip("_")[:80]
+    reason = reason or "rubika_delivery_failed"
+    try:
+        result = preserve_failed_media(
+            client, storage, "tiktok", "video", original, caption, reason,
+            item_id=item_id,
+        )
+        if not isinstance(result, dict):
+            return {
+                "ok": False, "stored": False, "recorded": False,
+                "error": "failed_media_invalid_result",
+            }
+        return {
+            "ok": result.get("ok") is True,
+            "stored": result.get("stored") is True,
+            "recorded": result.get("recorded") is True,
+            "error": result.get("error"),
+        }
+    except Exception:
+        # Preservation is best-effort and must never replace the delivery error.
+        return {
+            "ok": False, "stored": False, "recorded": False,
+            "error": "failed_media_preserve_unexpected_error",
+        }
 
 
 def _stage_failure_summary(stage_result: Mapping[str, Any]) -> dict[str, Any]:
@@ -470,15 +512,35 @@ def run_one(
             )
             ledger.save(current_state)
 
-        delivery = deliver_with_retry(
-            item_id=item_id,
-            send=send,
-            record_attempt=record_attempt,
-            delete_local=lambda: media_path.unlink(missing_ok=True),
-            max_attempts=3,
-            sleep_seconds=1,
-        )
+        safe_candidate_id = re.sub(r"[^A-Za-z0-9_-]", "_", candidate_id)[:80]
+        original_media_path = output_dir / "raw" / ("tiktok_" + safe_candidate_id + ".mp4")
+        try:
+            delivery = deliver_with_retry(
+                item_id=item_id,
+                send=send,
+                record_attempt=record_attempt,
+                delete_local=lambda: media_path.unlink(missing_ok=True),
+                max_attempts=3,
+                sleep_seconds=1,
+            )
+        except Exception as exc:
+            # If sendFile returned OK but the later ledger update failed, the item was sent.
+            # Otherwise, preserve the raw source before TemporaryDirectory removes it.
+            if last_response.get("status") != "OK":
+                _preserve_failed_tiktok_delivery(
+                    platform=platform, client=cloud, storage=storage,
+                    original_path=original_media_path, caption=payload.get("caption") or item.get("caption"),
+                    item_id=item_id, delivery={"status": "failed", "error": _safe_error(exc)},
+                )
+            raise
         sent = delivery.get("status") == "sent"
+        failed_media_result = _preserve_failed_tiktok_delivery(
+            platform=platform, client=cloud, storage=storage,
+            original_path=original_media_path, caption=payload.get("caption") or item.get("caption"),
+            item_id=item_id, delivery=delivery,
+        )
+        if failed_media_result is not None:
+            report_detail["failed_media"] = failed_media_result
         try:
             cloud.finish_run(
                 publish_run_id,
