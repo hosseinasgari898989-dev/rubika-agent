@@ -76,7 +76,7 @@ if(!count)return toast('مورد قابل‌حذفی پیدا نشد','bad');
 if(challenge.confirmation_required!==true||typeof challenge.confirmation!=='string')throw new Error('confirmation_challenge_missing');
 const typed=prompt('Worker '+count+' مورد را برای حذف آماده کرده است. برای تأیید دومرحله‌ای، DELETE را بنویس. این تأیید ۵ دقیقه اعتبار دارد.');
 if(typed!=='DELETE')return toast('لغو شد؛ هیچ فایلی برای حذف علامت نخورد','bad');
-const result=await api('/api/console/failed-media/delete-request',{method:'POST',body:{confirmation:challenge.confirmation}});
+const result=await api('/api/console/failed-media/delete-request',{method:'POST',body:{confirmation:challenge.confirmation,phrase:typed}});
 SEL.clear();
 const extra=(challenge.limited?' · هر مرحله حداکثر ۵۰ مورد':'')+(result.requested&&!result.dispatched?' · شروع خودکار حذف انجام نشد':'');
 toast(label+N(result.requested)+extra,result.requested&&result.dispatched?'ok':'bad');
