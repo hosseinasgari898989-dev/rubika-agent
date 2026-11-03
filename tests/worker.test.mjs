@@ -2767,31 +2767,26 @@ async function withDispatchFetch(responder, fn) {
   })());
 }
 
-// A late first Rubika response is deleted after the newer event wins; old text/buttons cannot become current again.
+// A newer click supersedes an in-flight loading edit without ever replacing the primary message.
 {
   let signalSlowStarted;
   const slowStarted = new Promise(resolve => { signalSlowStarted = resolve; });
   let releaseSlow;
   const slowGate = new Promise(resolve => { releaseSlow = resolve; });
-  let sendCount = 0;
+  let editTextCount = 0;
   const responder = async ({ method }) => {
-    if (method !== "sendMessage") return null;
-    sendCount += 1;
-    if (sendCount === 1) {
+    if (method !== "editMessageText") return null;
+    editTextCount += 1;
+    if (editTextCount === 1) {
       signalSlowStarted();
       await slowGate;
-      return new Response(JSON.stringify({ status: "OK", data: { message_id: "slow-stale-panel-01" } }), {
-        status: 200, headers: { "content-type": "application/json" },
-      });
     }
-    return new Response(JSON.stringify({ status: "OK", data: { message_id: "fast-current-panel-02" } }), {
-      status: 200, headers: { "content-type": "application/json" },
-    });
+    return null;
   };
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
-    state.DB.state.set("panel_sync_mode", "atomic");
+    state.DB.state.set("panel_sync_mode", "atomic"); // Retired value must not switch back to replacement mode.
     state.DB.state.set("panel_mid", "race-base-panel-0101");
     const secret = await panel.hookSecret(state);
     const click = (button, messageId) => ({
@@ -2804,16 +2799,20 @@ async function withDispatchFetch(responder, fn) {
     await postPanelUpdate(state, click("p_qs", "race-base-panel-0101"), secret);
     releaseSlow();
     await first;
-    assert.equal(state.DB.state.get("panel_mid"), "fast-current-panel-02");
-    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "slow-stale-panel-01"), true);
-    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
-    assert.equal(state.DB.state.get("atomic_ok"), "1");
+    assert.equal(state.DB.state.get("panel_mid"), "race-base-panel-0101");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "deleteMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "editMessageText").every(call =>
+      call.payload.message_id === "race-base-panel-0101"), true);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").every(call =>
+      call.payload.message_id === "race-base-panel-0101"), true);
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("صف انتشار"), true);
+    assert.equal(state.DB.state.get("atomic_ok") || "0", "0");
     assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 2);
   }, responder);
 }
 
-// A duplicate tap with the same event key is idempotently ignored.
+// A duplicate tap is ignored after one loading/final cycle and preserves the primary message ID.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -2827,7 +2826,6 @@ async function withDispatchFetch(responder, fn) {
         text: "", aux_data: { button_id: "p_status" },
       } },
     };
-    // Keep this pair inside the implementation's four-second duplicate-event window.
     const originalNow = Date.now;
     const originalRandom = Math.random;
     Date.now = () => 1800000000000;
@@ -2839,13 +2837,17 @@ async function withDispatchFetch(responder, fn) {
       Date.now = originalNow;
       Math.random = originalRandom;
     }
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
-    assert.equal(calls.some(call => call.method === "editMessageKeypad" || call.method === "editMessageText"), false);
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 2);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 2);
+    assert.equal(calls.filter(call => call.method === "editMessageText")[0].payload.text, "⏳ در حال انجام…");
+    assert.equal(state.DB.state.get("panel_mid"), "double-tap-panel-0202");
+    assert.equal(calls.every(call => call.method === "deleteMessage" ||
+      call.payload.message_id === "double-tap-panel-0202"), true);
   });
 }
 
-// When replacement send fails in atomic mode, keep the previous coherent panel and never start an in-place edit.
+// If both the in-place edit and its fallback delivery fail, the old coherent panel remains tracked.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -2861,17 +2863,16 @@ async function withDispatchFetch(responder, fn) {
     }, secret);
     assert.equal(state.DB.state.get("panel_mid"), "atomic-send-failure-old");
     assert.equal(state.DB.state.get("last_error"), "rubika_sendmessage_send_failed");
-    assert.equal(state.DB.state.get("atomic_fail"), "1");
-    assert.equal(state.DB.state.get("atomic_ok") || "0", "0");
     assert.equal(state.DB.state.get("panel_edit_fail"), "1");
-    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
+    assert.ok(calls.some(call => call.method === "editMessageText"));
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "atomic-send-failure-old"), false);
   }, ({ method }) => method === "sendMessage"
     ? new Response(JSON.stringify({ status: "SEND_FAILED" }), { status: 200 })
     : null);
 }
 
-// A best-effort old-panel delete failure must not corrupt the newly sent atomic panel.
+// The retired atomic setting is ignored; successful navigation edits the main text and keypad in place.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -2885,17 +2886,20 @@ async function withDispatchFetch(responder, fn) {
         text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
-    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "atomic-delete-failure-old"), true);
-    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
-    assert.equal(state.DB.state.get("atomic_ok"), "1");
+    assert.equal(state.DB.state.get("panel_mid"), "atomic-delete-failure-old");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "deleteMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 2);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 2);
+    assert.equal(calls.filter(call => call.method === "editMessageText")[0].payload.text, "⏳ در حال انجام…");
+    assert.equal(state.DB.state.get("atomic_ok") || "0", "0");
     assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
   }, ({ method }) => method === "deleteMessage"
     ? new Response(JSON.stringify({ status: "DELETE_FAILED" }), { status: 200 })
     : null);
 }
 
-// /panelmode can be changed only by the primary owner.
+// /panelmode reports the enforced in-place policy; only the primary owner may inspect it.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -2907,10 +2911,14 @@ async function withDispatchFetch(responder, fn) {
         message_id: "panelmode-command-1", chat_id: "b0actualowner", text: "/panelmode atomic",
       } },
     }, secret);
-    assert.equal(state.DB.state.get("panel_sync_mode"), "atomic");
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
-    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "panelmode-old-panel"), true);
-    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
+    assert.equal(state.DB.state.has("panel_sync_mode"), false);
+    assert.equal(state.DB.state.get("panel_mid"), "panelmode-old-panel");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 1);
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 1);
+    assert.equal(calls.some(call => call.method === "editMessageText" &&
+      call.payload.text.includes("atomic غیرفعال است")), true);
+    assert.equal(calls.filter(call => call.method === "deleteMessage").length, 0);
   });
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -2927,14 +2935,16 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(state.DB.state.get("panel_sync_mode"), "atomic");
     assert.equal(state.DB.state.get("panel_mid"), "primary-owner-panel-stays");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(calls[0].payload.text.includes("نقش مالک"), true);
   });
 }
 
-// A stale confirm button is never executed; stale messages are deleted and the safe related page is refreshed.
+// A stale callback is rejected and refreshes the currently tracked primary message in place.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_sync_mode", "atomic");
     state.DB.state.set("panel_mid", "latest-live-panel-9876");
     state.DB.state.set("panel_mob_pending_link_id", "1");
     state.DB.links.push({
@@ -2953,11 +2963,13 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(state.DB.links[0].status, "pending", "stale confirm must not mutate the link");
     assert.equal(state.DB.consoleJobs.size, 0, "stale confirm must not create a job");
     assert.equal(state.DB.state.get("panel_mob_pending_link_id"), "1");
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(state.DB.state.get("panel_mid"), "latest-live-panel-9876");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "stale-click-message-1234"), true);
-    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "latest-live-panel-9876"), true);
-    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "latest-live-panel-9876"), false);
+    assert.equal(calls.filter(call => call.method === "editMessageText")[0].payload.text, "⏳ در حال انجام…");
+    assert.equal(calls.filter(call => call.method === "editMessageText").every(call =>
+      call.payload.message_id === "latest-live-panel-9876"), true);
   });
 }
 
@@ -3303,7 +3315,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(statusText.includes("پایگاه داده"), false);
 }
 
-// Fresh commands replace the panel only for the four requested screens; other text commands keep edit-in-place behavior.
+// Slash commands are text input, not glass-button callbacks; the PV button path itself keeps a stable message.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -3315,40 +3327,23 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
       ["/digest", "خلاصهٔ ۲۴ ساعت"], ["/errors", "خطاها"], ["/runs", "آخرین اجراها"],
       ["/links", "لینک‌های X"], ["/ailog", "تاریخچهٔ تماس‌های AI"], ["/queue", "صف انتشار"],
     ];
-    const freshCommands = new Set(["/digest", "/errors", "/runs", "/links"]);
     let expectedSends = 0;
-    let expectedEdits = 0;
-    let currentPanel = "one-live-screen-panel";
     for (let i = 0; i < commands.length; i += 1) {
       await postPanelUpdate(state, {
         update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
           message_id: "stage-two-command-" + i, chat_id: "b0actualowner", text: commands[i][0],
         } },
       }, secret);
-      const editCalls = calls.filter(call => call.method === "editMessageText");
+      expectedSends += 1;
       const sendCalls = calls.filter(call => call.method === "sendMessage");
-      if (freshCommands.has(commands[i][0])) {
-        expectedSends += 1;
-        assert.equal(sendCalls.length, expectedSends, commands[i][0] + " should send one fresh page");
-        assert.equal(sendCalls.at(-1).payload.text.includes(commands[i][1]), true, commands[i][0] + " should render its screen");
-        assert.equal(state.DB.state.get("panel_mid"), "mock-reply-" + expectedSends);
-        assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === currentPanel), true);
-        currentPanel = state.DB.state.get("panel_mid");
-      } else {
-        expectedEdits += 1;
-        assert.equal(editCalls.length, expectedEdits, commands[i][0] + " should edit exactly one page");
-        assert.equal(editCalls.at(-1).payload.message_id, currentPanel);
-        assert.equal(editCalls.at(-1).payload.text.includes(commands[i][1]), true, commands[i][0] + " should render its screen");
-      }
-      assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("در حال دریافت")), false);
-      assert.equal(state.DB.state.get("mode"), "idle");
+      assert.equal(sendCalls.length, expectedSends, "typed slash commands keep their existing one-response behavior");
+      assert.equal(sendCalls.at(-1).payload.text.includes(commands[i][1]), true);
     }
-    assert.equal(calls.filter(call => call.method === "sendMessage").length, 4);
-    assert.equal(calls.filter(call => call.method === "editMessageText").length, 2);
+    assert.equal(state.DB.state.get("mode"), "idle");
   });
 }
 
-// Link deletion requires the explicit confirmation screen; a direct confirmation ID is harmless.
+// Link deletion confirmation edits the same main panel; a stale/direct confirmation never deletes.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -3362,25 +3357,28 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     state.DB.state.set("panel_sync_mode", "atomic");
     state.DB.state.set("panel_mid", "link-confirmation-panel");
     const secret = await panel.hookSecret(state);
-    const click = async (button, messageId) => postPanelUpdate(state, {
+    const click = button => postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: messageId, chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
+        message_id: "link-confirmation-panel", chat_id: "b0actualowner", text: "", aux_data: { button_id: button },
       } },
     }, secret);
-    await click("p_links_clear_yes", "link-confirmation-panel");
-    assert.equal(state.DB.links.length, 4, "direct confirmation ID must not delete links");
+    await click("p_links_clear_yes");
+    assert.equal(state.DB.links.length, 4);
     assert.equal(state.DB.linkDeleteCalls, 0);
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
-    await click("p_links_clear", "mock-reply-1");
+    assert.equal(state.DB.state.get("panel_mid"), "link-confirmation-panel");
+    await click("p_links_clear");
     assert.equal(state.DB.links.length, 4, "opening confirmation must not delete links");
-    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("🗑 2 لینک غیرفعال پاک شود؟"), true);
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-2");
-    await click("p_links_clear_yes", "mock-reply-2");
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("🗑 2 لینک غیرفعال پاک شود؟"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "link-confirmation-panel");
+    await click("p_links_clear_yes");
     assert.equal(state.DB.links.length, 2, "confirmed action should remove inactive links and preserve active links");
     assert.deepEqual(state.DB.links.map(row => row.status).sort(), ["queued", "ready_for_review"]);
     assert.equal(state.DB.linkDeleteCalls, 1);
-    assert.equal(calls.filter(call => call.method === "sendMessage").at(-1).payload.text.includes("✅ 2 لینک غیرفعال پاک شد؛ 2 لینک فعال حفظ شد."), true);
-    assert.equal(calls.some(call => call.method === "editMessageKeypad"), false);
+    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("✅ 2 لینک غیرفعال پاک شد؛ 2 لینک فعال حفظ شد."), true);
+    assert.equal(state.DB.state.get("panel_mid"), "link-confirmation-panel");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.ok(calls.filter(call => call.method === "editMessageText").length >= 6, "three clicks each render loading then final text");
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 6);
   });
 }
 
