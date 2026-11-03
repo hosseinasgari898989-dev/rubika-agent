@@ -253,7 +253,8 @@ def layout_cues(cues: list, *, width: int, height: int, fontsdir: str = "assets/
         while candidate_size >= minimum_size:
             font_obj = _layout_font(fontsdir, font, candidate_size)
             lines = [line for paragraph in paragraphs for line in _wrap_words(paragraph, font_obj, max_width)]
-            fits = len(lines) <= max_lines and all(_measure_line(font_obj, line) <= max_width for line in lines)
+            # Extra lines are split into separate cues below; only width requires shrinking here.
+            fits = all(_measure_line(font_obj, line) <= max_width for line in lines)
             if fits:
                 selected = (lines, candidate_size)
                 break
