@@ -24,7 +24,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         test_step = "      - name: Run all repository unit tests"
         self.assertIn(install_step, workflow)
         self.assertLess(workflow.index(install_step), workflow.index(test_step))
-        install_block = workflow.split(install_step, 1)[1].split("\\n      - name:", 1)[0]
+        install_block = workflow.split(install_step, 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("sudo apt-get install --yes ffmpeg", install_block)
         self.assertIn("ffmpeg -hide_banner -filters", install_block)
         self.assertIn("libass", install_block)
