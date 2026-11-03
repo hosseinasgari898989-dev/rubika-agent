@@ -26,6 +26,7 @@ PAGES = [
     ("rules", "قوانین"),
     ("chan", "کانال‌ها"),
     ("jobs", "کارها"),
+    ("report", "گزارش"),
     ("inst", "حالت فوری"),
     ("d1", "دیتابیس"),
     ("soon", "به‌زودی"),
@@ -63,6 +64,28 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
             "ok": True, "ready": True, "cooldown_active": False,
             "calls_used": 1, "daily_limit": 100, "remaining": 99,
             "last_error_code": None,
+        }
+    if path == "/api/console/digest":
+        return {
+            "ok": True,
+            "window": {
+                "started_at": "2026-11-02T07:05:00Z",
+                "ends_at": "2026-11-03T07:05:00Z",
+            },
+            "counts": [
+                {"category": "success", "count": 4},
+                {"category": "ai_error", "count": 1},
+            ],
+            "events": [
+                {
+                    "occurred_at": NOW, "category": "success",
+                    "source": "x", "title": "Mob X report fixture",
+                },
+                {
+                    "occurred_at": NOW, "category": "ai_error",
+                    "source": "openrouter", "title": "Translation report fixture",
+                },
+            ],
         }
     if path == "/api/console/items":
         return {"ok": True, "items": [{
@@ -352,6 +375,28 @@ def main() -> int:
 
                 except Exception as exc:
                     failures.append(f"{page_id}: could not open/render page: {exc}")
+
+            # The read-only report combines the current 24h digest with Worker, queue and AI status.
+            active_page[0] = "report"
+            try:
+                page.locator('#nav button[data-id="report"]').click()
+                page.wait_for_function(
+                    "(expected) => document.querySelector('#ttl')?.textContent === expected",
+                    arg="گزارش", timeout=5000,
+                )
+                page.wait_for_function("() => document.querySelector('#view')?.innerText.includes('Mob X report fixture')", timeout=5000)
+                report_text = page.locator("#view").inner_text()
+                for expected_text in (
+                    "خلاصهٔ ۲۴ ساعت", "Mob X report fixture",
+                    "Translation report fixture", "وضعیت Worker",
+                    "صف انتشار", "هوش مصنوعی", "4", "1",
+                ):
+                    if expected_text not in report_text:
+                        failures.append(f"report: expected rendered text not found: {expected_text}")
+                if any(word in report_text.lower() for word in ("private details", "api key", "window-private-id")):
+                    failures.append("report: private digest fields leaked into UI")
+            except Exception as exc:
+                failures.append(f"report: could not render report page: {exc}")
 
             # The failed-media preview modal is tested with a valid fixture and a hostile URL.
             active_page[0] = "unsent"
