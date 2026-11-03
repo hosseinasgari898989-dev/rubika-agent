@@ -483,7 +483,7 @@ class FakeStatement {
       if (!job || job.type !== "mob_x_link" || job.status !== "ready_for_review" ||
           job.result_json !== expectedResultJson || Number(job.panel_link_id) !== Number(panelLinkId) ||
           Number(expectedLinkId) !== Number(panelLinkId) || !link || link.status !== "ready_for_review" ||
-          !item || item.platform !== "mob_official" || item.status !== "ready") return { meta: { changes: 0 } };
+          !item || item.platform !== "mob_official" || item.status !== "ready" || item.review_state !== "pending") return { meta: { changes: 0 } };
       Object.assign(job, { result_json: resultJson, updated_at: updatedAt });
       return { meta: { changes: 1 } };
     }
@@ -503,7 +503,7 @@ class FakeStatement {
       const [caption, itemId] = v;
       const item = this.db.items.get(itemId);
       if (sql.includes("changes() > 0") && Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
-      if (!item || item.platform !== "mob_official" || item.status !== "ready") return { meta: { changes: 0 } };
+      if (!item || item.platform !== "mob_official" || item.status !== "ready" || item.review_state !== "pending") return { meta: { changes: 0 } };
       item.caption = caption;
       if (sql.includes("original_caption = ''")) { item.original_caption = ""; item.persian_translation = ""; }
       return { meta: { changes: 1 } };
