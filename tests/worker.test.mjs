@@ -1631,6 +1631,9 @@ function makeOmniAI(probability = 0.97) {
   const lock = response.body.lock_token;
   assert.equal(response.body.state.events.length, 1);
   assert.equal(response.body.state.events[0].category, "error");
+  assert.equal(response.body.state.health.d1_size_bytes, state.DB.sizeAfter);
+  assert.equal(response.body.state.health.daily_d1_reads, null);
+  assert.equal(response.body.state.health.daily_d1_writes, null);
 
   const concurrent = await read(await worker.fetch(request("/api/brain/owner-digest/claim", {
     method: "POST", body: {},
