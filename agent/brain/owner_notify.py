@@ -15,6 +15,14 @@ import urllib.request
 from typing import Any
 from urllib.parse import urlparse
 
+from agent.brain.owner_health import (
+    build_health_snapshot,
+    render_health_section,
+    should_reduce_nonessential_writes,
+    unavailable_daily_usage,
+    unavailable_health_snapshot,
+)
+
 
 DIGEST_MAX_CHARS = 3400
 DIGEST_CLAIM_ATTEMPTS = 8
@@ -188,7 +196,10 @@ def _make_rubika_bot(token: str) -> Any:
     return Bot(token=token, timeout=25, show_progress=False)
 
 
-def render_daily_digest(state: dict[str, Any]) -> str:
+def render_daily_digest(
+    state: dict[str, Any],
+    health_snapshot: dict[str, Any] | None = None,
+) -> str:
     counts = state.get("counts") if isinstance(state.get("counts"), dict) else {}
     successful = int(counts.get("success", 0) or 0) + int(counts.get("ai_success", 0) or 0)
     errors = int(counts.get("error", 0) or 0) + int(counts.get("ai_error", 0) or 0)
@@ -228,9 +239,12 @@ def render_daily_digest(state: dict[str, Any]) -> str:
     omitted = max(0, total_events - len(event_lines))
     note = "این پیام طی بازه ویرایش می‌شود؛ پس از پایان ۲۴ ساعت، بازه و پیام تازه‌ای آغاز می‌شود."
 
+    health_lines = render_health_section(health_snapshot or unavailable_health_snapshot())
+
     def build() -> str:
         rows = list(header)
         rows.extend(event_lines)
+        rows.extend(health_lines)
         if omitted:
             rows.append(f"… {omitted} رویداد قدیمی‌تر در سوابق همین بازه نگهداری می‌شود.")
         elif not event_lines:
@@ -270,7 +284,9 @@ def _commit_digest(
     return result.get("ok") is True
 
 
-def refresh_daily_digest() -> dict[str, Any]:
+def refresh_daily_digest(
+    health_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Refresh the current Rubika message, without creating a new event."""
     token = os.getenv("RUBIKA_TOKEN", "").strip()
     owner_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "").strip()
@@ -284,6 +300,12 @@ def refresh_daily_digest() -> dict[str, Any]:
             "sent": False,
             "reason": "rubika_client_" + type(exc).__name__,
         }
+
+    if health_snapshot is None:
+        try:
+            health_snapshot = build_health_snapshot()
+        except Exception:
+            health_snapshot = unavailable_health_snapshot()
 
     for attempt in range(DIGEST_CLAIM_ATTEMPTS):
         try:
@@ -304,7 +326,7 @@ def refresh_daily_digest() -> dict[str, Any]:
         old_message_id = str(old_message_id) if old_message_id else None
         old_body = str(state.get("message_body") or "")
         uncertain = state.get("message_creation_uncertain") is True
-        new_body = render_daily_digest(state)
+        new_body = render_daily_digest(state, health_snapshot)
 
         if not window_id or not lock_token:
             return {"sent": False, "reason": "digest_claim_response_invalid"}
@@ -555,16 +577,26 @@ def send_owner_notification(
     title = _sanitize_text(title, 180) or "Automation event"
     detail = _sanitize_text(detail or content, 600)
 
+    # Quota counters are currently unavailable to this job. If an approved
+    # telemetry source supplies them later, only low-priority event inserts are
+    # suppressed at 70%; error events and the digest/message path remain intact.
+    daily_usage = unavailable_daily_usage()
+    reduce_low_priority = (
+        picked_category in {"info", "success", "ai_success"}
+        and should_reduce_nonessential_writes({"daily_usage": daily_usage})
+    )
+
     try:
-        _worker_post(
-            "/api/brain/owner-digest/events",
-            {
-                "category": picked_category,
+        if not reduce_low_priority:
+            _worker_post(
+                "/api/brain/owner-digest/events",
+                {
+                    "category": picked_category,
                 "source": re.sub(r"[^A-Za-z0-9_.:-]", "_", source)[:64] or "automation",
                 "title": title,
-                "detail": detail,
-            },
-        )
+                    "detail": detail,
+                },
+            )
     except Exception as exc:
         return {
             "sent": False,
