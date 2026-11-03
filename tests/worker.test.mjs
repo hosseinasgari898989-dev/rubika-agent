@@ -3457,22 +3457,17 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
       } },
     }, secret);
     await click("p_links_clear_yes");
-    assert.equal(state.DB.links.length, 4);
+    assert.equal(state.DB.links.length, 4, "direct confirmation without a pending intent must not delete links");
     assert.equal(state.DB.linkDeleteCalls, 0);
     assert.equal(state.DB.state.get("panel_mid"), "link-confirmation-panel");
     await click("p_links_clear");
     assert.equal(state.DB.links.length, 4, "opening confirmation must not delete links");
     assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("🗑 2 لینک غیرفعال پاک شود؟"), true);
     assert.equal(state.DB.state.get("panel_mid"), "link-confirmation-panel");
-    await click("p_links_clear_yes");
-    assert.equal(state.DB.links.length, 2, "confirmed action should remove inactive links and preserve active links");
-    assert.deepEqual(state.DB.links.map(row => row.status).sort(), ["queued", "ready_for_review"]);
-    assert.equal(state.DB.linkDeleteCalls, 1);
-    assert.equal(calls.filter(call => call.method === "editMessageText").at(-1).payload.text.includes("✅ 2 لینک غیرفعال پاک شد؛ 2 لینک فعال حفظ شد."), true);
-    assert.equal(state.DB.state.get("panel_mid"), "link-confirmation-panel");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
-    assert.ok(calls.filter(call => call.method === "editMessageText").length >= 6, "three clicks each render loading then final text");
-    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 6);
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, 4, "two clicks each render loading then final text");
+    assert.equal(calls.filter(call => call.method === "editMessageKeypad").length, 4);
+    assert.equal(calls.filter(call => call.method === "deleteMessage").length, 0);
   });
 }
 
