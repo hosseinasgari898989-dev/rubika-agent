@@ -342,6 +342,63 @@ class PipelineTests(unittest.TestCase):
                 inspector=inspect,
             )
         self.assertEqual(result.skipped[0]["reason"], "no_audio")
+        self.assertIsNone(result.skipped[0]["music_probability"])
+        self.assertIs(result.skipped[0]["has_audio_stream"], False)
+
+    def test_pipeline_keeps_numeric_probability_for_ambiguous_music(self):
+        with tempfile.TemporaryDirectory() as folder:
+            candidate = self._candidate("tiktok", "ambiguous")
+            def download(_candidate):
+                path = Path(folder) / "ambiguous.mp4"
+                path.write_bytes(b"ambiguous video")
+                return path
+            def inspect(path, _kind=None):
+                raw = Path(path).read_bytes()
+                return InspectionResult(
+                    True, "video", hashlib.sha256(raw).hexdigest(), 100_000,
+                    "video/mp4", 1080, 1080, 3.0, True, "h264", "aac",
+                )
+            result = stage_edit_batch(
+                [candidate], required_counts={"tiktok": 1},
+                download=download,
+                moderate=lambda *_: {
+                    "music_probability": 0.42,
+                    "music_decision_reason": "music_probability_ambiguous",
+                },
+                output_dir=Path(folder) / "normalized",
+                inspector=inspect,
+            )
+        row = result.skipped[0]
+        self.assertEqual(row["reason"], "music_probability_ambiguous")
+        self.assertEqual(row["music_probability"], 0.42)
+        self.assertIs(type(row["music_probability"]), float)
+        self.assertIs(row["has_audio_stream"], True)
+
+    def test_pipeline_error_keeps_known_audio_stream_and_null_probability(self):
+        with tempfile.TemporaryDirectory() as folder:
+            candidate = self._candidate("tiktok", "moderation-error")
+            def download(_candidate):
+                path = Path(folder) / "moderation-error.mp4"
+                path.write_bytes(b"moderation error video")
+                return path
+            def inspect(path, _kind=None):
+                raw = Path(path).read_bytes()
+                return InspectionResult(
+                    True, "video", hashlib.sha256(raw).hexdigest(), 100_000,
+                    "video/mp4", 1080, 1080, 3.0, True, "h264", "aac",
+                )
+            def fail_moderation(*_args):
+                raise RuntimeError("mock provider failure")
+            result = stage_edit_batch(
+                [candidate], required_counts={"tiktok": 1},
+                download=download, moderate=fail_moderation,
+                output_dir=Path(folder) / "normalized",
+                inspector=inspect,
+            )
+        row = result.skipped[0]
+        self.assertEqual(row["reason"], "pipeline_error_RuntimeError")
+        self.assertIsNone(row["music_probability"])
+        self.assertIs(row["has_audio_stream"], True)
 
     def test_partial_batch_never_reports_ready(self):
         with tempfile.TemporaryDirectory() as folder:

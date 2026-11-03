@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import tempfile
@@ -31,9 +32,33 @@ def _safe_code(value: Any) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value or "unknown_error"))[:80] or "unknown_error"
 
 
+def _safe_music_probability(value: Any) -> float | None:
+    if type(value) not in {int, float}:
+        return None
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) and 0.0 <= numeric <= 1.0 else None
+
+
 def _safe_failure_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
     """Preserve actionable, sanitized staging detail without copying provider payloads."""
     diagnostics: dict[str, Any] = {}
+    moderation = result.get("moderation") if isinstance(result.get("moderation"), dict) else {}
+    validation = result.get("validation") if isinstance(result.get("validation"), dict) else {}
+    raw_probability = (
+        result.get("music_probability")
+        if "music_probability" in result
+        else moderation.get("music_probability")
+    )
+    raw_audio = (
+        result.get("has_audio_stream")
+        if "has_audio_stream" in result
+        else validation.get("has_audio")
+    )
+    diagnostics["music_probability"] = _safe_music_probability(raw_probability)
+    diagnostics["has_audio_stream"] = raw_audio if type(raw_audio) is bool else None
 
     raw_details = result.get("failure_details")
     details: list[dict[str, str]] = []
