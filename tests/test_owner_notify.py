@@ -61,11 +61,9 @@ class OwnerNotifyTests(unittest.TestCase):
         })
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.workflow_failures = patch.object(owner_notify, "collect_workflow_failures", return_value={
-            "termux": 0, "daily_queue": 0, "mob_x": 0, "deploy": 0,
-        })
-        self.workflow_failures.start()
-        self.addCleanup(self.workflow_failures.stop)
+        self.workflow_runs = patch.object(owner_notify, "_github_workflow_runs", return_value=None)
+        self.workflow_runs.start()
+        self.addCleanup(self.workflow_runs.stop)
 
     def test_first_event_creates_one_message_and_persists_message_id(self):
         bot = FakeRubikaBot()
@@ -309,6 +307,9 @@ class OwnerNotifyTests(unittest.TestCase):
         }
         rendered = owner_notify.render_daily_digest(state)
         self.assertIn("هشدار PV در اندازهٔ D1", rendered)
+        state["health"]["d1_size_bytes"] = 50 * 1024 * 1024
+        threshold_warning = owner_notify.render_daily_digest(state)
+        self.assertIn("⚠️ هشدار اندازهٔ D1", threshold_warning)
         self.assertIn("⚠️ D1 writes/day: 70,000/100,000 rows (70.0%)", rendered)
         self.assertIn("⚠️ Worker requests/day: 70,000/100,000 requests (70.0%)", rendered)
         self.assertIn("D1 reads/day: نامشخص", rendered)
