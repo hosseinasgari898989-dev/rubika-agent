@@ -362,6 +362,46 @@ A.insAdd=async()=>{const u=val('ins_u').trim();if(!u)return toast('لینک را
 A.insOk=async el=>{await api('/api/console/links/'+N(el.dataset.id)+'/confirm',{method:'POST',body:{}});INS.link=null;toast('تأیید شد؛ کار ثبت شد','ok');R.go('inst')};
 A.insNo=async el=>{await api('/api/console/links/'+N(el.dataset.id)+'/cancel',{method:'POST',body:{}});INS.link=null;toast('لغو شد','ok');R.go('inst')};
 
+/* ---------- گزارش (فقط خواندنی) ---------- */
+V.report=async()=>{
+ const [d,s,q,g,o]=await Promise.all([
+  safe('/api/console/digest'),
+  safe('/api/status'),
+  safe('/api/brain/owner-console/queue-summary'),
+  safe('/api/brain/ai-provider/status?provider=groq'),
+  safe('/api/brain/ai-provider/status?provider=openrouter')
+ ]);
+ const labels={info:'اطلاع',success:'موفق',error:'خطا',ai_success:'AI موفق',ai_error:'AI خطا'};
+ const windowText=d.window?('از '+fmt(d.window.started_at)+' تا '+fmt(d.window.ends_at)):'هنوز پنجرهٔ خلاصه ثبت نشده است';
+ const counts=(d.counts||[]).map(x=>'<span class="chip">'+E(labels[x.category]||x.category)+' <b>'+N(x.count)+'</b></span>').join('');
+ const events=(d.events||[]).map(x=>({
+  when:fmt(x.occurred_at),category:labels[x.category]||x.category,
+  source:x.source||'—',title:x.title||'—'
+ }));
+ const digestCard=card('خلاصهٔ ۲۴ ساعت',
+  '<div class="s">'+E(windowText)+'</div>'+
+  (d.ok===false?'<div class="empty">دریافت خلاصه ناموفق بود: '+E(d.error||'خطا')+'</div>':
+   (counts?'<div class="chips" style="margin-top:10px">'+counts+'</div>':'<div class="empty">در این پنجره رخدادی ثبت نشده است.</div>')));
+ const eventsCard=card('رخدادهای خلاصه',
+  tbl([['زمان',x=>E(x.when)],['دسته',x=>E(x.category)],['منبع',x=>E(x.source)],['شرح',x=>E(cut(x.title,180))]],events,'رخدادی در پنجرهٔ فعال نیست'));
+ const statusBody=s.ok===false?'<div class="empty">وضعیت Worker در دسترس نیست: '+E(s.error||'خطا')+'</div>':
+  '<div class="chips"><span class="chip">سرویس <b>'+E(s.service||'—')+'</b></span>'+
+  '<span class="chip">دیتابیس <b>'+((s.capabilities&&s.capabilities.database)?'آماده':'نامشخص')+'</b></span>'+
+  '<span class="chip">عامل <b>'+((s.agent&&N(s.agent.enabled)===1)?'فعال':'غیرفعال')+'</b></span>'+
+  '<span class="chip">انتشار <b>'+((s.capabilities&&s.capabilities.publishing)?'فعال':'غیرفعال')+'</b></span></div>';
+ const statusCard=card('وضعیت Worker',statusBody);
+ const queueBody=q.ok===false?'<div class="empty">وضعیت صف در دسترس نیست: '+E(q.error||'خطا')+'</div>':
+  '<div class="chips">'+Object.entries(q.queue_counts||{}).map(([k,v])=>'<span class="chip">'+E(ST[k]||k)+' <b>'+N(v)+'</b></span>').join('')+
+  '<span class="chip">ارسال امروز <b>'+N(q.sent_today)+'</b></span></div>';
+ const queueCard=card('صف انتشار',queueBody);
+ const aiRow=(name,x)=>'<div class="br" style="grid-template-columns:130px 1fr"><b>'+name+'</b><span>'+
+  (x.ok===false?('در دسترس نیست: '+E(x.error||'خطا')):
+   ((x.ready?'آماده':'غیرفعال')+' · تماس '+N(x.calls_used)+' از '+N(x.daily_limit)+' · باقی‌مانده '+N(x.remaining)+
+    (x.cooldown_active?' · در دورهٔ انتظار':'')+(x.last_error_code?' · '+E(x.last_error_code):'')))+'</span></div>';
+ const aiBody=aiRow('Groq',g)+aiRow('OpenRouter',o);
+ return digestCard+eventsCard+statusCard+queueCard+card('هوش مصنوعی',aiBody);
+};
+
 /* ---------- کارها ---------- */
 const JT=[['queue_intake_dry_run','بررسی آزمایشی ورود به صف'],['ai_health_check','بررسی سلامت AI'],['log_zip','فشرده‌سازی لاگ‌ها'],['d1_backup','بکاپ دیتابیس'],['requeue_stuck','بازگرداندن گیرکرده‌ها']];
 const JL=Object.fromEntries(JT.concat([['mob_x_link','لینک X خبر Mob']]));
@@ -380,6 +420,7 @@ A.dT=el=>{document.getElementById('d_q').value='SELECT * FROM "'+el.dataset.tbl+
 
 /* ---------- ناوبری ---------- */
 if(!NAV.some(n=>n[0]==='inst'))NAV.splice(3,0,['inst','حالت فوری','➤']);
+if(!NAV.some(n=>n[0]==='report')){const i=NAV.findIndex(n=>n[0]==='jobs');NAV.splice(i>=0?i:NAV.length,0,['report','گزارش','▧'])}
 document.getElementById('nav').innerHTML=NAV.map(n=>`<button class="nv" data-id="${n[0]}" data-a="go"><span>${n[2]}</span>${n[1]}</button>`).join('');
 R.go(R.cur);
 })();
