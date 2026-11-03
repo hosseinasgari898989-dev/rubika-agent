@@ -208,6 +208,11 @@ test("replayed or tampered signed confirmation is rejected", async () => {
   const invalid = await post("/failed-media/delete-request", { confirmation: tampered });
   assert.equal(invalid.status, 409);
   assert.equal((await invalid.json()).error, "confirmation_invalid_or_expired");
+  const [payloadPart, signaturePart] = challenge.confirmation.split(".");
+  const changedSignature = (signaturePart[0] === "A" ? "B" : "A") + signaturePart.slice(1);
+  const badSignature = await post("/failed-media/delete-request", { confirmation: payloadPart + "." + changedSignature });
+  assert.equal(badSignature.status, 409, "changed signature bytes must fail HMAC verification");
+  assert.equal((await badSignature.json()).error, "confirmation_invalid_or_expired");
   const first = await post("/failed-media/delete-request", { confirmation: challenge.confirmation });
   assert.equal(first.status, 200);
   const replay = await post("/failed-media/delete-request", { confirmation: challenge.confirmation });
