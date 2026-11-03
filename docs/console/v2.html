@@ -153,6 +153,18 @@ code{background:var(--glass2);border:1px solid var(--stroke);padding:2px 8px;bor
 }
 @media(max-width:380px){.g4{grid-template-columns:1fr 1fr}.stat .v{font-size:24px}.row>*{min-width:100%}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* fixes 2026-11-03 */
+.btn.danger{background:linear-gradient(135deg,var(--bad),#f43f5e);box-shadow:0 10px 24px -10px var(--bad),inset 0 1px 0 rgba(255,255,255,.25)}
+:focus-visible{outline:3px solid var(--acc2);outline-offset:2px}
+@media(max-width:880px){
+#app{padding-top:calc(10px + env(safe-area-inset-top,0px))}
+.orb{animation:none;filter:blur(60px);opacity:.28}
+.floor{display:none}
+#side,.card,.top{backdrop-filter:none;-webkit-backdrop-filter:none}
+.btn.sm{min-height:40px;padding:8px 14px}
+input[type=checkbox]{width:22px;height:22px}
+.row>.btn.sm{flex:1 1 auto}
+}
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -192,9 +204,10 @@ const card=(t,b,x)=>`<div class="card ${x||''}">${t?`<h3>${t}</h3>`:''}${b}</div
 const opts=(list,sel)=>list.map(o=>{const v=Array.isArray(o)?o[0]:o,l=Array.isArray(o)?o[1]:(ST[o]||o);return `<option value="${E(v)}"${String(v)===String(sel)?' selected':''}>${E(l)}</option>`}).join('');
 const A={},V={};
 function modal(h){$('#sheet').innerHTML=h;$('#modal').classList.add('on')}
-function closeModal(){$('#modal').classList.remove('on')}
+function closeModal(){$('#modal').classList.remove('on');if($('#sheet iframe'))$('#sheet').replaceChildren()}
 $('#modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()});
 A.close=closeModal;
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#modal').classList.contains('on'))closeModal()});
 document.addEventListener('click',e=>{const el=e.target.closest('[data-a]');if(el&&(el.tagName==='SELECT'||el.matches('input[type="checkbox"]')))return;if(el&&A[el.dataset.a]){e.preventDefault();Promise.resolve(A[el.dataset.a](el,e)).catch(x=>toast(em(x),'bad'))}});
 document.addEventListener('change',e=>{const el=e.target;if((el.tagName==='SELECT'||el.matches('input[type="checkbox"]'))&&el.dataset.a&&A[el.dataset.a])Promise.resolve(A[el.dataset.a](el,e)).catch(x=>toast(em(x),'bad'))});
 A.theme=()=>{const t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;LS('rc_theme',t)};
@@ -203,7 +216,7 @@ const NAV=[['dash','داشبورد','◈'],['items','آیتم‌ها','▤'],['q
 $('#nav').innerHTML=NAV.map(n=>`<button class="nv" data-id="${n[0]}" data-a="go"><span>${n[2]}</span>${n[1]}</button>`).join('');
 let cur='dash';
 A.go=el=>{location.hash='#/'+el.dataset.id};
-async function go(id){if(!V[id])id='dash';cur=id;document.querySelectorAll('.nv').forEach(b=>b.classList.toggle('on',b.dataset.id===id));$('#ttl').textContent=NAV.find(n=>n[0]===id)[1];const v=$('#view');v.innerHTML='<div class="sk"></div><div class="sk"></div><div class="sk"></div>';try{const h=await V[id]();if(cur!==id)return;v.innerHTML=h;v.scrollTop=0;fx()}catch(e){if(cur!==id)return;v.innerHTML=card('⚠ خطا',`<div class="empty">${E(em(e))}<br><br><button class="btn g" data-a="reload">تلاش دوباره</button></div>`)}}
+async function go(id){if(!V[id])id='dash';cur=id;document.querySelectorAll('.nv').forEach(b=>b.classList.toggle('on',b.dataset.id===id));{const on=document.querySelector('.nv.on');if(on&&on.scrollIntoView)on.scrollIntoView({block:'nearest',inline:'center'})}$('#ttl').textContent=NAV.find(n=>n[0]===id)[1];const v=$('#view');v.innerHTML='<div class="sk"></div><div class="sk"></div><div class="sk"></div>';try{const h=await V[id]();if(cur!==id)return;v.innerHTML=h;v.scrollTop=0;fx()}catch(e){if(cur!==id)return;v.innerHTML=card('⚠ خطا',`<div class="empty">${E(em(e))}<br><br><button class="btn g" data-a="reload">تلاش دوباره</button></div>`)}}
 A.reload=()=>go(cur);
 window.addEventListener('hashchange',()=>go(location.hash.replace('#/','')));
 function fx(){document.querySelectorAll('[data-n]').forEach(el=>{const t=N(el.dataset.n),s=performance.now();const f=n=>{const p=Math.min(1,(n-s)/900);el.textContent=Math.round(t*(1-Math.pow(1-p,3))).toLocaleString('fa-IR');if(p<1)requestAnimationFrame(f)};requestAnimationFrame(f)});setTimeout(()=>document.querySelectorAll('.bar i').forEach(i=>i.style.setProperty('--w',i.dataset.w)),60)}
@@ -310,12 +323,12 @@ V.soon=async()=>`<div class="grid g2">${[['☁','مدیریت Mega','فضا، ف
 
 /* ---------- اتصال ---------- */
 V.set=async()=>card('اتصال به Worker',`<label>آدرس Worker</label><input id="s_b" dir="ltr" placeholder="https://…workers.dev" value="${E(S.base)}"><label>توکن بیننده و Actions · AGENT_API_TOKEN</label><input id="s_t" type="password" dir="ltr" autocomplete="off" placeholder="${S.token?'ذخیره شده — برای تغییر بنویس':'توکن بیننده'}"><label>توکن مالک · OWNER_WEB_TOKEN</label><input id="s_ot" type="password" dir="ltr" autocomplete="off" placeholder="${S.ownerToken?'ذخیره شده — برای تغییر بنویس':'توکن جداگانهٔ مالک'}"><div class="s">توکن مالک برای تأییدها، حذف‌ها، تلاش مجدد و تغییرات کنسول لازم است. توکن بیننده برای مشاهده و درخواست‌های GitHub Actions باقی می‌ماند. هر دو فقط در همین مرورگر ذخیره می‌شوند و مقدارشان نمایش داده نمی‌شود.</div><div class="row" style="margin-top:14px"><button class="btn" data-a="sSave">ذخیره</button><button class="btn g" data-a="sTest">آزمایش اتصال بیننده</button></div><div id="s_o" class="chips" style="margin-top:14px"></div>`);
-A.sSave=()=>{S.base=val('s_b').trim().replace(/\/+$/,'');LS('rc_base',S.base);const t=val('s_t').trim();if(t){S.token=t;LS('rc_token',t)}const ot=val('s_ot').trim();if(ot){S.ownerToken=ot;LS('rc_owner_token',ot)}document.getElementById('s_t').value='';document.getElementById('s_ot').value='';toast('ذخیره شد','ok')};
-A.sTest=async()=>{const o=[];try{const r=await fetch(S.base+'/api/status');o.push(['اتصال و CORS',r.ok])}catch{o.push(['اتصال و CORS',false])}try{await api('/api/console/audit?limit=1');o.push(['توکن Bearer',true])}catch(e){o.push(['توکن Bearer',false])}const st=await safe('/api/status');o.push(['وضعیت Worker',st.ok===true]);setDot(st.ok===true);document.getElementById('s_o').innerHTML=o.map(x=>`<div class="chip">${x[0]} ${x[1]?'<span class="bd ok">سبز</span>':'<span class="bd bad">قرمز</span>'}</div>`).join('')};
+A.sSave=()=>{S.base=val('s_b').trim().replace(/\/+$/,'');if(S.base&&!/^https:\/\//.test(S.base))return toast('آدرس Worker باید با https:// شروع شود','bad');LS('rc_base',S.base);const t=val('s_t').trim();if(t){S.token=t;LS('rc_token',t)}const ot=val('s_ot').trim();if(ot){S.ownerToken=ot;LS('rc_owner_token',ot)}document.getElementById('s_t').value='';document.getElementById('s_ot').value='';toast('ذخیره شد','ok')};
+A.sTest=async()=>{const o=[];try{const r=await fetch(S.base+'/api/status');o.push(['اتصال و CORS',r.ok])}catch{o.push(['اتصال و CORS',false])}try{await api('/api/console/audit?limit=1');o.push(['توکن Bearer',true])}catch(e){o.push(['توکن Bearer',false])}const st=await safe('/api/status');o.push(['وضعیت Worker',st.ok===true]);o.push(['توکن بیننده ذخیره شده',!!S.token]);o.push(['توکن مالک ذخیره شده',!!S.ownerToken]);setDot(st.ok===true);document.getElementById('s_o').innerHTML=o.map(x=>`<div class="chip">${x[0]} ${x[1]?'<span class="bd ok">سبز</span>':'<span class="bd bad">قرمز</span>'}</div>`).join('')};
 
 window.RC={V,A,S,api,safe,card,tbl,opts,badge,E,N,val,fmt,cut,toast,em,modal,closeModal,go,NAV,ST,BC,get cur(){return cur}};
 if(!S.base||!S.token)location.hash='#/set';
-go(location.hash.replace('#/','')||'dash');
+document.addEventListener('DOMContentLoaded',()=>go(location.hash.replace('#/','')||'dash'));
 if(S.base)safe('/api/status').then(r=>setDot(r.ok===true));
 })();
 </script>
@@ -349,7 +362,7 @@ try{await api('/api/console/rules',{method:'PUT',body:{base_version:RU.version,r
 R.go(R.cur)};
 
 /* ---------- حالت فوری (فقط لینک رسمی Mob X؛ فقط کانال تست) ---------- */
-const INS={link:null};
+const INS=R.INS||(R.INS={link:null});
 V.inst=async()=>{
 const [l,j]=await Promise.all([safe('/api/console/links'),safe('/api/console/jobs?limit=100')]);
 const jobBy={};for(const x of (j.items||[]))if(x.panel_link_id!=null)jobBy[x.panel_link_id]=x;
@@ -383,7 +396,7 @@ V.report=async()=>{
   (d.ok===false?'<div class="empty">دریافت خلاصه ناموفق بود: '+E(d.error||'خطا')+'</div>':
    (counts?'<div class="chips" style="margin-top:10px">'+counts+'</div>':'<div class="empty">در این پنجره رخدادی ثبت نشده است.</div>')));
  const eventsCard=card('رخدادهای خلاصه',
-  tbl([['زمان',x=>E(x.when)],['دسته',x=>E(x.category)],['منبع',x=>E(x.source)],['شرح',x=>E(cut(x.title,180))]],events,'رخدادی در پنجرهٔ فعال نیست'));
+  tbl([['زمان',x=>E(x.when)],['دسته',x=>E(x.category)],['منبع',x=>E(x.source)],['شرح',x=>cut(x.title,180)]],events,'رخدادی در پنجرهٔ فعال نیست'));
  const statusBody=s.ok===false?'<div class="empty">وضعیت Worker در دسترس نیست: '+E(s.error||'خطا')+'</div>':
   '<div class="chips"><span class="chip">سرویس <b>'+E(s.service||'—')+'</b></span>'+
   '<span class="chip">دیتابیس <b>'+((s.capabilities&&s.capabilities.database)?'آماده':'نامشخص')+'</b></span>'+
@@ -418,7 +431,7 @@ const actions=eligible?('<div class="row" style="margin-top:14px">'+
 modal('<h3 style="margin-bottom:8px">جزئیات کار</h3>'+
  row('نوع',E(JL[j.type]||j.type))+row('وضعیت',badge(j.status))+row('پیشرفت',N(j.progress)+'٪')+
  row('شناسهٔ پست (۶ رقم آخر)',E(String(x.external_id||'').slice(-6)||'—'))+
- row('رسانه',E(x.media_type||'—'))+row('کپشن',E(cut(String(x.caption||''),240)||'—'))+
+ row('رسانه',E(x.media_type||'—'))+row('کپشن',cut(String(x.caption||''),240)||'—')+
  row('پیش‌نمایش در PV',x.preview_sent?'<span class="bd ok">آمادهٔ بررسی</span>':(x.caption_refresh_state==='not_refreshed'?'<span class="bd warn">کپشن تغییر کرده؛ پیش‌نمایش تازه را در PV آماده کن</span>':'—'))+
  row('وضعیت ارسال',E(x.delivery_status||'—'))+row('خطا',E(j.error||x.delivery_error||'—'))+
  '<div class="s" style="margin-top:10px">این سه اقدام فقط روی همین job Mob X اعمال می‌شوند. پس از تغییر کپشن، پیش‌نمایش قبلی نامعتبر می‌شود؛ پیش از تأیید باید پیش‌نمایش تازه را در PV آماده کنی. تأیید و انتشار فقط از PV است؛ وب پیش‌نمایش یا انتشار انجام نمی‌دهد.</div>'+
@@ -486,7 +499,7 @@ const on=bs.some(b=>!b.checked);bs.forEach(b=>{b.checked=on;if(on)SEL[k].add(b.d
 const bar=(k,btns)=>`<div class="row" style="margin:8px 0"><button class="btn g sm" data-a="selAll" data-k="${k}">انتخاب همه / هیچ</button><span class="s">انتخاب‌شده: <b id="sel_${k}">${SEL[k].size}</b></span>${btns}</div>`;
 
 /* ---------- حالت فوری: انتخاب چندتایی لینک‌ها ---------- */
-const INS={link:null};
+const INS=R.INS||(R.INS={link:null});
 V.inst=async()=>{
 const [l,j]=await Promise.all([safe('/api/console/links'),safe('/api/console/jobs?limit=100')]);
 const jobBy={};for(const x of (j.items||[]))if(x.panel_link_id!=null)jobBy[x.panel_link_id]=x;

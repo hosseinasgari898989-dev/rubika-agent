@@ -28,7 +28,7 @@ try{await api('/api/console/rules',{method:'PUT',body:{base_version:RU.version,r
 R.go(R.cur)};
 
 /* ---------- حالت فوری (فقط لینک رسمی Mob X؛ فقط کانال تست) ---------- */
-const INS={link:null};
+const INS=R.INS||(R.INS={link:null});
 V.inst=async()=>{
 const [l,j]=await Promise.all([safe('/api/console/links'),safe('/api/console/jobs?limit=100')]);
 const jobBy={};for(const x of (j.items||[]))if(x.panel_link_id!=null)jobBy[x.panel_link_id]=x;
@@ -62,7 +62,7 @@ V.report=async()=>{
   (d.ok===false?'<div class="empty">دریافت خلاصه ناموفق بود: '+E(d.error||'خطا')+'</div>':
    (counts?'<div class="chips" style="margin-top:10px">'+counts+'</div>':'<div class="empty">در این پنجره رخدادی ثبت نشده است.</div>')));
  const eventsCard=card('رخدادهای خلاصه',
-  tbl([['زمان',x=>E(x.when)],['دسته',x=>E(x.category)],['منبع',x=>E(x.source)],['شرح',x=>E(cut(x.title,180))]],events,'رخدادی در پنجرهٔ فعال نیست'));
+  tbl([['زمان',x=>E(x.when)],['دسته',x=>E(x.category)],['منبع',x=>E(x.source)],['شرح',x=>cut(x.title,180)]],events,'رخدادی در پنجرهٔ فعال نیست'));
  const statusBody=s.ok===false?'<div class="empty">وضعیت Worker در دسترس نیست: '+E(s.error||'خطا')+'</div>':
   '<div class="chips"><span class="chip">سرویس <b>'+E(s.service||'—')+'</b></span>'+
   '<span class="chip">دیتابیس <b>'+((s.capabilities&&s.capabilities.database)?'آماده':'نامشخص')+'</b></span>'+
@@ -97,7 +97,7 @@ const actions=eligible?('<div class="row" style="margin-top:14px">'+
 modal('<h3 style="margin-bottom:8px">جزئیات کار</h3>'+
  row('نوع',E(JL[j.type]||j.type))+row('وضعیت',badge(j.status))+row('پیشرفت',N(j.progress)+'٪')+
  row('شناسهٔ پست (۶ رقم آخر)',E(String(x.external_id||'').slice(-6)||'—'))+
- row('رسانه',E(x.media_type||'—'))+row('کپشن',E(cut(String(x.caption||''),240)||'—'))+
+ row('رسانه',E(x.media_type||'—'))+row('کپشن',cut(String(x.caption||''),240)||'—')+
  row('پیش‌نمایش در PV',x.preview_sent?'<span class="bd ok">آمادهٔ بررسی</span>':(x.caption_refresh_state==='not_refreshed'?'<span class="bd warn">کپشن تغییر کرده؛ پیش‌نمایش تازه را در PV آماده کن</span>':'—'))+
  row('وضعیت ارسال',E(x.delivery_status||'—'))+row('خطا',E(j.error||x.delivery_error||'—'))+
  '<div class="s" style="margin-top:10px">این سه اقدام فقط روی همین job Mob X اعمال می‌شوند. پس از تغییر کپشن، پیش‌نمایش قبلی نامعتبر می‌شود؛ پیش از تأیید باید پیش‌نمایش تازه را در PV آماده کنی. تأیید و انتشار فقط از PV است؛ وب پیش‌نمایش یا انتشار انجام نمی‌دهد.</div>'+
