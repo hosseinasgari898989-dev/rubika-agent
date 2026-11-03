@@ -1164,7 +1164,7 @@ async function processEvent(env, selfFetch, origin, ev) {
     const ui = { env: timedEnv, chat: ev.chat, selfFetch, origin };
     if (ev.kind === "click") {
       const currentPanelMid = await getState(timedEnv, "panel_mid", "");
-      const isMobJobAction = /^p_mob_(?:publish|edit|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || ""));
+      const isMobJobAction = /^p_mob_(?:publish|edit|nocap|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || ""));
       if (String(ev.mid || "") !== currentPanelMid && !isMobJobAction) {
         try { if (ev.mid) await rubika(timedEnv, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch {}
         const staleButton = String(ev.button || "");
