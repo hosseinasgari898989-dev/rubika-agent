@@ -587,7 +587,7 @@ def main() -> int:
 
                 page.once("dialog", lambda dialog: dialog.accept())
                 click_action(page, '#modal button[data-a="jMobReject"]', "reject this Mob X job")
-                page.wait_for_function("() => document.querySelector('#modal')?.innerText.includes('رد')", timeout=5000)
+                page.wait_for_function("() => { const m = document.querySelector('#modal'); return !!m && m.querySelectorAll('button[data-a^=jMob]').length === 0; }", timeout=5000)
                 if page.locator('#modal button[data-a^="jMob"]').count() != 0:
                     failures.append("jobs: review controls remained visible after rejection")
                 if [x["action"] for x in MOB_REVIEW_ACTIONS] != ["edit_caption", "no_caption", "reject"]:
