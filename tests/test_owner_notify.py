@@ -373,8 +373,8 @@ class OwnerNotifyTests(unittest.TestCase):
         }
         rendered = owner_notify.render_daily_digest(state)
         self.assertIn("هشدار PV در اندازهٔ D1", rendered)
-        self.assertIn("D1 writes/day: ⚠️ 70,000/100,000 rows (70.0%)", rendered)
-        self.assertIn("Worker requests/day: ⚠️ 70,000/100,000 requests (70.0%)", rendered)
+        self.assertIn("⚠️ D1 writes/day: 70,000/100,000 rows (70.0%)", rendered)
+        self.assertIn("⚠️ Worker requests/day: 70,000/100,000 requests (70.0%)", rendered)
         self.assertIn("D1 reads/day: نامشخص", rendered)
         self.assertIn("Workers AI neurons/day: نامشخص", rendered)
         self.assertIn("Mega: مصرف و فضای آزاد قابل‌خواندن نیست", rendered)
