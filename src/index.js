@@ -120,12 +120,15 @@ async function ownerTokenMatches(provided, expected) {
     crypto.subtle.digest("SHA-256", encoder.encode(provided)),
     crypto.subtle.digest("SHA-256", encoder.encode(expected)),
   ]);
-  if (typeof crypto.subtle.timingSafeEqual === "function") {
-    return crypto.subtle.timingSafeEqual(providedDigest, expectedDigest);
-  }
+  const providedBytes = new Uint8Array(providedDigest);
+  const expectedBytes = new Uint8Array(expectedDigest);
   let difference = 0;
-  for (let index = 0; index < 32; index += 1) difference |= providedDigest[index] ^ expectedDigest[index];
-  return difference === 0;
+  for (let index = 0; index < 32; index += 1) difference |= providedBytes[index] ^ expectedBytes[index];
+  const fixedTimeMatch = difference === 0;
+  if (typeof crypto.subtle.timingSafeEqual === "function") {
+    return crypto.subtle.timingSafeEqual(providedDigest, expectedDigest) && fixedTimeMatch;
+  }
+  return fixedTimeMatch;
 }
 
 async function ownerAuthorized(request, env) {
