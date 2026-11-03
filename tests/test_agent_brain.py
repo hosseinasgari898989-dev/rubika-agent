@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain.delivery import deliver_with_retry
-from agent.brain.e2e_from_report import _select_candidates
+from agent.brain.e2e_from_report import _select_candidates, _tiktok_publish_checks_pass
 from agent.brain.inspector import inspect_media, sha256_file
 from agent.brain.models import Candidate, InspectionResult
 from agent.brain.normalizer import NormalizeError, normalize_video_square_1080
@@ -63,6 +63,39 @@ class BrainModelPolicyTests(unittest.TestCase):
         )
         self.assertEqual(result.decision, "eligible")
         self.assertTrue(result.eligible)
+
+    def test_tiktok_final_gate_passes_with_keyword_audio_and_music_without_visual_field(self):
+        self.assertTrue(_tiktok_publish_checks_pass(
+            self.candidate(),
+            {"has_audio": True},
+            {"has_music": True},
+        ))
+
+    def test_tiktok_final_gate_rejects_missing_caption_and_hashtag_keyword(self):
+        candidate = self.candidate(title="Unrelated gameplay", caption="#gaming", hashtags=("#edit",))
+        self.assertFalse(_tiktok_publish_checks_pass(
+            candidate, {"has_audio": True}, {"has_music": True},
+        ))
+
+    def test_tiktok_final_gate_rejects_missing_audio_stream(self):
+        self.assertFalse(_tiktok_publish_checks_pass(
+            self.candidate(),
+            {"has_audio": False},
+            {"has_music": False, "music_detection_method": "python_no_audio_stream"},
+        ))
+
+    def test_tiktok_final_gate_rejects_ambiguous_music(self):
+        self.assertFalse(_tiktok_publish_checks_pass(
+            self.candidate(),
+            {"has_audio": True},
+            {"music_probability": 0.55, "music_decision_reason": "music_probability_ambiguous"},
+        ))
+
+    def test_tiktok_final_gate_rejects_missing_keyword_result_fail_closed(self):
+        with patch("agent.brain.e2e_from_report.has_required_any_keyword", return_value=None):
+            self.assertFalse(_tiktok_publish_checks_pass(
+                self.candidate(), {"has_audio": True}, {"has_music": True},
+            ))
 
     def test_duplicate_external_id_is_rejected(self):
         result = evaluate_edit_candidate(
