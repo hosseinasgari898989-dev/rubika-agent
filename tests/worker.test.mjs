@@ -3621,7 +3621,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     state.DB.consoleJobs.set(jobId, {
       id: jobId, type: "mob_x_link", status: overrides.status || "ready_for_review",
       progress: 100, panel_link_id: panelLinkId, result_json: JSON.stringify(result),
-      error: null, created_at: NOW, updated_at: NOW,
+      error: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     });
     state.DB.panelLinks.set(panelLinkId, {
       id: panelLinkId, status: overrides.linkStatus || "ready_for_review",
