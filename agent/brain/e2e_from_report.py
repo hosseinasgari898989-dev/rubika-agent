@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import tempfile
@@ -60,6 +61,26 @@ def _safe_error(exc: Exception) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value))[:80] or "unknown_error"
 
 
+def _safe_music_probability(value: Any) -> float | None:
+    if type(value) not in {int, float}:
+        return None
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) and 0.0 <= numeric <= 1.0 else None
+
+
+def _music_report_fields(moderation: Any, validation: Any) -> dict[str, Any]:
+    checks = moderation if isinstance(moderation, Mapping) else {}
+    media = validation if isinstance(validation, Mapping) else {}
+    raw_audio = media.get("has_audio")
+    return {
+        "music_probability": _safe_music_probability(checks.get("music_probability")),
+        "has_audio_stream": raw_audio if type(raw_audio) is bool else None,
+    }
+
+
 def _tiktok_publish_checks_pass(
     candidate: Candidate, validation: Any, moderation: Any,
 ) -> bool:
@@ -73,7 +94,9 @@ def _tiktok_publish_checks_pass(
     return isinstance(moderation, Mapping) and moderation.get("has_music") is True
 
 
-def _stage_failure_summary(stage_result: Mapping[str, Any]) -> dict[str, Any]:
+def _stage_failure_summary(
+    stage_result: Mapping[str, Any], *, candidate_identity: str | None = None,
+) -> dict[str, Any]:
     """Retain actionable staging error codes without leaking provider bodies or credentials."""
     raw_skipped = stage_result.get("skipped")
     skipped: list[dict[str, str]] = []
@@ -85,6 +108,17 @@ def _stage_failure_summary(stage_result: Mapping[str, Any]) -> dict[str, Any]:
             reason = re.sub(r"[^A-Za-z0-9_.,:-]", "", str(row.get("reason") or "unknown_error"))[:180]
             if reason:
                 skipped.append({"item": item, "reason": reason})
+
+    diagnostic_row = None
+    if candidate_identity:
+        for row in raw_skipped if isinstance(raw_skipped, (list, tuple)) else ():
+            if isinstance(row, Mapping) and row.get("item") == candidate_identity:
+                diagnostic_row = row
+                break
+    stage_diagnostics = _music_report_fields(
+        {"music_probability": diagnostic_row.get("music_probability")} if diagnostic_row else None,
+        {"has_audio": diagnostic_row.get("has_audio_stream")} if diagnostic_row else None,
+    )
 
     raw_sync = stage_result.get("cloud_sync_errors")
     sync_errors: list[str] = []
@@ -114,6 +148,7 @@ def _stage_failure_summary(stage_result: Mapping[str, Any]) -> dict[str, Any]:
         "reason": primary_reason,
         "failure_details": skipped,
         "cloud_sync_errors": sync_errors,
+        **stage_diagnostics,
     }
 
 
@@ -446,16 +481,23 @@ def run_one(
             if reuse_error:
                 report_detail["previous_staged_copy_rejected"] = reuse_error
             if stage.status != "ok" or stage.staged_count != 1:
+                candidate_identity = (
+                    f"{platform}:{candidates[0].external_id}" if len(candidates) == 1 else None
+                )
                 stage_result = stage.as_dict()
                 report_detail["stage_detail"] = stage_result
-                report_detail.update(_stage_failure_summary(stage_result))
+                report_detail.update(
+                    _stage_failure_summary(stage_result, candidate_identity=candidate_identity)
+                )
                 stage_file = Path(stage.report_path)
                 if stage_file.is_file():
                     try:
                         detailed_report = json.loads(stage_file.read_text(encoding="utf-8"))
                         if isinstance(detailed_report, dict):
                             report_detail["stage_detail"] = detailed_report
-                            report_detail.update(_stage_failure_summary(detailed_report))
+                            report_detail.update(
+                                _stage_failure_summary(detailed_report, candidate_identity=candidate_identity)
+                            )
                     except (OSError, json.JSONDecodeError):
                         pass
                 # A completed download that failed during staging can still be kept.
@@ -504,6 +546,7 @@ def run_one(
         item = item_map[item_id]
         payload = dict(item["cloud_payload"])
         moderation = payload.get("moderation")
+        music_diagnostics = _music_report_fields(moderation, payload.get("validation"))
         staged_candidate = next(
             (candidate for candidate in candidates
              if candidate.external_id == str(item.get("external_id"))),
@@ -538,6 +581,7 @@ def run_one(
                 "ok": False, "status": "brain_checks_not_publishable",
                 "platform": platform, "item_id": item_id, "publishing": False,
                 "moderation": moderation,
+                **music_diagnostics,
                 "reason": rejection_reason,
             }
 
@@ -678,6 +722,7 @@ def run_one(
             "delivery": delivery,
             "failed_media_preservation": failed_media,
             "moderation": moderation,
+            **music_diagnostics,
             "storage_key": item.get("storage_key"),
             "publishing": sent,
             "updated_at": _utc_now(),
