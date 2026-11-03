@@ -3446,7 +3446,8 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   const rootEntryPath = path.join(root, "console/index.html");
   const rootEntryHtml = fs.readFileSync(rootEntryPath, "utf8");
   assert.ok(rootEntryHtml.includes('<meta http-equiv="refresh" content="0;url=../docs/console/v2.html">'), "root console alias must provide the no-JS v2 redirect");
-  assert.ok(rootEntryHtml.includes("location.replace('../docs/console/v2.html'+location.hash)"), "root console alias must preserve the location hash");
+  assert.ok(rootEntryHtml.includes("const target='../docs/console/v2.html'+location.hash;"), "root console alias must build the target with the current hash");
+  assert.ok(rootEntryHtml.includes("location.replace(target);"), "root console alias must replace the current location");
   assert.ok(rootEntryHtml.includes('href="../docs/console/v2.html">ورود به کنسول</a>'), "root console alias must show a Persian fallback link");
   assert.ok(!rootEntryHtml.includes('id="rc-v5"'), "the old app must remain only at legacy.html");
 }
