@@ -520,10 +520,12 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         )
 
         fixed = "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
-        self.assertEqual(result["caption"], fixed)
-        self.assertEqual(result["caption_mode"], "no_caption")
-        self.assertEqual(result["original_caption"], "")
-        self.assertEqual(result["persian_translation"], None)
+        staged_result = client.transition.call_args.kwargs["result"]
+        self.assertEqual(result["status"], "ready_for_review")
+        self.assertEqual(staged_result["caption"], fixed)
+        self.assertEqual(staged_result["caption_mode"], "no_caption")
+        self.assertEqual(staged_result["original_caption"], "")
+        self.assertEqual(staged_result["persian_translation"], None)
         self.assertEqual(cloud.upsert_item.call_args.args[0]["caption"], fixed)
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertTrue(preview_caption.startswith(fixed))
