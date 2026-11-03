@@ -37,6 +37,7 @@ NOW = "2026-10-27T00:00:00Z"
 MEGA_KEY = "A" * 43
 MEGA_URL = f"https://mega.nz/file/AbCd1234#{MEGA_KEY}"
 MEGA_EMBED_URL = f"https://mega.nz/embed/AbCd1234#{MEGA_KEY}"
+CAPTION_LITERAL = "Special & ' < > literal"
 CORS = {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
@@ -84,7 +85,7 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
             "events": [
                 {
                     "occurred_at": NOW, "category": "success",
-                    "source": "x", "title": "Mob X report fixture",
+                    "source": "x", "title": f"Mob X report fixture {CAPTION_LITERAL}",
                 },
                 {
                     "occurred_at": NOW, "category": "ai_error",
@@ -288,7 +289,7 @@ def main() -> int:
             "result": {
                 "item_id": "mob_official:playwright-review", "external_id": "2107878755079213476",
                 "rubika_file_id": "mock-rubika-file", "media_type": "image",
-                "caption": "Original mocked caption", "caption_mode": "generated",
+                "caption": CAPTION_LITERAL, "caption_mode": "generated",
                 "original_caption": "Original text", "persian_translation": "ترجمهٔ اولیه",
                 "preview_sent": True,
             },
@@ -355,7 +356,7 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        context = browser.new_context()
+        context = browser.new_context(viewport={"width": 1280, "height": 800})
         context.add_init_script(
             "localStorage.setItem('rc_base', 'https://mock-worker.test');"
             "localStorage.setItem('rc_token', 'playwright-fixture-only');"
@@ -432,8 +433,110 @@ def main() -> int:
                         if not bound:
                             failures.append(f"{page_id}: control data-a='{action}' has no handler")
 
+                    dimensions = page.evaluate("() => ({scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth})")
+                    if dimensions["scrollWidth"] > dimensions["innerWidth"]:
+                        failures.append(f"{page_id}: horizontal overflow at 1280x800 ({dimensions['scrollWidth']} > {dimensions['innerWidth']})")
+
                 except Exception as exc:
                     failures.append(f"{page_id}: could not open/render page: {exc}")
+
+            # Repeat route overflow coverage at the mobile viewport.
+            page.set_viewport_size({"width": 390, "height": 844})
+            for page_id, title in PAGES:
+                active_page[0] = f"mobile-{page_id}"
+                try:
+                    page.evaluate("(id) => { location.hash = '#/' + id; }", page_id)
+                    page.wait_for_function(
+                        "(expected) => document.querySelector('#ttl')?.textContent === expected",
+                        arg=title, timeout=5000,
+                    )
+                    page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && !!v.querySelector('.card') && (v.innerText || '').trim().length > 0; }", timeout=5000)
+                    dimensions = page.evaluate("() => ({scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth})")
+                    if dimensions["scrollWidth"] > dimensions["innerWidth"]:
+                        failures.append(f"{page_id}: horizontal overflow at 390x844 ({dimensions['scrollWidth']} > {dimensions['innerWidth']})")
+                except Exception as exc:
+                    failures.append(f"{page_id}: mobile route/overflow check failed: {exc}")
+
+            # Direct initial loads must keep the requested route and render its own view.
+            direct_routes = [
+                ("inst", "حالت فوری"),
+                ("report", "گزارش"),
+                ("unsent", "ارسال‌نشده‌ها"),
+            ]
+            for viewport in ({"width": 390, "height": 844}, {"width": 1280, "height": 800}):
+                page.set_viewport_size(viewport)
+                for route_id, title in direct_routes:
+                    active_page[0] = f"direct-{route_id}-{viewport['width']}"
+                    try:
+                        page.goto(
+                            f"{CONSOLE_URL}?direct={route_id}-{viewport['width']}#/{route_id}",
+                            wait_until="domcontentloaded", timeout=15000,
+                        )
+                        page.wait_for_function("() => !!window.RC && !!window.RC.V && !!window.RC.A", timeout=10000)
+                        page.wait_for_function(
+                            "(expected) => document.querySelector('#ttl')?.textContent === expected",
+                            arg=title, timeout=7000,
+                        )
+                        page.wait_for_function("() => { const v = document.querySelector('#view'); return !!v && !v.querySelector('.sk') && !!v.querySelector('.card') && (v.innerText || '').trim().length > 0; }", timeout=7000)
+                        view_text = page.locator("#view").inner_text()
+                        if route_id == "inst" and page.locator("#view #ins_u").count() != 1:
+                            failures.append(f"direct inst at {viewport['width']}: instant-link form is missing")
+                        if route_id == "report" and "خلاصهٔ ۲۴ ساعت" not in view_text:
+                            failures.append(f"direct report at {viewport['width']}: report body missing; dashboard fallback suspected")
+                        if route_id == "unsent" and page.locator('#view button[data-a="fmPreview"]').count() != 2:
+                            failures.append(f"direct unsent at {viewport['width']}: failed-media controls are missing")
+                        dimensions = page.evaluate("() => ({scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth})")
+                        if dimensions["scrollWidth"] > dimensions["innerWidth"]:
+                            failures.append(f"direct {route_id} at {viewport['width']}: horizontal overflow ({dimensions['scrollWidth']} > {dimensions['innerWidth']})")
+                        if route_id == "unsent" and viewport["width"] == 390:
+                            checkboxes = page.locator('#view input[type="checkbox"]')
+                            if checkboxes.count() == 0:
+                                failures.append("mobile unsent: no checkboxes rendered for hit-target checks")
+                            for i in range(checkboxes.count()):
+                                box = checkboxes.nth(i).bounding_box()
+                                if not box or box["width"] < 22 or box["height"] < 22:
+                                    failures.append(f"mobile unsent: checkbox {i} is smaller than 22x22 CSS pixels")
+                            small_buttons = page.locator("#view .btn.sm")
+                            if small_buttons.count() == 0:
+                                failures.append("mobile unsent: no .btn.sm controls rendered for hit-target checks")
+                            for i in range(small_buttons.count()):
+                                box = small_buttons.nth(i).bounding_box()
+                                if not box or box["height"] < 40:
+                                    failures.append(f"mobile unsent: .btn.sm control {i} is shorter than 40 CSS pixels")
+                    except Exception as exc:
+                        failures.append(f"direct {route_id} at {viewport['width']} failed: {exc}")
+
+            page.set_viewport_size({"width": 1280, "height": 800})
+
+            # Reject-post styling must differ from a primary action on both target viewports.
+            for viewport in ({"width": 390, "height": 844}, {"width": 1280, "height": 800}):
+                page.set_viewport_size(viewport)
+                active_page[0] = f"danger-style-{viewport['width']}"
+                try:
+                    page.goto(f"{CONSOLE_URL}?danger={viewport['width']}#/jobs", wait_until="domcontentloaded", timeout=15000)
+                    page.wait_for_function(
+                        "(expected) => document.querySelector('#ttl')?.textContent === expected",
+                        arg="کارها", timeout=7000,
+                    )
+                    page.wait_for_function("() => !!document.querySelector('#view button[data-a=\\"jView\\"][data-id=\\"fixture-mob-ready\\"]')", timeout=7000)
+                    page.locator('#view button[data-a="jView"][data-id="fixture-mob-ready"]').click()
+                    page.wait_for_function("() => document.querySelector('#modal')?.classList.contains('on') && !!document.querySelector('#modal button[data-a=\\"jMobReject\\"]')", timeout=5000)
+                    reject = page.locator('#modal button[data-a="jMobReject"]')
+                    primary = page.locator('#modal button.btn:not(.danger):not(.g)').first
+                    if reject.count() != 1 or primary.count() != 1:
+                        failures.append(f"jobs at {viewport['width']}: reject/primary comparison controls not found")
+                    else:
+                        if "danger" not in (reject.get_attribute("class") or "").split():
+                            failures.append(f"jobs at {viewport['width']}: reject control lost the danger class")
+                        reject_background = reject.evaluate("(el) => getComputedStyle(el).background")
+                        primary_background = primary.evaluate("(el) => getComputedStyle(el).background")
+                        if reject_background == primary_background:
+                            failures.append(f"jobs at {viewport['width']}: reject background matches primary background")
+                    page.keyboard.press("Escape")
+                    page.wait_for_function("() => !document.querySelector('#modal')?.classList.contains('on')", timeout=3000)
+                except Exception as exc:
+                    failures.append(f"danger styling at {viewport['width']} failed: {exc}")
+            page.set_viewport_size({"width": 1280, "height": 800})
 
             # The read-only report combines the current 24h digest with Worker, queue and AI status.
             active_page[0] = "report"
@@ -454,6 +557,8 @@ def main() -> int:
                         failures.append(f"report: expected rendered text not found: {expected_text}")
                 if any(word in report_text.lower() for word in ("private details", "api key", "window-private-id")):
                     failures.append("report: private digest fields leaked into UI")
+                if CAPTION_LITERAL not in report_text or "&amp;" in report_text:
+                    failures.append("report: caption/report text was double-escaped")
             except Exception as exc:
                 failures.append(f"report: could not render report page: {exc}")
 
@@ -491,6 +596,16 @@ def main() -> int:
                 if fallback.get_attribute("target") != "_blank" or fallback.get_attribute("rel") != "noopener noreferrer":
                     failures.append("unsent: fallback link security attributes are missing")
                 page.locator('#modal button[data-a="fmPreviewClose"]').click()
+                page.wait_for_function(
+                    "() => !document.querySelector('#modal')?.classList.contains('on') && document.querySelectorAll('#modal iframe').length === 0",
+                    timeout=3000,
+                )
+                preview_buttons.nth(0).click()
+                page.wait_for_function(
+                    "() => document.querySelector('#modal')?.classList.contains('on') && !!document.querySelector('#modal iframe.fm-preview-frame')",
+                    timeout=5000,
+                )
+                page.keyboard.press("Escape")
                 page.wait_for_function(
                     "() => !document.querySelector('#modal')?.classList.contains('on') && document.querySelectorAll('#modal iframe').length === 0",
                     timeout=3000,
@@ -574,6 +689,9 @@ def main() -> int:
                 for action in ("jMobEdit", "jMobNoCaption", "jMobReject"):
                     if page.locator('#modal button[data-a="' + action + '"]').count() != 1:
                         failures.append(f"jobs: expected eligible Mob X control {action}")
+                job_details_text = page.locator("#modal").inner_text()
+                if CAPTION_LITERAL not in job_details_text or "&amp;" in job_details_text:
+                    failures.append("jobs: caption text was double-escaped")
                 if page.locator('#modal button[data-a*="publish"], #modal button[data-a*="approve"]').count():
                     failures.append("jobs: web review details exposed an approval/publish control")
                 if page.locator('#modal iframe, #modal video').count():
@@ -618,6 +736,8 @@ def main() -> int:
                 page.locator('#nav button[data-id="inst"]').click()
                 page.locator("#ins_u").fill("https://x.com/mobgamesstudios/status/123456789")
                 click_action(page, '#view button[data-a="insAdd"]', "save instant Mob X link")
+                if "مرحلهٔ ۲" not in page.locator("#view").inner_text():
+                    failures.append("inst: adding a link did not display the مرحلهٔ ۲ confirmation card")
                 click_action(page, '#view button[data-a="insOk"]', "confirm instant Mob X link")
             except Exception as exc:
                 failures.append(f"inst: link confirmation failed: {exc}")
@@ -633,6 +753,14 @@ def main() -> int:
             active_page[0] = "set"
             try:
                 page.locator('#nav button[data-id="set"]').click()
+                original_base = page.evaluate("() => localStorage.getItem('rc_base')")
+                page.locator("#s_b").fill("http://insecure.example")
+                page.locator('#view button[data-a="sSave"]').click()
+                page.wait_for_function("() => document.querySelector('#toast')?.innerText.includes('https://')")
+                if page.evaluate("() => localStorage.getItem('rc_base')") != original_base:
+                    failures.append("set: non-HTTPS Worker URL was persisted")
+                page.locator("#s_b").fill("https://mock-worker.test")
+                click_action(page, '#view button[data-a="sSave"]', "restore valid mocked Worker URL")
                 click_action(page, '#view button[data-a="sTest"]', "test mocked Worker connection")
             except Exception as exc:
                 failures.append(f"set: connection test failed: {exc}")
