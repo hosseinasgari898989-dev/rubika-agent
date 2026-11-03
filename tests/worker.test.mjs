@@ -3688,8 +3688,9 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(editedResult.caption_mode, "edited");
   assert.equal(editedResult.original_caption, "Original 101");
   assert.equal(editedResult.persian_translation, "ترجمهٔ اولیه 101");
-  assert.equal(editedResult.preview_sent, true);
-  assert.equal(editedResult.preview_message_id, "preview-101");
+  assert.equal(editedResult.preview_sent, false, "web caption edits must invalidate the old PV preview");
+  assert.equal(editedResult.caption_refresh_state, "not_refreshed");
+  assert.equal(editedResult.preview_message_id, "preview-101", "PV retains the old message id to replace it on refresh");
   assert.equal(JSON.stringify(state.DB.consoleJobs.get(secondJobId)), secondJobBefore,
     "editing one Mob X job must not touch a second job");
   assert.equal(JSON.stringify(state.DB.items.get(secondItemId)), secondItemBefore,
@@ -3725,6 +3726,8 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(noCaptionResult.caption, noCaptionFixed);
   assert.equal(noCaptionResult.original_caption, "");
   assert.equal(noCaptionResult.persian_translation, "");
+  assert.equal(noCaptionResult.preview_sent, false, "no-caption from web must invalidate the old PV preview");
+  assert.equal(noCaptionResult.caption_refresh_state, "not_refreshed");
   assert.equal(noCaptionItem.caption, noCaptionFixed);
   assert.equal(noCaptionItem.original_caption, "");
   assert.equal(noCaptionItem.persian_translation, "");
