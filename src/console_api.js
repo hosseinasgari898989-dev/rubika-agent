@@ -913,14 +913,14 @@ export async function handleConsoleApi(request, env, h) {
         job_id: jobId, panel_link_id: row.panel_link_id, action, caption_length: caption.length,
       }).slice(0, 900);
       const updateItemSql = action === "no_caption"
-        ? "UPDATE items SET caption = ?, original_caption = '', persian_translation = '' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND changes() > 0"
-        : "UPDATE items SET caption = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND changes() > 0";
+        ? "UPDATE items SET caption = ?, original_caption = '', persian_translation = '' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0"
+        : "UPDATE items SET caption = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0";
       const results = await env.DB.batch([
         env.DB.prepare(
           "UPDATE console_jobs SET result_json = ?, updated_at = ? " +
           "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND result_json = ? AND panel_link_id = ? " +
           "AND EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'ready_for_review') " +
-          "AND EXISTS (SELECT 1 FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'ready')"
+          "AND EXISTS (SELECT 1 FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending')"
         ).bind(nextResultJson, now, jobId, row.result_json, row.panel_link_id, row.panel_link_id, result.item_id),
         env.DB.prepare(updateItemSql).bind(caption, result.item_id),
         env.DB.prepare(
