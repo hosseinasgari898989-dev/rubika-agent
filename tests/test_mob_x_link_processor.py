@@ -247,7 +247,7 @@ class MobXLinkParserTests(unittest.TestCase):
         empty_caption = build_mob_x_caption("   ", None)
         self.assertEqual(
             empty_caption,
-            "**ماب انترتینمنت در پیج X خود پستی منتشر کرد.**",
+            "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**",
         )
         caption = build_mob_x_caption(
             "Official update: $literal$\n> not markup",
