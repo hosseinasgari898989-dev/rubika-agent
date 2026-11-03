@@ -1668,6 +1668,7 @@ class PanelFakeStatement {
     if (this.sql.startsWith("UPDATE console_jobs SET result_json = ?")) {
       const [resultJson, updatedAt, jobId, expectedResultJson] = this.values;
       const row = this.db.consoleJobs.get(jobId);
+      this.db.consoleJobResultUpdates.push({ sql: this.sql, job_id: jobId, expected_matches: Boolean(row && row.result_json === expectedResultJson), status: row?.status || null });
       if (!row || row.type !== "mob_x_link" || row.status !== "ready_for_review" ||
           row.result_json !== expectedResultJson) return { meta: { changes: 0 } };
       row.result_json = String(resultJson);
@@ -1804,6 +1805,7 @@ class PanelFakeDB {
     this.linkDeleteCalls = 0;
     this.nextPanelLinkId = 1;
     this.consoleJobs = new Map();
+    this.consoleJobResultUpdates = [];
     this.items = new Map();
     this.consoleOwners = new Map();
     this.nextConsoleOwnerId = 1;
@@ -2181,6 +2183,7 @@ async function withDispatchFetch(responder, fn) {
     assert.ok(Number(state.DB.state.get("panel_seq") || 0) > 0, "the callback must pass owner authorization and event de-duplication");
     assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("فقط نقش مالک")), false);
     assert.ok(calls.some(call => call.method === "sendFile"), "no-caption callback must refresh this job's preview; last_error=" + String(state.DB.state.get("last_error") || "none"));
+    assert.ok(state.DB.consoleJobResultUpdates.length >= 2, "both job-scoped CAS updates should execute; updates=" + JSON.stringify(state.DB.consoleJobResultUpdates));
     const changed = JSON.parse(state.DB.consoleJobs.get(firstJobId).result_json);
     assert.equal(changed.caption, "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**");
     assert.equal(changed.caption_mode, "no_caption");
