@@ -82,6 +82,18 @@ class PreservationSummaryTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(self.original.read_bytes(), self.original_bytes)
 
+    def test_original_file_check_error_does_not_hide_delivery_error(self):
+        delivery = {
+            "status": "failed", "error": "rubika_rejected_upload_failed",
+            "attempts": 3, "cleanup": "retained",
+        }
+        with mock.patch.object(Path, "is_file", side_effect=OSError("local storage error")):
+            result = self._call(delivery)
+        self.assertEqual(delivery["status"], "failed")
+        self.assertEqual(delivery["error"], "rubika_rejected_upload_failed")
+        self.assertEqual(result["error"], "failed_media_internal_error")
+        self.assertFalse(result["ok"])
+
     def test_confirmed_sent_item_is_never_preserved(self):
         with mock.patch.object(e2e_from_report, "preserve_failed_media") as preserve:
             result = self._call({
