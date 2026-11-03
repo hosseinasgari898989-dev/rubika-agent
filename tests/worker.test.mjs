@@ -1681,11 +1681,18 @@ class PanelFakeStatement {
       this.db.consoleJobResultUpdates.at(-1).persisted_caption = JSON.parse(row.result_json).caption;
       return { meta: { changes: 1 } };
     }
-    if (this.sql.startsWith("UPDATE items SET caption = ?, original_caption = ?, persian_translation = ?")) {
-      const [caption, originalCaption, translation, itemId] = this.values;
+    if (this.sql.startsWith("UPDATE items SET caption = ?, original_caption = '', persian_translation = ''")) {
+      const [caption, itemId] = this.values;
       const row = this.db.items.get(itemId);
       if (!row || row.platform !== "mob_official" || row.status !== "ready") return { meta: { changes: 0 } };
-      Object.assign(row, { caption, original_caption: originalCaption, persian_translation: translation });
+      Object.assign(row, { caption, original_caption: "", persian_translation: "" });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("UPDATE items SET caption = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready'")) {
+      const [caption, itemId] = this.values;
+      const row = this.db.items.get(itemId);
+      if (!row || row.platform !== "mob_official" || row.status !== "ready") return { meta: { changes: 0 } };
+      row.caption = caption;
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("UPDATE console_rules SET version = version + 1")) {
