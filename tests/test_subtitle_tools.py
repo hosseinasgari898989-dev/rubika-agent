@@ -59,7 +59,7 @@ class SubtitleToolsTest(unittest.TestCase):
         self.assertEqual(
             style_line,
             "Style: Default,Estedad,60,&H00FFFFFF,&H000000FF,&H66000000,&H80000000,"
-            "-1,0,0,0,100,100,0,0,1,0,0,2,40,40,40,1",
+            "-1,0,0,0,100,100,0,0,1,0,0,2,128,128,40,1",
         )
         self.assertNotIn(r"\ybord", ass)
         self.assertNotIn(r"\p1", ass)
@@ -463,7 +463,7 @@ class SubtitleLayoutMatrixTest(unittest.TestCase):
                             image = Image.open(png_path).convert("RGB")
                             self.assertEqual(image.size, (width, height))
                             self.assertEqual(png_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
-                            glyph = mask_bbox(image, 220, 256)
+                            glyph = mask_bbox(image, 128, 256)
                             box = mask_bbox(image, 5, 105)
                             self.assertIsNotNone(glyph, "Estedad text pixels must be rendered")
                             self.assertIsNotNone(box, "translucent black box pixels must be rendered")

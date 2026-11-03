@@ -47,6 +47,12 @@ class SplitLongCues(unittest.TestCase):
 
         def run(cmd, **kw):
             if cmd[0] == "ffprobe":
+                if "stream=width,height" in " ".join(cmd):
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout=json.dumps({"streams": [{"width": 1280, "height": 720}]}),
+                        stderr="",
+                    )
                 return SimpleNamespace(returncode=0, stdout=json.dumps({"format": {"duration": 8.0}}), stderr="")
             Path(cmd[-1]).write_bytes(b"x")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
