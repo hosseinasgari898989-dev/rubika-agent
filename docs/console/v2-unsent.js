@@ -69,18 +69,25 @@ return card('ارسال‌نشده‌ها · نسخهٔ اصلی در Mega',`<di
 ],items,'موردی نیست'))};
 
 const ask=async(body,label)=>{
-try{const r=await api('/api/console/failed-media/delete-request',{method:'POST',body});
+try{
+const challenge=await api('/api/console/failed-media/delete-request',{method:'POST',body});
+const count=N(challenge.requested);
+if(!count)return toast('مورد قابل‌حذفی پیدا نشد','bad');
+if(challenge.confirmation_required!==true||typeof challenge.confirmation!=='string')throw new Error('confirmation_challenge_missing');
+const typed=prompt('Worker '+count+' مورد را برای حذف آماده کرده است. برای تأیید دومرحله‌ای، DELETE را بنویس. این تأیید ۵ دقیقه اعتبار دارد.');
+if(typed!=='DELETE')return toast('لغو شد؛ هیچ فایلی برای حذف علامت نخورد','bad');
+const result=await api('/api/console/failed-media/delete-request',{method:'POST',body:{confirmation:challenge.confirmation,phrase:typed}});
 SEL.clear();
-toast(label+N(r.requested)+(r.requested&&!r.dispatched?' · شروع خودکار حذف انجام نشد':''),r.requested&&r.dispatched?'ok':'bad');
-R.go('unsent')}catch(e){toast('خطا: '+e.message,'bad')}};
-A.fmDel=async()=>{const ids=[...SEL];
+const extra=(challenge.limited?' · هر مرحله حداکثر ۵۰ مورد':'')+(result.requested&&!result.dispatched?' · شروع خودکار حذف انجام نشد':'');
+toast(label+N(result.requested)+extra,result.requested&&result.dispatched?'ok':'bad');
+R.go('unsent')
+}catch(e){toast('خطا: '+e.message,'bad')}};
+A.fmDel=async()=>{
+const ids=[...SEL];
 if(!ids.length)return toast('چیزی انتخاب نشده','bad');
-if(!confirm('فایل اصلی و کپشنِ '+ids.length+' مورد برای همیشه حذف می‌شود. ادامه؟'))return;
-await ask({ids},'درخواست حذف: ')};
-A.fmDelAll=async()=>{
-if(!confirm('همهٔ موردهای ارسال‌نشده برای همیشه حذف شوند؟'))return;
-if(prompt('برای تأیید نهایی کلمهٔ DELETE را بنویس')!=='DELETE')return toast('لغو شد؛ چیزی حذف نشد','bad');
-await ask({all:true,confirm:'DELETE_ALL'},'درخواست حذف همه: ')};
+if(ids.length>50)return toast('در هر مرحله حداکثر ۵۰ مورد را انتخاب کن','bad');
+await ask({ids},'حذف تأییدشده: ')};
+A.fmDelAll=async()=>{await ask({all:true},'حذف تأییدشده: ')};
 
 if(!NAV.some(n=>n[0]==='unsent'))NAV.splice(Math.min(4,NAV.length),0,['unsent','ارسال‌نشده‌ها','📦']);
 document.getElementById('nav').innerHTML=NAV.map(n=>`<button class="nv" data-id="${n[0]}" data-a="go"><span>${n[2]}</span>${n[1]}</button>`).join('');

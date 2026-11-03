@@ -1,8 +1,8 @@
 // Failed-media console routes (auth is enforced by index.js before handleConsoleApi). All POST:
 //   /failed-media/record          runner records a preserved original (upsert on storage_key)
 //   /failed-media/list            owner console lists items {limit?, offset?}
-//   /failed-media/delete-request  marks items 'delete_requested' {ids:[...]} or {all:true, confirm:"DELETE_ALL"},
-//                                 then dispatches the delete workflow (best effort)
+//   /failed-media/delete-request  phase 1 {ids:[...]} or {all:true} returns a short-lived signed challenge;
+//                                 phase 2 {confirmation:"..."} marks at most 50 rows and dispatches the workflow
 //   /failed-media/pending-delete  delete runner reads rows waiting for deletion
 //   /failed-media/delete-result   delete runner reports {id, ok}: ok removes the row (only AFTER mega-rm succeeded),
 //                                 failure sets status 'delete_failed'
@@ -14,13 +14,96 @@ const URL_RE = /^https:\/\/mega\.(?:nz|io)\/[^\s]+$/;
 const REASON_RE = /^[a-z0-9_-]{1,80}$/;
 const REF_RE = /^[A-Za-z0-9_.:@-]{1,160}$/;
 const ID_RE = /^fm_[0-9a-f]{24}$/;
-const MAX_IDS = 100;
+const MAX_IDS = 50;
+const OWNER_CONFIRM_TTL_MS = 5 * 60 * 1000;
 const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 const REPO = "hosseinasgari898989-dev/rubika-agent";
 const DELETE_WORKFLOW = "failed-media-delete.yml";
 
 const randomHex = (size = 12) =>
   Array.from(crypto.getRandomValues(new Uint8Array(size)), (b) => b.toString(16).padStart(2, "0")).join("");
+
+const encodeBase64Url = (bytes) => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+};
+const decodeBase64Url = (value) => {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
+    const binary = atob(padded);
+    const decoded = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    // Reject alternate base64url spellings whose unused trailing bits decode to the same bytes.
+    return encodeBase64Url(decoded) === value ? decoded : null;
+  } catch {
+    return null;
+  }
+};
+
+// The current web console has one privileged AGENT_API_TOKEN bearer. Do not accept caller-supplied roles/IDs.
+// The later owner/viewer token split is deliberately not simulated by an untrusted header here.
+function hasOwnerBearer(request, env) {
+  const expected = typeof env.AGENT_API_TOKEN === "string" ? env.AGENT_API_TOKEN : "";
+  const match = /^Bearer ([^\s]+)$/.exec(request.headers.get("authorization") || "");
+  if (!expected || expected.length < 32 || !match || match[1].length !== expected.length) return false;
+  const a = new TextEncoder().encode(match[1]);
+  const b = new TextEncoder().encode(expected);
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+async function issueDeleteConfirmation(env, rows) {
+  const payload = {
+    version: 1,
+    expires_at: Date.now() + OWNER_CONFIRM_TTL_MS,
+    rows: rows.map((row) => ({
+      id: row.id,
+      storage_key: row.storage_key,
+      status: row.status,
+      updated_at: row.updated_at ?? "",
+    })),
+  };
+  const payloadPart = encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(env.AGENT_API_TOKEN),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadPart)));
+  return payloadPart + "." + encodeBase64Url(signature);
+}
+
+async function verifyDeleteConfirmation(env, token) {
+  if (typeof token !== "string" || token.length > 16000) return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const payloadBytes = decodeBase64Url(parts[0]);
+  const signature = decodeBase64Url(parts[1]);
+  if (!payloadBytes || !signature || signature.length !== 32) return null;
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode(env.AGENT_API_TOKEN),
+      { name: "HMAC", hash: "SHA-256" }, false, ["verify"],
+    );
+    const valid = await crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(parts[0]));
+    if (!valid) return null;
+    const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
+    if (payload?.version !== 1 || !Number.isSafeInteger(payload.expires_at) ||
+        payload.expires_at < Date.now() || !Array.isArray(payload.rows) ||
+        payload.rows.length < 1 || payload.rows.length > MAX_IDS) return null;
+    for (const row of payload.rows) {
+      if (!row || typeof row.id !== "string" || !ID_RE.test(row.id) ||
+          typeof row.storage_key !== "string" || !KEY_RE.test(row.storage_key) ||
+          !["stored", "delete_failed", "delete_requested"].includes(row.status) ||
+          typeof row.updated_at !== "string" || row.updated_at.length > 40) return null;
+    }
+    if (new Set(payload.rows.map((row) => row.id)).size !== payload.rows.length) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
 
 async function audit(env, code, details) {
   try {
@@ -132,30 +215,92 @@ async function list(request, env, h, fail) {
 }
 
 async function deleteRequest(request, env, h, fail) {
+  if (!hasOwnerBearer(request, env)) return fail("owner_required", 403);
   const { b, res } = await readBody(request, h, fail);
   if (res) return res;
-  const eligible = "status IN ('stored','delete_failed','delete_requested')";
-  let sql;
-  let args = [];
-  if (b.all === true) {
-    // Two-step confirmation: the client must echo the exact phrase.
-    if (b.confirm !== "DELETE_ALL") return fail("confirmation_required");
-    sql = `UPDATE failed_media SET status = 'delete_requested', updated_at = ${NOW_SQL} WHERE ${eligible}`;
-  } else {
-    if (!Array.isArray(b.ids) || b.ids.length < 1 || b.ids.length > MAX_IDS) return fail("invalid_ids");
-    if (!b.ids.every((id) => typeof id === "string" && ID_RE.test(id))) return fail("invalid_ids");
-    args = [...new Set(b.ids)];
-    sql = `UPDATE failed_media SET status = 'delete_requested', updated_at = ${NOW_SQL} ` +
-      `WHERE id IN (${args.map(() => "?").join(",")}) AND ${eligible}`;
+
+  // Phase 2: consume a short-lived HMAC confirmation bound to the exact row snapshots.
+  if (Object.hasOwn(b, "confirmation")) {
+    if (Object.keys(b).length !== 2 || typeof b.confirmation !== "string" || b.phrase !== "DELETE") {
+      return fail("confirmation_phrase_required");
+    }
+    const payload = await verifyDeleteConfirmation(env, b.confirmation);
+    if (!payload) return fail("confirmation_invalid_or_expired", 409);
+    const rows = payload.rows;
+    const predicate = rows.map(() =>
+      "(id = ? AND status = ? AND COALESCE(updated_at, '') = ? AND storage_key = ?)"
+    ).join(" OR ");
+    const values = rows.flatMap((row) => [row.id, row.status, row.updated_at, row.storage_key]);
+    const sql = "UPDATE failed_media SET status = 'delete_requested', " +
+      "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') " +
+      `WHERE (${predicate}) AND (SELECT COUNT(*) FROM failed_media WHERE (${predicate})) = ?`;
+    try {
+      const out = await env.DB.prepare(sql).bind(...values, ...values, rows.length).run();
+      const requested = Number(out?.meta?.changes || 0);
+      if (requested !== rows.length) return fail("confirmation_stale", 409);
+      await audit(env, "console_failed_media_delete_request", { all: rows.length === MAX_IDS, requested });
+      const dispatched = await dispatchDelete(env);
+      return h.json({ ok: true, requested, dispatched, batch_limit: MAX_IDS });
+    } catch {
+      return fail("console_db_error", 503);
+    }
   }
+
+  // Phase 1: identify eligible rows, validate paths, and issue a signed server-side challenge.
+  const keys = Object.keys(b).sort();
+  let rows;
+  let all = false;
+  if (b.all === true && keys.length === 1 && keys[0] === "all") {
+    all = true;
+    try {
+      const result = await env.DB.prepare(
+        "SELECT id, storage_key, status, updated_at FROM failed_media " +
+        "WHERE status IN ('stored','delete_failed','delete_requested') " +
+        "ORDER BY updated_at, id LIMIT ?"
+      ).bind(MAX_IDS).all();
+      rows = result?.results || [];
+    } catch {
+      return fail("console_db_error", 503);
+    }
+  } else {
+    if (keys.length !== 1 || keys[0] !== "ids" ||
+        !Array.isArray(b.ids) || b.ids.length < 1) return fail("invalid_ids");
+    if (b.ids.length > MAX_IDS) return fail("too_many_ids");
+    if (!b.ids.every((id) => typeof id === "string" && ID_RE.test(id))) return fail("invalid_ids");
+    const ids = [...new Set(b.ids)];
+    if (ids.length !== b.ids.length) return fail("duplicate_ids");
+    try {
+      const result = await env.DB.prepare(
+        "SELECT id, storage_key, status, updated_at FROM failed_media " +
+        `WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY id`
+      ).bind(...ids).all();
+      rows = result?.results || [];
+    } catch {
+      return fail("console_db_error", 503);
+    }
+    if (rows.length !== ids.length ||
+        rows.some((row) => !["stored", "delete_failed", "delete_requested"].includes(row.status))) {
+      return fail("items_not_eligible", 409);
+    }
+  }
+
+  if (!rows.length) return h.json({ ok: true, requested: 0, confirmation_required: false, dispatched: false });
+  if (rows.length > MAX_IDS || rows.some((row) =>
+    typeof row.id !== "string" || !ID_RE.test(row.id) ||
+    typeof row.storage_key !== "string" || !KEY_RE.test(row.storage_key) ||
+    !["stored", "delete_failed", "delete_requested"].includes(row.status) ||
+    typeof row.updated_at !== "string" || row.updated_at.length > 40
+  )) return fail("invalid_storage_key", 409);
+
   try {
-    const out = await env.DB.prepare(sql).bind(...args).run();
-    const requested = out?.meta?.changes ?? 0;
-    await audit(env, "console_failed_media_delete_request", { all: b.all === true, requested });
-    const dispatched = requested > 0 ? await dispatchDelete(env) : false;
-    return h.json({ ok: true, requested, dispatched });
+    const confirmation = await issueDeleteConfirmation(env, rows);
+    return h.json({
+      ok: true, confirmation_required: true, confirmation,
+      requested: rows.length, limited: all && rows.length === MAX_IDS,
+      expires_in_seconds: OWNER_CONFIRM_TTL_MS / 1000,
+    });
   } catch {
-    return fail("console_db_error", 503);
+    return fail("confirmation_unavailable", 503);
   }
 }
 
@@ -164,7 +309,12 @@ async function pendingDelete(request, env, h, fail) {
     const rows = await env.DB.prepare(
       "SELECT id, storage_key FROM failed_media WHERE status = 'delete_requested' ORDER BY updated_at, id LIMIT 50"
     ).bind().all();
-    return h.json({ ok: true, items: rows?.results || [] });
+    const items = rows?.results || [];
+    if (items.some((row) =>
+      typeof row.id !== "string" || !ID_RE.test(row.id) ||
+      typeof row.storage_key !== "string" || !KEY_RE.test(row.storage_key)
+    )) return fail("invalid_storage_key", 409);
+    return h.json({ ok: true, items });
   } catch {
     return fail("console_db_error", 503);
   }
@@ -176,11 +326,18 @@ async function deleteResult(request, env, h, fail) {
   if (typeof b.id !== "string" || !ID_RE.test(b.id)) return fail("invalid_id");
   if (typeof b.ok !== "boolean") return fail("invalid_ok");
   try {
+    const current = await env.DB.prepare(
+      "SELECT id, storage_key, status FROM failed_media WHERE id = ?"
+    ).bind(b.id).first();
+    if (!current || current.status !== "delete_requested") return h.json({ ok: true, changed: 0 });
+    if (typeof current.storage_key !== "string" || !KEY_RE.test(current.storage_key)) {
+      return fail("invalid_storage_key", 409);
+    }
     // The row is removed only when the runner confirms the Mega file is gone; failures stay visible.
     const sql = b.ok
-      ? "DELETE FROM failed_media WHERE id = ? AND status = 'delete_requested'"
-      : `UPDATE failed_media SET status = 'delete_failed', updated_at = ${NOW_SQL} WHERE id = ? AND status = 'delete_requested'`;
-    const out = await env.DB.prepare(sql).bind(b.id).run();
+      ? "DELETE FROM failed_media WHERE id = ? AND status = 'delete_requested' AND storage_key = ?"
+      : `UPDATE failed_media SET status = 'delete_failed', updated_at = ${NOW_SQL} WHERE id = ? AND status = 'delete_requested' AND storage_key = ?`;
+    const out = await env.DB.prepare(sql).bind(b.id, current.storage_key).run();
     await audit(env, "console_failed_media_delete_result", { ok: b.ok });
     return h.json({ ok: true, changed: out?.meta?.changes ?? 0 });
   } catch {

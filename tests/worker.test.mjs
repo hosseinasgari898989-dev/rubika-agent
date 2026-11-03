@@ -15,6 +15,7 @@ const consoleRetrySource = fs.readFileSync(path.join(root, "src/console_retry.js
 const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
 const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
 const consoleFailedMediaModuleUrl = dataModuleUrl(consoleFailedMediaSource);
+const failedMedia = await import(consoleFailedMediaModuleUrl);
 const retryScreensSource = fs.readFileSync(path.join(root, "src/panel_retry_screens.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
 const retryScreensModuleUrl = dataModuleUrl(retryScreensSource);
@@ -57,6 +58,10 @@ class FakeStatement {
     return this;
   }
   async first() {
+    if (this.sql.includes("FROM failed_media WHERE id = ?")) {
+      const row = this.db.failedMedia.get(this.values[0]);
+      return row ? { ...row } : null;
+    }
     if (this.sql.includes("INSERT INTO ai_provider_calls") && this.sql.includes("'cloudflare', 'translate_official'")) {
       const [callId,usageDay,runId,estimate,startedAt,unknownDay,totalDay,totalEstimate,totalLimit,bucketDay,kind,bucketEstimate,bucketLimit]=this.values;
       const rows=[...this.db.aiProviderCalls.values()].filter(x=>x.usage_day===totalDay&&x.role==="translate_official");
@@ -214,6 +219,26 @@ class FakeStatement {
     return null;
   }
   async all() {
+    if (this.sql.includes("FROM failed_media WHERE status IN")) {
+      const limit = Number(this.values[0] || 0);
+      const rows = [...this.db.failedMedia.values()]
+        .filter(row => ["stored", "delete_failed", "delete_requested"].includes(row.status))
+        .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)) || String(a.id).localeCompare(String(b.id)))
+        .slice(0, limit);
+      return { results: rows.map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
+    }
+    if (this.sql.includes("FROM failed_media WHERE id IN")) {
+      const ids = new Set(this.values);
+      return { results: [...this.db.failedMedia.values()].filter(row => ids.has(row.id))
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+        .map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
+    }
+    if (this.sql.includes("FROM failed_media WHERE status = 'delete_requested'")) {
+      const rows = [...this.db.failedMedia.values()].filter(row => row.status === "delete_requested")
+        .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)) || String(a.id).localeCompare(String(b.id)))
+        .slice(0, 50).map(({ id, storage_key }) => ({ id, storage_key }));
+      return { results: rows };
+    }
     if (this.sql.includes("FROM owner_digest_events WHERE window_id = ? GROUP BY category")) {
       const windowId = this.values[0];
       const totals = new Map();
@@ -291,6 +316,37 @@ class FakeStatement {
   async run() {
     const sql = this.sql;
     const v = this.values;
+    if (sql.startsWith("UPDATE failed_media SET status = 'delete_requested'")) {
+      if ((v.length - 1) % 8 !== 0) throw new Error("fake_failed_media_snapshot_bind_mismatch");
+      const count = (v.length - 1) / 8;
+      const first = v.slice(0, count * 4);
+      const second = v.slice(count * 4, count * 8);
+      if (JSON.stringify(first) !== JSON.stringify(second)) throw new Error("fake_failed_media_snapshot_copy_mismatch");
+      const rows = [];
+      for (let i = 0; i < count; i += 1) {
+        const [id, status, updatedAt, storageKey] = first.slice(i * 4, i * 4 + 4);
+        const row = this.db.failedMedia.get(id);
+        if (!row || row.status !== status || String(row.updated_at ?? "") !== updatedAt || row.storage_key !== storageKey) {
+          return { meta: { changes: 0 } };
+        }
+        rows.push(row);
+      }
+      const changedAt = new Date(Date.now() + 1000).toISOString();
+      for (const row of rows) Object.assign(row, { status: "delete_requested", updated_at: changedAt });
+      return { meta: { changes: rows.length } };
+    }
+    if (sql.startsWith("DELETE FROM failed_media WHERE id = ? AND status = 'delete_requested'")) {
+      const row = this.db.failedMedia.get(v[0]);
+      if (!row || row.status !== "delete_requested" || row.storage_key !== v[1]) return { meta: { changes: 0 } };
+      this.db.failedMedia.delete(v[0]);
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE failed_media SET status = 'delete_failed'")) {
+      const row = this.db.failedMedia.get(v[0]);
+      if (!row || row.status !== "delete_requested" || row.storage_key !== v[1]) return { meta: { changes: 0 } };
+      Object.assign(row, { status: "delete_failed", updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
     if (sql.startsWith("UPDATE console_jobs SET params_json = ?")) {
       const [paramsJson, updatedAt, jobId, expectedParams] = v;
       const job = this.db.consoleJobs.get(jobId);
@@ -641,6 +697,7 @@ class FakeDB {
     this.consoleChannels = new Map();
     this.nextConsoleChannelId = 1;
     this.consoleJobs = new Map();
+    this.failedMedia = new Map();
     this.panelLinks = new Map();
     this.nextPanelLinkId = 1;
     this.lastChanges = 0;
@@ -3480,6 +3537,146 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(calls.some(call => call.method === "updateBotEndpoints"), false,
       "viewer must not register or change the webhook");
   });
+}
+
+
+// Failed-media bulk deletion is owner-bearer gated, bounded, path-safe, and requires a signed second step.
+{
+  const state = env();
+  const id = "fm_" + "a".repeat(24);
+  const key = "/Rubika-Agent/failed/owner-test.mp4";
+  const row = { id, storage_key: key, status: "stored", updated_at: "2026-11-03T00:00:00Z", created_at: "2026-11-03T00:00:00Z" };
+  state.DB.failedMedia.set(id, { ...row });
+
+  const viewer = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", token: "viewer-token-is-not-the-owner-api-token",
+    body: { ids: [id] },
+  }), state));
+  assert.equal(viewer.status, 401);
+  assert.equal(state.DB.failedMedia.get(id).status, "stored");
+
+  const directViewer = await failedMedia.handleFailedMedia(
+    request("/api/console/failed-media/delete-request", {
+      method: "POST", token: "viewer-token-is-not-the-owner-api-token", body: { ids: [id] },
+    }),
+    state,
+    {
+      json: (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }),
+      readJson: async req => ({ ok: true, value: await req.json() }),
+    },
+    "/failed-media/delete-request", "POST",
+  );
+  assert.equal(directViewer.status, 403, "route-level guard must reject a viewer bearer even when called internally");
+  assert.equal(state.DB.failedMedia.get(id).status, "stored");
+
+  const empty = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { ids: [] },
+  }), state));
+  assert.equal(empty.status, 400);
+  assert.equal(empty.body.error, "invalid_ids");
+
+  const tooMany = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { ids: Array.from({ length: 51 }, (_, i) => "fm_" + String(i).padStart(24, "0")) },
+  }), state));
+  assert.equal(tooMany.status, 400);
+  assert.equal(tooMany.body.error, "too_many_ids");
+
+  const challenge = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { ids: [id] },
+  }), state));
+  assert.equal(challenge.status, 200);
+  assert.equal(challenge.body.confirmation_required, true);
+  assert.equal(challenge.body.requested, 1);
+  assert.equal(state.DB.failedMedia.get(id).status, "stored", "phase one must not mutate the row");
+
+  const tampered = challenge.body.confirmation.slice(0, -1) + (challenge.body.confirmation.endsWith("A") ? "B" : "A");
+  const invalidConfirm = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { confirmation: tampered, phrase: "DELETE" },
+  }), state));
+  assert.equal(invalidConfirm.status, 409);
+  assert.equal(invalidConfirm.body.error, "confirmation_invalid_or_expired");
+  assert.equal(state.DB.failedMedia.get(id).status, "stored");
+
+  const confirmed = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { confirmation: challenge.body.confirmation, phrase: "DELETE" },
+  }), state));
+  assert.equal(confirmed.status, 200);
+  assert.equal(confirmed.body.requested, 1);
+  assert.equal(state.DB.failedMedia.get(id).status, "delete_requested");
+
+  const replay = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { confirmation: challenge.body.confirmation, phrase: "DELETE" },
+  }), state));
+  assert.equal(replay.status, 409, "a used snapshot must not be replayable");
+  assert.equal(replay.body.error, "confirmation_stale");
+  assert.equal(state.DB.failedMedia.get(id).status, "delete_requested");
+}
+
+// Invalid or out-of-scope storage paths are rejected before a challenge or runner handoff.
+{
+  const state = env();
+  const id = "fm_" + "b".repeat(24);
+  state.DB.failedMedia.set(id, {
+    id, storage_key: "/Rubika-Agent/official/not-failed.mp4", status: "stored",
+    updated_at: "2026-11-03T00:00:00Z", created_at: "2026-11-03T00:00:00Z",
+  });
+  const response = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { ids: [id] },
+  }), state));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "invalid_storage_key");
+  assert.equal(state.DB.failedMedia.get(id).status, "stored");
+
+  state.DB.failedMedia.get(id).status = "delete_requested";
+  const pending = await read(await worker.fetch(request("/api/console/failed-media/pending-delete", {
+    method: "POST", body: {},
+  }), state));
+  assert.equal(pending.status, 409);
+  assert.equal(pending.body.error, "invalid_storage_key");
+  assert.equal(pending.body.items, undefined, "an invalid path must never reach the Mega runner");
+}
+
+// "Delete all" is limited to the runner's 50-item page and leaves the remainder untouched.
+{
+  const state = env();
+  for (let i = 0; i < 55; i += 1) {
+    const id = "fm_" + i.toString(16).padStart(24, "0");
+    state.DB.failedMedia.set(id, {
+      id, storage_key: "/Rubika-Agent/failed/bulk-" + i + ".mp4",
+      status: "stored", updated_at: "2026-11-03T00:00:" + String(i).padStart(2, "0") + "Z",
+      created_at: "2026-11-03T00:00:" + String(i).padStart(2, "0") + "Z",
+    });
+  }
+  const stageOne = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { all: true },
+  }), state));
+  assert.equal(stageOne.status, 200);
+  assert.equal(stageOne.body.requested, 50);
+  assert.equal(stageOne.body.limited, true);
+  assert.equal([...state.DB.failedMedia.values()].filter(row => row.status === "stored").length, 55);
+
+  const stageTwo = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
+    method: "POST", body: { confirmation: stageOne.body.confirmation, phrase: "DELETE" },
+  }), state));
+  assert.equal(stageTwo.status, 200);
+  assert.equal(stageTwo.body.requested, 50);
+  assert.equal([...state.DB.failedMedia.values()].filter(row => row.status === "delete_requested").length, 50);
+  assert.equal([...state.DB.failedMedia.values()].filter(row => row.status === "stored").length, 5);
+}
+
+// The worker reports success only after the Mega runner confirms an in-scope key; row deletion remains last.
+{
+  const state = env();
+  const id = "fm_" + "c".repeat(24);
+  state.DB.failedMedia.set(id, {
+    id, storage_key: "/Rubika-Agent/failed/remove-last.mp4", status: "delete_requested",
+  });
+  const removed = await read(await worker.fetch(request("/api/console/failed-media/delete-result", {
+    method: "POST", body: { id, ok: true },
+  }), state));
+  assert.equal(removed.status, 200);
+  assert.equal(removed.body.changed, 1);
+  assert.equal(state.DB.failedMedia.has(id), false);
 }
 
 console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
