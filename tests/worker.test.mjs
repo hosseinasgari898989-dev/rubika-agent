@@ -1668,11 +1668,17 @@ class PanelFakeStatement {
     if (this.sql.startsWith("UPDATE console_jobs SET result_json = ?")) {
       const [resultJson, updatedAt, jobId, expectedResultJson] = this.values;
       const row = this.db.consoleJobs.get(jobId);
-      this.db.consoleJobResultUpdates.push({ sql: this.sql, job_id: jobId, expected_matches: Boolean(row && row.result_json === expectedResultJson), status: row?.status || null });
+      this.db.consoleJobResultUpdates.push({
+        sql: this.sql, job_id: jobId,
+        expected_matches: Boolean(row && row.result_json === expectedResultJson),
+        status: row?.status || null,
+        bound_caption: (() => { try { return JSON.parse(String(resultJson)).caption; } catch { return null; } })(),
+      });
       if (!row || row.type !== "mob_x_link" || row.status !== "ready_for_review" ||
           row.result_json !== expectedResultJson) return { meta: { changes: 0 } };
       row.result_json = String(resultJson);
       row.updated_at = updatedAt;
+      this.db.consoleJobResultUpdates.at(-1).persisted_caption = JSON.parse(row.result_json).caption;
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("UPDATE items SET caption = ?, original_caption = ?, persian_translation = ?")) {
@@ -2186,7 +2192,7 @@ async function withDispatchFetch(responder, fn) {
     assert.ok(state.DB.consoleJobResultUpdates.length >= 2, "both job-scoped CAS updates should execute; updates=" + JSON.stringify(state.DB.consoleJobResultUpdates));
     assert.ok(state.DB.consoleJobResultUpdates.every(update => update.job_id === firstJobId && update.expected_matches && update.status === "ready_for_review"), "each compare-and-swap must match the same job and its current state; updates=" + JSON.stringify(state.DB.consoleJobResultUpdates));
     const changed = JSON.parse(state.DB.consoleJobs.get(firstJobId).result_json);
-    assert.equal(changed.caption, "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**");
+    assert.equal(changed.caption, "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**", "updated result and final stored job result differ; trace=" + JSON.stringify(state.DB.consoleJobResultUpdates));
     assert.equal(changed.caption_mode, "no_caption");
     assert.equal(changed.original_caption, "");
     assert.equal(changed.persian_translation, "");
