@@ -29,6 +29,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("ffmpeg -hide_banner -filters", install_block)
         self.assertIn("libass", install_block)
         self.assertIn("ffprobe -version", install_block)
+
     def test_online_discovery_uses_main_as_single_source_of_truth(self):
         workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
         self.assertIn("ref: main", workflow)

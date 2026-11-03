@@ -94,6 +94,7 @@ jobs:
           ffmpeg -hide_banner -filters 2>&1 | grep -Eiq 'ass.*libass'
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
+
       - name: Smoke-test deployed Worker health without AI requests
         continue-on-error: true
         env:
