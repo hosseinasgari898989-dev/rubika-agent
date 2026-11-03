@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#05060f">
+<meta http-equiv="refresh" content="0;url=../docs/console/v2.html">
+<title>ورود به کنسول Rubika-Agent</title>
+<style>
+:root{color-scheme:dark;background:#05060f;color:#f1f4ff;font-family:Tahoma,"Segoe UI",system-ui,sans-serif}
+*{box-sizing:border-box}
+body{min-height:100vh;margin:0;display:grid;place-items:center;background:#05060f;color:#f1f4ff}
+main{padding:24px}
+a{display:inline-block;padding:12px 22px;border:1px solid rgba(34,211,238,.32);border-radius:14px;background:#0c1124;color:#22d3ee;text-decoration:none;font-weight:700}
+a:focus-visible{outline:3px solid #8b6cff;outline-offset:3px}
+</style>
+</head>
+<body>
+<main><a id="console-entry" href="../docs/console/v2.html">ورود به کنسول</a></main>
+<script>
+const entry=document.getElementById('console-entry');
+const target='../docs/console/v2.html'+location.hash;
+entry.href=target;
+location.replace(target);
+</script>
+</body>
+</html>
