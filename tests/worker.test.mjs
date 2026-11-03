@@ -11,6 +11,9 @@ const screensSource = fs.readFileSync(path.join(root, "src/panel_screens.js"), "
 const screensModuleUrl = dataModuleUrl(screensSource);
 const settingsSource = fs.readFileSync(path.join(root, "src/panel_settings.js"), "utf8");
 const settingsModuleUrl = dataModuleUrl(settingsSource);
+const mobXCaptionSource = fs.readFileSync(path.join(root, "src/mob_x_caption.js"), "utf8");
+const mobXCaptionModuleUrl = dataModuleUrl(mobXCaptionSource);
+const mobXCaption = await import(mobXCaptionModuleUrl);
 const consoleRetrySource = fs.readFileSync(path.join(root, "src/console_retry.js"), "utf8");
 const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
 const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
@@ -26,13 +29,15 @@ const screensExtModuleUrl = dataModuleUrl(screensExtSource);
 const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8")
   .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
   .replace('from "./panel_screens_ext.js";', 'from "' + screensExtModuleUrl + '";')
-  .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";');
+  .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";')
+  .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";');
 const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
 const screens = await import(screensModuleUrl);
 const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";')
-  .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";');
+  .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";')
+  .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";');
 const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
 const workerImport = 'import { handleOwnerPanel } from "./owner_panel.js";';
@@ -458,9 +463,69 @@ class FakeStatement {
       return { meta: { changes: 1, last_row_id: id } };
     }
     if (sql.startsWith("UPDATE panel_links SET status = 'rejected'")) {
+      if (sql.includes("status = 'ready_for_review'")) {
+        const [updatedAt, linkId] = v;
+        const row = this.db.panelLinks.get(Number(linkId));
+        if (Number(this.db.lastChanges || 0) <= 0 || !row || row.status !== "ready_for_review") return { meta: { changes: 0 } };
+        Object.assign(row, { status: "rejected", updated_at: updatedAt });
+        return { meta: { changes: 1 } };
+      }
       const row = this.db.panelLinks.get(Number(v[0]));
       if (!row || row.status !== "pending") return { meta: { changes: 0 } };
       Object.assign(row, { status: "rejected", updated_at: new Date().toISOString() });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE console_jobs SET result_json = ?")) {
+      const [resultJson, updatedAt, jobId, expectedResultJson, panelLinkId, expectedLinkId, itemId] = v;
+      const job = this.db.consoleJobs.get(jobId);
+      const link = this.db.panelLinks.get(Number(panelLinkId));
+      const item = this.db.items.get(itemId);
+      if (!job || job.type !== "mob_x_link" || job.status !== "ready_for_review" ||
+          job.result_json !== expectedResultJson || Number(job.panel_link_id) !== Number(panelLinkId) ||
+          Number(expectedLinkId) !== Number(panelLinkId) || !link || link.status !== "ready_for_review" ||
+          !item || item.platform !== "mob_official" || item.status !== "ready") return { meta: { changes: 0 } };
+      Object.assign(job, { result_json: resultJson, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE console_jobs SET status = 'rejected'")) {
+      const [updatedAt, jobId, panelLinkId, expectedLinkId, itemId] = v;
+      const job = this.db.consoleJobs.get(jobId);
+      const link = this.db.panelLinks.get(Number(panelLinkId));
+      const item = this.db.items.get(itemId);
+      if (!job || job.type !== "mob_x_link" || job.status !== "ready_for_review" ||
+          Number(job.panel_link_id) !== Number(panelLinkId) || Number(expectedLinkId) !== Number(panelLinkId) ||
+          !link || link.status !== "ready_for_review" || !item || item.platform !== "mob_official" ||
+          item.status !== "ready" || item.review_state !== "pending") return { meta: { changes: 0 } };
+      Object.assign(job, { status: "rejected", progress: 100, error: null, updated_at: updatedAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE items SET caption = ?")) {
+      const [caption, itemId] = v;
+      const item = this.db.items.get(itemId);
+      if (sql.includes("changes() > 0") && Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
+      if (!item || item.platform !== "mob_official" || item.status !== "ready") return { meta: { changes: 0 } };
+      item.caption = caption;
+      if (sql.includes("original_caption = ''")) { item.original_caption = ""; item.persian_translation = ""; }
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("UPDATE items SET review_state = 'rejected'")) {
+      const [itemId] = v;
+      const item = this.db.items.get(itemId);
+      if (Number(this.db.lastChanges || 0) <= 0 || !item || item.platform !== "mob_official" ||
+          item.status !== "ready" || item.review_state !== "pending") return { meta: { changes: 0 } };
+      item.review_state = "rejected";
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO brain_events (item_id, level, code, details_json) SELECT ?")) {
+      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
+      const [itemId, code, details] = v;
+      this.db.events.push({ item_id: itemId, level: "info", code, details_json: details, created_at: new Date().toISOString(), sql });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO brain_events (item_id, level, code, details_json) SELECT ?, 'info', 'console_mob_x_reject'")) {
+      if (Number(this.db.lastChanges || 0) <= 0) return { meta: { changes: 0 } };
+      const [itemId, details] = v;
+      this.db.events.push({ item_id: itemId, level: "info", code: "console_mob_x_reject", details_json: details, created_at: new Date().toISOString(), sql });
       return { meta: { changes: 1 } };
     }
     if (sql.startsWith("UPDATE console_jobs SET status = 'processing'")) {
