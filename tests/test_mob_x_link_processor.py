@@ -368,7 +368,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             "external_id": POST_ID,
         }
 
-    def _run_video_job(self, gate, *, pipeline_error=None):
+    def _run_video_job(self, gate, *, pipeline_error=None, original_text="Official video update"):
         from contextlib import ExitStack
 
         events = []
@@ -429,7 +429,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             cloud_class.prepare_staged_payload.return_value = {}
             # Keep the factory patch above deterministic for the class static helper and instance.
             stack.enter_context(patch("agent.brain.mob_x_link_processor.fetch_public_post",
-                                      return_value={"text": "Official video update", "title": "Mob update"}))
+                                      return_value={"text": original_text, "title": "Mob update"}))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.select_media",
                                       return_value=("video", VIDEO_URL)))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.download_public_media",
@@ -512,6 +512,24 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertIn("بدون زیرنویس: ویدیو گفتار ندارد", preview_caption)
         self.assertNotIn("زیرنویس فارسی", cloud.upsert_item.call_args.args[0]["caption"])
         self.assertNotIn("subtitle", [event[0] for event in events])
+
+    def test_media_backed_post_without_source_text_uses_fixed_no_caption_default(self):
+        result, events, _pipeline, _storage, cloud, _transcribe_mock = self._run_video_job(
+            {"decision": "skip", "reason": "no_speech", "language": None},
+            original_text="",
+        )
+
+        fixed = "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
+        self.assertEqual(result["caption"], fixed)
+        self.assertEqual(result["caption_mode"], "no_caption")
+        self.assertEqual(result["original_caption"], "")
+        self.assertEqual(result["persian_translation"], None)
+        self.assertEqual(cloud.upsert_item.call_args.args[0]["caption"], fixed)
+        preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
+        self.assertTrue(preview_caption.startswith(fixed))
+        self.assertNotIn("ترجمه", preview_caption)
+        self.assertNotIn("Official video update", preview_caption)
+        self.assertNotIn("translate", [event[0] for event in events])
 
     def test_no_cues_preview_reports_no_cues_without_changing_staged_caption(self):
         from scripts.subtitle_pipeline import SubtitleError
