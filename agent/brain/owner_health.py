@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 
 GITHUB_REPOSITORY = "hosseinasgari898989-dev/rubika-agent"
@@ -246,10 +246,8 @@ def render_health_section(snapshot: Mapping[str, Any] | None) -> list[str]:
     sample_date = str(d1.get("sample_date") or "نامشخص")
     if isinstance(sample_bytes, int) and not isinstance(sample_bytes, bool) and sample_bytes >= 0:
         pct = sample_bytes / D1_LIMIT_BYTES * 100
-        current_date = str(data.get("sampled_at") or "")[:10]
-        freshness = "نمونهٔ امروز" if current_date == sample_date else "نمونهٔ تاریخی"
         lines.append(
-            f"• D1: آخرین نمونه {freshness} {sample_date}، {_format_bytes(sample_bytes)} "
+            f"• D1: آخرین نمونهٔ ثبت‌شده در {sample_date}، {_format_bytes(sample_bytes)} "
             f"از 500 MiB ({pct:.2f}٪)؛ اندازهٔ زنده در digest قابل خواندن نیست."
         )
         if sample_bytes >= D1_PV_ALERT_BYTES:
