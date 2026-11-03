@@ -2707,7 +2707,7 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(keypadEdits[0].payload.inline_keypad.rows.flatMap(row => row.buttons || []).map(button => button.id).join(","), "p_home");
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "primary-panel-default-001"), false);
     assert.equal(state.DB.state.get("panel_mid"), "primary-panel-default-001");
-    assert.equal(state.DB.state.has("panel_sync_mode"), false);
+    assert.equal(state.DB.state.get("panel_sync_mode"), "inplace");
     assert.equal(state.DB.state.get("panel_edit_ok"), "2");
     assert.equal(state.DB.state.get("atomic_ok") || "0", "0");
     assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
