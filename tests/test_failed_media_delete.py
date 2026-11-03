@@ -72,6 +72,27 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(fmd.process(lambda p, b: {"ok": True, "items": []}, lambda *a, **k: cp(0)),
                          {"pending": 0, "deleted": 0, "failed": 0})
 
+    def test_mega_rm_precedes_worker_row_delete_result(self):
+        order = []
+
+        def post(path, payload):
+            if path.endswith("pending-delete"):
+                return {"ok": True, "items": [{"id": ID1, "storage_key": KEY}]}
+            order.append(("worker-delete-result", payload["id"], payload["ok"]))
+            return {"ok": True}
+
+        def runner(args, **kwargs):
+            order.append(("mega-rm", args[-1]))
+            return cp(0)
+
+        counts = fmd.process(post, runner)
+        self.assertEqual(counts, {"pending": 1, "deleted": 1, "failed": 0})
+        self.assertEqual(order, [
+            ("mega-rm", KEY),
+            ("worker-delete-result", ID1, True),
+        ])
+
+
 
 if __name__ == "__main__":
     unittest.main()
