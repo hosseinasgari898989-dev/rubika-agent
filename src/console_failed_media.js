@@ -1,8 +1,10 @@
 // Failed-media console routes (auth is enforced by index.js before handleConsoleApi). All POST:
-//   /failed-media/record          runner records a preserved original (upsert on storage_key)
-//   /failed-media/list            owner console lists items {limit?, offset?}
-//   /failed-media/delete-request  phase 1 {ids:[...]} or {all:true} returns a short-lived signed challenge;
-//                                 phase 2 {confirmation:"..."} marks at most 50 rows and dispatches the workflow
+//   /failed-media/record          Actions runner records a preserved original (upsert on storage_key)
+//   /failed-media/list            viewer/owner console reads items {limit?, offset?} with AGENT_API_TOKEN
+//   /failed-media/delete-request  requires OWNER_WEB_TOKEN; phase 1 {ids:[...]} or {all:true} returns a
+//                                 short-lived signed challenge; phase 2 {confirmation:"..."} marks at most
+//                                 50 rows and dispatches the workflow. AGENT_API_TOKEN remains the
+//                                 server-side HMAC key for this challenge, never an owner bearer.
 //   /failed-media/pending-delete  delete runner reads rows waiting for deletion
 //   /failed-media/delete-result   delete runner reports {id, ok}: ok removes the row (only AFTER mega-rm succeeded),
 //                                 failure sets status 'delete_failed'
@@ -41,17 +43,26 @@ const decodeBase64Url = (value) => {
   }
 };
 
-// The current web console has one privileged AGENT_API_TOKEN bearer. Do not accept caller-supplied roles/IDs.
-// The later owner/viewer token split is deliberately not simulated by an untrusted header here.
-function hasOwnerBearer(request, env) {
-  const expected = typeof env.AGENT_API_TOKEN === "string" ? env.AGENT_API_TOKEN : "";
+// Defense in depth for the owner-only deletion request. The router also gates all
+// owner mutations; this check deliberately uses only OWNER_WEB_TOKEN and fails closed.
+async function hasOwnerBearer(request, env) {
+  const expected = typeof env.OWNER_WEB_TOKEN === "string" ? env.OWNER_WEB_TOKEN : "";
   const match = /^Bearer ([^\s]+)$/.exec(request.headers.get("authorization") || "");
-  if (!expected || expected.length < 32 || !match || match[1].length !== expected.length) return false;
-  const a = new TextEncoder().encode(match[1]);
-  const b = new TextEncoder().encode(expected);
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i];
-  return diff === 0;
+  if (!expected || expected.length < 32 || expected === env.AGENT_API_TOKEN || !match) return false;
+  const encoder = new TextEncoder();
+  const [providedDigest, expectedDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(match[1])),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  const providedBytes = new Uint8Array(providedDigest);
+  const expectedBytes = new Uint8Array(expectedDigest);
+  let difference = 0;
+  for (let index = 0; index < 32; index += 1) difference |= providedBytes[index] ^ expectedBytes[index];
+  const fixedTimeMatch = difference === 0;
+  if (typeof crypto.subtle.timingSafeEqual === "function") {
+    return crypto.subtle.timingSafeEqual(providedDigest, expectedDigest) && fixedTimeMatch;
+  }
+  return fixedTimeMatch;
 }
 
 async function issueDeleteConfirmation(env, rows) {
@@ -215,7 +226,7 @@ async function list(request, env, h, fail) {
 }
 
 async function deleteRequest(request, env, h, fail) {
-  if (!hasOwnerBearer(request, env)) return fail("owner_required", 403);
+  if (!(await hasOwnerBearer(request, env))) return fail("owner_required", 403);
   const { b, res } = await readBody(request, h, fail);
   if (res) return res;
 

@@ -110,6 +110,51 @@ function authorized(request, env) {
   return Boolean(expected && match && tokenMatches(match[1], expected));
 }
 
+// Hash both bearer values to fixed-size digests before comparing. Cloudflare's
+// timingSafeEqual is used when available; the fixed 32-byte fallback avoids
+// leaking the original token length in Node-based Worker tests.
+async function ownerTokenMatches(provided, expected) {
+  if (typeof provided !== "string" || typeof expected !== "string" || expected.length < 32) return false;
+  const encoder = new TextEncoder();
+  const [providedDigest, expectedDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  const providedBytes = new Uint8Array(providedDigest);
+  const expectedBytes = new Uint8Array(expectedDigest);
+  let difference = 0;
+  for (let index = 0; index < 32; index += 1) difference |= providedBytes[index] ^ expectedBytes[index];
+  const fixedTimeMatch = difference === 0;
+  if (typeof crypto.subtle.timingSafeEqual === "function") {
+    return crypto.subtle.timingSafeEqual(providedDigest, expectedDigest) && fixedTimeMatch;
+  }
+  return fixedTimeMatch;
+}
+
+async function ownerAuthorized(request, env) {
+  const expected = typeof env.OWNER_WEB_TOKEN === "string" ? env.OWNER_WEB_TOKEN : "";
+  const match = /^Bearer ([^\s]+)$/.exec(request.headers.get("authorization") || "");
+  if (!expected || expected.length < 32 || expected === env.AGENT_API_TOKEN || !match) return false;
+  return ownerTokenMatches(match[1], expected);
+}
+
+const ACTIONS_RUNNER_POSTS = new Set([
+  "/mob-x/claim",
+  "/mob-x/publish-claim",
+  "/failed-media/record",
+  "/failed-media/list",
+  "/failed-media/pending-delete",
+  "/failed-media/delete-result",
+  "/d1/query", // SELECT-only explorer endpoint
+]);
+function requiresOwnerConsoleToken(path, method) {
+  if (!path.startsWith("/api/console/") || ["GET", "HEAD", "OPTIONS"].includes(method)) return false;
+  const sub = path.replace(/\/+$/, "").slice("/api/console".length);
+  if (ACTIONS_RUNNER_POSTS.has(sub)) return false;
+  if (/^\/mob-x\/jobs\/[A-Za-z0-9_-]{1,100}\/(?:transition|preview|delivery)$/.test(sub)) return false;
+  return true;
+}
+
 function canonicalUrlFor(platform, value) {
   if (typeof value !== "string" || value.length > 2048) return null;
   let parsed;
@@ -1374,7 +1419,11 @@ async function route(request, env, ctx) {
     }
 
     if (path.startsWith("/api/console/")) {
-      if (!authorized(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+      if (requiresOwnerConsoleToken(path, request.method)) {
+        if (!(await ownerAuthorized(request, env))) return json({ ok: false, error: "owner_required" }, 403);
+      } else if (!authorized(request, env)) {
+        return json({ ok: false, error: "unauthorized" }, 401);
+      }
       return handleConsoleApi(request, env, { json, readJson, text, validIdentifier });
     }
 

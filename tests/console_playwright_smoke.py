@@ -225,6 +225,24 @@ def main() -> int:
         if req.method == "OPTIONS":
             route.fulfill(status=204, headers=CORS, body="")
             return
+        if parts.path.startswith("/api/console/"):
+            runner_posts = {
+                "/api/console/mob-x/claim", "/api/console/mob-x/publish-claim",
+                "/api/console/failed-media/record", "/api/console/failed-media/list",
+                "/api/console/failed-media/pending-delete", "/api/console/failed-media/delete-result",
+                "/api/console/d1/query",
+            }
+            owner_mutation = req.method not in ("GET", "HEAD", "OPTIONS") and parts.path not in runner_posts
+            if parts.path.startswith("/api/console/mob-x/jobs/") and parts.path.rsplit("/", 1)[-1] in ("transition", "preview", "delivery"):
+                owner_mutation = False
+            expected = "Bearer playwright-owner-fixture-only" if owner_mutation else "Bearer playwright-fixture-only"
+            if req.headers.get("authorization") != expected:
+                failures.append(f"wrong bearer for {req.method} {parts.path}")
+                route.fulfill(
+                    status=403, content_type="application/json", headers=CORS,
+                    body=json.dumps({"ok": False, "error": "wrong_fixture_bearer"}),
+                )
+                return
         try:
             body = req.post_data_json if req.post_data else {}
             if not isinstance(body, dict):
@@ -259,6 +277,7 @@ def main() -> int:
         context.add_init_script(
             "localStorage.setItem('rc_base', 'https://mock-worker.test');"
             "localStorage.setItem('rc_token', 'playwright-fixture-only');"
+            "localStorage.setItem('rc_owner_token', 'playwright-owner-fixture-only');"
         )
         page = context.new_page()
         page.route(f"{MOCK_BASE}/**", mock_worker)

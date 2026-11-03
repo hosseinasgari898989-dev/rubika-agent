@@ -1,5 +1,5 @@
 // Owner web console API (phase 1). Same Worker, same D1. Nothing here publishes, downloads or runs jobs.
-// Auth (Bearer AGENT_API_TOKEN) is enforced by the caller in index.js BEFORE handleConsoleApi() is reached.
+// index.js requires OWNER_WEB_TOKEN for browser mutations; AGENT_API_TOKEN remains for reads and Actions runner routes.
 // Endpoints not implemented here fall through to 404 {ok:false,error:"not_found"}; the console shows them as "not active yet".
 
 import { handleConsoleRetry } from "./console_retry.js";
