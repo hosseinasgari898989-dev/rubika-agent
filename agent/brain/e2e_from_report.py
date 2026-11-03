@@ -239,27 +239,31 @@ def _preserve_failed_tiktok_original(
         return {"attempted": False, "reason": "delivery_confirmed"}
     if status not in {"failed", "uncertain"}:
         return {"attempted": False, "reason": "delivery_not_failed"}
-    if original_path is None or not original_path.is_file() or original_path.stat().st_size <= 0:
+    if original_path is None:
         return {"attempted": False, "error": "failed_media_original_unavailable"}
 
-    reason = _safe_error(delivery.get("error") or status)
     try:
+        if not original_path.is_file() or original_path.stat().st_size <= 0:
+            return {"attempted": False, "error": "failed_media_original_unavailable"}
+        reason = _safe_error(delivery.get("error") or status)
         result = preserve_failed_media(
             client, storage, "tiktok", "video", original_path, caption, reason,
             job_id=None, item_id=item_id,
         )
+        if not isinstance(result, Mapping):
+            raise TypeError("failed_media_result_invalid")
+        return {
+            "attempted": True,
+            "ok": bool(result.get("ok")),
+            "stored": bool(result.get("stored")),
+            "recorded": bool(result.get("recorded")),
+            "error": _safe_error(result.get("error")) if result.get("error") else None,
+        }
     except Exception:
-        # The helper is designed never to raise, but this boundary protects the
-        # original Rubika outcome even if a future helper implementation regresses.
+        # File inspection, Mega upload, Worker recording or result parsing must
+        # never replace the original Rubika failure/uncertain delivery outcome.
         return {"attempted": True, "ok": False, "stored": False, "recorded": False,
                 "error": "failed_media_internal_error"}
-    return {
-        "attempted": True,
-        "ok": bool(result.get("ok")),
-        "stored": bool(result.get("stored")),
-        "recorded": bool(result.get("recorded")),
-        "error": _safe_error(result.get("error")) if result.get("error") else None,
-    }
 
 
 def run_one(
