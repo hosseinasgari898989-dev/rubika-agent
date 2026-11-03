@@ -184,7 +184,7 @@ test("a valid owner confirmation changes exact snapshots and dispatches once", a
   try {
     env = makeEnv({ token: "test-dispatch-token" });
     const stageOne = await (await post("/failed-media/delete-request", { ids: [ID1] })).json();
-    const stageTwoResponse = await post("/failed-media/delete-request", { confirmation: stageOne.confirmation });
+    const stageTwoResponse = await post("/failed-media/delete-request", { confirmation: stageOne.confirmation, phrase: "DELETE" });
     const stageTwo = await stageTwoResponse.json();
     assert.equal(stageTwoResponse.status, 200);
     assert.deepEqual([stageTwo.requested, stageTwo.dispatched], [1, true]);
@@ -205,17 +205,17 @@ test("replayed or tampered signed confirmation is rejected", async () => {
   env = makeEnv();
   const challenge = await (await post("/failed-media/delete-request", { ids: [ID1] })).json();
   const tampered = challenge.confirmation.slice(0, -1) + (challenge.confirmation.endsWith("A") ? "B" : "A");
-  const invalid = await post("/failed-media/delete-request", { confirmation: tampered });
+  const invalid = await post("/failed-media/delete-request", { confirmation: tampered, phrase: "DELETE" });
   assert.equal(invalid.status, 409);
   assert.equal((await invalid.json()).error, "confirmation_invalid_or_expired");
   const [payloadPart, signaturePart] = challenge.confirmation.split(".");
   const changedSignature = (signaturePart[0] === "A" ? "B" : "A") + signaturePart.slice(1);
-  const badSignature = await post("/failed-media/delete-request", { confirmation: payloadPart + "." + changedSignature });
+  const badSignature = await post("/failed-media/delete-request", { confirmation: payloadPart + "." + changedSignature, phrase: "DELETE" });
   assert.equal(badSignature.status, 409, "changed signature bytes must fail HMAC verification");
   assert.equal((await badSignature.json()).error, "confirmation_invalid_or_expired");
-  const first = await post("/failed-media/delete-request", { confirmation: challenge.confirmation });
+  const first = await post("/failed-media/delete-request", { confirmation: challenge.confirmation, phrase: "DELETE" });
   assert.equal(first.status, 200);
-  const replay = await post("/failed-media/delete-request", { confirmation: challenge.confirmation });
+  const replay = await post("/failed-media/delete-request", { confirmation: challenge.confirmation, phrase: "DELETE" });
   assert.equal(replay.status, 409);
   assert.equal((await replay.json()).error, "confirmation_stale");
 });
@@ -238,7 +238,7 @@ test("delete-all only stages up to 50 rows and requires signed second step", asy
   assert.equal(first.requested, 50);
   assert.equal(first.limited, true);
   assert.equal([...env.rows.values()].filter(row => row.status === "stored").length, 55);
-  const secondResponse = await post("/failed-media/delete-request", { confirmation: first.confirmation });
+  const secondResponse = await post("/failed-media/delete-request", { confirmation: first.confirmation, phrase: "DELETE" });
   const second = await secondResponse.json();
   assert.equal(secondResponse.status, 200);
   assert.equal(second.requested, 50);
