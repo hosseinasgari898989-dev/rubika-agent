@@ -721,7 +721,7 @@ const OWNER_TOKEN = "test-owner-web-token-with-at-least-thirty-two-characters";
 const env = () => ({ DB: new FakeDB(), AGENT_API_TOKEN: TOKEN, OWNER_WEB_TOKEN: OWNER_TOKEN });
 const OWNER_EXEMPT_POSTS = new Set([
   "/mob-x/claim", "/mob-x/publish-claim",
-  "/failed-media/record", "/failed-media/list", "/failed-media/pending-delete", "/failed-media/delete-result",
+  "/failed-media/record", "/failed-media/list", "/failed-media/pending-delete", "/failed-media/delete-result", "/d1/query",
 ]);
 const needsOwnerToken = (url, method) => {
   if (!url.startsWith("/api/console/") || ["GET", "HEAD", "OPTIONS"].includes(method)) return false;
@@ -808,6 +808,13 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(closed.status, 403, "missing OWNER_WEB_TOKEN must fail closed");
   assert.equal(closed.body.error, "owner_required");
   assert.equal(missingSecret.DB.panelLinks.size, 0, "denied owner requests must not mutate D1 state");
+
+  const sharedSecret = env();
+  sharedSecret.OWNER_WEB_TOKEN = TOKEN;
+  const shared = await read(await worker.fetch(
+    request(path, { method: "POST", body, token: TOKEN }), sharedSecret
+  ));
+  assert.equal(shared.status, 403, "OWNER_WEB_TOKEN must not reuse the viewer/Actions secret");
 
   const viewerRead = await read(await worker.fetch(
     request("/api/console/events", { token: TOKEN }), state
