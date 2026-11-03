@@ -742,6 +742,7 @@ class FakeDB {
     this.aiProviderCalls = new Map();
     this.ownerDigestState = null;
     this.ownerDigestEvents = [];
+    this.sizeAfter = 12 * 1024 * 1024;
     this.ownerConsoleState = { id: 1, offset_id: null, updated_at: null };
     this.ownerConsoleUpdates = new Map();
     this.queueStateRepairCalls = 0;
