@@ -2738,17 +2738,17 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(firstText[0].payload.text, "⏳ در حال انجام…");
     assert.equal(firstText.at(-1).payload.text.includes("انتخاب لینک‌های غیرفعال"), true);
     const firstButtons = firstKeypad.at(-1).payload.inline_keypad.rows.flatMap(row => row.buttons || []).map(button => button.id);
-    assert.ok(firstButtons.some(id => id === "p_lsel_1_12"), "first inactive link needs a selectable glass button; actual=" + JSON.stringify({ firstButtons, finalText: firstText.at(-1)?.payload.text, links: state.DB.links }));
-    assert.ok(firstButtons.some(id => id === "p_lsel_2_12"), "second inactive link needs a selectable glass button");
+    assert.ok(firstButtons.some(id => id === "p_lsel_1_21"), "first inactive link needs a selectable glass button; actual=" + JSON.stringify({ firstButtons, finalText: firstText.at(-1)?.payload.text, links: state.DB.links }));
+    assert.ok(firstButtons.some(id => id === "p_lsel_2_21"), "second inactive link needs a selectable glass button");
     assert.equal(state.DB.state.get("panel_mid"), "inactive-link-select-main");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
 
-    await click("p_lsel_1_12");
+    await click("p_lsel_1_21");
     const finalText = calls.filter(call => call.method === "editMessageText").at(-1);
     const finalButtons = calls.filter(call => call.method === "editMessageKeypad").at(-1).payload.inline_keypad.rows.flatMap(row => row.buttons || []).map(button => button.id);
     assert.equal(finalText.payload.message_id, "inactive-link-select-main");
     assert.equal(finalText.payload.text.includes("☑️ 1)"), true);
-    assert.ok(finalButtons.includes("p_lseldel_1_12"), "selecting one row must reveal the matching delete action");
+    assert.ok(finalButtons.includes("p_lseldel_1_21"), "selecting one row must reveal the matching delete action");
     assert.equal(state.DB.state.get("panel_mid"), "inactive-link-select-main");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
     assert.equal(calls.some(call => call.method === "sendFile"), false, "selection screens do not create temporary media messages");
