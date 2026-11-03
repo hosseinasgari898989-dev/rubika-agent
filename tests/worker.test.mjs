@@ -3591,21 +3591,21 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 
   const tampered = challenge.body.confirmation.slice(0, -1) + (challenge.body.confirmation.endsWith("A") ? "B" : "A");
   const invalidConfirm = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
-    method: "POST", body: { confirmation: tampered },
+    method: "POST", body: { confirmation: tampered, phrase: "DELETE" },
   }), state));
   assert.equal(invalidConfirm.status, 409);
   assert.equal(invalidConfirm.body.error, "confirmation_invalid_or_expired");
   assert.equal(state.DB.failedMedia.get(id).status, "stored");
 
   const confirmed = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
-    method: "POST", body: { confirmation: challenge.body.confirmation },
+    method: "POST", body: { confirmation: challenge.body.confirmation, phrase: "DELETE" },
   }), state));
   assert.equal(confirmed.status, 200);
   assert.equal(confirmed.body.requested, 1);
   assert.equal(state.DB.failedMedia.get(id).status, "delete_requested");
 
   const replay = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
-    method: "POST", body: { confirmation: challenge.body.confirmation },
+    method: "POST", body: { confirmation: challenge.body.confirmation, phrase: "DELETE" },
   }), state));
   assert.equal(replay.status, 409, "a used snapshot must not be replayable");
   assert.equal(replay.body.error, "confirmation_stale");
@@ -3656,7 +3656,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal([...state.DB.failedMedia.values()].filter(row => row.status === "stored").length, 55);
 
   const stageTwo = await read(await worker.fetch(request("/api/console/failed-media/delete-request", {
-    method: "POST", body: { confirmation: stageOne.body.confirmation },
+    method: "POST", body: { confirmation: stageOne.body.confirmation, phrase: "DELETE" },
   }), state));
   assert.equal(stageTwo.status, 200);
   assert.equal(stageTwo.body.requested, 50);
