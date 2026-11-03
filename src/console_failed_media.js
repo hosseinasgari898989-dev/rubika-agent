@@ -220,7 +220,10 @@ async function deleteRequest(request, env, h, fail) {
   if (res) return res;
 
   // Phase 2: consume a short-lived HMAC confirmation bound to the exact row snapshots.
-  if (Object.keys(b).length === 1 && typeof b.confirmation === "string") {
+  if (Object.hasOwn(b, "confirmation")) {
+    if (Object.keys(b).length !== 2 || typeof b.confirmation !== "string" || b.phrase !== "DELETE") {
+      return fail("confirmation_phrase_required");
+    }
     const payload = await verifyDeleteConfirmation(env, b.confirmation);
     if (!payload) return fail("confirmation_invalid_or_expired", 409);
     const rows = payload.rows;
