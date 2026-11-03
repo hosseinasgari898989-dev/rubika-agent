@@ -93,6 +93,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_agent_brain.py' -v
           python -m unittest discover -s tests -p 'test_source_policy.py' -v
           python -m unittest discover -s tests -p 'test_e2e_batch_from_report.py' -v
+          python -m unittest discover -s tests -p 'test_failed_tiktok_preservation.py' -v
           python -m unittest discover -s tests -p 'test_authorization.py' -v
           python -m unittest discover -s tests -p 'test_orchestrator.py' -v
           python -m unittest discover -s tests -p 'test_official_stage.py' -v
