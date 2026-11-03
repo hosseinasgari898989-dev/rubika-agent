@@ -98,9 +98,9 @@ modal('<h3 style="margin-bottom:8px">جزئیات کار</h3>'+
  row('نوع',E(JL[j.type]||j.type))+row('وضعیت',badge(j.status))+row('پیشرفت',N(j.progress)+'٪')+
  row('شناسهٔ پست (۶ رقم آخر)',E(String(x.external_id||'').slice(-6)||'—'))+
  row('رسانه',E(x.media_type||'—'))+row('کپشن',E(cut(String(x.caption||''),240)||'—'))+
- row('پیش‌نمایش در PV',x.preview_sent?'<span class="bd ok">ارسال شد</span>':'—')+
+ row('پیش‌نمایش در PV',x.preview_sent?'<span class="bd ok">آمادهٔ بررسی</span>':(x.caption_refresh_state==='not_refreshed'?'<span class="bd warn">کپشن تغییر کرده؛ پیش‌نمایش تازه را در PV آماده کن</span>':'—'))+
  row('وضعیت ارسال',E(x.delivery_status||'—'))+row('خطا',E(j.error||x.delivery_error||'—'))+
- '<div class="s" style="margin-top:10px">این سه اقدام فقط روی همین کار Mob X و فقط در وضعیت آمادهٔ بررسی اعمال می‌شوند. تأیید و انتشار همچنان فقط از PV انجام می‌شود؛ پیش‌نمایش ویدیو و انتشار از وب وجود ندارد.</div>'+
+ '<div class="s" style="margin-top:10px">این سه اقدام فقط روی همین job Mob X اعمال می‌شوند. پس از تغییر کپشن، پیش‌نمایش قبلی نامعتبر می‌شود؛ پیش از تأیید باید پیش‌نمایش تازه را در PV آماده کنی. تأیید و انتشار فقط از PV است؛ وب پیش‌نمایش یا انتشار انجام نمی‌دهد.</div>'+
  actions+
  '<div class="row" style="margin-top:14px"><button class="btn g" data-a="close">بستن</button></div>');
 };
