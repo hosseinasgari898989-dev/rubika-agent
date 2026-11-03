@@ -20,13 +20,13 @@ GITHUB_API_BASE = "https://api.github.com/repos/" + GITHUB_REPOSITORY
 GITHUB_TIMEOUT_SECONDS = 6
 GITHUB_RESPONSE_MAX_BYTES = 512 * 1024
 
-D1_LIMIT_BYTES = 500 * 1024 * 1024
-D1_WARN_BYTES = 50 * 1024 * 1024
-D1_PV_ALERT_BYTES = 250 * 1024 * 1024
+D1_LIMIT_BYTES = 500_000_000
+D1_WARN_BYTES = 50_000_000
+D1_PV_ALERT_BYTES = 250_000_000
 D1_LAST_SAMPLE_BYTES = 991_232
 D1_LAST_SAMPLE_DATE = "2026-11-03"
 
-MEGA_LIMIT_BYTES = 20 * 1024 * 1024 * 1024
+MEGA_LIMIT_BYTES = 20_000_000_000
 MEGA_WARN_BYTES = int(MEGA_LIMIT_BYTES * 0.70)
 
 DAILY_LIMITS = {
@@ -233,8 +233,12 @@ def build_health_snapshot(
     return snapshot
 
 
-def _format_bytes(value: int) -> str:
-    return f"{value / (1024 * 1024):.2f} MiB"
+def _format_mb(value: int) -> str:
+    return f"{value / 1_000_000:.2f} MB"
+
+
+def _format_gb(value: int) -> str:
+    return f"{value / 1_000_000_000:.2f} GB"
 
 
 def render_health_section(snapshot: Mapping[str, Any] | None) -> list[str]:
@@ -247,15 +251,15 @@ def render_health_section(snapshot: Mapping[str, Any] | None) -> list[str]:
     if isinstance(sample_bytes, int) and not isinstance(sample_bytes, bool) and sample_bytes >= 0:
         pct = sample_bytes / D1_LIMIT_BYTES * 100
         lines.append(
-            f"• D1: آخرین نمونهٔ ثبت‌شده در {sample_date}، {_format_bytes(sample_bytes)} "
-            f"از 500 MiB ({pct:.2f}٪)؛ حدود هشدار 50 MiB و PV برابر 250 MiB؛ اندازهٔ زنده در digest قابل خواندن نیست."
+            f"• D1: آخرین نمونهٔ ثبت‌شده در {sample_date}، {_format_mb(sample_bytes)} "
+            f"از 500 MB ({pct:.2f}٪)؛ حدود هشدار 50 MB و PV برابر 250 MB؛ اندازهٔ زنده در digest قابل خواندن نیست."
         )
         if sample_bytes >= D1_PV_ALERT_BYTES:
-            lines.append("🚨 هشدار PV: اندازهٔ D1 از 250 MiB عبور کرده است.")
+            lines.append("🚨 هشدار PV: اندازهٔ D1 از 250 MB عبور کرده است.")
         elif sample_bytes >= D1_WARN_BYTES:
-            lines.append("⚠️ هشدار ظرفیت D1: اندازه از 50 MiB عبور کرده است.")
+            lines.append("⚠️ هشدار ظرفیت D1: اندازه از 50 MB عبور کرده است.")
     else:
-        lines.append("• D1: اندازهٔ فعلی از محیط digest قابل خواندن نیست؛ حدود هشدار 50 MiB و PV برابر 250 MiB از سقف 500 MiB است.")
+        lines.append("• D1: اندازهٔ فعلی از محیط digest قابل خواندن نیست؛ حدود هشدار 50 MB و PV برابر 250 MB از سقف 500 MB است.")
 
     usage = data.get("daily_usage") if isinstance(data.get("daily_usage"), Mapping) else {}
     usage_labels = {
@@ -294,7 +298,7 @@ def render_health_section(snapshot: Mapping[str, Any] | None) -> list[str]:
     if mega.get("available") is True and isinstance(mega.get("used_bytes"), int):
         used = mega["used_bytes"]
         pct = used / MEGA_LIMIT_BYTES * 100
-        lines.append(f"• MEGA: {_format_bytes(used)} از 20 GiB ({pct:.1f}٪)؛ هشدار در 14 GiB.")
+        lines.append(f"• MEGA: {_format_gb(used)} از 20 GB ({pct:.1f}٪)؛ هشدار در 14 GB.")
         if used >= MEGA_WARN_BYTES:
             lines.append("⚠️ هشدار فضای MEGA: مصرف به 70٪ رسیده است.")
     else:
