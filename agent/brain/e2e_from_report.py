@@ -424,15 +424,23 @@ def run_one(
                 # Intentional validation/duplicate/moderation rejections remove the raw
                 # file in stage_edit_batch, so they naturally remain unpreserved.
                 if platform == "tiktok" and stage.staged_count == 0 and candidates:
-                    first_candidate = candidates[0]
-                    safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", first_candidate.external_id)[:80]
-                    raw_original = output_dir / "raw" / f"tiktok_{safe_id}.mp4"
-                    if raw_original.is_file() and raw_original.stat().st_size > 0:
-                        report_detail["failed_media_preservation"] = _preserve_failed_tiktok_original(
+                    preserved_rows = []
+                    for failed_candidate in candidates:
+                        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", failed_candidate.external_id)[:80]
+                        raw_original = output_dir / "raw" / f"tiktok_{safe_id}.mp4"
+                        if not raw_original.is_file() or raw_original.stat().st_size <= 0:
+                            continue
+                        result = _preserve_failed_tiktok_original(
                             cloud, storage, raw_original,
-                            "tiktok:" + first_candidate.external_id, EDIT_CAPTION,
+                            "tiktok:" + failed_candidate.external_id, EDIT_CAPTION,
                             {"status": "failed", "error": _safe_error(report_detail.get("reason") or "staging_failed")},
                         )
+                        preserved_rows.append({
+                            "item_id": "tiktok:" + failed_candidate.external_id,
+                            **result,
+                        })
+                    if preserved_rows:
+                        report_detail["failed_media_preservation"] = preserved_rows
                 return {"ok": False, "status": "staging_failed", **report_detail}
         current_state = ledger.load()
         item_map = current_state.get("items", {})
