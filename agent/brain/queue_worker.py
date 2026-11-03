@@ -73,6 +73,15 @@ def _safe_failure_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
             if type(value) is int and value >= 0:
                 diagnostics[key] = value
 
+    failed_media = result.get("failed_media")
+    if isinstance(failed_media, dict):
+        recorded = failed_media.get("recorded")
+        diagnostics["failed_media"] = {
+            "stored": failed_media.get("stored") is True,
+            "recorded": recorded if type(recorded) is bool else None,
+            "error": _safe_code(failed_media["error"]) if failed_media.get("error") else None,
+        }
+
     return diagnostics
 
 
