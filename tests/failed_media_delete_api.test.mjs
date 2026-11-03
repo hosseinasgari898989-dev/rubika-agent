@@ -211,6 +211,13 @@ test("delete-request dispatches only after signed server confirmation", async ()
 test("stale confirmation and empty dispatch sets are rejected without redispatch", async () => {
   env = makeEnv({ changes: 0, token: "tok" });
   const challenge = await (await post("/failed-media/delete-request", { ids: [ID] })).json();
+  const missingPhrase = await post("/failed-media/delete-request", { confirmation: challenge.confirmation });
+  assert.equal(missingPhrase.status, 400);
+  assert.equal((await missingPhrase.json()).error, "confirmation_phrase_required");
+  const wrongPhrase = await post("/failed-media/delete-request", { confirmation: challenge.confirmation, phrase: "NO" });
+  assert.equal(wrongPhrase.status, 400);
+  assert.equal((await wrongPhrase.json()).error, "confirmation_phrase_required");
+  assert.equal(env.rows.get(ID).status, "stored");
   const stale = await post("/failed-media/delete-request", { confirmation: challenge.confirmation, phrase: "DELETE" });
   assert.equal(stale.status, 409);
   assert.equal((await stale.json()).error, "confirmation_stale");
