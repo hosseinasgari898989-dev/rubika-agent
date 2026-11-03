@@ -4,6 +4,7 @@
 
 import { handleConsoleRetry } from "./console_retry.js";
 import { handleFailedMedia } from "./console_failed_media.js";
+import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -804,6 +805,132 @@ export async function handleConsoleApi(request, env, h) {
         id: row.id, type: row.type, status: row.status, progress: Number(row.progress || 0),
         result, error: row.error || null, created_at: row.created_at, updated_at: row.updated_at,
       } });
+    }
+
+    // ---------- owner-only Mob X review actions (no preview, approval or publish path) ----------
+    const mobXReviewMatch = /^\/jobs\/(job_[A-Fa-f0-9]{8,80})\/mob-x-review$/.exec(sub);
+    if (mobXReviewMatch && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const body = parsed.value;
+      if (Object.keys(body).some(key => !["action", "caption"].includes(key))) return fail("fields_not_allowed", 400);
+      const action = body.action;
+      if (!["edit_caption", "no_caption", "reject"].includes(action)) return fail("invalid_action", 400);
+      if (action === "edit_caption" && typeof body.caption !== "string") return fail("invalid_caption", 400);
+      if (action !== "edit_caption" && Object.hasOwn(body, "caption")) return fail("caption_not_allowed_for_action", 400);
+
+      const jobId = mobXReviewMatch[1];
+      const row = await first(
+        "SELECT id, type, status, panel_link_id, result_json FROM console_jobs WHERE id = ?",
+        jobId
+      );
+      if (!row || row.type !== "mob_x_link") return fail("mob_x_job_not_found", 404);
+      let result = null;
+      try { result = row.result_json ? JSON.parse(row.result_json) : null; } catch {}
+      if (!isRecord(result) || typeof result.item_id !== "string" || !result.item_id) {
+        return fail("mob_x_job_result_invalid", 409);
+      }
+      const item = await first(
+        "SELECT id, platform, status, review_state, caption, original_caption, persian_translation FROM items WHERE id = ?",
+        result.item_id
+      );
+      const panelLink = await first(
+        "SELECT id, status FROM panel_links WHERE id = ?",
+        row.panel_link_id
+      );
+      if (!item || item.platform !== "mob_official") return fail("mob_x_item_not_found", 404);
+
+      if (action === "reject" && row.status === "rejected" &&
+          panelLink?.status === "rejected" && item.status === "ready" &&
+          item.review_state === "rejected") {
+        return json({ ok: true, action, status: "rejected", unchanged: true });
+      }
+      if (row.status !== "ready_for_review" || panelLink?.status !== "ready_for_review" ||
+          item.status !== "ready" || item.review_state !== "pending") {
+        return fail("invalid_state_for_action", 409);
+      }
+
+      const now = new Date().toISOString();
+      if (action === "reject") {
+        const detail = JSON.stringify({ job_id: jobId, panel_link_id: row.panel_link_id, action }).slice(0, 900);
+        const results = await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE console_jobs SET status = 'rejected', progress = 100, error = NULL, updated_at = ? " +
+            "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND panel_link_id = ? " +
+            "AND EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'ready_for_review') " +
+            "AND EXISTS (SELECT 1 FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending')"
+          ).bind(now, jobId, row.panel_link_id, row.panel_link_id, result.item_id),
+          env.DB.prepare(
+            "UPDATE panel_links SET status = 'rejected', updated_at = ? WHERE id = ? AND status = 'ready_for_review' AND changes() > 0"
+          ).bind(now, row.panel_link_id),
+          env.DB.prepare(
+            "UPDATE items SET review_state = 'rejected' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0"
+          ).bind(result.item_id),
+          env.DB.prepare(
+            "INSERT INTO brain_events (item_id, level, code, details_json) SELECT ?, 'info', 'console_mob_x_reject', ? WHERE changes() > 0"
+          ).bind(result.item_id, detail),
+        ]);
+        if (!results?.[0]?.meta?.changes || !results?.[1]?.meta?.changes || !results?.[2]?.meta?.changes) {
+          return fail("invalid_state_for_action", 409);
+        }
+        return json({ ok: true, action, status: "rejected", unchanged: false });
+      }
+
+      if (!result.rubika_file_id) return fail("mob_x_preview_file_id_missing", 409);
+      let caption;
+      let captionMode;
+      if (action === "no_caption") {
+        caption = buildMobXNoCaptionCaption();
+        captionMode = "no_caption";
+      } else {
+        caption = normalizeMobXCaption(body.caption);
+        if (!caption) return fail("caption_empty", 400);
+        const rulesRow = await first("SELECT rules_json FROM console_rules WHERE id = 1");
+        let rules = {};
+        try { rules = rulesRow?.rules_json ? JSON.parse(rulesRow.rules_json) : {}; } catch {}
+        const captionMax = maxMobXCaptionChars(rules.caption_max_chars);
+        if (caption.length > captionMax) return fail("caption_too_long", 400);
+        captionMode = "edited";
+      }
+
+      const isUnchanged = result.caption === caption && result.caption_mode === captionMode &&
+        (action !== "no_caption" ||
+          (String(result.original_caption || "") === "" && String(result.persian_translation || "") === ""));
+      if (isUnchanged && String(item.caption || "") === caption &&
+          (action !== "no_caption" ||
+            (String(item.original_caption || "") === "" && String(item.persian_translation || "") === ""))) {
+        return json({ ok: true, action, status: row.status, unchanged: true });
+      }
+
+      const nextResult = { ...result, caption, caption_mode: captionMode };
+      if (action === "no_caption") {
+        nextResult.original_caption = "";
+        nextResult.persian_translation = "";
+      }
+      const nextResultJson = JSON.stringify(nextResult);
+      const auditCode = action === "no_caption" ? "console_mob_x_no_caption" : "console_mob_x_caption_edit";
+      const auditDetail = JSON.stringify({
+        job_id: jobId, panel_link_id: row.panel_link_id, action, caption_length: caption.length,
+      }).slice(0, 900);
+      const updateItemSql = action === "no_caption"
+        ? "UPDATE items SET caption = ?, original_caption = '', persian_translation = '' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND changes() > 0"
+        : "UPDATE items SET caption = ? WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND changes() > 0";
+      const results = await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE console_jobs SET result_json = ?, updated_at = ? " +
+          "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND result_json = ? AND panel_link_id = ? " +
+          "AND EXISTS (SELECT 1 FROM panel_links WHERE id = ? AND status = 'ready_for_review') " +
+          "AND EXISTS (SELECT 1 FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'ready')"
+        ).bind(nextResultJson, now, jobId, row.result_json, row.panel_link_id, row.panel_link_id, result.item_id),
+        env.DB.prepare(updateItemSql).bind(caption, result.item_id),
+        env.DB.prepare(
+          "INSERT INTO brain_events (item_id, level, code, details_json) SELECT ?, 'info', ?, ? WHERE changes() > 0"
+        ).bind(result.item_id, auditCode, auditDetail),
+      ]);
+      if (!results?.[0]?.meta?.changes || !results?.[1]?.meta?.changes) {
+        return fail("invalid_state_for_action", 409);
+      }
+      return json({ ok: true, action, status: row.status, caption, caption_mode: captionMode, unchanged: false });
     }
 
     // ---------- X links saved by the owner (panel_links) ----------
