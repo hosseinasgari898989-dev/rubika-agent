@@ -220,6 +220,9 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
             job["item_review_state"] = "rejected"
         else:
             return {"ok": False, "error": "invalid_action"}
+        if action in ("edit_caption", "no_caption"):
+            job["result"]["preview_sent"] = False
+            job["result"]["caption_refresh_state"] = "not_refreshed"
         MOB_REVIEW_ACTIONS.append({"job_id": job_id, "action": action, "caption": body.get("caption")})
         return {"ok": True, "action": action, "status": job["status"], "caption": job["result"].get("caption")}
     if path == "/api/console/jobs":
@@ -584,6 +587,8 @@ def main() -> int:
 
                 click_action(page, '#modal button[data-a="jMobNoCaption"]', "apply no-caption to this Mob X job")
                 page.wait_for_function("() => document.querySelector('#modal')?.innerText.includes('ماب انترتینمنت')", timeout=5000)
+                if "پیش‌نمایش تازه را در PV آماده کن" not in page.locator("#modal").inner_text():
+                    failures.append("jobs: stale preview was not clearly marked as requiring PV refresh")
 
                 page.once("dialog", lambda dialog: dialog.accept())
                 click_action(page, '#modal button[data-a="jMobReject"]', "reject this Mob X job")
