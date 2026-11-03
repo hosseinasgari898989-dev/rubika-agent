@@ -194,7 +194,7 @@ test("delete-request dispatches only after signed server confirmation", async ()
     assert.equal(env.rows.get(ID).status, "stored");
     assert.equal(sent.length, 0, "stage one cannot dispatch the Mega runner");
 
-    const stageTwoResponse = await post("/failed-media/delete-request", { confirmation: stageOne.confirmation });
+    const stageTwoResponse = await post("/failed-media/delete-request", { confirmation: stageOne.confirmation, phrase: "DELETE" });
     const stageTwo = await stageTwoResponse.json();
     assert.equal(stageTwoResponse.status, 200);
     assert.deepEqual([stageTwo.requested, stageTwo.dispatched], [1, true]);
@@ -211,7 +211,7 @@ test("delete-request dispatches only after signed server confirmation", async ()
 test("stale confirmation and empty dispatch sets are rejected without redispatch", async () => {
   env = makeEnv({ changes: 0, token: "tok" });
   const challenge = await (await post("/failed-media/delete-request", { ids: [ID] })).json();
-  const stale = await post("/failed-media/delete-request", { confirmation: challenge.confirmation });
+  const stale = await post("/failed-media/delete-request", { confirmation: challenge.confirmation, phrase: "DELETE" });
   assert.equal(stale.status, 409);
   assert.equal((await stale.json()).error, "confirmation_stale");
   assert.equal(env.rows.get(ID).status, "stored");
@@ -220,7 +220,7 @@ test("stale confirmation and empty dispatch sets are rejected without redispatch
 test("missing dispatch token or network error leaves request visible without changing order", async () => {
   env = makeEnv({ changes: 1, token: "" });
   const challenge = await (await post("/failed-media/delete-request", { ids: [ID] })).json();
-  const noToken = await post("/failed-media/delete-request", { confirmation: challenge.confirmation });
+  const noToken = await post("/failed-media/delete-request", { confirmation: challenge.confirmation, phrase: "DELETE" });
   assert.equal(noToken.status, 200);
   assert.equal((await noToken.json()).dispatched, false);
 
@@ -229,7 +229,7 @@ test("missing dispatch token or network error leaves request visible without cha
   try {
     env = makeEnv({ changes: 1, token: "tok" });
     const secondChallenge = await (await post("/failed-media/delete-request", { ids: [ID] })).json();
-    const failed = await post("/failed-media/delete-request", { confirmation: secondChallenge.confirmation });
+    const failed = await post("/failed-media/delete-request", { confirmation: secondChallenge.confirmation, phrase: "DELETE" });
     assert.equal(failed.status, 200);
     assert.equal((await failed.json()).dispatched, false);
   } finally {
