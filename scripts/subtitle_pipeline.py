@@ -604,6 +604,26 @@ def probe_duration_ms(path: str, run=subprocess.run) -> int:
         raise SubtitleError("probe_failed", repr(exc)) from exc
 
 
+def probe_video_dimensions(path: str, run=subprocess.run) -> tuple:
+    """Read the first real video stream dimensions; never infer from orientation labels."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-of", "json", path,
+    ]
+    r = run(cmd, capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise SubtitleError("probe_failed", (r.stderr or "")[-200:])
+    try:
+        streams = json.loads(r.stdout)["streams"]
+        width = int(streams[0]["width"])
+        height = int(streams[0]["height"])
+        if width < 1 or height < 1:
+            raise ValueError("invalid_dimensions")
+        return width, height
+    except (ValueError, KeyError, TypeError, IndexError) as exc:
+        raise SubtitleError("probe_failed", "video_dimensions_invalid") from exc
+
+
 def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: str = "assets/fonts",
                           font: str = "Estedad", glossary: str = "", transcribe_fn=transcribe,
                           run=subprocess.run, max_missing_ratio: float = 0.0) -> dict:
@@ -620,6 +640,7 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
     asr_diagnostics = build_asr_diagnostics(raw_cues, cues, dropped_duplicates, 0)
     try:
         d_in = probe_duration_ms(str(video), run)
+        video_width, video_height = probe_video_dimensions(str(video), run)
         asr_diagnostics = build_asr_diagnostics(raw_cues, cues, dropped_duplicates, d_in)
         if not cues:
             raise SubtitleError("no_cues")
@@ -631,11 +652,19 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
             glossary=glossary, max_missing_ratio=max_missing_ratio,
         )
         fa_cues = split_long_cues(fa_cues)
+        try:
+            fa_cues, subtitle_font_sizes = st.layout_cues(
+                fa_cues, width=video_width, height=video_height,
+                fontsdir=fontsdir, font=font,
+            )
+        except Exception as exc:
+            raise SubtitleError("subtitle_layout_failed", type(exc).__name__) from exc
         srt, ass, out = wd / "fa.srt", wd / "fa.ass", wd / "subtitled.mp4"
         srt.write_text(st.format_srt(fa_cues), encoding="utf-8")
         try:
             ass_text, _glyph_bounds = st.to_ass_with_glyph_boxes(
-                fa_cues, fontsdir=fontsdir, font=font,
+                fa_cues, fontsdir=fontsdir, font=font, width=video_width,
+                height=video_height, font_sizes=subtitle_font_sizes,
             )
         except Exception as exc:
             raise SubtitleError(
@@ -660,7 +689,8 @@ def build_subtitled_video(video: str, workdir: str, translate_fn, *, fontsdir: s
         return {
             "out": str(out), "srt": str(srt), "ass": str(ass), "cues": len(fa_cues),
             "missing": stats["missing"], "batches": stats["batches"], "size": size,
-            "duration_ms": d_out, **asr_report, **asr_diagnostics,
+            "duration_ms": d_out, "video_width": video_width, "video_height": video_height,
+            **asr_report, **asr_diagnostics,
             "non_speech_tags_removed": non_speech_tags_removed,
         }
     except SubtitleError as exc:
