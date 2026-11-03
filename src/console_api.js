@@ -110,9 +110,9 @@ export async function handleConsoleApi(request, env, h) {
         .map(category => ({ category, count: totals.get(category) || 0 }))
         .filter(row => row.count > 0);
       const safeDigestText = (value, max) => String(value ?? "")
-        .replace(/[\\u0000-\\u001f\\u007f]/g, " ")
-        .replace(/\\*\\*|__|--|~~|\\|\\||\`|\\[|\\]/g, "")
-        .replace(/\\s+/g, " ").trim().slice(0, max);
+        .replace(/[\u0000-\u001f\u007f]/g, " ")
+        .replace(/\*\*|__|--|~~|\|\||`|\[|\]/g, "")
+        .replace(/\s+/g, " ").trim().slice(0, max);
       const events = (eventRows || [])
         .filter(row => allowed.includes(row.category))
         .reverse()
