@@ -204,6 +204,13 @@ test("a valid owner confirmation changes exact snapshots and dispatches once", a
 test("replayed or tampered signed confirmation is rejected", async () => {
   env = makeEnv();
   const challenge = await (await post("/failed-media/delete-request", { ids: [ID1] })).json();
+  const missingPhrase = await post("/failed-media/delete-request", { confirmation: challenge.confirmation });
+  assert.equal(missingPhrase.status, 400);
+  assert.equal((await missingPhrase.json()).error, "confirmation_phrase_required");
+  const wrongPhrase = await post("/failed-media/delete-request", { confirmation: challenge.confirmation, phrase: "NO" });
+  assert.equal(wrongPhrase.status, 400);
+  assert.equal((await wrongPhrase.json()).error, "confirmation_phrase_required");
+  assert.equal(env.rows.get(ID1).status, "stored");
   const tampered = challenge.confirmation.slice(0, -1) + (challenge.confirmation.endsWith("A") ? "B" : "A");
   const invalid = await post("/failed-media/delete-request", { confirmation: tampered, phrase: "DELETE" });
   assert.equal(invalid.status, 409);
