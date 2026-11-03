@@ -4573,7 +4573,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.failedMedia.has(id), false);
 }
 
-console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
+
 
 
 
@@ -4738,3 +4738,5 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(inviteNotice.payload.text.includes("\\n"), false, "invite claim notice must not contain literal backslash-n");
   });
 }
+
+console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
