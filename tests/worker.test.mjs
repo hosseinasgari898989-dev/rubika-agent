@@ -2239,15 +2239,23 @@ async function withDispatchFetch(responder, fn) {
       } },
     }, secret);
 
-    await click("p_mob", "mob-link-open-1");
+    await click("p_mob", "mob-link-confirm-panel");
     await postText("https://x.com/mobgamesstudios/status/2107878755079213476", "mob-link-text-2");
     assert.equal(state.DB.links.length, 1);
     assert.equal(state.DB.links[0].status, "pending");
     assert.equal(state.DB.consoleJobs.size, 0, "submitting a link must not start processing before owner confirmation");
-    assert.equal(calls.some(call => call.method === "sendMessage" && call.payload.text.includes("این لینک است؟")), true);
-
-    const confirmMessageId = state.DB.state.get("panel_mid");
+    const confirmMessage = calls.find(call => call.method === "sendMessage" && call.payload.text.includes("این لینک است؟"));
+    assert.ok(confirmMessage, "the Mob X confirmation prompt must be sent separately");
+    const confirmButtons = confirmMessage.payload.inline_keypad.rows.flatMap(row => row.buttons).map(button => button.id);
+    assert.deepEqual(confirmButtons, ["p_mob_confirm", "p_mob_cancel"], "the link-choice prompt must include both glass buttons");
+    const confirmMessageId = state.DB.state.get("panel_mob_temp_mid");
+    assert.ok(confirmMessageId && confirmMessageId !== state.DB.state.get("panel_mid"));
+    assert.equal(state.DB.state.get("panel_mid"), "mob-link-confirm-panel", "the confirmation prompt must not replace the main panel");
     await click("p_mob_confirm", confirmMessageId);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === confirmMessageId), true,
+      "the temporary link confirmation prompt must be deleted after its action");
+    assert.equal(state.DB.state.get("panel_mob_temp_mid"), "");
+    assert.equal(state.DB.state.get("panel_mid"), "mob-link-confirm-panel");
     assert.equal(state.DB.links[0].status, "confirmed");
     assert.equal(state.DB.consoleJobs.size, 1);
     const job = [...state.DB.consoleJobs.values()][0];
@@ -2276,6 +2284,7 @@ async function withDispatchFetch(responder, fn) {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "mob-x-main-panel-001");
     state.DB.consoleOwners.set(1, {
       id: 1, chat_id: "b0actualowner", role: "owner", enabled: 1,
     });
@@ -2321,6 +2330,13 @@ async function withDispatchFetch(responder, fn) {
     }, secret);
 
     await click("p_mob_nocap_" + firstJobId);
+    assert.equal(state.DB.state.get("panel_mid"), "mob-x-main-panel-001", "no-caption callback must not move panel_mid");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0, "the callback result belongs on the main message");
+    const mainTextEdits = calls.filter(call => call.method === "editMessageText" && call.payload.message_id === "mob-x-main-panel-001");
+    assert.ok(mainTextEdits.length >= 2, "slow action must edit main panel for loading and final result");
+    assert.match(mainTextEdits[0].payload.text, /در حال انجام/);
+    assert.equal(mainTextEdits.at(-1).payload.text.includes("کپشن حذف"), true);
+    assert.equal(calls.filter(call => call.method === "editMessageText").every(call => call.payload.message_id === "mob-x-main-panel-001"), true);
     const observedEvent = JSON.parse(state.DB.state.get("last_event") || "{}");
     assert.equal(observedEvent.button, "p_mob_nocap_" + firstJobId, "the PV hook must receive the no-caption callback");
     assert.ok(Number(state.DB.state.get("panel_seq") || 0) > 0, "the callback must pass owner authorization and event de-duplication");
@@ -2355,6 +2371,119 @@ async function withDispatchFetch(responder, fn) {
 
     await click("p_mob_nocap_" + firstJobId);
     assert.equal(calls.filter(call => call.method === "sendFile").length, 1, "a second click must be idempotent");
+  });
+}
+
+// Editing a Mob X caption keeps its prompt separate and deletes that temporary message after valid input.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "mob-x-main-panel-edit");
+    const jobId = "job_abcdef1234567890";
+    const itemId = "mob_official:2107878755079213476";
+    const result = {
+      item_id: itemId, caption: "Before", original_caption: "Before",
+      persian_translation: "", rubika_file_id: "mob-preview-file",
+      preview_sent: true, preview_message_id: "mob-old-preview",
+    };
+    state.DB.consoleJobs.set(jobId, {
+      id: jobId, type: "mob_x_link", status: "ready_for_review",
+      panel_link_id: 1, params_json: "{}", result_json: JSON.stringify(result),
+    });
+    state.DB.items.set(itemId, {
+      id: itemId, platform: "mob_official", status: "ready", review_state: "pending",
+      caption: "Before", original_caption: "Before", persian_translation: "",
+    });
+    const secret = await panel.hookSecret(state);
+    const click = button => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "mob-old-preview", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: button },
+      } },
+    }, secret);
+    await click("p_mob_edit_" + jobId);
+    const promptMid = state.DB.state.get("panel_mob_temp_mid");
+    assert.ok(promptMid && promptMid !== "mob-x-main-panel-edit");
+    assert.equal(state.DB.state.get("panel_mid"), "mob-x-main-panel-edit");
+    const prompt = calls.find(call => call.method === "sendMessage");
+    assert.ok(prompt, "caption prompt must be a separate temporary message");
+    assert.deepEqual(prompt.payload.inline_keypad.rows.flatMap(row => row.buttons).map(button => button.id), ["p_mob_edit_cancel"]);
+    assert.equal(calls.filter(call => call.method === "editMessageText").every(call => call.payload.message_id === "mob-x-main-panel-edit"), true);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "mob-caption-input-001", chat_id: "b0actualowner", text: "Edited caption",
+      } },
+    }, secret);
+    assert.equal(state.DB.state.get("panel_mid"), "mob-x-main-panel-edit");
+    assert.equal(state.DB.state.get("panel_mob_temp_mid"), "");
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === promptMid), true,
+      "caption prompt must be deleted after input");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1, "caption edit must not create a main panel message");
+    assert.equal(calls.filter(call => call.method === "sendFile").length, 1, "video preview remains a separate sendFile message");
+    assert.equal(calls.filter(call => call.method === "editMessageText").every(call => call.payload.message_id === "mob-x-main-panel-edit"), true);
+  });
+}
+
+// Reject, publish and manual-confirm callbacks edit the same main panel and never send a replacement.
+{
+  for (const [action, status, extra] of [
+    ["reject", "ready_for_review", {}],
+    ["publish", "approved", {}],
+    ["manualconfirm", "uncertain", { delivery_status: "uncertain" }],
+  ]) {
+    await withMockRubikaFetch(async calls => {
+      const state = panelEnv();
+      state.DB.ownerChat = "b0actualowner";
+      state.DB.state.set("panel_mid", "mob-x-main-" + action);
+      const jobId = "job_abcdef1234567890";
+      state.DB.consoleJobs.set(jobId, {
+        id: jobId, type: "mob_x_link", status, panel_link_id: 1, params_json: "{}",
+        result_json: JSON.stringify({ item_id: "mob_official:2107878755079213476", rubika_file_id: "file", preview_sent: true, ...extra }),
+      });
+      const secret = await panel.hookSecret(state);
+      await postPanelUpdate(state, {
+        update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+          message_id: "separate-preview-" + action, chat_id: "b0actualowner", text: "",
+          aux_data: { button_id: "p_mob_" + action + "_" + jobId },
+        } },
+      }, secret);
+      assert.equal(state.DB.state.get("panel_mid"), "mob-x-main-" + action, action + " must preserve panel_mid");
+      assert.equal(calls.filter(call => call.method === "sendMessage").length, 0, action + " result must not be a new main message");
+      const edits = calls.filter(call => call.method === "editMessageText");
+      assert.ok(edits.length >= 2, action + " must show loading then result");
+      assert.equal(edits.every(call => call.payload.message_id === "mob-x-main-" + action), true);
+      assert.match(edits[0].payload.text, /در حال انجام/);
+      assert.equal(calls.some(call => call.url && call.url.includes("api.github.com")), false,
+        "the mocked publish callback must not dispatch a workflow without a configured token");
+    });
+  }
+}
+
+// A callback from an older temporary link prompt is stale and cannot confirm its pending link.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "mob-main-stale");
+    state.DB.state.set("panel_mob_temp_mid", "fresh-link-prompt");
+    state.DB.state.set("panel_mob_pending_link_id", "1");
+    state.DB.links.push({
+      id: 1, url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+      external_id: "2107878755079213476", status: "pending",
+    });
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "stale-link-prompt", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: "p_mob_confirm" },
+      } },
+    }, secret);
+    assert.equal(state.DB.links[0].status, "pending", "stale confirm must not mutate the saved link");
+    assert.equal(state.DB.consoleJobs.size, 0, "stale confirm must not create a job");
+    assert.equal(state.DB.state.get("panel_mid"), "mob-main-stale");
+    assert.equal(state.DB.state.get("panel_mob_temp_mid"), "fresh-link-prompt");
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "stale-link-prompt"), true);
   });
 }
 

@@ -363,6 +363,58 @@ async function edit(env, chat, mid, src, keypad) {
     return replacementMid;
   }
 }
+const MOB_TEMP_MID_KEY = "panel_mob_temp_mid";
+async function deleteMobTemp(env, chat, expectedMid = "") {
+  const mid = await getState(env, MOB_TEMP_MID_KEY, "");
+  if (!mid || (expectedMid && mid !== expectedMid)) return false;
+  try { await rubika(env, "deleteMessage", { chat_id: chat, message_id: mid }); } catch { /* best effort cleanup */ }
+  if (await getState(env, MOB_TEMP_MID_KEY, "") === mid) await setState(env, MOB_TEMP_MID_KEY, "");
+  return true;
+}
+async function sendMobTemp(env, chat, src, keypad) {
+  await deleteMobTemp(env, chat);
+  await assertPanelEventCurrent(env);
+  const f = md(src);
+  const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
+    keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
+  const response = await rubika(env, "sendMessage", {
+    chat_id: chat, text: f.text, ...(f.metadata ? { metadata: f.metadata } : {}),
+    ...(hasKeypad ? { inline_keypad: keypad } : {}),
+  });
+  const mid = responseMessageId(response);
+  try { await setState(env, MOB_TEMP_MID_KEY, mid); }
+  catch (error) {
+    try { await rubika(env, "deleteMessage", { chat_id: chat, message_id: mid }); } catch {}
+    throw error;
+  }
+  return response;
+}
+async function editMobTemp(env, chat, src, keypad) {
+  const mid = await getState(env, MOB_TEMP_MID_KEY, "");
+  if (!mid) return sendMobTemp(env, chat, src, keypad);
+  const f = md(src);
+  const includeKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
+    keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
+  try {
+    await rubika(env, "editMessageText", {
+      chat_id: chat, message_id: mid, text: f.text, ...(f.metadata ? { metadata: f.metadata } : {}),
+    });
+    if (includeKeypad) {
+      await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: mid, inline_keypad: keypad });
+    }
+    return { data: { message_id: mid } };
+  } catch (error) {
+    if (error instanceof StalePanelEvent) throw error;
+    await deleteMobTemp(env, chat, mid);
+    return sendMobTemp(env, chat, src, keypad);
+  }
+}
+async function updateMobMain(ui, src, keypad = HOME_KB) {
+  const mid = await getState(ui.env, "panel_mid", "");
+  if (mid) return edit(ui.env, ui.chat, mid, src, keypad);
+  return send(ui.env, ui.chat, src, keypad);
+}
+
 async function registerWebhook(env, origin) {
   const s = await hookSecret(env);
   for (const type of HOOK_TYPES) await rubika(env, "updateBotEndpoints", { url: `${origin}/panel/hook/${s}/${type}`, type });
@@ -586,6 +638,11 @@ async function saveMobCaptionAndRefresh(ui, jobId, row, result, caption, {
     nextResult.persian_translation = "";
   }
   delete nextResult.preview_message_id;
+  if (clearEditMode) {
+    await setState(env, "mode", "idle");
+    await setState(env, "panel_mob_edit_job_id", "");
+    await deleteMobTemp(env, chat);
+  }
   const pendingJson = JSON.stringify(nextResult);
   const now = new Date().toISOString();
   const claimed = await env.DB.prepare(
@@ -593,7 +650,7 @@ async function saveMobCaptionAndRefresh(ui, jobId, row, result, caption, {
     "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND result_json = ?"
   ).bind(pendingJson, now, jobId, row.result_json).run();
   if (!claimed?.meta?.changes) {
-    await send(env, chat, "ذخیرهٔ کپشن انجام نشد؛ وضعیت کار یا کپشن هم‌زمان تغییر کرده است.", HOME_KB);
+    await updateMobMain(ui, "ذخیرهٔ کپشن انجام نشد؛ وضعیت کار یا کپشن هم‌زمان تغییر کرده است.", HOME_KB);
     return false;
   }
 
@@ -629,17 +686,13 @@ async function saveMobCaptionAndRefresh(ui, jobId, row, result, caption, {
       "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND result_json = ?"
     ).bind(finishedJson, new Date().toISOString(), jobId, pendingJson).run();
     if (!finished?.meta?.changes) {
-      await send(env, chat, "پیش‌نمایش ارسال شد، اما وضعیت کار هم‌زمان تغییر کرد؛ آن را تأیید نکن و وضعیت را تازه‌سازی کن.", HOME_KB);
+      await updateMobMain(ui, "پیش‌نمایش ارسال شد، اما وضعیت کار هم‌زمان تغییر کرد؛ آن را تأیید نکن و وضعیت را تازه‌سازی کن.", HOME_KB);
       return false;
     }
     if (previousPreviewId && messageId && previousPreviewId !== messageId) {
       try { await rubika(env, "deleteMessage", { chat_id: chat, message_id: previousPreviewId }); } catch {}
     }
-    if (clearEditMode) {
-      await setState(env, "mode", "idle");
-      await setState(env, "panel_mob_edit_job_id", "");
-    }
-    await send(env, chat, successText, HOME_KB);
+    await updateMobMain(ui, successText, HOME_KB);
     return true;
   } catch {
     const failedResult = { ...nextResult, preview_sent: false, caption_refresh_state: "failed" };
@@ -647,7 +700,7 @@ async function saveMobCaptionAndRefresh(ui, jobId, row, result, caption, {
       "UPDATE console_jobs SET result_json = ?, updated_at = ? " +
       "WHERE id = ? AND type = 'mob_x_link' AND status = 'ready_for_review' AND result_json = ?"
     ).bind(JSON.stringify(failedResult), new Date().toISOString(), jobId, pendingJson).run();
-    await send(env, chat, "کپشن ذخیره شد، اما پیش‌نمایش تازه ناموفق بود؛ انتشار را تأیید نکن تا پیش‌نمایش دوباره آماده شود.", HOME_KB);
+    await updateMobMain(ui, "کپشن ذخیره شد، اما پیش‌نمایش تازه ناموفق بود؛ انتشار را تأیید نکن تا پیش‌نمایش دوباره آماده شود.", HOME_KB);
     return false;
   }
 }
@@ -740,7 +793,8 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     if (id === "p_mob_edit_cancel") {
       await setState(env, "mode", "idle");
       await setState(env, "panel_mob_edit_job_id", "");
-      await send(env, chat, "✏️ ویرایش کپشن لغو شد.", HOME_KB);
+      await deleteMobTemp(env, chat, clickedMid);
+      await updateMobMain(ui, "✏️ ویرایش کپشن لغو شد.", HOME_KB);
       return;
     }
     const action = mobAction[1];
@@ -749,7 +803,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       "SELECT id, type, status, panel_link_id, params_json, result_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link'"
     ).bind(jobId).first();
     if (!row) {
-      await send(env, chat, "کار خبر Mob پیدا نشد.", HOME_KB);
+      await updateMobMain(ui, "کار خبر Mob پیدا نشد.", HOME_KB);
       return;
     }
     let result = {};
@@ -758,28 +812,29 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
 
     if (action === "edit") {
       if (row.status !== "ready_for_review" || !result.rubika_file_id) {
-        await send(env, chat, "این پیش‌نمایش دیگر قابل ویرایش نیست؛ وضعیت کار: " + esc(row.status), HOME_KB);
+        await updateMobMain(ui, "این پیش‌نمایش دیگر قابل ویرایش نیست؛ وضعیت کار: " + esc(row.status), HOME_KB);
         return;
       }
       await setState(env, "panel_mob_edit_job_id", jobId);
       await setState(env, "mode", "waiting_mob_caption_edit");
-      await send(env, chat, "✏️ کپشن نهایی را به‌صورت متن ساده بفرست. پیش‌نمایش قبلی تا ثبت کپشن جدید معتبر می‌ماند.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
+      await sendMobTemp(env, chat, "✏️ کپشن نهایی را به‌صورت متن ساده بفرست. پیش‌نمایش قبلی تا ثبت کپشن جدید معتبر می‌ماند.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
+      await updateMobMain(ui, "✅ درخواست ویرایش آماده است؛ کپشن را در پیام جداگانه بفرست.", HOME_KB);
       return;
     }
 
     if (action === "nocap") {
       if (row.status !== "ready_for_review" || !result.rubika_file_id) {
-        await send(env, chat, "این پیش‌نمایش دیگر برای تغییر کپشن باز نیست؛ وضعیت کار: " + esc(row.status), HOME_KB);
+        await updateMobMain(ui, "این پیش‌نمایش دیگر برای تغییر کپشن باز نیست؛ وضعیت کار: " + esc(row.status), HOME_KB);
         return;
       }
       if (result.caption_mode === "no_caption" &&
           result.caption === buildMobXNoCaptionCaption() &&
           result.preview_sent === true) {
-        await send(env, chat, "این کپشن قبلاً برای همین پست اعمال شده است؛ تأیید انتشار همچنان جداگانه انجام می‌شود.", HOME_KB);
+        await updateMobMain(ui, "این کپشن قبلاً برای همین پست اعمال شده است؛ تأیید انتشار همچنان جداگانه انجام می‌شود.", HOME_KB);
         return;
       }
       if (result.caption_refresh_state === "pending") {
-        await send(env, chat, "به‌روزرسانی پیش‌نمایش همین پست هنوز در حال انجام است؛ دوباره کلیک نکن.", HOME_KB);
+        await updateMobMain(ui, "به‌روزرسانی پیش‌نمایش همین پست هنوز در حال انجام است؛ دوباره کلیک نکن.", HOME_KB);
         return;
       }
       await saveMobCaptionAndRefresh(
@@ -791,7 +846,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
 
     if (action === "reject") {
       if (row.status !== "ready_for_review") {
-        await send(env, chat, "فقط پیش‌نمایش آمادهٔ بررسی را می‌توان رد کرد. وضعیت فعلی: " + esc(row.status), HOME_KB);
+        await updateMobMain(ui, "فقط پیش‌نمایش آمادهٔ بررسی را می‌توان رد کرد. وضعیت فعلی: " + esc(row.status), HOME_KB);
         return;
       }
       const now = new Date().toISOString();
@@ -801,10 +856,10 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         env.DB.prepare("UPDATE items SET review_state = 'rejected' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0").bind(result.item_id),
       ]);
       if (!updated?.[0]?.meta?.changes) {
-        await send(env, chat, "وضعیت کار هم‌زمان تغییر کرده؛ هیچ اقدامی انجام نشد.", HOME_KB);
+        await updateMobMain(ui, "وضعیت کار هم‌زمان تغییر کرده؛ هیچ اقدامی انجام نشد.", HOME_KB);
         return;
       }
-      await send(env, chat, "✖️ خبر رد شد و در کانال منتشر نمی‌شود.", HOME_KB);
+      await updateMobMain(ui, "✖️ خبر رد شد و در کانال منتشر نمی‌شود.", HOME_KB);
       return;
     }
 
@@ -815,18 +870,18 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
           { panel_link_job_id: jobId }, ["approved"],
         );
         if (!dispatchResult.ok && !dispatchResult.skipped) {
-          await send(env, chat, "⚠️ تأیید قبلاً ثبت شده، اما اجرای خودکار شروع نشد (" +
+          await updateMobMain(ui, "⚠️ تأیید قبلاً ثبت شده، اما اجرای خودکار شروع نشد (" +
             dispatchResult.error + ")." +
             (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
             " مقصد همچنان فقط کانال تست است.", HOME_KB);
         } else {
-          await send(env, chat, "✅ تأیید قبلاً ثبت شده است؛ اجرای خودکار برای کانال تست " +
+          await updateMobMain(ui, "✅ تأیید قبلاً ثبت شده است؛ اجرای خودکار برای کانال تست " +
             (dispatchResult.skipped ? "قبلاً آغاز یا ثبت شده." : "راه‌اندازی شد."), HOME_KB);
         }
         return;
       }
       if (row.status !== "ready_for_review" || !result.rubika_file_id || result.preview_sent !== true) {
-        await send(env, chat, "پیش‌نمایش هنوز آمادهٔ تأیید نهایی نیست؛ لطفاً کمی بعد وضعیت را بررسی کن.", HOME_KB);
+        await updateMobMain(ui, "پیش‌نمایش هنوز آمادهٔ تأیید نهایی نیست؛ لطفاً کمی بعد وضعیت را بررسی کن.", HOME_KB);
         return;
       }
       // This Worker does not receive GitHub Actions secrets. This button only records
@@ -843,7 +898,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         env.DB.prepare("UPDATE items SET review_state = 'approved' WHERE id = ? AND platform = 'mob_official' AND status = 'ready' AND review_state = 'pending' AND changes() > 0").bind(result.item_id),
       ]);
       if (!updated?.[0]?.meta?.changes || !updated?.[2]?.meta?.changes) {
-        await send(env, chat, "تأیید انتشار ثبت نشد؛ وضعیت کار یا آیتم تغییر کرده است.", HOME_KB);
+        await updateMobMain(ui, "تأیید انتشار ثبت نشد؛ وضعیت کار یا آیتم تغییر کرده است.", HOME_KB);
         return;
       }
       try {
@@ -856,7 +911,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         { panel_link_job_id: jobId }, ["approved"],
       );
       if (!dispatchResult.ok && !dispatchResult.skipped) {
-        await send(env, chat, "✅ تأیید مالک ثبت شد؛ اما اجرای خودکار شروع نشد (" +
+        await updateMobMain(ui, "✅ تأیید مالک ثبت شد؛ اما اجرای خودکار شروع نشد (" +
           dispatchResult.error + ")." +
           (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
           " مقصد فقط کانال تست است؛ ارسال زمان‌بندی‌شده همچنان فعال می‌ماند.", HOME_KB);
@@ -874,7 +929,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
 
     if (action === "manualconfirm") {
       if (row.status !== "uncertain" || result.delivery_status !== "uncertain") {
-        await send(env, chat, "این کار در وضعیت ارسال نامشخص نیست؛ هیچ ارسال جدیدی انجام نشد.", HOME_KB);
+        await updateMobMain(ui, "این کار در وضعیت ارسال نامشخص نیست؛ هیچ ارسال جدیدی انجام نشد.", HOME_KB);
         return;
       }
       const now = new Date().toISOString();
@@ -886,44 +941,45 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         env.DB.prepare("UPDATE items SET status = 'sent', sent_at = ? WHERE id = ? AND platform = 'mob_official' AND status = 'uncertain' AND changes() > 0").bind(now, result.item_id),
       ]);
       if (!saved?.[0]?.meta?.changes) {
-        await send(env, chat, "تأیید دستی ثبت نشد؛ وضعیت کار تغییر کرده است.", HOME_KB);
+        await updateMobMain(ui, "تأیید دستی ثبت نشد؛ وضعیت کار تغییر کرده است.", HOME_KB);
         return;
       }
-      await send(env, chat, "✅ تأیید دستی ثبت شد؛ وضعیت ارسال «ارسال‌شده» شد. هیچ ارسال جدیدی انجام نشد.", HOME_KB);
+      await updateMobMain(ui, "✅ تأیید دستی ثبت شد؛ وضعیت ارسال «ارسال‌شده» شد. هیچ ارسال جدیدی انجام نشد.", HOME_KB);
       return;
     }
   }
   if (id === "p_mob_confirm" || id === "p_mob_cancel") {
+    await deleteMobTemp(env, chat, clickedMid);
     const rawLinkId = await getState(env, "panel_mob_pending_link_id", "");
     const linkId = Number(rawLinkId);
     if (!Number.isSafeInteger(linkId) || linkId < 1) {
-      await send(env, chat, "این تأیید منقضی شده است؛ لینک را دوباره بفرست.", HOME_KB);
+      await updateMobMain(ui, "این تأیید منقضی شده است؛ لینک را دوباره بفرست.", HOME_KB);
       return;
     }
     const link = await env.DB.prepare("SELECT id, url, external_id, status FROM panel_links WHERE id = ?").bind(linkId).first();
     if (!link) {
       await setState(env, "panel_mob_pending_link_id", "");
-      await send(env, chat, "لینک پیدا نشد؛ دوباره ارسالش کن.", HOME_KB);
+      await updateMobMain(ui, "لینک پیدا نشد؛ دوباره ارسالش کن.", HOME_KB);
       return;
     }
     if (id === "p_mob_cancel") {
       const canceled = await env.DB.prepare("UPDATE panel_links SET status = 'rejected', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'pending'").bind(linkId).run();
       await setState(env, "panel_mob_pending_link_id", "");
       if (!canceled?.meta?.changes && link.status !== "rejected") {
-        await send(env, chat, "وضعیت لینک تغییر کرده؛ بخش «لینک‌های X» را تازه‌سازی کن.", HOME_KB);
+        await updateMobMain(ui, "وضعیت لینک تغییر کرده؛ بخش «لینک‌های X» را تازه‌سازی کن.", HOME_KB);
         return;
       }
       return render(ui, "p_links", { clickedMid });
     }
 
     if (!/^\d{15,22}$/.test(String(link.external_id || ""))) {
-      await send(env, chat, "شناسهٔ پست معتبر نیست؛ لینک دوباره بررسی شود.", HOME_KB);
+      await updateMobMain(ui, "شناسهٔ پست معتبر نیست؛ لینک دوباره بررسی شود.", HOME_KB);
       return;
     }
     const existing = await env.DB.prepare("SELECT id FROM console_jobs WHERE panel_link_id = ?").bind(linkId).first();
     if (!existing) {
       if (!["pending", "confirmed"].includes(link.status)) {
-        await send(env, chat, "این لینک دیگر در وضعیت قابل تأیید نیست.", HOME_KB);
+        await updateMobMain(ui, "این لینک دیگر در وضعیت قابل تأیید نیست.", HOME_KB);
         return;
       }
       const jobId = "job_" + Array.from(crypto.getRandomValues(new Uint8Array(12)), value => value.toString(16).padStart(2, "0")).join("");
@@ -936,7 +992,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       "SELECT id, status, params_json FROM console_jobs WHERE panel_link_id = ? AND type = 'mob_x_link'"
     ).bind(linkId).first();
     if (!job) {
-      await send(env, chat, "ثبت کار انجام نشد؛ خطا: mob_x_link_job_create_failed", HOME_KB);
+      await updateMobMain(ui, "ثبت کار انجام نشد؛ خطا: mob_x_link_job_create_failed", HOME_KB);
       return;
     }
     const dispatchResult = await dispatchMobXJobOnce(
@@ -945,7 +1001,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     );
     await setState(env, "panel_mob_pending_link_id", "");
     if (!dispatchResult.ok && !dispatchResult.skipped) {
-      await send(env, chat, "⚠️ راه‌اندازی خودکار پردازش انجام نشد (" + dispatchResult.error +
+      await updateMobMain(ui, "⚠️ راه‌اندازی خودکار پردازش انجام نشد (" + dispatchResult.error +
         ")." + (dispatchResult.error_detail ? "\\n" + dispatchResult.error_detail : "") +
         " پردازش زمان‌بندی‌شده همچنان فعال است.", HOME_KB);
       return;
@@ -1109,6 +1165,7 @@ async function processEvent(env, selfFetch, origin, ev) {
       .bind(ev.chat).run();
   } catch { /* migration 0010 may not be applied yet; keep existing panel behavior */ }
   const msgAge = messageAgeSeconds(ev.time, receivedAt);
+  let mobTextMode = "";
   try {
     const lastEvent = {
       kind: clean(ev.kind, 16) || "unknown",
@@ -1151,7 +1208,10 @@ async function processEvent(env, selfFetch, origin, ev) {
     if (ev.kind === "click") {
       const currentPanelMid = await getState(timedEnv, "panel_mid", "");
       const isMobJobAction = /^p_mob_(?:publish|edit|nocap|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || ""));
-      if (String(ev.mid || "") !== currentPanelMid && !isMobJobAction) {
+      const tempMid = await getState(timedEnv, MOB_TEMP_MID_KEY, "");
+      const isMobPromptButton = ["p_mob_confirm", "p_mob_cancel", "p_mob_edit_cancel"].includes(String(ev.button || ""));
+      const isCurrentMobPromptAction = isMobPromptButton && Boolean(tempMid) && String(ev.mid || "") === tempMid;
+      if (String(ev.mid || "") !== currentPanelMid && !isMobJobAction && !isCurrentMobPromptAction) {
         try { if (ev.mid) await rubika(timedEnv, "deleteMessage", { chat_id: ev.chat, message_id: ev.mid }); } catch {}
         const staleButton = String(ev.button || "");
         // Never execute confirmation/destructive actions from an old message.
@@ -1168,7 +1228,7 @@ async function processEvent(env, selfFetch, origin, ev) {
         await render(ui, refreshId, { clickedMid: currentPanelMid });
         return;
       }
-      if (isMainPanelScreenClick(ev.button) && currentPanelMid) {
+      if ((isMainPanelScreenClick(ev.button) || isMobJobAction || isCurrentMobPromptAction) && currentPanelMid) {
         await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB);
       }
       await render(ui, ev.button, { clickedMid: ev.mid });
@@ -1192,11 +1252,13 @@ async function processEvent(env, selfFetch, origin, ev) {
     }
     if (COMMANDS[word]) { await render(ui, COMMANDS[word], { fresh: true }); return; }
     const activeMode = await getState(timedEnv, "mode", "idle");
+    mobTextMode = activeMode;
     if (activeMode === "waiting_mob_caption_edit") {
       const jobId = await getState(timedEnv, "panel_mob_edit_job_id", "");
       if (!/^job_[A-Fa-f0-9]{8,80}$/.test(jobId)) {
         await setState(timedEnv, "mode", "idle");
-        await send(timedEnv, ev.chat, "ویرایش منقضی شده است؛ دوباره از پیش‌نمایش اقدام کن.", HOME_KB);
+        await deleteMobTemp(timedEnv, ev.chat);
+        await updateMobMain(ui, "ویرایش منقضی شده است؛ دوباره از پیش‌نمایش اقدام کن.", HOME_KB);
         return;
       }
       const row = await timedEnv.DB.prepare(
@@ -1205,13 +1267,17 @@ async function processEvent(env, selfFetch, origin, ev) {
       if (!row || row.status !== "ready_for_review") {
         await setState(timedEnv, "mode", "idle");
         await setState(timedEnv, "panel_mob_edit_job_id", "");
-        await send(timedEnv, ev.chat, "این کار دیگر برای ویرایش باز نیست.", HOME_KB);
+        await deleteMobTemp(timedEnv, ev.chat);
+        await updateMobMain(ui, "این کار دیگر برای ویرایش باز نیست.", HOME_KB);
         return;
       }
       let result = {};
       try { result = row.result_json ? JSON.parse(row.result_json) : {}; } catch {}
       if (!result || typeof result !== "object" || Array.isArray(result) || !result.rubika_file_id) {
-        await send(timedEnv, ev.chat, "فایل پیش‌نمایش در دسترس نیست؛ خطا: mob_x_preview_file_id_missing", HOME_KB);
+        await setState(timedEnv, "mode", "idle");
+        await setState(timedEnv, "panel_mob_edit_job_id", "");
+        await deleteMobTemp(timedEnv, ev.chat);
+        await updateMobMain(ui, "فایل پیش‌نمایش در دسترس نیست؛ خطا: mob_x_preview_file_id_missing", HOME_KB);
         return;
       }
       const rulesRow = await timedEnv.DB.prepare("SELECT rules_json FROM console_rules WHERE id = 1").first();
@@ -1220,13 +1286,14 @@ async function processEvent(env, selfFetch, origin, ev) {
       const captionMax = maxMobXCaptionChars(rules.caption_max_chars);
       const caption = normalizeMobXCaption(ev.text);
       if (!caption) {
-        await send(timedEnv, ev.chat, "کپشن خالی است؛ متن سادهٔ کپشن را بفرست.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
+        await editMobTemp(timedEnv, ev.chat, "کپشن خالی است؛ متن سادهٔ کپشن را دوباره بفرست.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
         return;
       }
       if (caption.length > captionMax) {
-        await send(timedEnv, ev.chat, "کپشن بیش از سقف مجاز " + captionMax + " نویسه است؛ کوتاه‌ترش کن.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
+        await editMobTemp(timedEnv, ev.chat, "کپشن بیش از سقف مجاز " + captionMax + " نویسه است؛ کوتاه‌ترش کن.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
         return;
       }
+      mobTextMode = "mob_input_processing";
       await saveMobCaptionAndRefresh(
         ui, jobId, row, result, caption,
         { clearEditMode: true, successText: "✅ کپشن ویرایش شد و پیش‌نمایش جدید ارسال شد." },
@@ -1236,28 +1303,47 @@ async function processEvent(env, selfFetch, origin, ev) {
     if (activeMode === "waiting_link") {
       const link = parseXLink(ev.text);
       if (!link) {
-        await send(timedEnv, ev.chat, "فقط لینک پست حساب رسمی mobgamesstudios در x.com یا twitter.com پذیرفته می‌شود.", CANCEL_KB);
+        await editMobTemp(timedEnv, ev.chat, "فقط لینک پست حساب رسمی mobgamesstudios در x.com یا twitter.com پذیرفته می‌شود. لینک را دوباره بفرست.", CANCEL_KB);
         return;
       }
+      mobTextMode = "mob_input_processing";
+      await deleteMobTemp(timedEnv, ev.chat);
       const externalId = link.split("/").pop();
       await timedEnv.DB.prepare("INSERT OR IGNORE INTO panel_links (url, external_id, status) VALUES (?, ?, 'pending')").bind(link, externalId).run();
       const saved = await timedEnv.DB.prepare("SELECT id, url, external_id, status FROM panel_links WHERE external_id = ?").bind(externalId).first();
       if (!saved) throw new PanelError("mob_x_link_save_failed");
       if (saved.status !== "pending") {
         await setState(timedEnv, "mode", "idle");
-        await send(timedEnv, ev.chat, "این پست قبلاً ثبت شده است؛ وضعیت فعلی: " + esc(saved.status) + ".", HOME_KB);
+        await updateMobMain(ui, "این پست قبلاً ثبت شده است؛ وضعیت فعلی: " + esc(saved.status) + ".", HOME_KB);
         return;
       }
       await setState(timedEnv, "panel_mob_pending_link_id", String(saved.id));
       await setState(timedEnv, "mode", "idle");
       const confirmKb = kb([[["✅ تأیید", "p_mob_confirm"], ["✖️ لغو", "p_mob_cancel"]]]);
-      await send(timedEnv, ev.chat, "این لینک است؟\n" + saved.url, confirmKb);
+      await sendMobTemp(timedEnv, ev.chat, "این لینک است؟\n" + saved.url, confirmKb);
+      await updateMobMain(ui, "لینک دریافت شد؛ تأیید را در پیام جداگانه انجام بده.", HOME_KB);
       return;
     }
     await send(timedEnv, ev.chat, "برای شروع «منو» را بفرست.", HOME_KB);
   } catch (e) {
     if (e instanceof StalePanelEvent) return;
-    if (ev.kind === "click" && isMainPanelScreenClick(ev.button)) {
+    const mobClick = ev.kind === "click" && (
+      /^p_mob_(?:publish|edit|nocap|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(String(ev.button || "")) ||
+      ["p_mob_confirm", "p_mob_cancel", "p_mob_edit_cancel"].includes(String(ev.button || ""))
+    );
+    if (ev.kind === "text" && mobTextMode === "waiting_link") {
+      try { await editMobTemp(timedEnv, ev.chat, "ثبت لینک انجام نشد؛ لینک رسمی پست را دوباره بفرست.", CANCEL_KB); } catch {}
+      return;
+    }
+    if (ev.kind === "text" && mobTextMode === "waiting_mob_caption_edit") {
+      try { await editMobTemp(timedEnv, ev.chat, "ثبت کپشن انجام نشد؛ متن سادهٔ کپشن را دوباره بفرست.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]])); } catch {}
+      return;
+    }
+    if (ev.kind === "text" && mobTextMode === "mob_input_processing") {
+      try { await updateMobMain({ env: timedEnv, chat: ev.chat }, "❌ پردازش ورودی Mob X ناموفق شد؛ وضعیت را تازه‌سازی کن. خطا: " + esc(e && e.code || "unknown"), HOME_KB); } catch {}
+      return;
+    }
+    if (ev.kind === "click" && (isMainPanelScreenClick(ev.button) || mobClick)) {
       const currentMid = await getState(timedEnv, "panel_mid", "");
       // Settings writes must not be repeated blindly after a partial failure; refresh the settings screen instead.
       const retryId = isSettingsId(ev.button) ? "p_set" : ev.button;
