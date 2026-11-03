@@ -2585,6 +2585,33 @@ async function withDispatchFetch(responder, fn) {
     : null);
 }
 
+// HTTP rate limiting on an edit falls back for that click to a replacement panel and deletes the old message.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "old-rate-limited-panel-7788");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "old-rate-limited-panel-7788", chat_id: "b0actualowner",
+        text: "", aux_data: { button_id: "p_status" },
+      } },
+    }, secret);
+    const failedEdit = calls.find(call => call.method === "editMessageText");
+    const fallbackSend = calls.find(call => call.method === "sendMessage");
+    assert.equal(state.DB.state.get("last_error"), "rubika_editmessagetext_http_429");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "old-rate-limited-panel-7788"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(fallbackSend.payload.text, failedEdit.payload.text);
+    assert.equal(Array.isArray(fallbackSend.payload.inline_keypad.rows), true);
+    assert.equal(fallbackSend.payload.inline_keypad.rows.some(row => row.buttons?.length), true);
+  }, ({ method }) => method === "editMessageText"
+    ? new Response(JSON.stringify({ status: "RATE_LIMITED" }), { status: 429 })
+    : null);
+}
+
 // /debug is owner-only and prints only error codes and last-four-character identifier tails.
 {
   await withMockRubikaFetch(async calls => {
@@ -2622,29 +2649,32 @@ async function withDispatchFetch(responder, fn) {
 }
 
 
-// Atomic mode sends the whole text+keypad as one Rubika message; missing mode defaults to atomic.
+// Missing panel mode defaults to editing the same primary message and keypad in place.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
     state.DB.state.delete("panel_sync_mode");
-    state.DB.state.set("panel_mid", "atomic-old-panel-001");
+    state.DB.state.set("panel_mid", "primary-panel-default-001");
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
       update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
-        message_id: "atomic-old-panel-001", chat_id: "b0actualowner",
+        message_id: "primary-panel-default-001", chat_id: "b0actualowner",
         text: "", aux_data: { button_id: "p_status" },
       } },
     }, secret);
-    const sent = calls.filter(call => call.method === "sendMessage");
-    assert.equal(sent.length, 1);
-    assert.ok(sent[0].payload.inline_keypad?.rows?.some(row => row.buttons?.length));
-    assert.equal(calls.some(call => call.method === "editMessageText" || call.method === "editMessageKeypad"), false);
-    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "atomic-old-panel-001"), true);
-    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
-    assert.equal(state.DB.state.get("panel_sync_mode") || "atomic", "atomic");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    const textEdits = calls.filter(call => call.method === "editMessageText");
+    const keypadEdits = calls.filter(call => call.method === "editMessageKeypad");
+    assert.equal(textEdits.length, 1);
+    assert.equal(keypadEdits.length, 1);
+    assert.equal(textEdits[0].payload.message_id, "primary-panel-default-001");
+    assert.equal(keypadEdits[0].payload.message_id, "primary-panel-default-001");
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "primary-panel-default-001"), false);
+    assert.equal(state.DB.state.get("panel_mid"), "primary-panel-default-001");
+    assert.equal(state.DB.state.has("panel_sync_mode"), false);
     assert.equal(state.DB.state.get("panel_edit_ok"), "1");
-    assert.equal(state.DB.state.get("atomic_ok"), "1");
+    assert.equal(state.DB.state.get("atomic_ok") || "0", "0");
     assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
   });
 }

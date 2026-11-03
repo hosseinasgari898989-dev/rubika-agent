@@ -325,8 +325,8 @@ async function edit(env, chat, mid, src, keypad) {
   const base = { chat_id: chat, message_id: targetMid, text: f.text };
   const hasKeypad = Boolean(keypad && Array.isArray(keypad.rows) &&
     keypad.rows.some((row) => Array.isArray(row.buttons) && row.buttons.length > 0));
-  const syncMode = await getState(env, "panel_sync_mode", "atomic");
-  // Atomic mode sends the full text+keypad together. Only explicit "inplace" opts into two edits.
+  const syncMode = await getState(env, "panel_sync_mode", "inplace");
+  // In-place editing is the default; explicit "atomic" remains an owner-selected compatibility mode.
   if (syncMode !== "inplace") {
     try {
       const replacement = await send(env, chat, src, hasKeypad ? keypad : undefined);
@@ -676,8 +676,8 @@ async function debugText(env) {
   const staleSkip = await readCounter("panel_stale_skip");
   const atomicOk = await readCounter("atomic_ok");
   const atomicFail = await readCounter("atomic_fail");
-  const storedMode = await getState(env, "panel_sync_mode", "atomic");
-  const panelSyncMode = storedMode === "inplace" ? "inplace" : "atomic";
+  const storedMode = await getState(env, "panel_sync_mode", "inplace");
+  const panelSyncMode = storedMode === "atomic" ? "atomic" : "inplace";
   let timings = [];
   try {
     const parsed = JSON.parse(await getState(env, "last_timings", "[]"));
@@ -1191,7 +1191,7 @@ async function processEvent(env, selfFetch, origin, ev) {
         return;
       }
       if (!match) {
-        const currentMode = (await getState(timedEnv, "panel_sync_mode", "atomic")) === "inplace" ? "inplace" : "atomic";
+        const currentMode = (await getState(timedEnv, "panel_sync_mode", "inplace")) === "atomic" ? "atomic" : "inplace";
         const currentMid = await getState(timedEnv, "panel_mid", "");
         await sendFreshPanel(ui, "حالت فعلی پنل: " + currentMode + "\nاستفاده: /panelmode atomic یا /panelmode inplace", HOME_KB, currentMid);
         return;
