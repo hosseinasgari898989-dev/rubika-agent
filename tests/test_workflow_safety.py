@@ -18,6 +18,17 @@ class WorkflowSafetyTests(unittest.TestCase):
         # Merely changing the request file must not launch downloads or publication.
         self.assertNotIn("\n  push:\n", workflow)
 
+    def test_online_discovery_installs_ffmpeg_before_full_unit_suite(self):
+        workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        install_step = "      - name: Install FFmpeg for the complete repository test suite"
+        test_step = "      - name: Run all repository unit tests"
+        self.assertIn(install_step, workflow)
+        self.assertLess(workflow.index(install_step), workflow.index(test_step))
+        install_block = workflow.split(install_step, 1)[1].split("\\n      - name:", 1)[0]
+        self.assertIn("sudo apt-get install --yes ffmpeg", install_block)
+        self.assertIn("ffmpeg -hide_banner -filters", install_block)
+        self.assertIn("libass", install_block)
+        self.assertIn("ffprobe -version", install_block)
     def test_online_discovery_uses_main_as_single_source_of_truth(self):
         workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
         self.assertIn("ref: main", workflow)
