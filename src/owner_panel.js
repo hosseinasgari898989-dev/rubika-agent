@@ -797,7 +797,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         return;
       }
       await saveMobCaptionAndRefresh(
-        ui, jobId, row, result, "**" + MOB_X_NO_CAPTION + "**",
+        ui, jobId, row, result, buildMobXNoCaptionCaption(),
         { clearSource: true, successText: "✅ کپشن حذف و متن ثابت فقط برای همین پست جایگزین شد؛ پیش‌نمایش جدید آمادهٔ بررسی است." },
       );
       return;
