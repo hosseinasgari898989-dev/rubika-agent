@@ -44,7 +44,7 @@ const decodeBase64Url = (value) => {
 function hasOwnerBearer(request, env) {
   const expected = typeof env.AGENT_API_TOKEN === "string" ? env.AGENT_API_TOKEN : "";
   const match = /^Bearer ([^\s]+)$/.exec(request.headers.get("authorization") || "");
-  if (!expected || !match || match[1].length !== expected.length) return false;
+  if (!expected || expected.length < 32 || !match || match[1].length !== expected.length) return false;
   const a = new TextEncoder().encode(match[1]);
   const b = new TextEncoder().encode(expected);
   let diff = 0;
