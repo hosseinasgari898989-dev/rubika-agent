@@ -813,6 +813,7 @@ export async function handleConsoleApi(request, env, h) {
       const parsed = await readJson(request);
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const body = parsed.value;
+      if (!isRecord(body)) return fail("invalid_body", 400);
       if (Object.keys(body).some(key => !["action", "caption"].includes(key))) return fail("fields_not_allowed", 400);
       const action = body.action;
       if (!["edit_caption", "no_caption", "reject"].includes(action)) return fail("invalid_action", 400);
