@@ -2184,6 +2184,7 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("فقط نقش مالک")), false);
     assert.ok(calls.some(call => call.method === "sendFile"), "no-caption callback must refresh this job's preview; last_error=" + String(state.DB.state.get("last_error") || "none"));
     assert.ok(state.DB.consoleJobResultUpdates.length >= 2, "both job-scoped CAS updates should execute; updates=" + JSON.stringify(state.DB.consoleJobResultUpdates));
+    assert.ok(state.DB.consoleJobResultUpdates.every(update => update.job_id === firstJobId && update.expected_matches && update.status === "ready_for_review"), "each compare-and-swap must match the same job and its current state; updates=" + JSON.stringify(state.DB.consoleJobResultUpdates));
     const changed = JSON.parse(state.DB.consoleJobs.get(firstJobId).result_json);
     assert.equal(changed.caption, "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**");
     assert.equal(changed.caption_mode, "no_caption");
