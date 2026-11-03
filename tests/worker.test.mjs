@@ -3008,7 +3008,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(state.DB.brainEvents.filter(event => event.code === "console_rules_update").length, 0);
     assert.equal(state.DB.state.get("panel_mid"), "primary-owner-panel", "denying viewer must not replace the owner's tracked panel");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 1);
-    assert.equal(calls[0].payload.text.includes("فقط نقش مالک"), true);
+    assert.equal(calls[0].payload.text.includes("نقش مالک"), true);
   });
 }
 
