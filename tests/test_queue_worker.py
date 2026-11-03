@@ -156,6 +156,22 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(report["sent_count"], 0)
         self.assertEqual(report["queue_counts"]["sent_today"], 4)
 
+    def test_failure_diagnostics_include_only_sanitized_failed_media_status(self):
+        diagnostics = queue_worker._safe_failure_diagnostics({
+            "failed_media": {
+                "ok": False, "stored": True, "recorded": False,
+                "error": "failed_media_record_failed",
+                "storage_key": "/Rubika-Agent/failed/private-file.mp4",
+                "share_url": "https://mega.nz/private",
+            },
+        })
+        self.assertEqual(diagnostics["failed_media"], {
+            "stored": True, "recorded": False,
+            "error": "failed_media_record_failed",
+        })
+        self.assertNotIn("storage_key", repr(diagnostics))
+        self.assertNotIn("mega.nz", repr(diagnostics))
+
     def test_worker_main_sends_quota_notification_without_name_error(self):
         messages = []
         report = {
