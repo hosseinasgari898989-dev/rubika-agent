@@ -1761,6 +1761,12 @@ class PanelFakeStatement {
     return null;
   }
   async all() {
+    if (this.sql.includes("FROM panel_links WHERE status NOT IN")) {
+      const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
+      const limit = Number(this.values[0]) || 50;
+      return { results: this.db.links.filter(row => !active.has(row.status))
+        .sort((a, b) => Number(b.id) - Number(a.id)).slice(0, limit).map(row => ({ ...row })) };
+    }
     if (this.sql.includes("FROM panel_links ORDER BY id DESC")) {
       return { results: this.db.links.slice().reverse().slice(0, 8).map(row => ({ ...row })) };
     }
@@ -1933,7 +1939,7 @@ class PanelFakeDB {
     };
     this.itemsSentToday = 3;
     this.conflictConsoleRulesUpdate = false;
-    // Legacy panel tests opt into the explicit in-place mode; atomic behavior has dedicated tests below.
+    // Some tests seed the retired atomic value to verify that it cannot replace the tracked primary message.
     this.state = new Map([["panel_sync_mode", "inplace"]]);
     this.events = new Set();
     this.links = [];
@@ -2649,7 +2655,7 @@ async function withDispatchFetch(responder, fn) {
 }
 
 
-// Missing panel mode defaults to editing the same primary message and keypad in place.
+// Every normal screen click first shows loading, then edits text and keypad on the same message.
 {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
@@ -2666,17 +2672,99 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
     const textEdits = calls.filter(call => call.method === "editMessageText");
     const keypadEdits = calls.filter(call => call.method === "editMessageKeypad");
-    assert.equal(textEdits.length, 1);
-    assert.equal(keypadEdits.length, 1);
-    assert.equal(textEdits[0].payload.message_id, "primary-panel-default-001");
-    assert.equal(keypadEdits[0].payload.message_id, "primary-panel-default-001");
+    assert.equal(textEdits.length, 2);
+    assert.equal(keypadEdits.length, 2);
+    assert.equal(textEdits[0].payload.text, "⏳ در حال انجام…");
+    assert.notEqual(textEdits[1].payload.text, "⏳ در حال انجام…");
+    assert.equal(textEdits.every(call => call.payload.message_id === "primary-panel-default-001"), true);
+    assert.equal(keypadEdits.every(call => call.payload.message_id === "primary-panel-default-001"), true);
+    assert.equal(keypadEdits[0].payload.inline_keypad.rows.flat().map(button => button.id).join(","), "p_home");
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "primary-panel-default-001"), false);
     assert.equal(state.DB.state.get("panel_mid"), "primary-panel-default-001");
     assert.equal(state.DB.state.has("panel_sync_mode"), false);
-    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
+    assert.equal(state.DB.state.get("panel_edit_ok"), "2");
     assert.equal(state.DB.state.get("atomic_ok") || "0", "0");
     assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
   });
+}
+
+// The inactive-link selection page has real glass-button rows, and each click replaces both the checkmark text and keypad.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "inactive-link-select-main");
+    state.DB.links = [
+      { id: 21, url: "https://x.com/Test/status/2107878755079213476", status: "pending", created_at: "2026-11-03T08:00:00Z" },
+      { id: 22, url: "https://x.com/Test/status/2107878755079213477", status: "rejected", created_at: "2026-11-03T08:01:00Z" },
+    ];
+    const secret = await panel.hookSecret(state);
+    const click = button => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "inactive-link-select-main", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: button },
+      } },
+    }, secret);
+
+    await click("p_lsel");
+    const firstText = calls.filter(call => call.method === "editMessageText");
+    const firstKeypad = calls.filter(call => call.method === "editMessageKeypad");
+    assert.equal(firstText[0].payload.text, "⏳ در حال انجام…");
+    assert.equal(firstText.at(-1).payload.text.includes("انتخاب لینک‌های غیرفعال"), true);
+    const firstButtons = firstKeypad.at(-1).payload.inline_keypad.rows.flat().map(button => button.id);
+    assert.ok(firstButtons.some(id => id === "p_lsel_1_12"), "first inactive link needs a selectable glass button");
+    assert.ok(firstButtons.some(id => id === "p_lsel_2_12"), "second inactive link needs a selectable glass button");
+    assert.equal(state.DB.state.get("panel_mid"), "inactive-link-select-main");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+
+    await click("p_lsel_1_12");
+    const finalText = calls.filter(call => call.method === "editMessageText").at(-1);
+    const finalButtons = calls.filter(call => call.method === "editMessageKeypad").at(-1).payload.inline_keypad.rows.flat().map(button => button.id);
+    assert.equal(finalText.payload.message_id, "inactive-link-select-main");
+    assert.equal(finalText.payload.text.includes("☑️ 1)"), true);
+    assert.ok(finalButtons.includes("p_lseldel_1_12"), "selecting one row must reveal the matching delete action");
+    assert.equal(state.DB.state.get("panel_mid"), "inactive-link-select-main");
+    assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
+    assert.equal(calls.some(call => call.method === "sendFile"), false, "selection screens do not create temporary media messages");
+    assert.equal(calls.some(call => call.method === "deleteMessage"), false);
+  });
+}
+
+// If the loading edit is rate-limited, one complete replacement is sent and the final page edits that replacement.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "rate-limited-loading-main");
+    state.DB.links = [
+      { id: 21, url: "https://x.com/Test/status/2107878755079213476", status: "pending", created_at: "2026-11-03T08:00:00Z" },
+    ];
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "rate-limited-loading-main", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: "p_lsel" },
+      } },
+    }, secret);
+    const sends = calls.filter(call => call.method === "sendMessage");
+    const finalText = calls.filter(call => call.method === "editMessageText").at(-1);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].payload.text, "⏳ در حال انجام…");
+    assert.ok(sends[0].payload.inline_keypad.rows.flat().some(button => button.id === "p_home"));
+    assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "rate-limited-loading-main"), true);
+    assert.equal(state.DB.state.get("panel_mid"), "mock-reply-1");
+    assert.equal(finalText.payload.message_id, "mock-reply-1");
+    assert.equal(finalText.payload.text.includes("انتخاب لینک‌های غیرفعال"), true);
+  }, (() => {
+    let first = true;
+    return ({ method }) => {
+      if (method === "editMessageText" && first) {
+        first = false;
+        return new Response(JSON.stringify({ status: "RATE_LIMITED" }), { status: 429 });
+      }
+      return null;
+    };
+  })());
 }
 
 // A late first Rubika response is deleted after the newer event wins; old text/buttons cannot become current again.
