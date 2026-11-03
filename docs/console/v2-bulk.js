@@ -13,7 +13,7 @@ const on=bs.some(b=>!b.checked);bs.forEach(b=>{b.checked=on;if(on)SEL[k].add(b.d
 const bar=(k,btns)=>`<div class="row" style="margin:8px 0"><button class="btn g sm" data-a="selAll" data-k="${k}">انتخاب همه / هیچ</button><span class="s">انتخاب‌شده: <b id="sel_${k}">${SEL[k].size}</b></span>${btns}</div>`;
 
 /* ---------- حالت فوری: انتخاب چندتایی لینک‌ها ---------- */
-const INS={link:null};
+const INS=R.INS||(R.INS={link:null});
 V.inst=async()=>{
 const [l,j]=await Promise.all([safe('/api/console/links'),safe('/api/console/jobs?limit=100')]);
 const jobBy={};for(const x of (j.items||[]))if(x.panel_link_id!=null)jobBy[x.panel_link_id]=x;
