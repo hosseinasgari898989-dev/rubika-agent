@@ -33,7 +33,9 @@ const decodeBase64Url = (value) => {
   try {
     const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
     const binary = atob(padded);
-    return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const decoded = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    // Reject alternate base64url spellings whose unused trailing bits decode to the same bytes.
+    return encodeBase64Url(decoded) === value ? decoded : null;
   } catch {
     return null;
   }
