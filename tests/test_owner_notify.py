@@ -66,6 +66,11 @@ class OwnerNotifyTests(unittest.TestCase):
         })
         self.workflow_failures.start()
         self.addCleanup(self.workflow_failures.stop)
+        self.workflow_failures = patch.object(owner_notify, "collect_workflow_failures", return_value={
+            "termux": 0, "daily_queue": 0, "mob_x": 0, "deploy": 0,
+        })
+        self.workflow_failures.start()
+        self.addCleanup(self.workflow_failures.stop)
 
     def test_first_event_creates_one_message_and_persists_message_id(self):
         bot = FakeRubikaBot()
@@ -311,6 +316,65 @@ class OwnerNotifyTests(unittest.TestCase):
         self.assertIn("هشدار PV در اندازهٔ D1", rendered)
         self.assertIn("D1 writes/day: 70,000/100,000 rows (70.0%)", rendered)
         self.assertIn("⚠️ Worker requests/day: 70,000/100,000 requests (70.0%)", rendered)
+        self.assertIn("D1 reads/day: نامشخص", rendered)
+        self.assertIn("Workers AI neurons/day: نامشخص", rendered)
+        self.assertIn("Mega: مصرف و فضای آزاد قابل‌خواندن نیست", rendered)
+        self.assertEqual(rendered.count("Mega: مصرف و فضای آزاد قابل‌خواندن نیست"), 1)
+        self.assertIn("Termux=2 | Daily queue=1 | Mob X=0 | Deploy=2", rendered)
+        self.assertIn("صف، dedupe و ارسال هرگز محدود نمی‌شوند", rendered)
+
+
+    def test_workflow_failure_monitor_counts_consecutive_runs_and_ignores_pull_requests(self):
+        fixtures = {
+            "termux-docker-discovery.yml": [
+                {"status": "completed", "conclusion": "failure", "event": "pull_request", "head_branch": "feature", "created_at": "2026-11-03T09:00:00Z"},
+                {"status": "completed", "conclusion": "failure", "event": "schedule", "head_branch": "main", "created_at": "2026-11-03T08:00:00Z"},
+                {"status": "completed", "conclusion": "timed_out", "event": "schedule", "head_branch": "main", "created_at": "2026-11-02T20:00:00Z"},
+                {"status": "completed", "conclusion": "success", "event": "schedule", "head_branch": "main", "created_at": "2026-11-02T09:00:00Z"},
+                {"status": "completed", "conclusion": "failure", "event": "schedule", "head_branch": "main", "created_at": "2026-11-01T20:00:00Z"},
+            ],
+            "daily-queue-processor.yml": [
+                {"status": "completed", "conclusion": "failure", "event": "schedule", "head_branch": "main", "created_at": "2026-11-02T16:00:00Z"},
+                {"status": "completed", "conclusion": "success", "event": "schedule", "head_branch": "main", "created_at": "2026-11-01T16:00:00Z"},
+            ],
+            "mob-x-link-processor.yml": [
+                {"status": "completed", "conclusion": "success", "event": "schedule", "head_branch": "main", "created_at": "2026-11-03T08:00:00Z"},
+                {"status": "completed", "conclusion": "failure", "event": "schedule", "head_branch": "main", "created_at": "2026-11-03T07:55:00Z"},
+            ],
+            "deploy-worker.yml": [
+                {"status": "completed", "conclusion": "failure", "event": "push", "head_branch": "main", "created_at": "2026-11-03T08:00:00Z"},
+                {"status": "completed", "conclusion": "timed_out", "event": "push", "head_branch": "main", "created_at": "2026-11-03T07:00:00Z"},
+                {"status": "completed", "conclusion": "success", "event": "push", "head_branch": "main", "created_at": "2026-11-03T06:00:00Z"},
+            ],
+        }
+        with patch.object(owner_notify, "_github_workflow_runs", side_effect=lambda name: fixtures[name]):
+            self.assertEqual(owner_notify.collect_workflow_failures(), {
+                "termux": 2, "daily_queue": 1, "mob_x": 0, "deploy": 2,
+            })
+
+    def test_workflow_monitor_reports_unavailable_run_history_as_unknown(self):
+        with patch.object(owner_notify, "_github_workflow_runs", return_value=None):
+            self.assertEqual(owner_notify.collect_workflow_failures(), {
+                "termux": None, "daily_queue": None, "mob_x": None, "deploy": None,
+            })
+
+    def test_digest_health_section_warns_at_threshold_and_reports_unreadable_quotas_once(self):
+        state = digest_state()
+        state["health"] = {
+            "d1_size_bytes": 250 * 1024 * 1024,
+            "daily_d1_writes": 70_000,
+            "daily_d1_reads": None,
+            "daily_worker_requests": 70_000,
+            "workers_ai_neurons": None,
+            "mega_used_bytes": None,
+        }
+        state["workflow_failures"] = {
+            "termux": 2, "daily_queue": 1, "mob_x": 0, "deploy": 2,
+        }
+        rendered = owner_notify.render_daily_digest(state)
+        self.assertIn("هشدار PV در اندازهٔ D1", rendered)
+        self.assertIn("D1 writes/day: ⚠️ 70,000/100,000 rows (70.0%)", rendered)
+        self.assertIn("Worker requests/day: ⚠️ 70,000/100,000 requests (70.0%)", rendered)
         self.assertIn("D1 reads/day: نامشخص", rendered)
         self.assertIn("Workers AI neurons/day: نامشخص", rendered)
         self.assertIn("Mega: مصرف و فضای آزاد قابل‌خواندن نیست", rendered)
