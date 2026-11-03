@@ -2738,7 +2738,7 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(firstText[0].payload.text, "⏳ در حال انجام…");
     assert.equal(firstText.at(-1).payload.text.includes("انتخاب لینک‌های غیرفعال"), true);
     const firstButtons = firstKeypad.at(-1).payload.inline_keypad.rows.flatMap(row => row.buttons || []).map(button => button.id);
-    assert.ok(firstButtons.some(id => id === "p_lsel_1_12"), "first inactive link needs a selectable glass button");
+    assert.ok(firstButtons.some(id => id === "p_lsel_1_12"), "first inactive link needs a selectable glass button; actual=" + JSON.stringify({ firstButtons, finalText: firstText.at(-1)?.payload.text, links: state.DB.links }));
     assert.ok(firstButtons.some(id => id === "p_lsel_2_12"), "second inactive link needs a selectable glass button");
     assert.equal(state.DB.state.get("panel_mid"), "inactive-link-select-main");
     assert.equal(calls.filter(call => call.method === "sendMessage").length, 0);
