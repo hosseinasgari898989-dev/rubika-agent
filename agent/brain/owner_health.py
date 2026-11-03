@@ -68,6 +68,11 @@ def unavailable_daily_usage() -> dict[str, int | None]:
     return {key: None for key in DAILY_LIMITS}
 
 
+def get_daily_usage_snapshot() -> dict[str, int | None]:
+    """Return only counters genuinely accessible to the digest runtime."""
+    return unavailable_daily_usage()
+
+
 def unavailable_health_snapshot() -> dict[str, Any]:
     return {
         "sampled_at": None,
