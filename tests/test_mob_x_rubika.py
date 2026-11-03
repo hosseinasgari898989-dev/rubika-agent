@@ -125,6 +125,42 @@ class MobXRubikaTests(unittest.TestCase):
         self.assertNotIn("متن اصلی", payload["text"])
         self.assertNotIn("ترجمه", payload["text"])
 
+    def test_no_caption_preview_and_test_channel_send_use_native_bold_metadata(self):
+        from agent.brain.mob_x_link_processor import build_mob_x_caption
+
+        fixed = build_mob_x_caption("", None)
+        self.assertEqual(fixed, "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**")
+        holder = {}
+
+        def factory(**kwargs):
+            holder["bot"] = RubikaMediaMock(**kwargs)
+            return holder["bot"]
+
+        send_owner_preview(
+            "test-token", "owner-chat", "rubika-file-001", fixed,
+            "job_abcdef1234567890", bot_factory=factory,
+        )
+        _, preview_payload = holder["bot"]._post.call_args.args
+        self.assertEqual(preview_payload["text"], "ماب انترتینمنت در پیج خود پستی منتشر کرد.")
+        self.assertEqual(
+            [part["type"] for part in preview_payload["metadata"]["meta_data_parts"]],
+            ["Bold"],
+        )
+
+        holder["bot"]._post.reset_mock()
+        send_test_channel_once(
+            "test-token", TEST_CHANNEL_FOR_TESTS, "rubika-file-001", fixed,
+            bot_factory=factory,
+        )
+        _, channel_payload = holder["bot"]._post.call_args.args
+        self.assertEqual(channel_payload["text"], preview_payload["text"])
+        self.assertEqual(
+            [part["type"] for part in channel_payload["metadata"]["meta_data_parts"]],
+            ["Bold"],
+        )
+        self.assertNotIn("Original", channel_payload["text"])
+        self.assertNotIn("ترجمه", channel_payload["text"])
+
     def test_channel_delivery_is_exactly_one_send_and_has_no_owner_buttons(self):
         holder = {}
         def factory(**kwargs):
