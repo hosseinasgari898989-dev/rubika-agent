@@ -518,9 +518,9 @@ def main() -> int:
                         "(expected) => document.querySelector('#ttl')?.textContent === expected",
                         arg="کارها", timeout=7000,
                     )
-                    page.wait_for_function("() => !!document.querySelector('#view button[data-a=\\"jView\\"][data-id=\\"fixture-mob-ready\\"]')", timeout=7000)
+                    page.wait_for_selector('#view button[data-a="jView"][data-id="fixture-mob-ready"]', timeout=7000)
                     page.locator('#view button[data-a="jView"][data-id="fixture-mob-ready"]').click()
-                    page.wait_for_function("() => document.querySelector('#modal')?.classList.contains('on') && !!document.querySelector('#modal button[data-a=\\"jMobReject\\"]')", timeout=5000)
+                    page.wait_for_selector('#modal button[data-a="jMobReject"]', timeout=5000)
                     reject = page.locator('#modal button[data-a="jMobReject"]')
                     primary = page.locator('#modal button.btn:not(.danger):not(.g)').first
                     if reject.count() != 1 or primary.count() != 1:
