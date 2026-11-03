@@ -2176,6 +2176,10 @@ async function withDispatchFetch(responder, fn) {
     }, secret);
 
     await click("p_mob_nocap_" + firstJobId);
+    const observedEvent = JSON.parse(state.DB.state.get("last_event") || "{}");
+    assert.equal(observedEvent.button, "p_mob_nocap_" + firstJobId, "the PV hook must receive the no-caption callback");
+    assert.ok(Number(state.DB.state.get("panel_seq") || 0) > 0, "the callback must pass owner authorization and event de-duplication");
+    assert.equal(calls.some(call => call.method === "sendMessage" && String(call.payload.text).includes("فقط نقش مالک")), false);
     const changed = JSON.parse(state.DB.consoleJobs.get(firstJobId).result_json);
     assert.equal(changed.caption, "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**");
     assert.equal(changed.caption_mode, "no_caption");
