@@ -298,6 +298,7 @@ def stage_edit_batch(
                     final_inspection = inspector(publish_path, "video")
                 finally:
                     _add_stage_timing(timings, "checks", checks_started)
+                if not final_inspection.ok or final_inspection.media_type != "video":
                     result.skipped.append({"item": identity, "reason": "preserved_output_invalid", **_music_diagnostic_fields(moderation, first.has_audio)})
                     destination.unlink(missing_ok=True)
                     original.unlink(missing_ok=True)

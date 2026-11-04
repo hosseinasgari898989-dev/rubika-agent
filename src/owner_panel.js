@@ -153,7 +153,12 @@ export async function dispatchMobXWorkflow(env, workflow, inputs) {
   let lastError = "github_dispatch_network";
   let lastErrorDetail = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-github external start
+    let response;
+    const timing = env && env[PANEL_TIMING];
+    const externalStartedAt = performance.now();
+    if (timing) timing.external_calls += 1;
+    try {
+      response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "User-Agent": "rubika-agent-worker",
@@ -167,7 +172,15 @@ github external start
           : { ref: "main", inputs: cleanInputs }),
         signal: AbortSignal.timeout(2500),
       });
-github external end
+    } catch (error) {
+      lastError = error && (error.name === "TimeoutError" || error.name === "AbortError") ? "github_dispatch_timeout" : "github_dispatch_network";
+      lastErrorDetail = null;
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 120));
+      continue;
+    } finally {
+      if (timing) timing.external_ms += elapsedMs(externalStartedAt);
+    }
+    if (response.ok) return { ok: true };
     const status = Number(response.status) || 0;
     lastError = status ? "github_dispatch_http_" + status : "github_dispatch_http_unknown";
     let responseBody = "";
@@ -493,7 +506,11 @@ function timedStatement(statement, timing) {
       if (["first", "run", "all", "raw", "exec"].includes(String(property)) && typeof value === "function") {
         return async (...args) => {
           const startedAt = performance.now();
-d1 execute
+          try { return await value.apply(target, args); }
+          finally {
+            timing.d1_queries += 1;
+            timing.d1_ms += elapsedMs(startedAt);
+          }
         };
       }
       return typeof value === "function" ? value.bind(target) : value;
@@ -515,7 +532,11 @@ function withPanelTiming(env, timing) {
           if (["batch", "exec"].includes(String(property)) && typeof value === "function") {
             return async (...args) => {
               const startedAt = performance.now();
-d1 batch
+              try { return await value.apply(target, args); }
+              finally {
+                timing.d1_queries += Array.isArray(args[0]) ? args[0].length : 1;
+                timing.d1_ms += elapsedMs(startedAt);
+              }
             };
           }
           return typeof value === "function" ? value.bind(target) : value;
@@ -539,9 +560,31 @@ async function recordPanelTiming(env, timing, msgAge) {
     if (!Array.isArray(history)) history = [];
     history = history.filter((item) => item && typeof item === "object" && !Array.isArray(item))
       .map((item) => ({
-sanitize history
+        event_kind: item.event_kind === "click" || item.event_kind === "text" ? item.event_kind : "unknown",
+        msg_age_s: typeof item.msg_age_s === "number" && Number.isFinite(item.msg_age_s) ? item.msg_age_s : null,
+        total_ms: Number.isFinite(item.total_ms) && item.total_ms >= 0 ? item.total_ms : 0,
+        d1_queries: Number.isSafeInteger(item.d1_queries) && item.d1_queries >= 0 ? item.d1_queries : 0,
+        d1_ms: Number.isFinite(item.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
+        rubika_calls: Number.isSafeInteger(item.rubika_calls) && item.rubika_calls >= 0 ? item.rubika_calls : 0,
+        rubika_ms: Number.isFinite(item.rubika_ms) && item.rubika_ms >= 0 ? item.rubika_ms : 0,
+        worker_api_calls: Number.isSafeInteger(item.worker_api_calls) && item.worker_api_calls >= 0 ? item.worker_api_calls : 0,
+        worker_api_ms: Number.isFinite(item.worker_api_ms) && item.worker_api_ms >= 0 ? item.worker_api_ms : 0,
+        external_calls: Number.isSafeInteger(item.external_calls) && item.external_calls >= 0 ? item.external_calls : 0,
+        external_ms: Number.isFinite(item.external_ms) && item.external_ms >= 0 ? item.external_ms : 0,
       })).slice(-4);
-record row
+    const row = {
+      event_kind: timing.event_kind,
+      msg_age_s: msgAge,
+      total_ms: elapsedMs(timing.startedAt),
+      d1_queries: timing.d1_queries,
+      d1_ms: timing.d1_ms,
+      rubika_calls: timing.rubika_calls,
+      rubika_ms: timing.rubika_ms,
+      worker_api_calls: timing.worker_api_calls,
+      worker_api_ms: timing.worker_api_ms,
+      external_calls: timing.external_calls,
+      external_ms: timing.external_ms,
+    };
     await setState(env, "last_timings", JSON.stringify([...history, row].slice(-5)));
   } catch { /* diagnostics must never break owner commands */ }
 }
@@ -584,7 +627,14 @@ export function fmtAi(p, d) {
 
 // ---------- screens
 async function api(ui, path) {
-worker api
+  const timing = ui.env && ui.env[PANEL_TIMING];
+  if (timing) timing.worker_api_calls += 1;
+  const startedAt = performance.now();
+  try {
+    const res = await ui.selfFetch(new Request(ui.origin + path, { headers: { authorization: `Bearer ${ui.env.AGENT_API_TOKEN}`, accept: "application/json" } }));
+    return await res.json();
+  } catch { return { ok: false }; }
+  finally { if (timing) timing.worker_api_ms += elapsedMs(startedAt); }
 }
 const aiBlock = async (ui) => (await Promise.all(["groq", "openrouter"].map(async (p) => fmtAi(p, await api(ui, `/api/brain/ai-provider/status?provider=${p}`))))).join("\n\n");
 
@@ -695,7 +745,19 @@ async function debugText(env) {
   let timings = [];
   try {
     const parsed = JSON.parse(await getState(env, "last_timings", "[]"));
-debug sanitizer
+    if (Array.isArray(parsed)) timings = parsed.slice(-5).map((item) => ({
+      event_kind: item?.event_kind === "click" || item?.event_kind === "text" ? item.event_kind : "unknown",
+      msg_age_s: typeof item?.msg_age_s === "number" && Number.isFinite(item.msg_age_s) ? item.msg_age_s : null,
+      total_ms: Number.isFinite(item?.total_ms) && item.total_ms >= 0 ? item.total_ms : 0,
+      d1_queries: Number.isSafeInteger(item?.d1_queries) && item.d1_queries >= 0 ? item.d1_queries : 0,
+      d1_ms: Number.isFinite(item?.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
+      rubika_calls: Number.isSafeInteger(item?.rubika_calls) && item.rubika_calls >= 0 ? item.rubika_calls : 0,
+      rubika_ms: Number.isFinite(item?.rubika_ms) && item.rubika_ms >= 0 ? item.rubika_ms : 0,
+      worker_api_calls: Number.isSafeInteger(item?.worker_api_calls) && item.worker_api_calls >= 0 ? item.worker_api_calls : 0,
+      worker_api_ms: Number.isFinite(item?.worker_api_ms) && item.worker_api_ms >= 0 ? item.worker_api_ms : 0,
+      external_calls: Number.isSafeInteger(item?.external_calls) && item.external_calls >= 0 ? item.external_calls : 0,
+      external_ms: Number.isFinite(item?.external_ms) && item.external_ms >= 0 ? item.external_ms : 0,
+    }));
   } catch { /* invalid or old timing state */ }
   let event = null;
   try { event = JSON.parse(await getState(env, "last_event", "null")); } catch { /* invalid older state */ }
@@ -1116,7 +1178,14 @@ async function tryClaim(env, ev) {
 const idTail = (value) => String(value ?? "").slice(-4);
 async function processEvent(env, selfFetch, origin, ev) {
   if (!ev) return;
-timing init
+  const timing = {
+    startedAt: performance.now(),
+    event_kind: ev.kind === "click" ? "click" : "text",
+    d1_queries: 0, d1_ms: 0,
+    rubika_calls: 0, rubika_ms: 0,
+    worker_api_calls: 0, worker_api_ms: 0,
+    external_calls: 0, external_ms: 0,
+  };
   const receivedAt = Date.now();
   const timedEnv = withPanelTiming(env, timing);
   const owner = await getOwner(timedEnv);
