@@ -1,10 +1,10 @@
 """Media-type-aware Rubka publisher with safe Markdown metadata for captions.
 
 The pinned Rubka package supports Markdown-to-Rubika metadata parsing, but its
-high-level media methods omit the metadata field when they call sendFile. For
-formatted captions we therefore upload once, then send the same file_id with
-the parsed text and metadata payload. Plain captions continue through the
-library's native media methods.
+high-level media methods strictly index the response's data.message_id field.
+All media types therefore upload once and call sendFile directly, preserving
+the raw response for the guarded receipt parser. Formatted captions include
+the parsed metadata payload; plain captions retain their plain text.
 """
 from __future__ import annotations
 
