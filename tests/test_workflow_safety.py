@@ -102,7 +102,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", processor)
         dispatch = discovery.split("name: Start the serialized TEST-only TikTok queue processor after successful sync", 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("steps.queue_intake.outcome == 'success'", dispatch)
-        self.assertIn("steps.record_cycle.outcome == 'success'", dispatch)
+        self.assertLess(discovery.index("name: Start the serialized TEST-only TikTok queue processor after successful sync"), discovery.index("name: Record successful five-hour collection cycle"))
         self.assertIn("daily-queue-processor.yml", dispatch)
         self.assertIn('"publish_four_tiktok_test":"true"', dispatch)
         self.assertIn('"publish_four_tiktok_test":"true"', recovery)
