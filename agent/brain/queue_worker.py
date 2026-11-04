@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.brain.cloud_state import CloudState
+from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.e2e_from_report import run_one
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
 # The global lifecycle birth gate is reserved for official Mob news, not TikTok edits.
@@ -30,6 +30,35 @@ def _utc_now() -> str:
 
 def _safe_code(value: Any) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value or "unknown_error"))[:80] or "unknown_error"
+
+
+def _safe_cloud_state_error_detail(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    raw_status = value.get("status_code")
+    status_code = raw_status if type(raw_status) is int and 100 <= raw_status <= 599 else None
+    raw_endpoint = value.get("endpoint_path")
+    endpoint_path = (
+        raw_endpoint
+        if isinstance(raw_endpoint, str)
+        and re.fullmatch(r"/api/brain/[A-Za-z0-9_{}-]+(?:/[A-Za-z0-9_{}-]+)*", raw_endpoint)
+        else None
+    )
+    raw_code = value.get("code")
+    code = _safe_code(raw_code) if isinstance(raw_code, str) else None
+    if status_code is None and endpoint_path is None and code is None:
+        return None
+    return {"status_code": status_code, "endpoint_path": endpoint_path, "code": code}
+
+
+def _cloud_state_error_detail(exc: Exception) -> dict[str, Any] | None:
+    if not isinstance(exc, CloudStateError):
+        return None
+    return _safe_cloud_state_error_detail({
+        "status_code": exc.status_code,
+        "endpoint_path": exc.endpoint_path,
+        "code": exc.code,
+    })
 
 
 def _safe_music_probability(value: Any) -> float | None:
@@ -86,6 +115,10 @@ def _safe_failure_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
             sync_errors.append(":".join(match.groups()) if match else "cloud_sync_error")
     if sync_errors:
         diagnostics["cloud_sync_errors"] = sync_errors
+
+    cloud_error = _safe_cloud_state_error_detail(result.get("cloud_state_error"))
+    if cloud_error is not None:
+        diagnostics["cloud_state_error"] = cloud_error
 
     reuse_error = result.get("previous_staged_copy_rejected")
     if isinstance(reuse_error, str) and reuse_error:
@@ -293,8 +326,11 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                 result = {
                     "ok": False,
                     "status": "error",
-                    "reason": _safe_code(type(exc).__name__),
+                    "reason": _safe_code(getattr(exc, "code", None) or type(exc).__name__),
                 }
+                cloud_error = _cloud_state_error_detail(exc)
+                if cloud_error is not None:
+                    result["cloud_state_error"] = cloud_error
 
             status = str(result.get("status") or "error")
             report["attempted_count"] += 1

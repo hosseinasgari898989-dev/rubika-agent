@@ -91,6 +91,13 @@ class BrainModelPolicyTests(unittest.TestCase):
             {"music_probability": 0.55, "music_decision_reason": "music_probability_ambiguous"},
         ))
 
+    def test_tiktok_final_gate_rejects_low_music_probability(self):
+        self.assertFalse(_tiktok_publish_checks_pass(
+            self.candidate(),
+            {"has_audio": True},
+            {"has_music": False, "music_probability": 0.10},
+        ))
+
     def test_tiktok_final_gate_rejects_missing_keyword_result_fail_closed(self):
         with patch("agent.brain.e2e_from_report.has_required_any_keyword", return_value=None):
             self.assertFalse(_tiktok_publish_checks_pass(

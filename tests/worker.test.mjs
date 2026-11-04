@@ -1176,9 +1176,9 @@ const read = async response => ({ status: response.status, body: await response.
 {
   const state = env();
   const goodModeration = {
-    is_poppy_playtime: true,
-    is_edit: true,
-    high_quality_edit: true,
+    is_poppy_playtime: null,
+    is_edit: null,
+    high_quality_edit: null,
     has_music: true,
   };
   const base = {
@@ -1187,7 +1187,7 @@ const read = async response => ({ status: response.status, body: await response.
     source_key: "@creator", title: "Poppy Playtime edit", status: "ready",
     review_state: "approved", media_type: "video", source_tier: "trusted",
     media_sha256: "a".repeat(64), media_bytes: 1000000,
-    validation: { ok: true, width: 1080, height: 1080, mime_type: "video/mp4" },
+    validation: { ok: true, has_audio: true, width: 1080, height: 1080, mime_type: "video/mp4" },
     moderation: goodModeration,
   };
   const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
@@ -1196,10 +1196,49 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.status, 200);
   assert.equal(response.body.item_id, "tiktok:7616247520657771796");
 
+  for (const hasMusic of [false, null]) {
+    const rejectedState = env();
+    response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+      method: "POST",
+      body: {
+        ...base,
+        external_id: "761624752065777179" + (hasMusic === false ? "7" : "8"),
+        canonical_url: "https://www.tiktok.com/@creator/video/761624752065777179" + (hasMusic === false ? "7" : "8"),
+        moderation: { is_poppy_playtime: null, is_edit: null, has_music: hasMusic },
+      },
+    }), rejectedState));
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, "edit_approval_requires_visual_content_and_music_checks");
+  }
+
   const queue = await read(await worker.fetch(request("/api/brain/queue?limit=999"), state));
   assert.equal(queue.status, 200);
   assert.equal(queue.body.publishing, false);
   assert.equal(state.DB.queueLimit, 100);
+}
+{
+  const state = env();
+  const youtubeBase = {
+    platform: "youtube", external_id: "vkVFgmgLo1s",
+    canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
+    source_key: "channel", title: "YouTube approval contract",
+    status: "ready", review_state: "approved", media_type: "video", source_tier: "trusted",
+    media_sha256: "d".repeat(64), media_bytes: 500000,
+    validation: { ok: true },
+    moderation: { has_music: true, is_poppy_playtime: true, is_edit: true },
+  };
+  let response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST", body: youtubeBase,
+  }), state));
+  assert.equal(response.status, 200);
+
+  response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST",
+    body: { ...youtubeBase, external_id: "abcdefghijk", canonical_url: "https://www.youtube.com/watch?v=abcdefghijk",
+      moderation: { has_music: true, is_poppy_playtime: null, is_edit: null } },
+  }), env()));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "edit_approval_requires_visual_content_and_music_checks");
 }
 {
   const state = env();

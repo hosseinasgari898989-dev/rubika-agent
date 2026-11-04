@@ -157,6 +157,18 @@ class CloudStateTests(unittest.TestCase):
         })
         self.assertEqual(index["hashes"], {"d" * 64, "e" * 64, "f" * 64})
 
+    def test_cloud_state_error_redacts_dynamic_ids_and_query_values(self):
+        error = CloudStateError(
+            "control_api_http_400_invalid_request",
+            status_code=400,
+            endpoint_path="/api/brain/items/tiktok:private-id/attempts?token=hidden&channel=private",
+        )
+        self.assertEqual(error.status_code, 400)
+        self.assertEqual(error.endpoint_path, "/api/brain/items/{item_id}/attempts")
+        self.assertNotIn("private-id", error.endpoint_path)
+        self.assertNotIn("hidden", error.endpoint_path)
+        self.assertNotIn("private", error.endpoint_path)
+
     def test_http_failure_is_sanitized(self):
         state = CloudState("https://worker.example", TOKEN)
         error = __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
@@ -192,6 +204,8 @@ class CloudStateTests(unittest.TestCase):
                 })
 
         self.assertEqual(caught.exception.code, "control_api_http_400_invalid_canonical_url")
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(caught.exception.endpoint_path, "/api/brain/items/upsert")
         self.assertNotIn("secret", str(caught.exception))
         self.assertNotIn("do not expose this", str(caught.exception))
 
