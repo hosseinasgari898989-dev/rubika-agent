@@ -449,7 +449,7 @@ class DeliveryStateMachineTests(unittest.TestCase):
     def test_failed_local_cleanup_keeps_remote_copy(self):
         result = deliver_with_retry(
             item_id="tiktok:7616247520657771796",
-            send=lambda: {"status": "OK"},
+            send=lambda: {"status": "OK", "message_id": "cleanup-test-message"},
             record_attempt=lambda *_: None,
             delete_local=lambda: (_ for _ in ()).throw(OSError()),
             sleeper=lambda _: None,
