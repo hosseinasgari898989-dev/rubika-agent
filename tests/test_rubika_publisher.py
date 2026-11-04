@@ -132,43 +132,50 @@ class RubikaPublisherMediaTests(unittest.TestCase):
         self.assertTrue({"Bold", "Quote"}.issubset(types))
         self.assertEqual(self.fake_bot.calls, [])
 
-    def test_image_uses_native_inline_image_method_with_caption(self):
+    def test_image_uses_raw_send_file_response_with_caption(self):
         self.publisher.send_media(self.media_path, "image", "A test caption")
 
-        self.assertEqual(len(self.fake_bot.calls), 1)
-        method, payload = self.fake_bot.calls[0]
-        self.assertEqual(method, "send_image")
+        self.assertEqual(self.fake_bot.calls, [])
+        self.assertEqual(self.fake_bot.uploads[0], ("get_upload_url", "Image"))
+        method, payload = self.fake_bot.posts[0]
+        self.assertEqual(method, "sendFile")
         self.assertEqual(payload["chat_id"], TEST_CHANNEL_FOR_TESTS)
-        self.assertEqual(payload["path"], str(self.media_path))
+        self.assertEqual(payload["file_id"], "uploaded-file-id")
         self.assertEqual(payload["text"], "A test caption")
-        self.assertEqual(payload["file_name"], "official_media.webp")
+        self.assertEqual("metadata" in payload, False)
 
-    def test_image_never_falls_back_to_generic_file_attachment(self):
+    def test_plain_media_uses_the_raw_send_file_endpoint_once(self):
         self.publisher.send_media(self.media_path, "image", "A test caption")
-        self.assertNotIn("send_file", [method for method, _ in self.fake_bot.calls])
 
-    def test_edit_caption_uses_plain_native_video_payload_without_bold_metadata(self):
+        self.assertEqual(len(self.fake_bot.posts), 1)
+        self.assertEqual(self.fake_bot.posts[0][0], "sendFile")
+        self.assertEqual(self.fake_bot.calls, [])
+
+    def test_edit_caption_uses_plain_raw_video_payload_without_bold_metadata(self):
         video_path = Path(self.tempdir.name) / "edit_video.mp4"
         video_path.write_bytes(b"fake-video-for-adapter-test")
         self.assertEqual(_decorate_official_mob_caption(EDIT_CAPTION), EDIT_CAPTION)
         self.publisher.send_media(video_path, "video", EDIT_CAPTION)
-        self.assertFalse(self.fake_bot.posts)
-        method, payload = self.fake_bot.calls[-1]
-        self.assertEqual(method, "send_video")
+        self.assertEqual(self.fake_bot.calls, [])
+        method, payload = self.fake_bot.posts[0]
+        self.assertEqual(method, "sendFile")
         self.assertEqual(payload["text"], EDIT_CAPTION)
-        self.assertNotIn("**", payload["text"])
+        self.assertNotIn("metadata", payload)
 
-    def test_video_uses_native_inline_video_method_with_caption(self):
+    def test_video_returns_unmodified_raw_api_response(self):
         video_path = Path(self.tempdir.name) / "official_video.mp4"
         video_path.write_bytes(b"fake-video-for-adapter-test")
 
-        self.publisher.send_media(video_path, "video", "A video caption")
+        response = self.publisher.send_media(video_path, "video", "A video caption")
 
-        method, payload = self.fake_bot.calls[-1]
-        self.assertEqual(method, "send_video")
+        self.assertEqual(response, {"status": "OK", "data": {"message_id": "formatted-media-message"}})
+        self.assertEqual(self.fake_bot.calls, [])
+        self.assertEqual(self.fake_bot.uploads[0], ("get_upload_url", "Video"))
+        method, payload = self.fake_bot.posts[0]
+        self.assertEqual(method, "sendFile")
         self.assertEqual(payload["chat_id"], TEST_CHANNEL_FOR_TESTS)
-        self.assertEqual(payload["path"], str(video_path))
         self.assertEqual(payload["text"], "A video caption")
+        self.assertNotIn("metadata", payload)
 
 
     def test_non_test_destination_is_rejected_before_any_upload_or_send(self):

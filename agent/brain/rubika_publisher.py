@@ -1,10 +1,10 @@
 """Media-type-aware Rubka publisher with safe Markdown metadata for captions.
 
 The pinned Rubka package supports Markdown-to-Rubika metadata parsing, but its
-high-level media methods omit the metadata field when they call sendFile. For
-formatted captions we therefore upload once, then send the same file_id with
-the parsed text and metadata payload. Plain captions continue through the
-library's native media methods.
+high-level media methods strictly index the response's data.message_id field.
+All media types therefore upload once and call sendFile directly, preserving
+the raw response for the guarded receipt parser. Formatted captions include
+the parsed metadata payload; plain captions retain their plain text.
 """
 from __future__ import annotations
 
@@ -106,7 +106,14 @@ class RubikaPublisher:
             bot_factory = Bot
         self.bot = bot_factory(token=token, timeout=30, show_progress=True)
 
-    def _send_formatted_media(self, path: Path, media_type: str, caption: dict[str, Any]) -> Any:
+    def _send_uploaded_media(
+        self,
+        path: Path,
+        media_type: str,
+        text: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send once through the raw API to preserve all supported response shapes."""
         assert_test_channel_destination(self.channel_guid)
         post = getattr(self.bot, "_post", None)
         get_upload_url = getattr(self.bot, "get_upload_url", None)
@@ -127,13 +134,19 @@ class RubikaPublisher:
         payload = {
             "chat_id": self.channel_guid,
             "file_id": file_id,
-            "text": caption["text"],
-            "metadata": caption["metadata"],
+            "text": text,
             "disable_notification": False,
             "chat_keypad_type": "None",
         }
+        if metadata is not None:
+            payload["metadata"] = metadata
         # Deliberately send once: never retry an ambiguous media send and duplicate it.
         return post("sendFile", payload)
+
+    def _send_formatted_media(self, path: Path, media_type: str, caption: dict[str, Any]) -> Any:
+        return self._send_uploaded_media(
+            path, media_type, caption["text"], metadata=caption["metadata"]
+        )
 
     def send_media(self, path: str | Path, media_type: str, caption: str | None = None) -> Any:
         assert_test_channel_destination(self.channel_guid)
@@ -150,30 +163,6 @@ class RubikaPublisher:
         if formatted_caption is not None:
             return self._send_formatted_media(local_path, media_type, formatted_caption)
 
-        name = local_path.name
-        if media_type == "image":
-            send_image = getattr(self.bot, "send_image", None)
-            if not callable(send_image):
-                raise RuntimeError("rubka_send_image_unavailable")
-            return send_image(
-                chat_id=self.channel_guid,
-                path=str(local_path),
-                text=caption or None,
-                file_name=name,
-            )
-        if media_type == "video":
-            return self.bot.send_video(
-                chat_id=self.channel_guid,
-                path=str(local_path),
-                text=caption or None,
-                file_name=name,
-            )
-        send_file = getattr(self.bot, "send_file", None)
-        if not callable(send_file):
-            raise RuntimeError("rubka_send_file_unavailable")
-        return send_file(
-            chat_id=self.channel_guid,
-            path=str(local_path),
-            caption=caption or None,
-            file_name=name,
-        )
+        # Bypass Rubka's strict resp["data"]["message_id"] indexing. The raw
+        # response is parsed by delivery.py, which keeps missing receipts uncertain.
+        return self._send_uploaded_media(local_path, media_type, caption or None)
