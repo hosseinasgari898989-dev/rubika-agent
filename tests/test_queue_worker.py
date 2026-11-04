@@ -400,6 +400,36 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(cloud.items[1]["status"], "queued")
         self.assertFalse(report["ok"])
 
+    def test_owner_digest_rate_limit_stops_after_the_confirmed_media_send(self):
+        cloud = FakeCloud()
+        calls = []
+
+        def fake_run_one(*_args, **_kwargs):
+            calls.append(True)
+            return {"ok": True, "status": "sent", "title": "Sent"}
+
+        def rate_limited_notice(_message):
+            return {
+                "sent": False,
+                "reason": "rubika_digest_edit_rejected",
+                "diagnostic": {"status": "ERROR", "code": 429},
+            }
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", side_effect=rate_limited_notice),
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(report["sent_count"], 1)
+        self.assertEqual(report["status"], "rate_limited")
+        self.assertTrue(report["ok"])
+        self.assertEqual(cloud.items[0]["status"], "sent")
+        self.assertEqual(cloud.items[1]["status"], "queued")
+
     def test_paused_youtube_item_remains_queued_for_later(self):
         cloud = FakeCloud()
         cloud.items = [make_item("youtube", "abcdefghijk", "YouTube must remain queued")]
