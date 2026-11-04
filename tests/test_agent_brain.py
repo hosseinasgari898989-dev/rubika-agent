@@ -68,7 +68,7 @@ class BrainModelPolicyTests(unittest.TestCase):
         self.assertTrue(_tiktok_publish_checks_pass(
             self.candidate(),
             {"has_audio": True},
-            {"has_music": True},
+            {"has_music": True, "music_probability": 0.70},
         ))
 
     def test_tiktok_final_gate_rejects_missing_caption_and_hashtag_keyword(self):

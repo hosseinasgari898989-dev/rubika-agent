@@ -1184,13 +1184,13 @@ const read = async response => ({ status: response.status, body: await response.
   const base = {
     platform: "tiktok", external_id: "7616247520657771796",
     canonical_url: "https://www.tiktok.com/@creator/video/7616247520657771796",
-    source_key: "@creator", title: "Poppy Playtime edit", status: "ready",
+    source_key: "@creator", title: "Poppy Playtime edit", caption: "#PoppyPlaytime #edit", status: "ready",
     review_state: "approved", media_type: "video", source_tier: "trusted",
     media_sha256: "a".repeat(64), media_bytes: 1000000,
     validation: { ok: true, has_audio: true, width: 1080, height: 1080, mime_type: "video/mp4" },
-    moderation: goodModeration,
+    moderation: { ...goodModeration, music_probability: 0.97 },
   };
-  const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+  let response = await read(await worker.fetch(request("/api/brain/items/upsert", {
     method: "POST", body: base,
   }), state));
   assert.equal(response.status, 200);
