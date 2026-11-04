@@ -65,27 +65,51 @@ class WorkflowSafetyTests(unittest.TestCase):
             with self.subTest(preserved=preserved):
                 self.assertTrue((workflows / preserved).is_file())
 
-    def test_edit_queue_uses_main_digest_and_four_success_cap(self):
+    def test_edit_queue_has_no_send_count_cap_and_keeps_a_safe_time_budget(self):
         workflow = (ROOT / ".github" / "workflows" / "daily-queue-processor.yml").read_text(encoding="utf-8")
         worker = (ROOT / "agent" / "brain" / "queue_worker.py").read_text(encoding="utf-8")
         self.assertIn("ref: main", workflow)
-        self.assertIn("--daily-limit 4", workflow)
-        self.assertIn("DAILY_SUCCESS_LIMIT = 4", worker)
+        self.assertIn("--time-budget-seconds 9000", workflow)
+        self.assertIn("--send-delay-seconds 3", workflow)
+        self.assertIn("timeout-minutes: 180", workflow)
+        self.assertNotIn("--daily-limit", workflow)
+        self.assertNotIn("--max-attempts", workflow)
+        self.assertNotIn("DAILY_SUCCESS_LIMIT", worker)
+        self.assertNotIn("MAX_CANDIDATE_ATTEMPTS", worker)
         self.assertIn("edit_message_text", (ROOT / "agent" / "brain" / "owner_notify.py").read_text(encoding="utf-8"))
 
-    def test_manual_four_tiktok_dispatch_is_explicit_and_test_channel_only(self):
+    def test_manual_and_automated_queue_paths_are_pinned_to_test_channel(self):
         workflow = (ROOT / ".github" / "workflows" / "daily-queue-processor.yml").read_text(encoding="utf-8")
         worker = (ROOT / "agent" / "brain" / "queue_worker.py").read_text(encoding="utf-8")
+        guard = '0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8'
         self.assertIn("publish_four_tiktok_test", workflow)
         self.assertIn("default: false", workflow)
         self.assertIn("inputs.publish_four_tiktok_test == true", workflow)
-        self.assertIn('if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]', workflow)
         self.assertIn("sha256sum", workflow)
-        self.assertIn("0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8", workflow)
-        # The scheduled-run test-channel guard was removed on purpose (owner-approved).
-        self.assertNotIn('RUBIKA_CHANNEL_GUID:-}" == "', workflow)
+        self.assertIn(guard, workflow)
+        self.assertLess(workflow.index("actual_hash="), workflow.index('if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]'))
+        self.assertIn('if [[ "$actual_hash" !=', workflow)
         self.assertIn("PLATFORMS = (\"tiktok\",)", worker)
-        self.assertIn("--daily-limit 4", workflow)
+        self.assertNotIn("--daily-limit", workflow)
+
+    def test_discovery_sync_chains_into_one_serialized_queue_processor(self):
+        workflows = ROOT / ".github" / "workflows"
+        processor = (workflows / "daily-queue-processor.yml").read_text(encoding="utf-8")
+        discovery = (workflows / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        recovery = (workflows / "queue-intake.yml").read_text(encoding="utf-8")
+        group = "rubika-agent-daily-queue-processor"
+        self.assertIn(f"group: {group}", processor)
+        self.assertIn("cancel-in-progress: false", processor)
+        dispatch = discovery.split("name: Start the daily queue worker", 1)[1].split("\\n      - name:", 1)[0]
+        self.assertIn("steps.queue_intake.outcome == 'success'", dispatch)
+        self.assertIn("steps.record_cycle.outcome == 'success'", dispatch)
+        self.assertIn("daily-queue-processor.yml", dispatch)
+        self.assertIn('"publish_four_tiktok_test":"true"', dispatch)
+        self.assertIn('"publish_four_tiktok_test":"true"', recovery)
+        # Existing discovery throttles remain unchanged.
+        self.assertIn('MINIMUM_INTERVAL = timedelta(hours=5)', (ROOT / "termux" / "collection_gate.py").read_text(encoding="utf-8"))
+        self.assertIn("max_per_profile=8", (ROOT / "termux" / "daily_discovery.py").read_text(encoding="utf-8"))
+        self.assertIn("--max-new 4", discovery)
 
     def test_edit_pipeline_does_not_apply_mob_birth_cutoff(self):
         intake = (ROOT / "agent" / "brain" / "queue_intake.py").read_text(encoding="utf-8")
