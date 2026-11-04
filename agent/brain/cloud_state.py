@@ -12,12 +12,36 @@ from typing import Any, Mapping
 from .deduplication import status_blocks_delivery
 
 
-class CloudStateError(RuntimeError):
-    """Safe, non-sensitive API error code."""
+def _safe_endpoint_path(value: Any) -> str | None:
+    """Keep only the API route; remove queries and redact dynamic item identifiers."""
+    if not isinstance(value, str):
+        return None
+    endpoint = urllib.parse.urlsplit(value).path
+    parts = endpoint.split("/")
+    if len(parts) == 6 and parts[1:4] == ["api", "brain", "items"] and parts[5] == "attempts":
+        parts[4] = "{item_id}"
+    elif len(parts) == 6 and parts[1:4] == ["api", "brain", "automation-queue"] and parts[5] == "state":
+        parts[4] = "{queue_id}"
+    endpoint = "/".join(parts)
+    if re.fullmatch(r"/api/brain/[A-Za-z0-9_{}-]+(?:/[A-Za-z0-9_{}-]+)*", endpoint):
+        return endpoint
+    return None
 
-    def __init__(self, code: str):
+
+class CloudStateError(RuntimeError):
+    """Safe API error code plus sanitized HTTP context; never stores response bodies."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        status_code: int | None = None,
+        endpoint_path: str | None = None,
+    ):
         super().__init__(code)
         self.code = code
+        self.status_code = status_code if type(status_code) is int and 100 <= status_code <= 599 else None
+        self.endpoint_path = _safe_endpoint_path(endpoint_path)
 
 
 class CloudState:
@@ -83,16 +107,20 @@ class CloudState:
                     detail = "_" + raw_code.lower()
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 pass
-            raise CloudStateError("control_api_http_" + str(exc.code) + detail) from None
+            raise CloudStateError(
+                "control_api_http_" + str(exc.code) + detail,
+                status_code=exc.code,
+                endpoint_path=path,
+            ) from None
         except (urllib.error.URLError, TimeoutError, OSError):
-            raise CloudStateError("control_api_unreachable") from None
+            raise CloudStateError("control_api_unreachable", endpoint_path=path) from None
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise CloudStateError("control_api_invalid_json") from None
+            raise CloudStateError("control_api_invalid_json", endpoint_path=path) from None
 
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("error", "control_api_rejected") if isinstance(result, dict) else "control_api_invalid_response"
             safe = re.sub(r"[^a-zA-Z0-9_-]", "", str(code).lower())[:60] or "rejected"
-            raise CloudStateError("control_api_" + safe)
+            raise CloudStateError("control_api_" + safe, endpoint_path=path)
         return result
 
     def translate_official(self, source_text: str, *, kind: str = "caption", run_id: str | None = None) -> str:

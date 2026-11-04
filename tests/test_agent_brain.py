@@ -68,7 +68,7 @@ class BrainModelPolicyTests(unittest.TestCase):
         self.assertTrue(_tiktok_publish_checks_pass(
             self.candidate(),
             {"has_audio": True},
-            {"has_music": True},
+            {"has_music": True, "music_probability": 0.70},
         ))
 
     def test_tiktok_final_gate_rejects_missing_caption_and_hashtag_keyword(self):
@@ -89,6 +89,13 @@ class BrainModelPolicyTests(unittest.TestCase):
             self.candidate(),
             {"has_audio": True},
             {"music_probability": 0.55, "music_decision_reason": "music_probability_ambiguous"},
+        ))
+
+    def test_tiktok_final_gate_rejects_low_music_probability(self):
+        self.assertFalse(_tiktok_publish_checks_pass(
+            self.candidate(),
+            {"has_audio": True},
+            {"has_music": False, "music_probability": 0.10},
         ))
 
     def test_tiktok_final_gate_rejects_missing_keyword_result_fail_closed(self):

@@ -348,7 +348,9 @@ async function upsertItem(env, body) {
         return json({ ok: false, error: "official_media_requires_verified_track_and_supported_type" }, 400);
       }
     } else {
-      const required = ["has_music", "is_poppy_playtime", "is_edit"];
+      const required = platform === "tiktok"
+        ? ["has_music"]
+        : ["has_music", "is_poppy_playtime", "is_edit"];
       let moderation;
       try { moderation = JSON.parse(moderationJson || "null"); } catch { moderation = null; }
       if (

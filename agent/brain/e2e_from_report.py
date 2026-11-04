@@ -554,7 +554,7 @@ def run_one(
         )
         policy = staged_candidate.source_policy or {}
         required_checks = {"has_music": True}
-        if policy.get("require_edit_signal_check") is True:
+        if platform != "tiktok" and policy.get("require_edit_signal_check") is True:
             required_checks["is_edit"] = True
         if policy.get("require_brain_quality_check") is True:
             required_checks["high_quality_edit"] = True

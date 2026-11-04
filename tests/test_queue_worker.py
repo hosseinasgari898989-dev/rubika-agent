@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain import queue_worker
+from agent.brain.cloud_state import CloudStateError
 
 
 def make_item(platform: str, external_id: str, title: str) -> dict:
@@ -185,6 +186,38 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertNotIn("provider_body", result)
         self.assertNotIn("private.invalid", json.dumps(result))
         self.assertNotIn("hidden", json.dumps(result))
+
+    def test_cloud_state_http_error_details_reach_queue_report_without_secrets(self):
+        def fail_with_cloud_error(*args, **kwargs):
+            raise CloudStateError(
+                "control_api_http_400_edit_approval_requires_visual_content_and_music_checks",
+                status_code=400,
+                endpoint_path="/api/brain/items/upsert?token=hidden&channel=private",
+            )
+
+        with (
+            patch.object(queue_worker, "CloudState", FakeCloud),
+            patch.object(queue_worker, "run_one", side_effect=fail_with_cloud_error),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(daily_limit=1, max_attempts=1)
+
+        result = report["results"][0]
+        self.assertEqual(
+            result["reason"],
+            "control_api_http_400_edit_approval_requires_visual_content_and_music_checks",
+        )
+        self.assertEqual(result["cloud_state_error"], {
+            "status_code": 400,
+            "endpoint_path": "/api/brain/items/upsert",
+            "code": "control_api_http_400_edit_approval_requires_visual_content_and_music_checks",
+        })
+        serialized = json.dumps(report)
+        self.assertNotIn("hidden", serialized)
+        self.assertNotIn("private", serialized)
+        self.assertNotIn("token", serialized)
+        self.assertNotIn("response_body", serialized)
 
     def test_stops_after_four_successes_were_already_recorded_today(self):
         cloud = FakeCloud()
