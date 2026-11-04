@@ -493,64 +493,6 @@ def run_daily(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--daily-limit", type=int, choices=range(1, 5), default=DAILY_SUCCESS_LIMIT)
-    parser.add_argument("--max-attempts", type=int, choices=range(1, 101), default=20)
-    parser.add_argument("--report", type=Path, default=Path("artifacts/automation-daily-report.json"))
-    parser.add_argument("--no-notify", action="store_true")
-    args = parser.parse_args()
-    try:
-        result = run_daily(daily_limit=args.daily_limit, max_attempts=args.max_attempts)
-    except Exception as exc:
-        result = {
-            "ok": False,
-            "status": "failed",
-            "error": _safe_code(type(exc).__name__),
-            "sent_count": 0,
-            "failed_count": 1,
-            "results": [],
-            "errors": [{"error": _safe_code(type(exc).__name__)}],
-            "finished_at": _utc_now(),
-        }
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({
-        "ok": result.get("ok"),
-        "status": result.get("status"),
-        "sent_count": result.get("sent_count", 0),
-        "failed_count": result.get("failed_count", 0),
-        "skipped_count": result.get("skipped_count", 0),
-        "queued_remaining": (result.get("queue_counts") or {}).get("queued"),
-        "report": str(args.report),
-    }, ensure_ascii=False, sort_keys=True))
-    if not args.no_notify:
-        error_rows = result.get("errors") if isinstance(result.get("errors"), list) else []
-        error_lines = []
-        for error_row in error_rows[:4]:
-            if not isinstance(error_row, dict):
-                continue
-            platform = re.sub(r"[^A-Za-z0-9_-]", "", str(error_row.get("platform") or ""))[:20]
-            external_id = re.sub(r"[^A-Za-z0-9._-]", "", str(error_row.get("external_id") or ""))[:40]
-            code = _safe_code(error_row.get("error") or "unknown_error")
-            identity = f" ({platform}:{external_id})" if platform and external_id else ""
-            error_lines.append(f"• {code}{identity}")
-        error_summary = ("\nآخرین کدهای خطا:\n" + "\n".join(error_lines)) if error_lines else ""
-        message = (
-            "📊 گزارش پایان نوبت خودکار روبیکا\n"
-            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))}/{args.daily_limit}\n"
-            f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\n"
-            f"وضعیت: {result.get('status', 'unknown')}\n"
-            + str(result.get("inventory_text") or queue_inventory_lines(result.get("queue_counts") or {}))
-            + error_summary
-        )
-        notify = send_owner_notification(message)
-        result["final_notification_sent"] = bool(notify.get("sent"))
-        args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return 0 if result.get("ok") else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--time-budget-seconds", type=int, default=DEFAULT_TIME_BUDGET_SECONDS,
         help="Graceful per-run processing budget; must remain below the Actions job timeout.",
@@ -579,7 +521,7 @@ if __name__ == "__main__":
             "finished_at": _utc_now(),
         }
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
+    args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({
         "ok": result.get("ok"),
         "status": result.get("status"),
@@ -602,19 +544,19 @@ if __name__ == "__main__":
             code = _safe_code(error_row.get("error") or "unknown_error")
             identity = f" ({platform}:{external_id})" if platform and external_id else ""
             error_lines.append(f"• {code}{identity}")
-        error_summary = ("\\nآخرین کدهای خطا:\\n" + "\\n".join(error_lines)) if error_lines else ""
+        error_summary = ("\nآخرین کدهای خطا:\n" + "\n".join(error_lines)) if error_lines else ""
         message = (
-            "📊 گزارش پایان نوبت خودکار روبیکا\\n"
-            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))} | سقف روزانه: ندارد\\n"
-            f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\\n"
-            f"وقفه بین ارسال: {args.send_delay_seconds:g} ثانیه | بودجهٔ اجرا: {args.time_budget_seconds} ثانیه\\n"
-            f"وضعیت: {result.get('status', 'unknown')}\\n"
+            "📊 گزارش پایان نوبت خودکار روبیکا\n"
+            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))} | سقف روزانه: ندارد\n"
+            f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\n"
+            f"وقفه بین ارسال: {args.send_delay_seconds:g} ثانیه | بودجهٔ اجرا: {args.time_budget_seconds} ثانیه\n"
+            f"وضعیت: {result.get('status', 'unknown')}\n"
             + str(result.get("inventory_text") or queue_inventory_lines(result.get("queue_counts") or {}))
             + error_summary
         )
         notify = send_owner_notification(message)
         result["final_notification_sent"] = bool(notify.get("sent"))
-        args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
+        args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return 0 if result.get("ok") else 1
 
 
