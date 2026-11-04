@@ -109,6 +109,8 @@ class QueueWorkerTests(unittest.TestCase):
             },
             RuntimeError("mocked pipeline error"),
         ]
+        cloud = FakeCloud()
+        cloud.items = cloud.items[:4]
         calls = {"count": 0}
         def fake_run_one(*_args, **_kwargs):
             index = calls["count"]
@@ -119,7 +121,7 @@ class QueueWorkerTests(unittest.TestCase):
             return outcome
 
         with (
-            patch.object(queue_worker, "CloudState", FakeCloud),
+            patch.object(queue_worker, "CloudState", return_value=cloud),
             patch.object(queue_worker, "run_one", side_effect=fake_run_one),
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
@@ -328,7 +330,7 @@ class QueueWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             report_path = Path(folder) / "report.json"
             with (
-                patch("sys.argv", ["queue_worker", "--time-budget-seconds", "9000", "--send-delay-seconds", "0", "--report", str(report_path)]),
+                patch("sys.argv", ["queue_worker", "--time-budget-seconds", "7200", "--send-delay-seconds", "0", "--report", str(report_path)]),
                 patch.object(queue_worker, "run_daily", return_value=report),
                 patch.object(queue_worker, "send_owner_notification",
                              side_effect=lambda message: (messages.append(message) or {"sent": True})),
@@ -346,8 +348,10 @@ class QueueWorkerTests(unittest.TestCase):
         def fail_staging(*args, **kwargs):
             return {"ok": False, "status": "staging_failed", "reason": "download_failed"}
 
+        cloud = FakeCloud()
+        cloud.items = cloud.items[:1]
         with (
-            patch.object(queue_worker, "CloudState", FakeCloud),
+            patch.object(queue_worker, "CloudState", return_value=cloud),
             patch.object(queue_worker, "run_one", side_effect=fail_staging),
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
