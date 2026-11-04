@@ -100,7 +100,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         group = "rubika-agent-daily-queue-processor"
         self.assertIn(f"group: {group}", processor)
         self.assertIn("cancel-in-progress: false", processor)
-        dispatch = discovery.split("name: Start the daily queue worker", 1)[1].split("\\n      - name:", 1)[0]
+        dispatch = discovery.split("name: Start the serialized TEST-only TikTok queue processor after successful sync", 1)[1].split("\\n      - name:", 1)[0]
         self.assertIn("steps.queue_intake.outcome == 'success'", dispatch)
         self.assertIn("steps.record_cycle.outcome == 'success'", dispatch)
         self.assertIn("daily-queue-processor.yml", dispatch)
