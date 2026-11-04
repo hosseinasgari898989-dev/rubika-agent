@@ -189,10 +189,10 @@ jobs:
       - name: Process all eligible TikTok queue items within a safe runtime budget
         id: queue_worker
         run: |
-          # Process every eligible queued TikTok item until the 150-minute budget,
+          # Process every eligible queued TikTok item until the 120-minute budget,
           # an uncertain delivery, or a Rubika flood/rate-limit response stops the run.
           python -m agent.brain.queue_worker \
-            --time-budget-seconds 9000 \
+            --time-budget-seconds 7200 \
             --send-delay-seconds 3 \
             --report artifacts/automation-daily-report.json
 
