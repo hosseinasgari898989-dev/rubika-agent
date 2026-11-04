@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import unittest
 
 from agent.brain.delivery import deliver_with_retry
