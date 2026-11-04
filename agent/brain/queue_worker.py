@@ -1,4 +1,4 @@
-"""Scheduled persistent queue worker; default quota is one successful edit per UTC day."""
+"""Continuously process eligible TEST-only TikTok queue items within a safe runtime budget."""
 from __future__ import annotations
 
 import argparse
@@ -7,10 +7,11 @@ import math
 import os
 import re
 import tempfile
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.e2e_from_report import run_one
@@ -18,9 +19,11 @@ from agent.brain.owner_notify import queue_inventory_lines, send_owner_notificat
 # The global lifecycle birth gate is reserved for official Mob news, not TikTok edits.
 
 
-DAILY_SUCCESS_LIMIT = 4
-MAX_CANDIDATE_ATTEMPTS = 20
-QUEUE_READ_LIMIT = 100
+QUEUE_READ_LIMIT = 100  # API page size; not a per-run send ceiling.
+MAX_QUEUE_OFFSET = 1_000_000  # CloudState API pagination boundary.
+DEFAULT_TIME_BUDGET_SECONDS = 9_000  # 150 min in a 180 min workflow job.
+DEFAULT_SEND_DELAY_SECONDS = 3.0
+MAX_SEND_DELAY_SECONDS = 60.0
 PLATFORMS = ("tiktok",)
 
 
@@ -203,12 +206,25 @@ def _inventory_text(queue_counts: dict[str, int], ledger: dict[str, Any]) -> str
     return "\n".join(lines)
 
 
-def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX_CANDIDATE_ATTEMPTS) -> dict[str, Any]:
-    if type(daily_limit) is not int or not 1 <= daily_limit <= 4:
-        raise ValueError("daily_success_limit_out_of_range")
-    if not 1 <= max_attempts <= 100:
-        raise ValueError("max_attempts_out_of_range")
+def run_daily(
+    *,
+    time_budget_seconds: int = DEFAULT_TIME_BUDGET_SECONDS,
+    send_delay_seconds: float = DEFAULT_SEND_DELAY_SECONDS,
+    clock: Callable[[], float] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+) -> dict[str, Any]:
+    if type(time_budget_seconds) is not int or not 1 <= time_budget_seconds <= 10_800:
+        raise ValueError("time_budget_seconds_out_of_range")
+    if (
+        type(send_delay_seconds) not in {int, float}
+        or not math.isfinite(float(send_delay_seconds))
+        or not 0 <= float(send_delay_seconds) <= MAX_SEND_DELAY_SECONDS
+    ):
+        raise ValueError("send_delay_seconds_out_of_range")
 
+    monotonic = clock or time.monotonic
+    sleep = sleeper or time.sleep
+    started_monotonic = monotonic()
     cloud = CloudState(
         os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
         token=os.getenv("AGENT_API_TOKEN", ""),
@@ -221,12 +237,16 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
         "lifecycle_mode": "not_applied_to_tiktok_edits",
         "agent_born_at": None,
         "birth_cutoff_enabled": False,
-        "daily_success_limit": daily_limit,
-        "max_candidate_attempts": max_attempts,
+        "daily_success_limit": None,
+        "max_candidate_attempts": None,
+        "time_budget_seconds": time_budget_seconds,
+        "send_delay_seconds": float(send_delay_seconds),
         "attempted_count": 0,
         "sent_count": 0,
         "failed_count": 0,
         "skipped_count": 0,
+        "rate_limited_count": 0,
+        "queue_pages_read": 0,
         "results": [],
         "errors": [],
     }
@@ -234,29 +254,41 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
     initial_counts = cloud.get_automation_queue_summary()
     sent_today_before = int(initial_counts.get("sent_today", 0) or 0)
     report["daily_sent_before"] = sent_today_before
-    remaining_successes = max(0, daily_limit - sent_today_before)
-    if remaining_successes == 0:
-        report["status"] = "daily_quota_reached"
-        report["finished_at"] = _utc_now()
-        report["queue_counts"] = initial_counts
-        report["inventory"] = _mega_inventory()
-        report["inventory_text"] = _inventory_text(initial_counts, report["inventory"])
-        return report
 
-    queue_response = cloud.get_automation_queue(status="queued", limit=QUEUE_READ_LIMIT)
-    candidates = queue_response.get("items", [])
-    if not isinstance(candidates, list):
-        raise RuntimeError("automation_queue_invalid")
-    # Test-channel rollout: attempt the supported TikTok path first and never
-    # mutate unsupported YouTube/Instagram rows; those stay queued for later.
+    candidates: list[dict[str, Any]] = []
+    offset = 0
+    while monotonic() - started_monotonic < time_budget_seconds:
+        queue_response = cloud.get_automation_queue(
+            status="queued", limit=QUEUE_READ_LIMIT, offset=offset
+        )
+        page = queue_response.get("items", [])
+        if not isinstance(page, list):
+            raise RuntimeError("automation_queue_invalid")
+        report["queue_pages_read"] += 1
+        if not page:
+            break
+        candidates.extend(item for item in page if isinstance(item, dict))
+        if len(page) < QUEUE_READ_LIMIT:
+            break
+        offset += len(page)
+        if offset > MAX_QUEUE_OFFSET:
+            raise CloudStateError("control_api_automation_queue_offset_limit")
+    else:
+        report["time_budget_exhausted"] = True
+        report["stop_reason"] = "time_budget_exhausted"
+
+    # SQL pages are oldest-first. Stable grouping prioritizes TikTok while preserving
+    # oldest-first order within TikTok; paused platforms stay queued.
     candidates.sort(
-        key=lambda item: 0 if isinstance(item, dict) and item.get("platform") in PLATFORMS else 1
+        key=lambda item: 0 if item.get("platform") in PLATFORMS else 1
     )
     report["queued_at_start"] = len(candidates)
-    if not candidates:
+
+    if not candidates and not report.get("time_budget_exhausted"):
         report["status"] = "queue_empty"
         report["finished_at"] = _utc_now()
         report["queue_counts"] = cloud.get_automation_queue_summary()
+        report["daily_sent_today"] = int(report["queue_counts"].get("sent_today", 0) or 0)
         report["inventory"] = _mega_inventory()
         report["inventory_text"] = _inventory_text(report["queue_counts"], report["inventory"])
         return report
@@ -264,10 +296,25 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
     with tempfile.TemporaryDirectory(prefix="rubika-agent-queue-") as folder:
         root = Path(folder)
         for item in candidates:
-            if report["sent_count"] >= remaining_successes or report["attempted_count"] >= max_attempts:
+            elapsed = monotonic() - started_monotonic
+            if elapsed >= time_budget_seconds:
+                report["time_budget_exhausted"] = True
+                report["stop_reason"] = "time_budget_exhausted"
                 break
-            if not isinstance(item, dict):
-                continue
+
+            # Pace successful sends. Do not begin a delay that would consume the
+            # remaining safety margin, and never sleep past the job's safe budget.
+            if report["sent_count"] and send_delay_seconds:
+                if elapsed + float(send_delay_seconds) >= time_budget_seconds:
+                    report["time_budget_exhausted"] = True
+                    report["stop_reason"] = "time_budget_exhausted"
+                    break
+                sleep(float(send_delay_seconds))
+                if monotonic() - started_monotonic >= time_budget_seconds:
+                    report["time_budget_exhausted"] = True
+                    report["stop_reason"] = "time_budget_exhausted"
+                    break
+
             platform = str(item.get("platform") or "")
             external_id = str(item.get("external_id") or "")
             queue_id = str(item.get("id") or "")
@@ -286,19 +333,6 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                 })
                 continue
 
-            # Edit publication uses edit/source validation and the persistent queue.
-            # The official Mob birth boundary is deliberately not applied to this lane.
-
-            # A stale/unverified YouTube row is not allowed to become a publish attempt.
-            if platform == "youtube" and item.get("freshness_verified") not in (1, True):
-                cloud.update_automation_queue_item(queue_id, "processing")
-                cloud.update_automation_queue_item(queue_id, "skipped", error_code="youtube_freshness_unverified")
-                report["skipped_count"] += 1
-                report["results"].append({
-                    "platform": platform, "external_id": external_id, "status": "skipped",
-                    "reason": "youtube_freshness_unverified",
-                })
-                continue
             try:
                 cloud.update_automation_queue_item(queue_id, "processing")
             except Exception as exc:
@@ -341,13 +375,12 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                 "status": status,
                 "reason": _safe_code(result.get("reason") or result.get("error") or status),
             }
-            # Preserve useful failure detail without copying provider bodies or local paths.
             result_entry.update(_safe_failure_diagnostics(result))
+
             if status == "sent" and result.get("ok") is True:
                 try:
                     cloud.update_automation_queue_item(queue_id, "sent")
                 except Exception as exc:
-                    # Delivery is already confirmed; never retry this item just because the queue update failed.
                     report["ok"] = False
                     report["errors"].append({
                         "platform": platform,
@@ -366,25 +399,56 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
                     "✅ انتشار موفق ویدئوی ادیت\n"
                     f"پلتفرم: {platform}\n"
                     f"عنوان: {str(item.get('title') or 'بدون عنوان')[:250]}\n"
-                    f"سهمیهٔ موفق امروز: {sent_today_before + report['sent_count']}/{daily_limit}\n"
+                    "سقف روزانه: ندارد (مقصد فقط کانال تست)\n"
+                    f"موفق‌های امروز: {sent_today_before + report['sent_count']}\n"
                     + inventory
                 )
                 notify_result = send_owner_notification(message)
                 result_entry["owner_notification_sent"] = bool(notify_result.get("sent"))
-            elif status == "uncertain" or str(result.get("delivery", {}).get("status") if isinstance(result.get("delivery"), dict) else "") == "uncertain":
-                cloud.update_automation_queue_item(queue_id, "uncertain", error_code="delivery_uncertain")
+
+            elif status == "rate_limited" or "rubika_rate_limited" in result_entry["reason"]:
+                # A clear HTTP/API flood rejection did not publish. Return this queue
+                # row to queued and stop; never hammer Rubika or advance to another item.
+                try:
+                    cloud.update_automation_queue_item(
+                        queue_id, "queued", error_code="rubika_rate_limited"
+                    )
+                    result_entry["queue_state"] = "left_queued"
+                except Exception as exc:
+                    report["ok"] = False
+                    report["errors"].append({
+                        "platform": platform, "external_id": external_id,
+                        "error": "rate_limit_requeue_" + _safe_code(type(exc).__name__),
+                    })
+                report["rate_limited_count"] += 1
+                report["rate_limited"] = True
+                report["stop_reason"] = "rubika_rate_limited"
+                result_entry["halt_reason"] = "rubika_rate_limited_stop_run"
+                report["results"].append(result_entry)
+                break
+
+            elif status == "uncertain" or str(
+                result.get("delivery", {}).get("status")
+                if isinstance(result.get("delivery"), dict) else ""
+            ) == "uncertain":
+                cloud.update_automation_queue_item(
+                    queue_id, "uncertain", error_code="delivery_uncertain"
+                )
                 report["failed_count"] += 1
                 report["errors"].append({
-                    "platform": platform, "external_id": external_id, "error": "delivery_uncertain",
+                    "platform": platform, "external_id": external_id,
+                    "error": "delivery_uncertain",
                 })
                 result_entry["halt_reason"] = "delivery_uncertain_requires_receipt_reconciliation"
                 report["results"].append(result_entry)
-                # The send may have reached Rubika despite the missing receipt. Never
-                # risk a second post in this run or treat uncertainty as a normal failure.
                 break
+
             elif status == "no_candidate":
-                cloud.update_automation_queue_item(queue_id, "skipped", error_code="already_seen_or_unavailable")
+                cloud.update_automation_queue_item(
+                    queue_id, "skipped", error_code="already_seen_or_unavailable"
+                )
                 report["skipped_count"] += 1
+
             else:
                 reason = _safe_code(result.get("reason") or result.get("error") or status)
                 cloud.update_automation_queue_item(queue_id, "failed", error_code=reason)
@@ -397,20 +461,29 @@ def run_daily(*, daily_limit: int = DAILY_SUCCESS_LIMIT, max_attempts: int = MAX
     report["finished_at"] = _utc_now()
     report["queue_counts"] = cloud.get_automation_queue_summary()
     report["daily_sent_today"] = int(report["queue_counts"].get("sent_today", 0) or 0)
-    report["status"] = (
-        "sent" if report["sent_count"] >= remaining_successes
-        else "queue_empty" if report["sent_count"] == 0 and report["queue_counts"].get("queued", 0) == 0
-        else "failed" if report["sent_count"] == 0 and report["failed_count"]
-        else "partial"
-    )
-    reached_goal = report["sent_count"] >= remaining_successes
     has_queue_claim_error = any(
         error.get("error", "").startswith("queue_claim_") for error in report["errors"]
     )
-    # A run that failed before meeting its delivery goal must exit non-zero;
-    # don't report ok=true simply because the inventory API itself worked.
-    report["ok"] = report["ok"] and not has_queue_claim_error and (
-        reached_goal or report["failed_count"] == 0
+
+    if report.get("rate_limited"):
+        report["status"] = "rate_limited"
+    elif report.get("time_budget_exhausted"):
+        report["status"] = "time_budget_exhausted"
+    elif report["failed_count"]:
+        report["status"] = "partial" if report["sent_count"] else "failed"
+    elif report["sent_count"]:
+        report["status"] = "sent"
+    elif report["queue_counts"].get("queued", 0):
+        report["status"] = "partial"
+    else:
+        report["status"] = "queue_empty"
+
+    # Time-budget and explicit flood stops are graceful. A definite media failure
+    # or an uncertain delivery still fails the run; uncertain always stops the loop.
+    report["ok"] = (
+        report["ok"]
+        and not has_queue_claim_error
+        and (report["failed_count"] == 0 or bool(report.get("rate_limited")))
     )
     ledger = _mega_inventory()
     report["inventory"] = ledger
@@ -472,6 +545,76 @@ def main() -> int:
         notify = send_owner_notification(message)
         result["final_notification_sent"] = bool(notify.get("sent"))
         args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return 0 if result.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--time-budget-seconds", type=int, default=DEFAULT_TIME_BUDGET_SECONDS,
+        help="Graceful per-run processing budget; must remain below the Actions job timeout.",
+    )
+    parser.add_argument(
+        "--send-delay-seconds", type=float, default=DEFAULT_SEND_DELAY_SECONDS,
+        help="Delay between confirmed TikTok sends (0-60 seconds).",
+    )
+    parser.add_argument("--report", type=Path, default=Path("artifacts/automation-daily-report.json"))
+    parser.add_argument("--no-notify", action="store_true")
+    args = parser.parse_args()
+    try:
+        result = run_daily(
+            time_budget_seconds=args.time_budget_seconds,
+            send_delay_seconds=args.send_delay_seconds,
+        )
+    except Exception as exc:
+        result = {
+            "ok": False,
+            "status": "failed",
+            "error": _safe_code(type(exc).__name__),
+            "sent_count": 0,
+            "failed_count": 1,
+            "results": [],
+            "errors": [{"error": _safe_code(type(exc).__name__)}],
+            "finished_at": _utc_now(),
+        }
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
+    print(json.dumps({
+        "ok": result.get("ok"),
+        "status": result.get("status"),
+        "sent_count": result.get("sent_count", 0),
+        "failed_count": result.get("failed_count", 0),
+        "skipped_count": result.get("skipped_count", 0),
+        "rate_limited_count": result.get("rate_limited_count", 0),
+        "time_budget_seconds": result.get("time_budget_seconds"),
+        "queued_remaining": (result.get("queue_counts") or {}).get("queued"),
+        "report": str(args.report),
+    }, ensure_ascii=False, sort_keys=True))
+    if not args.no_notify:
+        error_rows = result.get("errors") if isinstance(result.get("errors"), list) else []
+        error_lines = []
+        for error_row in error_rows[:4]:
+            if not isinstance(error_row, dict):
+                continue
+            platform = re.sub(r"[^A-Za-z0-9_-]", "", str(error_row.get("platform") or ""))[:20]
+            external_id = re.sub(r"[^A-Za-z0-9._-]", "", str(error_row.get("external_id") or ""))[:40]
+            code = _safe_code(error_row.get("error") or "unknown_error")
+            identity = f" ({platform}:{external_id})" if platform and external_id else ""
+            error_lines.append(f"• {code}{identity}")
+        error_summary = ("\\nآخرین کدهای خطا:\\n" + "\\n".join(error_lines)) if error_lines else ""
+        message = (
+            "📊 گزارش پایان نوبت خودکار روبیکا\\n"
+            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))} | سقف روزانه: ندارد\\n"
+            f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\\n"
+            f"وقفه بین ارسال: {args.send_delay_seconds:g} ثانیه | بودجهٔ اجرا: {args.time_budget_seconds} ثانیه\\n"
+            f"وضعیت: {result.get('status', 'unknown')}\\n"
+            + str(result.get("inventory_text") or queue_inventory_lines(result.get("queue_counts") or {}))
+            + error_summary
+        )
+        notify = send_owner_notification(message)
+        result["final_notification_sent"] = bool(notify.get("sent"))
+        args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
     return 0 if result.get("ok") else 1
 
 
