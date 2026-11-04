@@ -281,7 +281,6 @@ class QueueWorkerTests(unittest.TestCase):
                 send_delay_seconds=4,
                 sleeper=lambda seconds: sleeps.append(seconds),
             )
-            )
 
         self.assertEqual(report["sent_count"], 2)
         self.assertEqual(sleeps, [4])
