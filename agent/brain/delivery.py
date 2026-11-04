@@ -114,7 +114,7 @@ def _is_rate_limit_error(value: Any) -> bool:
             return True
         return any(
             _is_rate_limit_error(value.get(key))
-            for key in ("response", "data", "error")
+            for key in ("response", "data", "error", "diagnostic")
             if isinstance(value.get(key), Mapping)
         )
     if isinstance(value, BaseException):
