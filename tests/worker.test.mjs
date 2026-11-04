@@ -1217,28 +1217,38 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(state.DB.queueLimit, 100);
 }
 {
-  const state = env();
-  const youtubeBase = {
-    platform: "youtube", external_id: "vkVFgmgLo1s",
-    canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
-    source_key: "channel", title: "YouTube approval contract",
-    status: "ready", review_state: "approved", media_type: "video", source_tier: "trusted",
-    media_sha256: "d".repeat(64), media_bytes: 500000,
-    validation: { ok: true },
-    moderation: { has_music: true, is_poppy_playtime: true, is_edit: true },
-  };
-  let response = await read(await worker.fetch(request("/api/brain/items/upsert", {
-    method: "POST", body: youtubeBase,
-  }), state));
-  assert.equal(response.status, 200);
-
-  response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+  const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
     method: "POST",
-    body: { ...youtubeBase, external_id: "abcdefghijk", canonical_url: "https://www.youtube.com/watch?v=abcdefghijk",
-      moderation: { has_music: true, is_poppy_playtime: null, is_edit: null } },
+    body: {
+      platform: "youtube", external_id: "vkVFgmgLo1s",
+      canonical_url: "https://www.youtube.com/watch?v=vkVFgmgLo1s",
+      source_key: "channel", status: "ready", review_state: "approved",
+      media_type: "video", source_tier: "trusted",
+      media_sha256: "d".repeat(64), media_bytes: 500000,
+      validation: { ok: true },
+      moderation: { has_music: true, is_poppy_playtime: true, is_edit: true },
+    },
   }), env()));
   assert.equal(response.status, 400);
-  assert.equal(response.body.error, "edit_approval_requires_visual_content_and_music_checks");
+  assert.equal(response.body.error, "invalid_platform_or_external_id");
+}
+{
+  const state = env();
+  const approvedOfficial = {
+    platform: "mob_official",
+    external_id: "x-2107878755079213476",
+    canonical_url: "https://x.com/mobgamesstudios/status/2107878755079213476",
+    source_key: "x.com/mobgamesstudios",
+    title: "Official Mob approval contract",
+    status: "ready", review_state: "approved", media_type: "image", source_tier: "official",
+    media_sha256: "e".repeat(64), media_bytes: 500000,
+    validation: { ok: true },
+  };
+  const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST", body: approvedOfficial,
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.item_id, "mob_official:x-2107878755079213476");
 }
 {
   const state = env();
