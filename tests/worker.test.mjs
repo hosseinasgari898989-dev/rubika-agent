@@ -1496,10 +1496,9 @@ for (const [label, canonicalUrl] of [
   response = await read(await worker.fetch(request("/api/brain/automation-queue/" + encodeURIComponent(queueId) + "/state", {
     method: "POST", body: { status: "processing" },
   }), state));
-  assert.equal(response.status, 409);
-  assert.equal(response.body.error, "quiet_hours");
-  assert.equal(state.DB.automationQueue.get(queueId).status, "queued");
-  assert.equal(state.DB.automationQueue.get(queueId).attempt_count, 0);
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.automationQueue.get(queueId).status, "processing");
+  assert.equal(state.DB.automationQueue.get(queueId).attempt_count, 1);
 }
 
 // Mob X news is exempt from daily_success_cap and quiet_hours (owner decision 2026-10-30).

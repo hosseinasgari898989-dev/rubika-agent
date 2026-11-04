@@ -92,6 +92,51 @@ def _log_missing_receipt(response: Mapping[str, Any]) -> None:
     _LOGGER.warning("Rubika delivery receipt missing; present_key_names=%s", key_sets)
 
 
+def _is_rate_limit_error(value: Any) -> bool:
+    """Recognize explicit Rubika/HTTP flood rejections without logging provider payloads."""
+    if isinstance(value, Mapping):
+        for key in ("status_code", "http_status", "code"):
+            code = value.get(key)
+            if type(code) is int and code == 429:
+                return True
+            if isinstance(code, str) and code.strip() == "429":
+                return True
+        fields = (
+            value.get("status"),
+            value.get("error"),
+            value.get("error_code"),
+            value.get("message"),
+            value.get("description"),
+            value.get("detail"),
+            value.get("reason"),
+        )
+        if any(_is_rate_limit_error(field) for field in fields if field is not None):
+            return True
+        return any(
+            _is_rate_limit_error(value.get(key))
+            for key in ("response", "data", "error", "diagnostic")
+            if isinstance(value.get(key), Mapping)
+        )
+    if isinstance(value, BaseException):
+        for key in ("status_code", "http_status", "code"):
+            code = getattr(value, key, None)
+            if type(code) is int and code == 429:
+                return True
+        response = getattr(value, "response", None)
+        if response is not None and _is_rate_limit_error({
+            "status_code": getattr(response, "status_code", None)
+        }):
+            return True
+        value = str(value)
+    if isinstance(value, str):
+        normalized = value.casefold().replace("-", "_").replace(" ", "_")
+        return any(marker in normalized for marker in (
+            "429", "flood", "flood_wait", "too_many_requests",
+            "rate_limit", "rate_limited", "slowmode", "retry_after",
+        ))
+    return False
+
+
 def deliver_with_retry(
     *,
     item_id: str,
@@ -111,11 +156,26 @@ def deliver_with_retry(
         try:
             response = _response_dict(send())
         except Exception as exc:
+            if _is_rate_limit_error(exc):
+                record_attempt(attempt, "failed", "rubika_rate_limited")
+                return {
+                    "item_id": item_id, "status": "rate_limited",
+                    "attempts": attempt, "error": "rubika_rate_limited",
+                    "cleanup": "retained",
+                }
             code = "transport_" + type(exc).__name__
             record_attempt(attempt, "uncertain", code)
             return {
                 "item_id": item_id, "status": "uncertain",
                 "attempts": attempt, "error": code, "cleanup": "retained",
+            }
+
+        if _is_rate_limit_error(response):
+            record_attempt(attempt, "failed", "rubika_rate_limited")
+            return {
+                "item_id": item_id, "status": "rate_limited",
+                "attempts": attempt, "error": "rubika_rate_limited",
+                "cleanup": "retained",
             }
 
         status = response.get("status")

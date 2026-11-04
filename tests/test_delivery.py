@@ -59,6 +59,48 @@ class DeliveryRetentionTests(unittest.TestCase):
         self.assertEqual(attempts, [(1, "started", None), (1, "uncertain", "delivery_receipt_missing")])
         self.assertEqual(deleted, [])
 
+    def test_rate_limit_response_stops_retries_and_preserves_local_media(self):
+        attempts = []
+        deleted = []
+        sleeps = []
+        result = deliver_with_retry(
+            item_id="tiktok:test-item",
+            send=lambda: {
+                "status": "ERROR",
+                "error": "FLOOD_WAIT: too many requests",
+                "code": 429,
+            },
+            record_attempt=lambda number, status, code: attempts.append((number, status, code)),
+            delete_local=lambda: deleted.append(True),
+            max_attempts=3,
+            sleeper=lambda seconds: sleeps.append(seconds),
+        )
+        self.assertEqual(result["status"], "rate_limited")
+        self.assertEqual(result["error"], "rubika_rate_limited")
+        self.assertEqual(attempts, [
+            (1, "started", None),
+            (1, "failed", "rubika_rate_limited"),
+        ])
+        self.assertEqual(sleeps, [])
+        self.assertEqual(deleted, [])
+
+    def test_http_429_exception_is_classified_as_rate_limited_not_uncertain(self):
+        error = RuntimeError("HTTP 429 Too Many Requests")
+        error.status_code = 429
+        attempts = []
+        result = deliver_with_retry(
+            item_id="tiktok:test-item",
+            send=lambda: (_ for _ in ()).throw(error),
+            record_attempt=lambda number, status, code: attempts.append((number, status, code)),
+            delete_local=lambda: self.fail("rate-limited item must retain its local media"),
+            max_attempts=3,
+        )
+        self.assertEqual(result["status"], "rate_limited")
+        self.assertEqual(attempts, [
+            (1, "started", None),
+            (1, "failed", "rubika_rate_limited"),
+        ])
+
     def test_missing_keys_never_raise_keyerror(self):
         for response in (None, {}, {"status": "OK"}, {"data": {}}, {"status": "OK", "data": []}):
             with self.subTest(response_type=type(response).__name__):

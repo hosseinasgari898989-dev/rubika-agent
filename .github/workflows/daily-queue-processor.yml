@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_four_tiktok_test:
-        description: "Explicitly confirm up to four queued TikTok videos will be sent to the fixed test channel"
+        description: "Confirm processing all currently eligible queued TikTok videos in the fixed TEST channel"
         required: true
         type: boolean
         default: false
@@ -59,23 +59,22 @@ jobs:
             missing=1
           fi
           if [[ "$missing" -ne 0 ]]; then exit 2; fi
+          if [[ -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
+            echo "::error::RUBIKA_CHANNEL_GUID secret is missing."
+            exit 2
+          fi
+          actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
+          if [[ "$actual_hash" != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then
+            echo "::error::Every queue-processor invocation must target the registered TEST-channel hash."
+            exit 2
+          fi
+          echo "TEST destination hash matched; this guard applies to scheduled, manual and post-sync invocation paths."
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             if [[ "${{ inputs.publish_four_tiktok_test }}" != "true" ]]; then
-              echo "::error::Manual four-video test was not explicitly confirmed; no media will be published."
+              echo "::error::Manual or chained queue processing was not explicitly confirmed; no media will be published."
               exit 2
             fi
-            if [[ -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
-              echo "::error::RUBIKA_CHANNEL_GUID secret is missing."
-              exit 2
-            fi
-            actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
-            if [[ "$actual_hash" != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then
-              echo "::error::Manual four-video test can target only the registered test-channel hash."
-              exit 2
-            fi
-            echo "Explicit manual trial confirmed; this run is locked to the test channel and capped at four successful TikTok posts."
-          else
-            echo "Scheduled publishing destination is set by RUBIKA_CHANNEL_GUID; daily successful-post cap is four."
+            echo "Queue processing confirmed; eligible TikTok backlog is limited only by the safe runtime budget."
           fi
 
       - name: Set up Node.js
@@ -97,7 +96,7 @@ jobs:
         id: install_python_dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
-      - name: Verify Rubika bot and main destination without sending a message
+      - name: Verify Rubika bot and TEST destination without sending a message
         id: rubika_destination_check
         if: steps.credentials_check.outcome == 'success'
         shell: bash
@@ -112,8 +111,8 @@ jobs:
               raise SystemExit("rubika_bot_authentication_failed")
           destination = bot.get_chat(os.environ["RUBIKA_CHANNEL_GUID"])
           if not isinstance(destination, dict) or destination.get("status") != "OK":
-              raise SystemExit("rubika_main_destination_unavailable")
-          print("Rubika bot authentication and main destination validated; no message was sent.")
+              raise SystemExit("rubika_test_destination_unavailable")
+          print("Rubika bot authentication and TEST destination validated; no message was sent.")
           PY
 
       - name: Record queue-run start in the single editable owner digest
@@ -121,7 +120,7 @@ jobs:
         continue-on-error: true
         run: |
           python -m agent.brain.owner_notify \
-            --message '🚀 شروع پردازش صف ادیت‌ها؛ سقف این اجرا ۴ انتشار موفق است.' \
+            --message '🚀 شروع پردازش پیوستهٔ صف TikTok؛ بدون سقف روزانه، فقط مقصد تست.' \
             --workflow 'Daily edit queue'
 
       - name: Install ffmpeg if required
@@ -187,14 +186,14 @@ jobs:
           mega-ls /Rubika-Agent >/dev/null
           echo "MEGA login and project folder verified."
 
-      - name: Process the D1 backlog with a four-success test-channel cap
+      - name: Process all eligible TikTok queue items within a safe runtime budget
         id: queue_worker
         run: |
-          # A clear failed/skipped video does not consume the one-post daily quota:
-          # keep trying other queued URLs, with a hard cap of 20 candidate attempts.
+          # Process every eligible queued TikTok item until the 120-minute budget,
+          # an uncertain delivery, or a Rubika flood/rate-limit response stops the run.
           python -m agent.brain.queue_worker \
-            --daily-limit 4 \
-            --max-attempts 20 \
+            --time-budget-seconds 7200 \
+            --send-delay-seconds 3 \
             --report artifacts/automation-daily-report.json
 
       - name: Safely reclaim stale confirmed-sent media

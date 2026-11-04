@@ -67,7 +67,7 @@ jobs:
           response_code="$(curl --silent --show-error --output "$RUNNER_TEMP/dispatch-response.json" --write-out '%{http_code}' \
             --request POST "${headers[@]}" \
             -H "Content-Type: application/json" \
-            --data '{"ref":"main"}' \
+            --data '{"ref":"main","inputs":{"publish_four_tiktok_test":"true"}}' \
             "$workflow_api/dispatches" || true)"
           echo "dispatch_http=${response_code:-request_failed}"
           if [[ "$response_code" != "204" ]]; then
@@ -78,7 +78,7 @@ jobs:
             echo "::warning::Queue was saved, but immediate processing dispatch failed; see the sanitized GitHub API diagnostic above."
             exit 1
           fi
-          echo "The saved queue was dispatched; the processor's fail-closed release gate must be explicitly approved before any publishing can occur."
+          echo "The saved queue was dispatched to the TEST-only processor; the processor rechecks the registered TEST destination hash before any send."
       - name: Notify owner if immediate processing dispatch failed
         if: steps.dispatch_daily.outcome == 'failure'
         continue-on-error: true

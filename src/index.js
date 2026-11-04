@@ -1372,27 +1372,7 @@ async function automationQueueState(env, queueId, body) {
       item.status === "processing" && ["queued", "sent", "failed", "uncertain", "skipped"].includes(nextStatus);
     if (!validTransition) return json({ ok: false, error: "invalid_queue_state_transition" }, 409);
 
-    // Quiet hours apply to TikTok edit publishing at the queue boundary, never to Mob X.
-    if (nextStatus === "processing" && item.platform === "tiktok") {
-      const rulesRow = await env.DB.prepare("SELECT rules_json FROM console_rules WHERE id = 1").first();
-      if (rulesRow) {
-        let rules;
-        try { rules = JSON.parse(rulesRow.rules_json || "{}"); }
-        catch { return json({ ok: false, error: "rules_invalid_json" }, 503); }
-        const quiet = rules && typeof rules.quiet_hours === "object" && rules.quiet_hours;
-        if (quiet && quiet.enabled !== false &&
-            /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.start || "")) &&
-            /^([01]\d|2[0-3]):[0-5]\d$/.test(String(quiet.end || ""))) {
-          const now = new Date();
-          const current = now.getUTCHours() * 60 + now.getUTCMinutes();
-          const parseMinutes = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
-          const start = parseMinutes(quiet.start), end = parseMinutes(quiet.end);
-          const inQuiet = start === end ? true :
-            (start < end ? current >= start && current < end : current >= start || current < end);
-          if (inQuiet) return json({ ok: false, error: "quiet_hours" }, 409);
-        }
-      }
-    }
+    // The continuous TikTok queue processor has no quiet-hours gate. Destination safety is enforced separately by TEST hash guards.
 
     await env.DB.prepare(
       "UPDATE automation_queue SET status = ?, attempt_count = attempt_count + CASE WHEN ? = 'processing' AND status = 'queued' THEN 1 ELSE 0 END, last_error_code = ?, sent_at = CASE WHEN ? = 'sent' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE sent_at END, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"
