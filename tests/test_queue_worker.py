@@ -62,15 +62,16 @@ class FakeCloud:
 
 
 class QueueWorkerTests(unittest.TestCase):
-    def test_counts_four_successes_not_four_attempts_and_leaves_remaining_queue(self):
+    def test_processes_more_than_four_successes_across_queue_pages(self):
+        cloud = FakeCloud()
+        cloud.items = [
+            make_item("tiktok", str(7700000000000000000 + index), f"Success {index}")
+            for index in range(107)
+        ]
+
         def fake_run_one(report_path, platform, output_report, **kwargs):
             payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
             row = payload["candidates"][platform][0]
-            if row["title"] == "First failed candidate":
-                return {
-                    "ok": False, "status": "staging_failed",
-                    "reason": "media_validation_failed",
-                }
             return {
                 "ok": True, "status": "sent",
                 "platform": platform, "external_id": row["id"],
@@ -78,24 +79,18 @@ class QueueWorkerTests(unittest.TestCase):
             }
 
         with (
-            patch.object(queue_worker, "CloudState", FakeCloud),
+            patch.object(queue_worker, "CloudState", return_value=cloud),
             patch.object(queue_worker, "run_one", side_effect=fake_run_one),
-            patch.object(queue_worker, "_mega_inventory", return_value={
-                "available": True, "total": 8, "by_status": {"ready": 2, "sent": 6},
-            }),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily(daily_limit=4)
+            report = queue_worker.run_daily(send_delay_seconds=0)
 
-        self.assertEqual(report["sent_count"], 4)
-        self.assertEqual(report["failed_count"], 1)
-        self.assertEqual(report["attempted_count"], 5)
+        self.assertEqual(report["sent_count"], 107)
+        self.assertEqual(report["attempted_count"], 107)
+        self.assertEqual(report["queue_counts"]["queued"], 0)
+        self.assertEqual(report["queue_counts"]["sent"], 107)
         self.assertEqual(report["status"], "sent")
-        self.assertEqual(report["queue_counts"]["sent"], 4)
-        self.assertEqual(report["queue_counts"]["failed"], 1)
-        self.assertEqual(report["queue_counts"]["queued"], 1)
-        self.assertEqual(report["results"][0]["status"], "staging_failed")
-        self.assertEqual(sum(1 for result in report["results"] if result["status"] == "sent"), 4)
 
     def test_report_keeps_music_diagnostics_for_pass_ambiguous_no_audio_and_error(self):
         outcomes = [
@@ -129,7 +124,7 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily(daily_limit=4, max_attempts=4)
+            report = queue_worker.run_daily(send_delay_seconds=0)
 
         self.assertEqual(calls["count"], 4)
         self.assertEqual(len(report["results"]), 4)
@@ -172,7 +167,7 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily(daily_limit=1, max_attempts=1)
+            report = queue_worker.run_daily(send_delay_seconds=0)
 
         result = report["results"][0]
         self.assertEqual(result["reason"], "cloud_sync_failed")
@@ -201,7 +196,7 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily(daily_limit=1, max_attempts=1)
+            report = queue_worker.run_daily(send_delay_seconds=0)
 
         result = report["results"][0]
         self.assertEqual(
@@ -219,12 +214,15 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertNotIn("token", serialized)
         self.assertNotIn("response_body", serialized)
 
-    def test_stops_after_four_successes_were_already_recorded_today(self):
+    def test_existing_daily_sent_count_does_not_block_more_tiktok_sends(self):
         cloud = FakeCloud()
         for item in cloud.items[:4]:
             item["status"] = "sent"
-        def fake_run_one(*args, **kwargs):
-            raise AssertionError("No extra publication attempt should run after daily quota is reached.")
+
+        def fake_run_one(report_path, platform, output_report, **kwargs):
+            payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
+            row = payload["candidates"][platform][0]
+            return {"ok": True, "status": "sent", "title": row["title"]}
 
         with (
             patch.object(queue_worker, "CloudState", return_value=cloud),
@@ -232,15 +230,83 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
         ):
-            report = queue_worker.run_daily(daily_limit=4)
+            report = queue_worker.run_daily(send_delay_seconds=0)
 
-        mocked_run.assert_not_called()
-        self.assertEqual(report["status"], "daily_quota_reached")
+        self.assertEqual(mocked_run.call_count, 2)
         self.assertEqual(report["daily_sent_before"], 4)
-        self.assertEqual(report["sent_count"], 0)
-        self.assertEqual(report["queue_counts"]["sent_today"], 4)
+        self.assertEqual(report["sent_count"], 2)
+        self.assertEqual(report["queue_counts"]["sent_today"], 6)
 
-    def test_worker_main_sends_quota_notification_without_name_error(self):
+    def test_time_budget_stops_between_items_and_leaves_rest_queued(self):
+        cloud = FakeCloud()
+        elapsed = [0.0]
+
+        def fake_run_one(report_path, platform, output_report, **kwargs):
+            elapsed[0] += 2.0
+            return {"ok": True, "status": "sent", "title": "First"}
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0)
+
+        self.assertEqual(report["sent_count"], 1)
+        self.assertEqual(report["status"], "time_budget_exhausted")
+        self.assertTrue(report["ok"])
+        self.assertEqual(cloud.items[0]["status"], "sent")
+        self.assertEqual(cloud.items[1]["status"], "queued")
+        self.assertEqual(cloud.items[2]["status"], "queued")
+
+    def test_configurable_delay_is_applied_between_successful_sends(self):
+        cloud = FakeCloud()
+        cloud.items = cloud.items[:2]
+        sleeps = []
+
+        def fake_run_one(report_path, platform, output_report, **kwargs):
+            return {"ok": True, "status": "sent", "title": "Sent"}
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0),
+            )
+
+        self.assertEqual(report["sent_count"], 2)
+        self.assertEqual(sleeps, [4])
+
+    def test_rate_limit_requeues_current_item_and_stops_remaining_work(self):
+        cloud = FakeCloud()
+        calls = []
+
+        def fake_run_one(*_args, **_kwargs):
+            calls.append(True)
+            return {
+                "ok": False, "status": "rate_limited",
+                "reason": "rubika_rate_limited",
+            }
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(report["status"], "rate_limited")
+        self.assertTrue(report["ok"])
+        self.assertEqual(cloud.items[0]["status"], "queued")
+        self.assertEqual(cloud.items[1]["status"], "queued")
+        self.assertEqual(report["attempted_count"], 1)
+
+    def test_worker_main_sends_unlimited_queue_notification_without_name_error(self):
         messages = []
         report = {
             "ok": True,
@@ -249,8 +315,6 @@ class QueueWorkerTests(unittest.TestCase):
             "failed_count": 0,
             "skipped_count": 0,
             "attempted_count": 1,
-            "daily_sent_today": 1,
-            "daily_sent_before": 0,
             "queue_counts": {"queued": 3, "processing": 0, "sent": 1, "failed": 0,
                              "uncertain": 0, "skipped": 0, "sent_today": 1},
             "inventory_text": "📦 وضعیت صف: در انتظار 3",
@@ -259,7 +323,7 @@ class QueueWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             report_path = Path(folder) / "report.json"
             with (
-                patch("sys.argv", ["queue_worker", "--daily-limit", "1", "--report", str(report_path)]),
+                patch("sys.argv", ["queue_worker", "--time-budget-seconds", "9000", "--send-delay-seconds", "0", "--report", str(report_path)]),
                 patch.object(queue_worker, "run_daily", return_value=report),
                 patch.object(queue_worker, "send_owner_notification",
                              side_effect=lambda message: (messages.append(message) or {"sent": True})),
@@ -270,7 +334,7 @@ class QueueWorkerTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(messages), 1)
-        self.assertIn("1/1", messages[0])
+        self.assertIn("بدون سقف روزانه", messages[0])
         self.assertTrue(saved["final_notification_sent"])
 
     def test_unsatisfied_delivery_goal_is_not_reported_as_ok(self):
@@ -283,7 +347,7 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily(daily_limit=1, max_attempts=1)
+            report = queue_worker.run_daily(send_delay_seconds=0)
 
         self.assertEqual(report["sent_count"], 0)
         self.assertEqual(report["failed_count"], 1)
@@ -319,7 +383,7 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily(daily_limit=1, max_attempts=20)
+            report = queue_worker.run_daily(send_delay_seconds=0)
 
         self.assertEqual(len(calls), 1)
         self.assertEqual(report["attempted_count"], 1)
@@ -342,7 +406,7 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
         ):
-            report = queue_worker.run_daily(daily_limit=1)
+            report = queue_worker.run_daily(send_delay_seconds=0)
 
         mocked_run.assert_not_called()
         self.assertEqual(cloud.items[0]["status"], "queued")
