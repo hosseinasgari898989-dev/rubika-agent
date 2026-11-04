@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent.brain.cloud_state import CloudState, CloudStateError
+from agent.brain.delivery import _is_rate_limit_error
 from agent.brain.e2e_from_report import run_one
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
 # The global lifecycle birth gate is reserved for official Mob news, not TikTok edits.
@@ -21,7 +22,7 @@ from agent.brain.owner_notify import queue_inventory_lines, send_owner_notificat
 
 QUEUE_READ_LIMIT = 100  # API page size; not a per-run send ceiling.
 MAX_QUEUE_OFFSET = 1_000_000  # CloudState API pagination boundary.
-DEFAULT_TIME_BUDGET_SECONDS = 9_000  # 150 min in a 180 min workflow job.
+DEFAULT_TIME_BUDGET_SECONDS = 7_200  # 120 min; preserve at least 60 min for the 180 min job's setup/cleanup margin.
 DEFAULT_SEND_DELAY_SECONDS = 3.0
 MAX_SEND_DELAY_SECONDS = 60.0
 PLATFORMS = ("tiktok",)
@@ -213,7 +214,7 @@ def run_daily(
     clock: Callable[[], float] | None = None,
     sleeper: Callable[[float], None] | None = None,
 ) -> dict[str, Any]:
-    if type(time_budget_seconds) is not int or not 1 <= time_budget_seconds <= 10_800:
+    if type(time_budget_seconds) is not int or not 1 <= time_budget_seconds <= DEFAULT_TIME_BUDGET_SECONDS:
         raise ValueError("time_budget_seconds_out_of_range")
     if (
         type(send_delay_seconds) not in {int, float}
@@ -405,6 +406,13 @@ def run_daily(
                 )
                 notify_result = send_owner_notification(message)
                 result_entry["owner_notification_sent"] = bool(notify_result.get("sent"))
+                if _is_rate_limit_error(notify_result):
+                    report["rate_limited_count"] += 1
+                    report["rate_limited"] = True
+                    report["stop_reason"] = "rubika_rate_limited"
+                    result_entry["halt_reason"] = "owner_notification_rate_limited_stop_run"
+                    report["results"].append(result_entry)
+                    break
 
             elif status == "rate_limited" or "rubika_rate_limited" in result_entry["reason"]:
                 # A clear HTTP/API flood rejection did not publish. Return this queue
