@@ -251,7 +251,10 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily(send_delay_seconds=0)
+            report = queue_worker.run_daily(
+                time_budget_seconds=1, send_delay_seconds=0,
+                clock=lambda: elapsed[0], sleeper=lambda _seconds: None,
+            )
 
         self.assertEqual(report["sent_count"], 1)
         self.assertEqual(report["status"], "time_budget_exhausted")
@@ -274,7 +277,10 @@ class QueueWorkerTests(unittest.TestCase):
             patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
             patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
         ):
-            report = queue_worker.run_daily(send_delay_seconds=0),
+            report = queue_worker.run_daily(
+                send_delay_seconds=4,
+                sleeper=lambda seconds: sleeps.append(seconds),
+            )
             )
 
         self.assertEqual(report["sent_count"], 2)
