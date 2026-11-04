@@ -555,7 +555,7 @@ def main() -> int:
         error_summary = ("\nآخرین کدهای خطا:\n" + "\n".join(error_lines)) if error_lines else ""
         message = (
             "📊 گزارش پایان نوبت خودکار روبیکا\n"
-            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))} | سقف روزانه: ندارد\n"
+            f"ویدئوهای موفق در این اجرا: {result.get('sent_count', 0)} | مجموع امروز: {result.get('daily_sent_today', result.get('daily_sent_before', 0))} | بدون سقف روزانه\n"
             f"تلاش‌ها: {result.get('attempted_count', 0)} | خطاها: {result.get('failed_count', 0)} | ردشده‌ها: {result.get('skipped_count', 0)}\n"
             f"وقفه بین ارسال: {args.send_delay_seconds:g} ثانیه | بودجهٔ اجرا: {args.time_budget_seconds} ثانیه\n"
             f"وضعیت: {result.get('status', 'unknown')}\n"
