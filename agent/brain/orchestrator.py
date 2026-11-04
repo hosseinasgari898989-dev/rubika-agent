@@ -7,6 +7,7 @@ audio stream. This staging orchestrator itself never publishes to Rubika.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -108,6 +109,7 @@ class StagingOrchestrator:
         output_dir: str | Path,
         ledger: MegaLedger | None = None,
         required_counts: Mapping[str, int] | None = None,
+        timings: dict[str, Any] | None = None,
     ) -> None:
         self.cloud = cloud
         self.storage = storage
@@ -116,6 +118,7 @@ class StagingOrchestrator:
         self.moderator = moderator
         self.output_dir = Path(output_dir)
         self.required_counts = dict(required_counts or {"tiktok": 5, "youtube": 5})
+        self.timings = timings
         self.ledger = ledger or MegaLedger(storage)
 
     def run(self, candidates: Iterable[Candidate], *, trigger_type: str = "manual") -> StageJobResult:
@@ -222,7 +225,17 @@ class StagingOrchestrator:
             if decision is None or not decision.allowed:
                 raise RuntimeError("permission_gate_failed")
             downloader = self.downloaders[candidate.platform]
-            return downloader(candidate, raw_dir, decision.allowed)
+            started = time.perf_counter()
+            try:
+                return downloader(candidate, raw_dir, decision.allowed)
+            finally:
+                if self.timings is not None:
+                    old_calls = self.timings.get("download_calls", 0)
+                    old_ms = self.timings.get("download_ms", 0.0)
+                    calls = old_calls if type(old_calls) is int and old_calls >= 0 else 0
+                    elapsed = float(old_ms) if type(old_ms) in {int, float} and math.isfinite(float(old_ms)) and old_ms >= 0 else 0.0
+                    self.timings["download_calls"] = calls + 1
+                    self.timings["download_ms"] = elapsed + (time.perf_counter() - started) * 1000.0
 
         def persist(staged: StagedMedia) -> None:
             identity = staged.candidate.platform + ":" + staged.candidate.external_id
@@ -285,6 +298,7 @@ class StagingOrchestrator:
             )),
             storage=self.storage,
             persist_staged=persist,
+            timings=self.timings,
         )
         staged_count = len(batch.staged)
         if cloud_sync_errors or batch.status != "ready":

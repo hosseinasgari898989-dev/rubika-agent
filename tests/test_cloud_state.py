@@ -96,6 +96,8 @@ class CloudStateTests(unittest.TestCase):
             result = state.record_attempt("tiktok:123", 1, "sent", message_id="m1")
 
         self.assertTrue(result["ok"])
+        self.assertEqual(state.timings["worker_api_calls"], 1)
+        self.assertGreaterEqual(state.timings["worker_api_ms"], 0)
         self.assertTrue(captured["url"].endswith("/api/brain/items/tiktok:123/attempts"))
         with self.assertRaises(ValueError):
             state.record_attempt("tiktok/123", 1, "sent")

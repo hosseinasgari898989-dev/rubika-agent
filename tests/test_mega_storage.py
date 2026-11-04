@@ -66,6 +66,8 @@ class MegaSafetyTests(unittest.TestCase):
             file.write_bytes(b"safe demo")
             remote = client.upload(file, "staging")
         self.assertEqual(remote, "/Rubika-Agent/staging/sample.mp4")
+        self.assertEqual(client.timings["mega_calls"], len(fake.calls))
+        self.assertGreaterEqual(client.timings["mega_ms"], 0)
         self.assertTrue(all("password" not in " ".join(call).lower() for call in fake.calls))
         self.assertIn(["mega-put", str(file), "/Rubika-Agent/staging/"], fake.calls)
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import re
 import shutil
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -79,10 +80,22 @@ def _music_diagnostic_fields(moderation: Any, has_audio: Any) -> dict[str, Any]:
     }
 
 
+def _add_stage_timing(timings: dict[str, Any] | None, name: str, started: float) -> None:
+    if timings is None:
+        return
+    old_calls = timings.get(name + "_calls", 0)
+    old_ms = timings.get(name + "_ms", 0.0)
+    calls = old_calls if type(old_calls) is int and old_calls >= 0 else 0
+    elapsed = float(old_ms) if type(old_ms) in {int, float} and math.isfinite(float(old_ms)) and old_ms >= 0 else 0.0
+    timings[name + "_calls"] = calls + 1
+    timings[name + "_ms"] = elapsed + (time.perf_counter() - started) * 1000.0
+
+
 def stage_edit_batch(
     candidates: Iterable[Candidate],
     *,
     required_counts: Mapping[str, int] | None = None,
+    timings: dict[str, Any] | None = None,
     download: Callable[[Candidate], str | Path],
     moderate: Callable[[Candidate, Path], Mapping[str, Any] | None],
     output_dir: str | Path,
@@ -142,7 +155,11 @@ def stage_edit_batch(
         }
         try:
             original = Path(download(candidate))
-            first = inspector(original, "video")
+            checks_started = time.perf_counter()
+            try:
+                first = inspector(original, "video")
+            finally:
+                _add_stage_timing(timings, "checks", checks_started)
             if not first.ok:
                 result.skipped.append({
                     "item": identity,
@@ -167,20 +184,28 @@ def stage_edit_batch(
                     "music_detection_method": "python_no_audio_stream",
                 }
             else:
-                moderation_value, recovery_receipt = call_with_bounded_retry(
-                    lambda: moderate(candidate, original),
-                    max_attempts=2,
-                    sleep_seconds=0.75,
-                )
+                checks_started = time.perf_counter()
+                try:
+                    moderation_value, recovery_receipt = call_with_bounded_retry(
+                        lambda: moderate(candidate, original),
+                        max_attempts=2,
+                        sleep_seconds=0.75,
+                    )
+                finally:
+                    _add_stage_timing(timings, "checks", checks_started)
                 moderation = dict(moderation_value or {})
                 moderation["recovery_diagnostics"] = recovery_receipt
-            evaluation = evaluate_edit_candidate(
-                candidate, first,
-                seen_external_ids=seen_ids,
-                seen_hashes=seen_digests,
-                trusted_source_keys=trusted_source_keys,
-                moderation=moderation,
-            )
+            checks_started = time.perf_counter()
+            try:
+                evaluation = evaluate_edit_candidate(
+                    candidate, first,
+                    seen_external_ids=seen_ids,
+                    seen_hashes=seen_digests,
+                    trusted_source_keys=trusted_source_keys,
+                    moderation=moderation,
+                )
+            finally:
+                _add_stage_timing(timings, "checks", checks_started)
             if recovery_receipt.get("recovered"):
                 updated_checks = dict(evaluation.checks)
                 updated_checks["moderation_recovery"] = recovery_receipt
@@ -245,9 +270,13 @@ def stage_edit_batch(
                         _safe_component(platform) + "-" +
                         _safe_component(candidate.external_id) + "-square1080x1080.mp4"
                     )
-                    normalizer(original, destination)
-                    publish_path = destination
-                    final_inspection = inspector(publish_path, "video")
+                    checks_started = time.perf_counter()
+                    try:
+                        normalizer(original, destination)
+                        publish_path = destination
+                        final_inspection = inspector(publish_path, "video")
+                    finally:
+                        _add_stage_timing(timings, "checks", checks_started)
                     if not final_inspection.ok or final_inspection.width != 1080 or final_inspection.height != 1080:
                         result.skipped.append({"item": identity, "reason": "normalized_output_invalid", **_music_diagnostic_fields(moderation, first.has_audio)})
                         destination.unlink(missing_ok=True)
@@ -264,8 +293,11 @@ def stage_edit_batch(
                 if original.resolve() != destination.resolve():
                     shutil.copy2(original, destination)
                 publish_path = destination
-                final_inspection = inspector(publish_path, "video")
-                if not final_inspection.ok or final_inspection.media_type != "video":
+                checks_started = time.perf_counter()
+                try:
+                    final_inspection = inspector(publish_path, "video")
+                finally:
+                    _add_stage_timing(timings, "checks", checks_started)
                     result.skipped.append({"item": identity, "reason": "preserved_output_invalid", **_music_diagnostic_fields(moderation, first.has_audio)})
                     destination.unlink(missing_ok=True)
                     original.unlink(missing_ok=True)

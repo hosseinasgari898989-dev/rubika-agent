@@ -286,6 +286,8 @@ class QueueWorkerTests(unittest.TestCase):
 
         self.assertEqual(report["sent_count"], 2)
         self.assertEqual(sleeps, [4])
+        self.assertGreaterEqual(report["results"][1]["timings"]["delay_ms"], 0)
+        self.assertGreaterEqual(report["timings"]["items"]["delay_ms"], 0)
 
     def test_rate_limit_requeues_current_item_and_stops_remaining_work(self):
         cloud = FakeCloud()
@@ -452,6 +454,56 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertEqual(report["queue_counts"]["queued"], 1)
         self.assertEqual(report["results"][0]["status"], "deferred")
         self.assertEqual(report["results"][0]["queue_state"], "left_queued")
+
+
+
+    def test_timing_report_keeps_only_safe_per_item_counts_and_durations(self):
+        cloud = FakeCloud()
+        cloud.items = cloud.items[:1]
+
+        def fake_run_one(_report_path, _platform, _output_report, **kwargs):
+            kwargs["timings"].update({
+                "download_calls": 1,
+                "download_ms": 12.5,
+                "checks_calls": 3,
+                "checks_ms": 8.25,
+                "rubika_calls": 1,
+                "rubika_ms": 20.0,
+                "worker_ai_calls": 1,
+                "worker_ai_ms": 9.0,
+                "mega_calls": 2,
+                "mega_ms": 5.0,
+                "worker_api_calls": 4,
+                "worker_api_ms": 6.0,
+                "token": "never-store-this",
+                "channel_id": "never-store-this-either",
+                "message_text": "private",
+            })
+            return {"ok": True, "status": "sent", "title": "sample"}
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0)
+
+        timing = report["results"][0]["timings"]
+        self.assertEqual(timing["download_calls"], 1)
+        self.assertEqual(timing["download_ms"], 12.5)
+        self.assertEqual(timing["checks_calls"], 3)
+        self.assertEqual(timing["send_ms"], 20.0)
+        self.assertEqual(timing["worker_ai_calls"], 1)
+        self.assertEqual(timing["mega_calls"], 2)
+        self.assertEqual(timing["worker_api_calls"], 4)
+        self.assertIn("timings", report)
+        self.assertEqual(report["timings"]["items_measured"], 1)
+        encoded = json.dumps(report["timings"])
+        self.assertNotIn("never-store-this", encoded)
+        self.assertNotIn("private", encoded)
+        self.assertEqual(set(timing), set(queue_worker._TIMING_FIELDS))
+
 
 
 if __name__ == "__main__":

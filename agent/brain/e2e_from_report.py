@@ -12,6 +12,7 @@ import math
 import os
 import re
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -335,13 +336,14 @@ def _preserve_failed_tiktok_original(
                 "error": "failed_media_internal_error"}
 
 
-def run_one(
+def _run_one(
     report_path: Path,
     platform: str,
     output_report: Path,
     *,
     candidate_limit: int = 1,
     candidate_offset: int = 0,
+    timings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     channel_guid = assert_test_channel_destination(
         os.getenv("RUBIKA_CHANNEL_GUID", "")
@@ -361,6 +363,9 @@ def run_one(
 
     cloud = CloudState(api_url, token)
     storage = MegaStorage(root="/Rubika-Agent", timeout_seconds=180)
+    if timings is not None:
+        timings["_cloud"] = cloud
+        timings["_storage"] = storage
     ledger = MegaLedger(storage)
     initial_state = ledger.load()
     initial_items = initial_state.get("items", {})
@@ -445,6 +450,8 @@ def run_one(
         registry_path = Path("config/trusted_sources.json")
         registry = SourceRegistry.load(registry_path)
         moderator = CloudflareVideoModerator(cloud)
+        if timings is not None:
+            timings["_moderator"] = moderator
         orchestrator = StagingOrchestrator(
             cloud=cloud,
             storage=storage,
@@ -454,6 +461,7 @@ def run_one(
             output_dir=output_dir,
             ledger=ledger,
             required_counts={platform: 1},
+            timings=timings,
         )
 
         if reused_candidate is not None:
@@ -672,6 +680,7 @@ def run_one(
                     delete_local=lambda: media_path.unlink(missing_ok=True),
                     max_attempts=3,
                     sleep_seconds=1,
+                    timings=timings,
                 )
             except Exception as exc:
                 # A failed initial D1 attempt record occurs before send. If Rubika
@@ -729,6 +738,45 @@ def run_one(
         })
         return report_detail
 
+
+
+def run_one(
+    report_path: Path,
+    platform: str,
+    output_report: Path,
+    *,
+    candidate_limit: int = 1,
+    candidate_offset: int = 0,
+    timings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect sanitized, per-item timing counters without changing delivery flow."""
+    collected = timings if isinstance(timings, dict) else {}
+    started = time.perf_counter()
+    try:
+        return _run_one(
+            report_path,
+            platform,
+            output_report,
+            candidate_limit=candidate_limit,
+            candidate_offset=candidate_offset,
+            timings=collected,
+        )
+    finally:
+        collected["queue_item_ms"] = (time.perf_counter() - started) * 1000.0
+        for private_key, count_key, duration_key in (
+            ("_cloud", "worker_api_calls", "worker_api_ms"),
+            ("_storage", "mega_calls", "mega_ms"),
+            ("_moderator", "worker_ai_calls", "worker_ai_ms"),
+        ):
+            target = collected.pop(private_key, None)
+            metrics = getattr(target, "timings", {}) if target is not None else {}
+            if isinstance(metrics, Mapping):
+                calls = metrics.get(count_key)
+                elapsed = metrics.get(duration_key)
+                if type(calls) is int and calls >= 0:
+                    collected[count_key] = calls
+                if type(elapsed) in {int, float} and math.isfinite(float(elapsed)) and elapsed >= 0:
+                    collected[duration_key] = float(elapsed)
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

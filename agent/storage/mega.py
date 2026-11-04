@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+import time
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -39,13 +40,19 @@ class MegaStorage:
         self.root = root.rstrip("/") or "/"
         self.runner = runner
         self.timeout_seconds = timeout_seconds
+        self.timings = {"mega_calls": 0, "mega_ms": 0.0}
 
     def _run(self, args: Sequence[str]) -> str:
         try:
-            result = self.runner(
-                list(args), capture_output=True, text=True,
-                timeout=self.timeout_seconds, check=False,
-            )
+            self.timings["mega_calls"] += 1
+            started = time.perf_counter()
+            try:
+                result = self.runner(
+                    list(args), capture_output=True, text=True,
+                    timeout=self.timeout_seconds, check=False,
+                )
+            finally:
+                self.timings["mega_ms"] += (time.perf_counter() - started) * 1000.0
         except FileNotFoundError as exc:
             raise MegaStorageError("megacmd_not_installed") from exc
         except subprocess.TimeoutExpired as exc:
