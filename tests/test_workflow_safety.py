@@ -69,7 +69,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "daily-queue-processor.yml").read_text(encoding="utf-8")
         worker = (ROOT / "agent" / "brain" / "queue_worker.py").read_text(encoding="utf-8")
         self.assertIn("ref: main", workflow)
-        self.assertIn("--time-budget-seconds 9000", workflow)
+        self.assertIn("--time-budget-seconds 7200", workflow)
         self.assertIn("--send-delay-seconds 3", workflow)
         self.assertIn("timeout-minutes: 180", workflow)
         self.assertNotIn("--daily-limit", workflow)
