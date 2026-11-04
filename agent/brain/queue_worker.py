@@ -36,6 +36,56 @@ def _safe_code(value: Any) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value or "unknown_error"))[:80] or "unknown_error"
 
 
+_TIMING_FIELDS = (
+    "download_calls", "download_ms", "checks_calls", "checks_ms",
+    "rubika_calls", "rubika_ms", "send_ms", "worker_ai_calls", "worker_ai_ms",
+    "mega_calls", "mega_ms", "worker_api_calls", "worker_api_ms",
+    "queue_item_ms", "delay_ms",
+)
+
+
+def _safe_timing_record(value: Any) -> dict[str, int | float]:
+    source = value if isinstance(value, dict) else {}
+    safe: dict[str, int | float] = {}
+    for name in _TIMING_FIELDS:
+        raw = source.get(name, 0)
+        if type(raw) is int and raw >= 0:
+            safe[name] = raw
+        elif type(raw) is float and math.isfinite(raw) and raw >= 0:
+            safe[name] = round(raw, 3)
+        else:
+            safe[name] = 0
+    if safe["send_ms"] == 0 and safe["rubika_ms"]:
+        safe["send_ms"] = safe["rubika_ms"]
+    return safe
+
+
+def _record_run_timings(report: dict[str, Any], cloud: Any, started: float, queue_read_ms: float) -> None:
+    rows = [
+        row.get("timings", {}) for row in report.get("results", [])
+        if isinstance(row, dict) and isinstance(row.get("timings"), dict)
+    ]
+    totals = {name: 0.0 for name in _TIMING_FIELDS}
+    for row in rows:
+        safe = _safe_timing_record(row)
+        for name, value in safe.items():
+            totals[name] += float(value)
+    api_timing = getattr(cloud, "timings", {})
+    api_calls = api_timing.get("worker_api_calls", 0) if isinstance(api_timing, dict) else 0
+    api_ms = api_timing.get("worker_api_ms", 0.0) if isinstance(api_timing, dict) else 0.0
+    report["timings"] = {
+        "run_total_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        "queue_read_ms": round(max(0.0, queue_read_ms), 3),
+        "worker_api_calls": int(api_calls) if type(api_calls) is int and api_calls >= 0 else 0,
+        "worker_api_ms": round(float(api_ms), 3) if type(api_ms) in {int, float} and math.isfinite(float(api_ms)) and api_ms >= 0 else 0,
+        "items_measured": len(rows),
+        "items": {
+            name: (int(value) if name.endswith("_calls") else round(value, 3))
+            for name, value in totals.items()
+        },
+    }
+
+
 def _safe_cloud_state_error_detail(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -226,6 +276,9 @@ def run_daily(
     monotonic = clock or time.monotonic
     sleep = sleeper or time.sleep
     started_monotonic = monotonic()
+    run_started = time.perf_counter()
+    queue_read_started = time.perf_counter()
+    queue_read_ms = 0.0
     cloud = CloudState(
         os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
         token=os.getenv("AGENT_API_TOKEN", ""),
@@ -278,6 +331,7 @@ def run_daily(
         report["time_budget_exhausted"] = True
         report["stop_reason"] = "time_budget_exhausted"
 
+    queue_read_ms = (time.perf_counter() - queue_read_started) * 1000.0
     # SQL pages are oldest-first. Stable grouping prioritizes TikTok while preserving
     # oldest-first order within TikTok; paused platforms stay queued.
     candidates.sort(
@@ -292,11 +346,14 @@ def run_daily(
         report["daily_sent_today"] = int(report["queue_counts"].get("sent_today", 0) or 0)
         report["inventory"] = _mega_inventory()
         report["inventory_text"] = _inventory_text(report["queue_counts"], report["inventory"])
+        _record_run_timings(report, cloud, run_started, queue_read_ms)
         return report
 
     with tempfile.TemporaryDirectory(prefix="rubika-agent-queue-") as folder:
         root = Path(folder)
         for item in candidates:
+            item_delay_ms = 0.0
+            item_timing: dict[str, Any] = {}
             elapsed = monotonic() - started_monotonic
             if elapsed >= time_budget_seconds:
                 report["time_budget_exhausted"] = True
@@ -310,7 +367,9 @@ def run_daily(
                     report["time_budget_exhausted"] = True
                     report["stop_reason"] = "time_budget_exhausted"
                     break
+                delay_started = time.perf_counter()
                 sleep(float(send_delay_seconds))
+                item_delay_ms += (time.perf_counter() - delay_started) * 1000.0
                 if monotonic() - started_monotonic >= time_budget_seconds:
                     report["time_budget_exhausted"] = True
                     report["stop_reason"] = "time_budget_exhausted"
@@ -331,6 +390,7 @@ def run_daily(
                     "status": "deferred",
                     "reason": "platform_paused",
                     "queue_state": "left_queued",
+                    "timings": _safe_timing_record({"delay_ms": item_delay_ms}),
                 })
                 continue
 
@@ -354,6 +414,7 @@ def run_daily(
                     result_path,
                     candidate_limit=1,
                     candidate_offset=0,
+                    timings=item_timing,
                 )
                 if not isinstance(result, dict):
                     result = {"ok": False, "status": "error", "reason": "invalid_worker_result"}
@@ -377,6 +438,9 @@ def run_daily(
                 "reason": _safe_code(result.get("reason") or result.get("error") or status),
             }
             result_entry.update(_safe_failure_diagnostics(result))
+            item_timing["delay_ms"] = item_delay_ms
+            item_timing["send_ms"] = item_timing.get("rubika_ms", 0.0)
+            result_entry["timings"] = _safe_timing_record(item_timing)
 
             if status == "sent" and result.get("ok") is True:
                 try:
@@ -496,6 +560,7 @@ def run_daily(
     ledger = _mega_inventory()
     report["inventory"] = ledger
     report["inventory_text"] = _inventory_text(report["queue_counts"], ledger)
+    _record_run_timings(report, cloud, run_started, queue_read_ms)
     return report
 
 

@@ -150,5 +150,22 @@ class DeliveryRetentionTests(unittest.TestCase):
             self.assertEqual(local, [])
 
 
+
+    def test_rubika_call_timing_counts_actual_send_invocations(self):
+        timings = {}
+        result = deliver_with_retry(
+            item_id="tiktok:test-item",
+            send=lambda: {"status": "OK", "message_id": "receipt"},
+            record_attempt=lambda *_args: None,
+            delete_local=lambda: None,
+            max_attempts=1,
+            timings=timings,
+        )
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(timings["rubika_calls"], 1)
+        self.assertGreaterEqual(timings["rubika_ms"], 0)
+
+
+
 if __name__ == "__main__":
     unittest.main()

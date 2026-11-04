@@ -236,5 +236,42 @@ class StagingOrchestratorTests(unittest.TestCase):
             self.assertIn("youtube:vkVFgmgLo1s", cloud.items)
 
 
+
+    def test_download_timing_is_recorded_without_identifying_values(self):
+        cloud = FakeCloud()
+        ledger = FakeLedger()
+        timings = {}
+        candidate = make_candidate()
+
+        def fake_stage(candidates, **kwargs):
+            rows = list(candidates)
+            self.assertEqual(len(rows), 1)
+            self.assertIs(kwargs["timings"], timings)
+            self.assertEqual(kwargs["download"](rows[0]), "safe-local-path.mp4")
+            return BatchResult(status="partial", required_counts={"youtube": 1}, skipped=[])
+
+        with tempfile.TemporaryDirectory() as folder:
+            orchestrator = StagingOrchestrator(
+                cloud=cloud,
+                storage=object(),
+                registry=allowed_registry(),
+                downloaders={"youtube": lambda *_args: "safe-local-path.mp4"},
+                moderator=lambda *_args: {},
+                output_dir=folder,
+                ledger=ledger,
+                required_counts={"youtube": 1},
+                timings=timings,
+            )
+            with patch("agent.brain.orchestrator.stage_edit_batch", side_effect=fake_stage):
+                result = orchestrator.run([candidate])
+
+        self.assertEqual(result.authorized_count, 1)
+        self.assertEqual(timings["download_calls"], 1)
+        self.assertGreaterEqual(timings["download_ms"], 0)
+        self.assertNotIn("external_id", timings)
+        self.assertNotIn("safe-local-path.mp4", repr(timings))
+
+
+
 if __name__ == "__main__":
     unittest.main()

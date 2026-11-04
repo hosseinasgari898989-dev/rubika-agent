@@ -146,6 +146,7 @@ def deliver_with_retry(
     max_attempts: int = 3,
     sleep_seconds: float = 1.0,
     sleeper: Callable[[float], None] = time.sleep,
+    timings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Retry definite API rejections at most 3 times; never retry ambiguous outcomes."""
     if max_attempts < 1 or max_attempts > 3:
@@ -153,8 +154,15 @@ def deliver_with_retry(
 
     for attempt in range(1, max_attempts + 1):
         record_attempt(attempt, "started", None)
+        send_started = time.perf_counter()
+        if timings is not None:
+            timings["rubika_calls"] = int(timings.get("rubika_calls", 0)) + 1
         try:
-            response = _response_dict(send())
+            try:
+                response = _response_dict(send())
+            finally:
+                if timings is not None:
+                    timings["rubika_ms"] = float(timings.get("rubika_ms", 0.0)) + (time.perf_counter() - send_started) * 1000.0
         except Exception as exc:
             if _is_rate_limit_error(exc):
                 record_attempt(attempt, "failed", "rubika_rate_limited")

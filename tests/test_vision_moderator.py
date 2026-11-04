@@ -78,6 +78,8 @@ class CloudflareMusicModeratorTests(unittest.TestCase):
         self.assertNotIn("0:v:0", command)
         self.assertTrue(cloud.calls[0]["audio_data_url"].startswith("data:audio/mpeg;base64,"))
         self.assertEqual(cloud.calls[0]["platform"], "tiktok")
+        self.assertEqual(moderator.timings["worker_ai_calls"], 1)
+        self.assertGreaterEqual(moderator.timings["worker_ai_ms"], 0)
         self.assertIs(result["has_music"], True)
         self.assertEqual(result["music_probability"], 0.97)
         self.assertNotIn("is_poppy_playtime", result)
@@ -119,6 +121,7 @@ class CloudflareMusicModeratorTests(unittest.TestCase):
         self.assertIs(result["has_music"], False)
         self.assertEqual(result["music_decision_reason"], "source_has_no_audio_stream")
         self.assertEqual(cloud.calls, [])
+        self.assertEqual(moderator.timings["worker_ai_calls"], 0)
 
     def test_missing_ffmpeg_fails_closed(self):
         with tempfile.TemporaryDirectory() as folder:

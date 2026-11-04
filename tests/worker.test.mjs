@@ -2838,7 +2838,11 @@ async function withDispatchFetch(responder, fn) {
     state.DB.state.set("panel_edit_ok", "9");
     state.DB.state.set("panel_edit_fail", "2");
     state.DB.state.set("last_timings", JSON.stringify([
-      { msg_age_s: 1.25, total_ms: 10, rubika_calls: 2, rubika_ms: 6, d1_ms: 3 },
+      {
+        event_kind: "click", msg_age_s: 1.25, total_ms: 10,
+        d1_queries: 7, d1_ms: 3, rubika_calls: 2, rubika_ms: 6,
+        worker_api_calls: 1, worker_api_ms: 4, external_calls: 1, external_ms: 2,
+      },
     ]));
     const secret = await panel.hookSecret(state);
     await postPanelUpdate(state, {
@@ -2857,7 +2861,11 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(debugSend.payload.text.includes("panel_edit_ok: 9"), true);
     assert.equal(debugSend.payload.text.includes("panel_edit_fail: 2"), true);
     assert.equal(debugSend.payload.text.includes('"msg_age_s":1.25'), true);
+    assert.equal(debugSend.payload.text.includes('"event_kind":"click"'), true);
+    assert.equal(debugSend.payload.text.includes('"d1_queries":7'), true);
     assert.equal(debugSend.payload.text.includes('"rubika_calls":2'), true);
+    assert.equal(debugSend.payload.text.includes('"worker_api_calls":1'), true);
+    assert.equal(debugSend.payload.text.includes('"external_calls":1'), true);
     assert.equal(debugSend.payload.text.includes("chat_tail: wner"), true);
     assert.equal(debugSend.payload.text.includes("message_id_tail: 1234"), true);
     assert.equal(debugSend.payload.text.includes("b0actualowner"), false);
@@ -3383,13 +3391,25 @@ async function withDispatchFetch(responder, fn) {
       assert.equal(Number.isFinite(row.msg_age_s), true);
       assert.equal(typeof row.total_ms, "number");
       assert.equal(typeof row.rubika_calls, "number");
+      assert.equal(typeof row.event_kind, "string");
+      assert.equal(typeof row.d1_queries, "number");
       assert.equal(typeof row.rubika_ms, "number");
       assert.equal(typeof row.d1_ms, "number");
+      assert.equal(typeof row.worker_api_calls, "number");
+      assert.equal(typeof row.worker_api_ms, "number");
+      assert.equal(typeof row.external_calls, "number");
+      assert.equal(typeof row.external_ms, "number");
+      assert.equal(row.event_kind, "text");
+      assert.equal(row.d1_queries >= 1, true);
       assert.equal(row.rubika_calls, 2);
       assert.equal(row.total_ms >= 0, true);
       assert.equal(row.rubika_ms >= 0, true);
       assert.equal(row.d1_ms >= 0, true);
-      assert.deepEqual(Object.keys(row).sort(), ["d1_ms", "msg_age_s", "rubika_calls", "rubika_ms", "total_ms"]);
+      assert.deepEqual(Object.keys(row).sort(), [
+        "d1_ms", "d1_queries", "event_kind", "external_calls", "external_ms",
+        "msg_age_s", "rubika_calls", "rubika_ms", "total_ms",
+        "worker_api_calls", "worker_api_ms",
+      ]);
     }
     assert.equal(calls.filter(call => call.method === "deleteMessage").length, 6);
   });

@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import time
 from typing import Any, Mapping
 from .deduplication import status_blocks_delivery
 
@@ -59,6 +60,7 @@ class CloudState:
         self.base_url = base_url.rstrip("/")
         self.token = (token if token is not None else os.getenv("AGENT_API_TOKEN", "")).strip()
         self.timeout_seconds = timeout_seconds
+        self.timings = {"worker_api_calls": 0, "worker_api_ms": 0.0}
         if len(self.token) < 32:
             raise ValueError("missing_or_short_AGENT_API_TOKEN")
 
@@ -92,6 +94,8 @@ class CloudState:
                 "User-Agent": "rubika-agent-brain/1.0",
             },
         )
+        self.timings["worker_api_calls"] += 1
+        request_started = time.perf_counter()
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read(256 * 1024).decode("utf-8")
@@ -116,6 +120,8 @@ class CloudState:
             raise CloudStateError("control_api_unreachable", endpoint_path=path) from None
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise CloudStateError("control_api_invalid_json", endpoint_path=path) from None
+        finally:
+            self.timings["worker_api_ms"] += (time.perf_counter() - request_started) * 1000.0
 
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("error", "control_api_rejected") if isinstance(result, dict) else "control_api_invalid_response"

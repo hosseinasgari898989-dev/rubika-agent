@@ -154,6 +154,9 @@ export async function dispatchMobXWorkflow(env, workflow, inputs) {
   let lastErrorDetail = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     let response;
+    const timing = env && env[PANEL_TIMING];
+    const externalStartedAt = performance.now();
+    if (timing) timing.external_calls += 1;
     try {
       response = await fetch(endpoint, {
         method: "POST",
@@ -174,6 +177,8 @@ export async function dispatchMobXWorkflow(env, workflow, inputs) {
       lastErrorDetail = null;
       if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 120));
       continue;
+    } finally {
+      if (timing) timing.external_ms += elapsedMs(externalStartedAt);
     }
     if (response.ok) return { ok: true };
     const status = Number(response.status) || 0;
@@ -230,49 +235,47 @@ export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, input
 async function rubika(env, method, payload) {
   const methodName = String(method || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "unknown";
   const timing = env && env[PANEL_TIMING];
+  if (method !== "deleteMessage") await assertPanelEventCurrent(env);
   if (timing) timing.rubika_calls += 1;
-  const startedAt = performance.now();
+  let res;
+  const requestStartedAt = performance.now();
   try {
-    if (method !== "deleteMessage") await assertPanelEventCurrent(env);
-    let res;
-    try {
-      res = await fetch(RUBIKA_API + "/" + env.RUBIKA_TOKEN + "/" + method, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(12_000),
-      });
-    } catch (error) {
-      if (error instanceof PanelError) throw error;
-      if (error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-        throw new PanelError("rubika_" + methodName + "_timeout");
-      }
-      throw new PanelError("rubika_" + methodName + "_network");
+    res = await fetch(RUBIKA_API + "/" + env.RUBIKA_TOKEN + "/" + method, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(12_000),
+    });
+  } catch (error) {
+    if (error instanceof PanelError) throw error;
+    if (error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new PanelError("rubika_" + methodName + "_timeout");
     }
-    let data = null;
-    try { data = await res.json(); } catch { /* ignore */ }
-    if (!res.ok || !data || data.status !== "OK") {
-      const statusCode = res.ok
-        ? String(data && data.status || "bad").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30)
-        : "http_" + res.status;
-      throw new PanelError("rubika_" + methodName + "_" + statusCode);
-    }
-    if (method !== "deleteMessage") {
-      try {
-        await assertPanelEventCurrent(env);
-      } catch (error) {
-        // A sendMessage may have succeeded after a newer panel event overtook it.
-        // Remove that late response so its stale keypad cannot remain actionable.
-        const staleMid = data && data.data && data.data.message_id;
-        if (error instanceof StalePanelEvent && method === "sendMessage" &&
-            typeof staleMid === "string" && staleMid) {
-          try { await rubika(env, "deleteMessage", { chat_id: payload && payload.chat_id, message_id: staleMid }); } catch {}
-        }
-        throw error;
-      }
-    }
-    return data;
+    throw new PanelError("rubika_" + methodName + "_network");
   } finally {
-    if (timing) timing.rubika_ms += elapsedMs(startedAt);
+    if (timing) timing.rubika_ms += elapsedMs(requestStartedAt);
   }
+  let data = null;
+  const bodyStartedAt = performance.now();
+  try { data = await res.json(); } catch { /* ignore */ }
+  finally { if (timing) timing.rubika_ms += elapsedMs(bodyStartedAt); }
+  if (!res.ok || !data || data.status !== "OK") {
+    const statusCode = res.ok
+      ? String(data && data.status || "bad").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30)
+      : "http_" + res.status;
+    throw new PanelError("rubika_" + methodName + "_" + statusCode);
+  }
+  if (method !== "deleteMessage") {
+    try {
+      await assertPanelEventCurrent(env);
+    } catch (error) {
+      const staleMid = data && data.data && data.data.message_id;
+      if (error instanceof StalePanelEvent && method === "sendMessage" &&
+          typeof staleMid === "string" && staleMid) {
+        try { await rubika(env, "deleteMessage", { chat_id: payload && payload.chat_id, message_id: staleMid }); } catch {}
+      }
+      throw error;
+    }
+  }
+  return data;
 }
 const responseMessageId = (response) => {
   const mid = response && response.data && response.data.message_id;
@@ -504,7 +507,10 @@ function timedStatement(statement, timing) {
         return async (...args) => {
           const startedAt = performance.now();
           try { return await value.apply(target, args); }
-          finally { timing.d1_ms += elapsedMs(startedAt); }
+          finally {
+            timing.d1_queries += 1;
+            timing.d1_ms += elapsedMs(startedAt);
+          }
         };
       }
       return typeof value === "function" ? value.bind(target) : value;
@@ -527,7 +533,10 @@ function withPanelTiming(env, timing) {
             return async (...args) => {
               const startedAt = performance.now();
               try { return await value.apply(target, args); }
-              finally { timing.d1_ms += elapsedMs(startedAt); }
+              finally {
+                timing.d1_queries += Array.isArray(args[0]) ? args[0].length : 1;
+                timing.d1_ms += elapsedMs(startedAt);
+              }
             };
           }
           return typeof value === "function" ? value.bind(target) : value;
@@ -551,18 +560,30 @@ async function recordPanelTiming(env, timing, msgAge) {
     if (!Array.isArray(history)) history = [];
     history = history.filter((item) => item && typeof item === "object" && !Array.isArray(item))
       .map((item) => ({
+        event_kind: item.event_kind === "click" || item.event_kind === "text" ? item.event_kind : "unknown",
         msg_age_s: typeof item.msg_age_s === "number" && Number.isFinite(item.msg_age_s) ? item.msg_age_s : null,
         total_ms: Number.isFinite(item.total_ms) && item.total_ms >= 0 ? item.total_ms : 0,
+        d1_queries: Number.isSafeInteger(item.d1_queries) && item.d1_queries >= 0 ? item.d1_queries : 0,
+        d1_ms: Number.isFinite(item.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
         rubika_calls: Number.isSafeInteger(item.rubika_calls) && item.rubika_calls >= 0 ? item.rubika_calls : 0,
         rubika_ms: Number.isFinite(item.rubika_ms) && item.rubika_ms >= 0 ? item.rubika_ms : 0,
-        d1_ms: Number.isFinite(item.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
+        worker_api_calls: Number.isSafeInteger(item.worker_api_calls) && item.worker_api_calls >= 0 ? item.worker_api_calls : 0,
+        worker_api_ms: Number.isFinite(item.worker_api_ms) && item.worker_api_ms >= 0 ? item.worker_api_ms : 0,
+        external_calls: Number.isSafeInteger(item.external_calls) && item.external_calls >= 0 ? item.external_calls : 0,
+        external_ms: Number.isFinite(item.external_ms) && item.external_ms >= 0 ? item.external_ms : 0,
       })).slice(-4);
     const row = {
+      event_kind: timing.event_kind,
       msg_age_s: msgAge,
       total_ms: elapsedMs(timing.startedAt),
+      d1_queries: timing.d1_queries,
+      d1_ms: timing.d1_ms,
       rubika_calls: timing.rubika_calls,
       rubika_ms: timing.rubika_ms,
-      d1_ms: timing.d1_ms,
+      worker_api_calls: timing.worker_api_calls,
+      worker_api_ms: timing.worker_api_ms,
+      external_calls: timing.external_calls,
+      external_ms: timing.external_ms,
     };
     await setState(env, "last_timings", JSON.stringify([...history, row].slice(-5)));
   } catch { /* diagnostics must never break owner commands */ }
@@ -606,10 +627,14 @@ export function fmtAi(p, d) {
 
 // ---------- screens
 async function api(ui, path) {
+  const timing = ui.env && ui.env[PANEL_TIMING];
+  if (timing) timing.worker_api_calls += 1;
+  const startedAt = performance.now();
   try {
     const res = await ui.selfFetch(new Request(ui.origin + path, { headers: { authorization: `Bearer ${ui.env.AGENT_API_TOKEN}`, accept: "application/json" } }));
     return await res.json();
   } catch { return { ok: false }; }
+  finally { if (timing) timing.worker_api_ms += elapsedMs(startedAt); }
 }
 const aiBlock = async (ui) => (await Promise.all(["groq", "openrouter"].map(async (p) => fmtAi(p, await api(ui, `/api/brain/ai-provider/status?provider=${p}`))))).join("\n\n");
 
@@ -721,11 +746,17 @@ async function debugText(env) {
   try {
     const parsed = JSON.parse(await getState(env, "last_timings", "[]"));
     if (Array.isArray(parsed)) timings = parsed.slice(-5).map((item) => ({
+      event_kind: item?.event_kind === "click" || item?.event_kind === "text" ? item.event_kind : "unknown",
       msg_age_s: typeof item?.msg_age_s === "number" && Number.isFinite(item.msg_age_s) ? item.msg_age_s : null,
       total_ms: Number.isFinite(item?.total_ms) && item.total_ms >= 0 ? item.total_ms : 0,
+      d1_queries: Number.isSafeInteger(item?.d1_queries) && item.d1_queries >= 0 ? item.d1_queries : 0,
+      d1_ms: Number.isFinite(item?.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
       rubika_calls: Number.isSafeInteger(item?.rubika_calls) && item.rubika_calls >= 0 ? item.rubika_calls : 0,
       rubika_ms: Number.isFinite(item?.rubika_ms) && item.rubika_ms >= 0 ? item.rubika_ms : 0,
-      d1_ms: Number.isFinite(item?.d1_ms) && item.d1_ms >= 0 ? item.d1_ms : 0,
+      worker_api_calls: Number.isSafeInteger(item?.worker_api_calls) && item.worker_api_calls >= 0 ? item.worker_api_calls : 0,
+      worker_api_ms: Number.isFinite(item?.worker_api_ms) && item.worker_api_ms >= 0 ? item.worker_api_ms : 0,
+      external_calls: Number.isSafeInteger(item?.external_calls) && item.external_calls >= 0 ? item.external_calls : 0,
+      external_ms: Number.isFinite(item?.external_ms) && item.external_ms >= 0 ? item.external_ms : 0,
     }));
   } catch { /* invalid or old timing state */ }
   let event = null;
@@ -1147,7 +1178,14 @@ async function tryClaim(env, ev) {
 const idTail = (value) => String(value ?? "").slice(-4);
 async function processEvent(env, selfFetch, origin, ev) {
   if (!ev) return;
-  const timing = { startedAt: performance.now(), rubika_calls: 0, rubika_ms: 0, d1_ms: 0 };
+  const timing = {
+    startedAt: performance.now(),
+    event_kind: ev.kind === "click" ? "click" : "text",
+    d1_queries: 0, d1_ms: 0,
+    rubika_calls: 0, rubika_ms: 0,
+    worker_api_calls: 0, worker_api_ms: 0,
+    external_calls: 0, external_ms: 0,
+  };
   const receivedAt = Date.now();
   const timedEnv = withPanelTiming(env, timing);
   const owner = await getOwner(timedEnv);

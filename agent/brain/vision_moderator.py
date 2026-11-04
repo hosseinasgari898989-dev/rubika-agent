@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -41,6 +42,7 @@ class CloudflareVideoModerator:
         if not 0 <= minimum_confidence <= 1:
             raise ValueError("minimum_confidence_out_of_range")
         self.cloud = cloud
+        self.timings = {"worker_ai_calls": 0, "worker_ai_ms": 0.0}
         self.inspector = inspector
         self.maximum_seconds = maximum_seconds
         self.maximum_bytes = maximum_bytes
@@ -108,6 +110,8 @@ class CloudflareVideoModerator:
             self._prepare_audio(source, sample_path)
             encoded = base64.b64encode(sample_path.read_bytes()).decode("ascii")
             data_url = "data:audio/mpeg;base64," + encoded
+            self.timings["worker_ai_calls"] += 1
+            started = time.perf_counter()
             try:
                 result = self.cloud.moderate_music(
                     data_url,
@@ -116,6 +120,8 @@ class CloudflareVideoModerator:
             except Exception as exc:
                 code = getattr(exc, "code", "music_api_" + type(exc).__name__)
                 raise VisionModeratorError(str(code)) from None
+            finally:
+                self.timings["worker_ai_ms"] += (time.perf_counter() - started) * 1000.0
 
         if not isinstance(result, Mapping):
             raise VisionModeratorError("music_api_invalid_response")
