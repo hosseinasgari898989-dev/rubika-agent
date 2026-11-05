@@ -115,14 +115,14 @@ jobs:
             "$base/checksums.txt" --output "$checksums" 2>/dev/null; then
             fallback
           fi
-          if ! printf '%s  %s\\n' "$expected_checksums_sha256" "$checksums" | sha256sum --check --status; then
+          if ! printf '%s  %s\n' "$expected_checksums_sha256" "$checksums" | sha256sum --check --status; then
             fallback
           fi
           published_checksum="$(awk -v target="$archive_name" '$2 == target { print $1; exit }' "$checksums")"
           if [[ "$published_checksum" != "$expected_archive_sha256" ]]; then
             fallback
           fi
-          if ! printf '%s  %s\\n' "$published_checksum" "$archive" | sha256sum --check --status; then
+          if ! printf '%s  %s\n' "$expected_checksums_sha256" "$checksums" | sha256sum --check --status; then
             fallback
           fi
           if ! tar -tzf "$archive" >/dev/null 2>&1; then
