@@ -566,7 +566,7 @@ def _fetch_post(
     post_id: str,
     timeout_seconds: int,
     *,
-    pinned_state: bool | None = None,
+    pin_evidence: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     endpoint = "https://cdn.syndication.twimg.com/tweet-result"
     tokens = ["0", _syndication_token(post_id)]
@@ -589,7 +589,7 @@ def _fetch_post(
             continue
         if not isinstance(payload, dict):
             continue
-        item = _parse_post(payload, post_id, pinned_state=pinned_state)
+        item = _parse_post(payload, post_id, pin_evidence=pin_evidence)
         if item is not None:
             return item, "ok"
         # A 200 response without usable media/canonical-author metadata may indicate
@@ -811,18 +811,23 @@ def _discover_legacy_mob_x_posts(
     skipped: dict[str, int] = {}
     for post_id in post_ids:
         pin_state = (pin_states or {}).get(post_id)
+        legacy_pin_evidence = {
+            "flags": ([{"value": pin_state, "source": "legacy_public_index.pin_state"}]
+                      if isinstance(pin_state, bool) else []),
+            "profile_pinned_ids": [],
+        }
         item, result = _fetch_post(
             client,
             post_id,
             timeout_seconds,
-            pinned_state=pin_state,
+            pin_evidence=legacy_pin_evidence,
         )
         if item is None:
             safe_cutoff = cutoff or datetime.fromisoformat("2026-11-05T00:00:00+00:00")
             item, mirror_source = _fallback_post_by_id(
                 client,
                 post_id,
-                pinned_state=pin_state,
+                pin_evidence=legacy_pin_evidence,
                 cutoff=safe_cutoff,
             )
             if item is not None:
@@ -1169,7 +1174,7 @@ def _fallback_post_by_id(
     client: Any,
     post_id: str,
     *,
-    pinned_state: bool | None,
+    pin_evidence: dict[str, Any] | None,
     cutoff: datetime,
     timeout_seconds: int = 10,
 ) -> tuple[dict[str, Any] | None, str]:
@@ -1203,11 +1208,10 @@ def _fallback_post_by_id(
         reason = _row_skip_reason(post, cutoff)
         if reason:
             continue
-        pin_values = (post.get("is_pinned"), post.get("isPinned"), post.get("pinned"), pinned_state)
-        if any(value is True for value in pin_values):
-            continue
-        if not any(value is False for value in pin_values if isinstance(value, bool)):
-            continue
+        merged_pin_evidence = _merge_pin_evidence(
+            pin_evidence,
+            _pin_evidence_for_row(post, provider),
+        )
         text_value = str(post.get("text") or post.get("full_text") or post.get("tweet") or "").strip()
         media_block = post.get("media")
         if provider == "fxtwitter" and isinstance(media_block, dict):
@@ -1260,7 +1264,8 @@ def _fallback_post_by_id(
             "thumbnail_url": None,
             "method": provider + "_status_fallback",
             "discovery_source": provider,
-            "pinned": False,
+            "pin_flags": merged_pin_evidence["flags"],
+            "profile_pinned_ids": merged_pin_evidence["profile_pinned_ids"],
         }, provider
     return None, "unavailable"
 
