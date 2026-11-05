@@ -31,7 +31,11 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             "id": "x-1734258130186559716",
             "external_id": "x-1734258130186559716",
             "url": "https://x.com/mobgamesstudios/status/1734258130186559716",
-            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "canonical_url": (
+                "https://x.com/mobgamesstudios/status/" + external_id.removeprefix("x-")
+                if re.fullmatch(r"x-[0-9]{15,22}", external_id)
+                else "https://x.com/mobgamesstudios/status/1734258130186559716"
+            ),
             "title": "Official post",
             "caption": "Original Mob caption",
             "original_caption": "Original Mob caption",
@@ -484,6 +488,7 @@ class OfficialSinceRuleTests(unittest.TestCase):
             "source_name": "Mob Entertainment on X",
             "source_platform": "x",
             "official_source": True,
+            "pinned": False,
             "freshness_verified": True,
             "published_at": published_at,
             "media_type": "image",
@@ -549,22 +554,22 @@ class OfficialSinceRuleTests(unittest.TestCase):
             "birth_datetime": datetime(2026, 11, 5, tzinfo=timezone.utc),
         }
         candidates = [
-            self.row("x-newer", "2026-11-06T00:00:00Z"),
-            self.row("x-oldhash", "2026-11-05T00:30:00Z"),
-            self.row("x-seen", "2026-11-05T01:00:00Z"),
-            self.row("x-oldest-valid", "2026-11-05T02:00:00Z"),
+            self.row("x-2111111111111111111", "2026-11-06T00:00:00Z"),
+            self.row("x-2111111111111111112", "2026-11-05T00:30:00Z"),
+            self.row("x-2111111111111111113", "2026-11-05T01:00:00Z"),
+            self.row("x-2111111111111111114", "2026-11-05T02:00:00Z"),
         ]
         publisher = FakePublisher()
         media_hash = {
-            "x-oldhash": "sha-known",
-            "x-oldest-valid": "sha-new",
-            "x-newer": "sha-newer",
+            "x-2111111111111111112": "sha-known",
+            "x-2111111111111111114": "sha-new",
+            "x-2111111111111111111": "sha-newer",
         }
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             source_media = {}
             for candidate in candidates:
-                if candidate["external_id"] == "x-seen":
+                if candidate["external_id"] == "x-2111111111111111113":
                     continue
                 media_path = root / (candidate["external_id"] + ".jpg")
                 media_path.write_bytes(b"fake image bytes")
@@ -605,12 +610,12 @@ class OfficialSinceRuleTests(unittest.TestCase):
                 )
 
         self.assertEqual(result["status"], "published")
-        self.assertEqual(result["selected"]["external_id"], "x-oldest-valid")
+        self.assertEqual(result["selected"]["external_id"], "x-2111111111111111114")
         self.assertEqual(len(publisher.calls), 1)
         self.assertEqual(result["backlog_count"], 1)
         evaluations = {row.get("external_id"): row.get("result") for row in result["candidate_evaluations"]}
-        self.assertEqual(evaluations["x-oldhash"], "duplicate_media_hash")
-        self.assertNotIn("x-seen", evaluations)
+        self.assertEqual(evaluations["x-2111111111111111112"], "duplicate_media_hash")
+        self.assertNotIn("x-2111111111111111113", evaluations)
 
 if __name__ == "__main__":
     unittest.main()
