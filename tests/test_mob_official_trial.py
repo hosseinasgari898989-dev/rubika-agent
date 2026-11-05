@@ -479,8 +479,16 @@ class OfficialSinceRuleTests(unittest.TestCase):
             "platform": "mob_official",
             "external_id": external_id,
             "id": external_id,
-            "url": "https://x.com/mobgamesstudios/status/1734258130186559716",
-            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "url": (
+                "https://x.com/mobgamesstudios/status/" + external_id.removeprefix("x-")
+                if re.fullmatch(r"x-[0-9]{15,22}", external_id)
+                else "https://x.com/mobgamesstudios/status/1734258130186559716"
+            ),
+            "canonical_url": (
+                "https://x.com/mobgamesstudios/status/" + external_id.removeprefix("x-")
+                if re.fullmatch(r"x-[0-9]{15,22}", external_id)
+                else "https://x.com/mobgamesstudios/status/1734258130186559716"
+            ),
             "title": "Official post",
             "caption": "Original Mob caption",
             "original_caption": "Original Mob caption",
@@ -532,7 +540,10 @@ class OfficialSinceRuleTests(unittest.TestCase):
                 self.attempts = []
 
             def get_seen_index(self):
-                return {"ids": {"mob_official:x-seen", "x-seen"}, "hashes": {"sha-known"}}
+                return {
+                    "ids": {"mob_official:x-2111111111111111113", "x-2111111111111111113"},
+                    "hashes": {"sha-known"},
+                }
 
             def upsert_item(self, item):
                 self.upserted.append(item)
@@ -617,6 +628,142 @@ class OfficialSinceRuleTests(unittest.TestCase):
         evaluations = {row.get("external_id"): row.get("result") for row in result["candidate_evaluations"]}
         self.assertEqual(evaluations["x-2111111111111111112"], "duplicate_media_hash")
         self.assertNotIn("x-2111111111111111113", evaluations)
+
+    def test_d1_backlog_survives_single_post_run_and_resumes_without_rediscovery(self):
+        class FakeCloud:
+            items = {}
+
+            def __init__(self, *args, **kwargs):
+                self.attempts = []
+
+            def get_official_items(self):
+                return [dict(row) for row in self.items.values()]
+
+            def get_seen_index(self):
+                ids = set()
+                hashes = set()
+                for row in self.items.values():
+                    if row.get("status") in {"sent", "sending", "uncertain"}:
+                        ids.add("mob_official:" + row["external_id"])
+                        ids.add(row["external_id"])
+                        if row.get("media_sha256"):
+                            hashes.add(row["media_sha256"])
+                return {"ids": ids, "hashes": hashes}
+
+            def upsert_item(self, payload):
+                external_id = str(payload["external_id"])
+                item_id = "mob_official:" + external_id
+                previous = self.items.get(external_id, {})
+                row = {
+                    **previous,
+                    **payload,
+                    "id": item_id,
+                    "validation_json": json.dumps(payload.get("validation"))
+                    if payload.get("validation") is not None else previous.get("validation_json"),
+                }
+                if previous and payload.get("status") == "discovered":
+                    row["status"] = previous.get("status")
+                self.items[external_id] = row
+                return {"ok": True, "item_id": item_id}
+
+            def record_attempt(self, item_id, attempt_number, status, **kwargs):
+                external_id = item_id.split(":", 1)[1]
+                row = self.items[external_id]
+                row["status"] = {"started": "sending", "sent": "sent",
+                                 "failed": "failed", "uncertain": "uncertain"}[status]
+                if status == "sent":
+                    row["sent_at"] = "2026-11-05T03:00:00Z"
+                self.attempts.append((item_id, status, kwargs))
+                return {"ok": True}
+
+        class FakePublisher:
+            def __init__(self):
+                self.sent = []
+
+            def send_media(self, media_path, media_type, caption):
+                self.sent.append((Path(media_path).name, media_type, caption))
+                return {"status": "OK", "data": {"message_id": "message-" + str(len(self.sent))}}
+
+        cutoff = "2026-11-05T00:00:00Z"
+        policy = {
+            "mode": "production",
+            "born_at": cutoff,
+            "birth_datetime": datetime(2026, 11, 5, tzinfo=timezone.utc),
+        }
+        first = self.row("x-2111111111111111201", "2026-11-05T01:00:00Z", id_source="x-cli")
+        second = self.row("x-2111111111111111202", "2026-11-05T02:00:00Z", id_source="x-cli")
+        discovered = [first, second]
+        publisher = FakePublisher()
+        media_hash = {
+            first["external_id"]: "a" * 64,
+            second["external_id"]: "b" * 64,
+        }
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            media_files = {}
+            for item in discovered:
+                path = root / (item["external_id"] + ".jpg")
+                path.write_bytes(b"validated media")
+                media_files[item["external_id"]] = path
+
+            def fake_download(item, _output_dir):
+                return media_files[item["external_id"]], {
+                    "sha256": media_hash[item["external_id"]],
+                    "media_type": "image",
+                    "size_bytes": 15,
+                    "mime_type": "image/jpeg",
+                }
+
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=policy),
+                patch.object(mob_official_trial, "_official_publishing_config_enabled", return_value=True),
+                patch.object(mob_official_trial, "discover_official_x_posts", side_effect=[
+                    (discovered, []),
+                    ([], []),
+                ]) as discover,
+                patch.object(mob_official_trial, "format_mob_post", side_effect=lambda value: {
+                    "original_caption": value.get("original_caption") or "Original caption",
+                    "persian_translation": "ترجمه تأییدشده",
+                    "translation_status": "translated",
+                    "caption": "ترجمه تأییدشده",
+                }),
+                patch.object(mob_official_trial, "download_and_validate", side_effect=fake_download),
+                patch.object(mob_official_trial, "RubikaPublisher", return_value=publisher),
+                patch.dict("os.environ", {
+                    "RUBIKA_CHANNEL_GUID": TEST_CHANNEL_FOR_TESTS,
+                    "RUBIKA_TOKEN": "dummy-token",
+                }),
+            ):
+                first_result = run_trial(
+                    publish=True,
+                    limit=1,
+                    output_report=root / "first-report.json",
+                    output_dir=root / "first-media",
+                    source_platform="x",
+                )
+                self.assertEqual(first_result["status"], "published")
+                self.assertEqual(first_result["selected"]["external_id"], first["external_id"])
+                self.assertEqual(first_result["backlog_count"], 1)
+                self.assertEqual(FakeCloud.items[first["external_id"]]["status"], "sent")
+                self.assertEqual(FakeCloud.items[second["external_id"]]["status"], "discovered")
+
+                second_result = run_trial(
+                    publish=True,
+                    limit=1,
+                    output_report=root / "second-report.json",
+                    output_dir=root / "second-media",
+                    source_platform="x",
+                )
+
+        self.assertEqual(discover.call_count, 2)
+        self.assertEqual(second_result["status"], "published")
+        self.assertEqual(second_result["selected"]["external_id"], second["external_id"])
+        self.assertEqual(second_result["backlog_count"], 0)
+        self.assertEqual(FakeCloud.items[second["external_id"]]["status"], "sent")
+        self.assertEqual(len(publisher.sent), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
