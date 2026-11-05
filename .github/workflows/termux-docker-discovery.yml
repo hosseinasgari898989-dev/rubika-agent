@@ -55,7 +55,6 @@ jobs:
     timeout-minutes: 40
     env:
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
-      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
     steps:
       - name: Check out the main discovery code
         uses: actions/checkout@v4
@@ -64,6 +63,8 @@ jobs:
           persist-credentials: true
 
       - name: Validate queue credential without exposing it
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -126,6 +127,8 @@ jobs:
 
       - name: Run real Termux Docker source tests and collect live metadata
         id: termux_discovery
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -159,6 +162,9 @@ jobs:
               "paid_providers_used": summary.get("paid_providers_used", []),
               "media_downloads": report.get("limits", {}).get("media_downloads", 0),
               "rubika_posts": report.get("limits", {}).get("rubika_posts", 0),
+              "tiktok_source_overlay_status": summary.get("tiktok_source_overlay_status"),
+              "tiktok_account_removals_applied": summary.get("tiktok_account_removals_applied"),
+              "tiktok_missing_created_at_cutoff_count": summary.get("tiktok_missing_created_at_cutoff_count", 0),
           }
           print("ONLINE_TERMUX_SUMMARY=" + json.dumps(
               safe_summary, ensure_ascii=False, sort_keys=True
@@ -281,6 +287,8 @@ jobs:
       - name: Add TikTok metadata to the persistent D1 edit queue
         id: queue_intake
         if: steps.push_report.outcome == 'success'
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail

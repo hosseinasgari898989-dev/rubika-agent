@@ -97,6 +97,20 @@ const sendState=row=>{
   if(row.can_resend===1||row.can_resend===true)return '<button class="btn sm" data-a="tkResend" data-id="'+E(row.id)+'">ارسال دوباره</button>';
   return '<span class="s">قابل ارسال مجدد نیست</span>';
 };
+const originalMedia=row=>{
+  if(!row.failed_media_id)return '<span class="s">نسخهٔ اصلی ذخیره نشده</span>';
+  const embed=typeof R.toMegaEmbedUrl==='function'?R.toMegaEmbedUrl(row.original_share_url):null;
+  const link=embed
+    ? '<a href="'+E(row.original_share_url)+'" target="_blank" rel="noopener noreferrer">باز کردن در Mega</a>'
+    : '<span class="s">لینک پیش‌نمایش معتبر موجود نیست</span>';
+  const preview='<button class="btn g sm" data-a="tkPreview" data-id="'+E(row.id)+'" '+(embed?'':'disabled')+'>پیش‌نمایش</button>';
+  const canDelete=['stored','delete_failed'].includes(String(row.failed_media_status||''));
+  const remove=canDelete
+    ? '<button class="btn r sm" data-a="tkDelete" data-id="'+E(row.id)+'">حذف نسخهٔ اصلی</button>'
+    : String(row.failed_media_status||'')==='delete_requested'
+      ? '<span class="bd warn">در انتظار حذف</span>' : '';
+  return '<div>'+link+'</div><div class="row" style="margin-top:6px">'+preview+remove+'</div>';
+};
 
 V['tiktok-unsent']=async()=>{
   const r=await api('/api/console/tiktok-unsent');
@@ -106,6 +120,7 @@ V['tiktok-unsent']=async()=>{
       ['حساب',x=>'<code dir="ltr">@'+E(String(x.account||'').replace(/^@/,''))+'</code>'],
       ['زمان',x=>E(fmt(x.created_at))],
       ['دلیل خطا',x=>E(reasonFa(x.reason))],
+      ['نسخهٔ اصلی',x=>originalMedia(x)],
       ['وضعیت',x=>sendState(x)]
     ],unsentRows,'مورد ارسال‌نشده‌ای وجود ندارد.'));
 };
@@ -136,6 +151,43 @@ A.tkResend=async el=>{
     }
   }finally{inFlight.delete(id)}
 };
+
+A.tkPreview=el=>{
+  const row=unsentRows.find(x=>String(x.id)===String(el.dataset.id||''));
+  const embed=typeof R.toMegaEmbedUrl==='function'&&row?R.toMegaEmbedUrl(row.original_share_url):null;
+  if(!row||!embed)return;
+  const shareUrl=row.original_share_url;
+  R.modal('<h3 style="margin-bottom:10px">پیش‌نمایش رسانهٔ ذخیره‌شده</h3>'+
+    '<div class="s" style="margin-bottom:10px">اگر ویدیو در این پنجره بارگذاری نشد، لینک ثابت Mega را باز کن.</div>'+
+    '<iframe class="fm-preview-frame" title="پیش‌نمایش فایل Mega" src="'+E(embed)+'" sandbox="allow-scripts allow-same-origin" allowfullscreen allow="fullscreen" referrerpolicy="no-referrer" style="display:block;width:100%;aspect-ratio:16/9;min-height:220px;border:0;border-radius:14px;background:#000"></iframe>'+
+    '<div class="row" style="margin-top:14px"><a class="btn g sm" href="'+E(shareUrl)+'" target="_blank" rel="noopener noreferrer">باز کردن در Mega</a><button class="btn sm" data-a="tkPreviewClose">بستن</button></div>');
+};
+A.tkPreviewClose=()=>R.closeModal();
+
+A.tkDelete=async el=>{
+  const row=unsentRows.find(x=>String(x.id)===String(el.dataset.id||''));
+  if(!row||!row.failed_media_id||!['stored','delete_failed'].includes(String(row.failed_media_status||'')))return;
+  try{
+    const challenge=await api('/api/console/failed-media/delete-request',{
+      method:'POST',body:{ids:[String(row.failed_media_id)],source:'tiktok'}
+    });
+    const count=N(challenge.requested);
+    if(!count)return toast('نسخهٔ اصلی قابل‌حذفی پیدا نشد','bad');
+    if(challenge.confirmation_required!==true||typeof challenge.confirmation!=='string')throw new Error('confirmation_challenge_missing');
+    const typed=prompt('Worker نسخهٔ اصلی این ویدئو را برای حذف آماده کرده است. برای تأیید دومرحله‌ای، DELETE را بنویس. این تأیید ۵ دقیقه اعتبار دارد.');
+    if(typed!=='DELETE')return toast('لغو شد؛ فایل برای حذف علامت نخورد','bad');
+    const result=await api('/api/console/failed-media/delete-request',{
+      method:'POST',body:{confirmation:challenge.confirmation,phrase:typed}
+    });
+    row.failed_media_status='delete_requested';
+    const message=result.requested&&result.dispatched
+      ? 'درخواست حذف نسخهٔ اصلی ثبت شد؛ حذف فایل و ردیف در حال انجام است'
+      : 'درخواست حذف ثبت شد، اما شروع خودکار حذف تأیید نشد';
+    toast(message,'ok');
+    R.go('tiktok-unsent');
+  }catch(e){toast('حذف نسخهٔ اصلی ناموفق بود: '+e.message,'bad')}
+};
+
 
 if(!NAV.some(x=>x[0]==='tkaccounts'))NAV.splice(Math.max(0,NAV.findIndex(x=>x[0]==='src')+1),0,['tkaccounts','حساب‌های TikTok','♧']);
 if(!NAV.some(x=>x[0]==='tiktok-unsent'))NAV.splice(Math.max(0,NAV.findIndex(x=>x[0]==='unsent')+1),0,['tiktok-unsent','تیک‌تاک - ارسال‌نشده','↻']);

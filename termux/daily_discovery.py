@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from agent.discovery.mob_official_complete import discover_official_x_posts
-from agent.discovery.termux_sources import discover_tiktok_profiles
+from agent.discovery.termux_sources import TIKTOK_PROFILES, discover_tiktok_profiles
 from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
 from agent.brain.cloud_state import CloudState
-from agent.source_policy import set_dynamic_tiktok_sources
+from agent.source_policy import refresh_dynamic_tiktok_sources, set_dynamic_tiktok_sources
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,28 +45,65 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
     """Collect TikTok edit metadata and official Mob X posts without downloads or publishing."""
     print("1/2 TikTok: loading owner-selected creator profiles (metadata only)...", flush=True)
     dynamic_cutoffs: dict[str, str] = {}
-    token = os.getenv("AGENT_API_TOKEN", "").strip()
+    missing_cutoff_attempts: list[dict[str, str]] = []
+    source_diagnostics: list[dict[str, str]] = []
+    source_rows_available = False
+    source_status = "legacy_six_local"
+
     if load_remote_sources:
-        if not token:
-            raise RuntimeError("authenticated_tiktok_sources_unavailable")
-        cloud = CloudState(
-            os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
-            token=token, timeout_seconds=25,
-        )
-        source_rows = cloud.get_console_tiktok_sources()
-        set_dynamic_tiktok_sources(source_rows)
-        profiles = tuple(
-            str(row.get("source_key") or "").lstrip("@")
-            for row in source_rows
-            if row.get("enabled") is True or row.get("enabled") == 1
-        )
-        for row in source_rows:
-            handle = str(row.get("source_key") or "").lstrip("@").lower()
-            created_at = row.get("created_at")
-            if handle and row.get("managed") is True and isinstance(created_at, str) and created_at:
-                dynamic_cutoffs[handle] = created_at
+        try:
+            token = os.getenv("AGENT_API_TOKEN", "").strip()
+            if len(token) < 32:
+                raise RuntimeError("console_sources_auth_unavailable")
+            cloud = CloudState(
+                os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
+                token=token, timeout_seconds=25,
+            )
+            source_rows, source_rows_available = refresh_dynamic_tiktok_sources(cloud)
+            if not source_rows_available:
+                raise RuntimeError("console_sources_unavailable")
+            selected_profiles: list[str] = []
+            for row in source_rows:
+                if not isinstance(row, dict) or not (row.get("enabled") is True or row.get("enabled") == 1):
+                    continue
+                handle = str(row.get("source_key") or "").strip().lstrip("@")
+                if not handle:
+                    continue
+                if row.get("managed") is True:
+                    created_at = row.get("created_at")
+                    cutoff_valid = False
+                    if isinstance(created_at, str) and created_at.strip():
+                        try:
+                            datetime.fromisoformat(created_at.strip().replace("Z", "+00:00"))
+                            cutoff_valid = True
+                        except ValueError:
+                            cutoff_valid = False
+                    if not cutoff_valid:
+                        missing_cutoff_attempts.append({
+                            "platform": "tiktok",
+                            "source": "console_sources",
+                            "query": "@" + handle[:24],
+                            "reason": "missing_created_at_cutoff",
+                        })
+                        continue
+                    dynamic_cutoffs[handle.casefold()] = created_at.strip()
+                selected_profiles.append(handle)
+            profiles = tuple(selected_profiles)
+            source_status = "console_sources_loaded"
+        except Exception:
+            # The optional overlay must never block either public discovery lane.
+            # Do not log exception text: it can include request or transport details.
+            set_dynamic_tiktok_sources([])
+            dynamic_cutoffs = {}
+            profiles = TIKTOK_PROFILES
+            source_rows_available = False
+            source_status = "console_sources_unavailable_using_legacy_six"
+            source_diagnostics.append({
+                "source": "tiktok_console_sources",
+                "reason": "console_sources_unavailable_using_legacy_six",
+            })
     else:
-        from agent.discovery.termux_sources import TIKTOK_PROFILES
+        set_dynamic_tiktok_sources([])
         profiles = TIKTOK_PROFILES
 
     max_tiktok_results = max(48, len(profiles) * 8) if profiles else 0
@@ -82,6 +119,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             max_per_profile=8,
             created_after_by_profile=dynamic_cutoffs,
         )
+    tiktok_attempts.extend(missing_cutoff_attempts)
+    tiktok_attempts.extend(source_diagnostics)
     print("2/2 Mob Entertainment: checking only official X posts via public discovery and X syndication (metadata only)...", flush=True)
     mob_candidates, mob_attempts = discover_official_x_posts(max_results=12)
 
@@ -138,6 +177,9 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             "mob_official_birth_cutoff_rejected": len(stale_mob),
             "tiktok_selected_source_candidates": len(normalized["tiktok"]),
             "tiktok_method": "yt_dlp_selected_creator_profiles_only",
+            "tiktok_source_overlay_status": source_status,
+            "tiktok_account_removals_applied": source_rows_available if load_remote_sources else None,
+            "tiktok_missing_created_at_cutoff_count": len(missing_cutoff_attempts),
             "agent_lifecycle_mode": lifecycle_policy["mode"],
             "paid_providers_used": [],
             "ready_to_publish": False,

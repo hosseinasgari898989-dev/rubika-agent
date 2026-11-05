@@ -17,7 +17,7 @@ from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.delivery import _is_rate_limit_error
 from agent.brain.e2e_from_report import run_one
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
-from agent.source_policy import set_dynamic_tiktok_sources
+from agent.source_policy import refresh_dynamic_tiktok_sources
 # The global lifecycle birth gate is reserved for official Mob news, not TikTok edits.
 
 
@@ -285,16 +285,18 @@ def run_daily(
         token=os.getenv("AGENT_API_TOKEN", ""),
         timeout_seconds=25,
     )
-    source_reader = getattr(cloud, "get_console_tiktok_sources", None)
     # Removing an account stops future discovery, but items already in the queue remain valid.
-    set_dynamic_tiktok_sources(
-        source_reader() if callable(source_reader) else [], include_disabled=True
+    # If the optional overlay read fails, keep legacy policy and continue existing queue work.
+    _source_rows, source_rows_available = refresh_dynamic_tiktok_sources(
+        cloud, include_disabled=True
     )
     report: dict[str, Any] = {
         "ok": True,
         "status": "running",
         "started_at": _utc_now(),
         "lifecycle_mode": "not_applied_to_tiktok_edits",
+        "tiktok_source_overlay_status": "console_sources_loaded" if source_rows_available else "console_sources_unavailable_using_legacy_six",
+        "tiktok_account_removals_applied": source_rows_available,
         "agent_born_at": None,
         "birth_cutoff_enabled": False,
         "daily_success_limit": None,

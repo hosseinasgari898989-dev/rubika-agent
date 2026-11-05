@@ -107,8 +107,8 @@ async function addTikTokSource(request, env, h) {
     ).bind(handle, displayName || null, id).run();
   } else {
     await env.DB.prepare(
-      "INSERT INTO sources (id, platform, source_key, display_name, enabled) " +
-      "VALUES (?, 'tiktok', ?, ?, 1)"
+      "INSERT INTO sources (id, platform, source_key, display_name, enabled, created_at) " +
+      "VALUES (?, 'tiktok', ?, ?, 1, " + NOW_SQL + ")"
     ).bind(id, handle, displayName || null).run();
   }
   return h.json({
@@ -133,7 +133,8 @@ async function removeTikTokSource(env, h, id) {
     ).bind(existing.id).run();
   } else {
     await env.DB.prepare(
-      "INSERT INTO sources (id, platform, source_key, enabled) VALUES (?, 'tiktok', ?, 0)"
+      "INSERT INTO sources (id, platform, source_key, enabled, created_at) " +
+      "VALUES (?, 'tiktok', ?, 0, " + NOW_SQL + ")"
     ).bind("tiktok:" + handle, handle).run();
   }
   // Soft-disable only: queue items, item rows, attempts and Mega ledger history remain.
@@ -148,6 +149,7 @@ async function listTikTokUnsent(env, h) {
     "COALESCE(NULLIF(fm.reason, ''), NULLIF(q.last_error_code, ''), NULLIF(i.last_error_code, ''), " +
     "CASE WHEN q.status = 'skipped' THEN 'not_sent' ELSE 'send_failed' END) AS reason, " +
     "COALESCE(fm.created_at, q.updated_at, q.created_at) AS created_at, " +
+    "fm.id AS failed_media_id, fm.share_url AS original_share_url, fm.status AS failed_media_status, " +
     "q.status AS queue_status, i.status AS item_status, i.sent_at, i.rubika_message_id, " +
     "CASE WHEN q.status IN ('sent','processing','uncertain') OR " +
     "i.status IN ('sent','sending','uncertain') OR i.sent_at IS NOT NULL OR " +

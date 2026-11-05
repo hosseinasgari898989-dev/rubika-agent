@@ -65,9 +65,10 @@ async function hasOwnerBearer(request, env) {
   return fixedTimeMatch;
 }
 
-async function issueDeleteConfirmation(env, rows) {
+async function issueDeleteConfirmation(env, rows, sourceScope = "non_tiktok") {
   const payload = {
     version: 1,
+    source_scope: sourceScope,
     expires_at: Date.now() + OWNER_CONFIRM_TTL_MS,
     rows: rows.map((row) => ({
       id: row.id,
@@ -103,6 +104,9 @@ async function verifyDeleteConfirmation(env, token) {
     if (payload?.version !== 1 || !Number.isSafeInteger(payload.expires_at) ||
         payload.expires_at < Date.now() || !Array.isArray(payload.rows) ||
         payload.rows.length < 1 || payload.rows.length > MAX_IDS) return null;
+    const sourceScope = payload.source_scope === undefined ? "non_tiktok" : payload.source_scope;
+    if (!["tiktok", "non_tiktok"].includes(sourceScope)) return null;
+    payload.source_scope = sourceScope;
     for (const row of payload.rows) {
       if (!row || typeof row.id !== "string" || !ID_RE.test(row.id) ||
           typeof row.storage_key !== "string" || !KEY_RE.test(row.storage_key) ||
@@ -243,14 +247,15 @@ async function deleteRequest(request, env, h, fail) {
       "(id = ? AND status = ? AND COALESCE(updated_at, '') = ? AND storage_key = ?)"
     ).join(" OR ");
     const values = rows.flatMap((row) => [row.id, row.status, row.updated_at, row.storage_key]);
+    const sourcePredicate = payload.source_scope === "tiktok" ? "source = 'tiktok'" : "source <> 'tiktok'";
     const sql = "UPDATE failed_media SET status = 'delete_requested', " +
       "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') " +
-      `WHERE (${predicate}) AND source <> 'tiktok' AND (SELECT COUNT(*) FROM failed_media WHERE (${predicate}) AND source <> 'tiktok') = ?`;
+      `WHERE (${predicate}) AND ${sourcePredicate} AND (SELECT COUNT(*) FROM failed_media WHERE (${predicate}) AND ${sourcePredicate}) = ?`;
     try {
       const out = await env.DB.prepare(sql).bind(...values, ...values, rows.length).run();
       const requested = Number(out?.meta?.changes || 0);
       if (requested !== rows.length) return fail("confirmation_stale", 409);
-      await audit(env, "console_failed_media_delete_request", { all: rows.length === MAX_IDS, requested });
+      await audit(env, "console_failed_media_delete_request", { source_scope: payload.source_scope, all: rows.length === MAX_IDS, requested });
       const dispatched = await dispatchDelete(env);
       return h.json({ ok: true, requested, dispatched, batch_limit: MAX_IDS });
     } catch {
@@ -259,10 +264,14 @@ async function deleteRequest(request, env, h, fail) {
   }
 
   // Phase 1: identify eligible rows, validate paths, and issue a signed server-side challenge.
+  // Generic requests stay non-TikTok; the dedicated view opts into only TikTok IDs.
+  if (b.source !== undefined && b.source !== "tiktok") return fail("invalid_source_scope");
+  const sourceScope = b.source === "tiktok" ? "tiktok" : "non_tiktok";
+  const sourcePredicate = sourceScope === "tiktok" ? "source = 'tiktok'" : "source <> 'tiktok'";
   const keys = Object.keys(b).sort();
   let rows;
   let all = false;
-  if (b.all === true && keys.length === 1 && keys[0] === "all") {
+  if (sourceScope === "non_tiktok" && b.all === true && keys.length === 1 && keys[0] === "all") {
     all = true;
     try {
       const result = await env.DB.prepare(
@@ -275,8 +284,10 @@ async function deleteRequest(request, env, h, fail) {
       return fail("console_db_error", 503);
     }
   } else {
-    if (keys.length !== 1 || keys[0] !== "ids" ||
-        !Array.isArray(b.ids) || b.ids.length < 1) return fail("invalid_ids");
+    const validKeys = sourceScope === "tiktok"
+      ? keys.length === 2 && keys[0] === "ids" && keys[1] === "source"
+      : keys.length === 1 && keys[0] === "ids";
+    if (!validKeys || !Array.isArray(b.ids) || b.ids.length < 1) return fail("invalid_ids");
     if (b.ids.length > MAX_IDS) return fail("too_many_ids");
     if (!b.ids.every((id) => typeof id === "string" && ID_RE.test(id))) return fail("invalid_ids");
     const ids = [...new Set(b.ids)];
@@ -284,7 +295,7 @@ async function deleteRequest(request, env, h, fail) {
     try {
       const result = await env.DB.prepare(
         "SELECT id, storage_key, status, updated_at FROM failed_media " +
-`WHERE id IN (${ids.map(() => "?").join(",")}) AND source <> 'tiktok' ORDER BY id`
+`WHERE id IN (${ids.map(() => "?").join(",")}) AND ${sourcePredicate} ORDER BY id`
       ).bind(...ids).all();
       rows = result?.results || [];
     } catch {
@@ -305,7 +316,7 @@ async function deleteRequest(request, env, h, fail) {
   )) return fail("invalid_storage_key", 409);
 
   try {
-    const confirmation = await issueDeleteConfirmation(env, rows);
+    const confirmation = await issueDeleteConfirmation(env, rows, sourceScope);
     return h.json({
       ok: true, confirmation_required: true, confirmation,
       requested: rows.length, limited: all && rows.length === MAX_IDS,

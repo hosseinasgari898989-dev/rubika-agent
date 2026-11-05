@@ -39,6 +39,25 @@ def set_dynamic_tiktok_sources(rows: Any, *, include_disabled: bool = False) -> 
 
 
 
+
+def refresh_dynamic_tiktok_sources(
+    cloud: Any, *, include_disabled: bool = False
+) -> tuple[list[dict[str, Any]], bool]:
+    """Refresh the optional console overlay; read failures reset to legacy-only policy."""
+    try:
+        source_reader = getattr(cloud, "get_console_tiktok_sources", None)
+        if not callable(source_reader):
+            raise RuntimeError("console_source_reader_unavailable")
+        rows = source_reader()
+        if not isinstance(rows, list):
+            raise RuntimeError("console_sources_invalid")
+    except Exception:
+        set_dynamic_tiktok_sources([])
+        return [], False
+    set_dynamic_tiktok_sources(rows, include_disabled=include_disabled)
+    return rows, True
+
+
 @lru_cache(maxsize=1)
 def load_source_policy_config() -> dict[str, Any]:
     """Load repository policy; invalid configuration fails closed for source access."""
