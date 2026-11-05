@@ -147,13 +147,15 @@ def since_rule_rejection(
 def filter_candidates_by_since(
     candidates: list[dict[str, Any]],
     since_utc: str | None,
+    *,
+    now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        reason = since_rule_rejection(candidate, since_utc)
+        reason = since_rule_rejection(candidate, since_utc, now=now)
         if reason:
             rejected.append({
                 "id": str(candidate.get("external_id") or candidate.get("id") or "")[:120],
@@ -622,6 +624,158 @@ def filter_official_candidates_by_source(
     ]
 
 
+def _mob_x_candidate_rejection(candidate: dict[str, Any], since_utc: str | None) -> str | None:
+    """Fail closed on unverified or non-original Mob X candidates from any input path."""
+    if candidate.get("platform") != "mob_official" or candidate.get("source_platform") != "x":
+        return "official_x_source_required"
+    if candidate.get("official_source") is not True:
+        return "official_source_unverified"
+    external_id = str(candidate.get("external_id") or "")
+    if not re.fullmatch(r"x-[0-9]{15,22}", external_id):
+        return "invalid_external_id"
+    canonical = str(candidate.get("canonical_url") or "")
+    if canonical != "https://x.com/mobgamesstudios/status/" + external_id[2:]:
+        return "official_post_url_unverified"
+    author = str(candidate.get("author") or "").strip().lstrip("@").casefold()
+    if author != "mobgamesstudios":
+        return "not_official_author"
+    if candidate.get("pinned") is not False:
+        return "pinned_or_pin_state_unknown"
+    pin_state = str(candidate.get("pin_state") or "")
+    pin_state_source = str(candidate.get("pin_state_source") or "")
+    if pin_state not in {"known_not_pinned", "inferred_not_pinned"} or not pin_state_source:
+        return "pin_state_provenance_missing"
+    legacy = candidate.get("legacy") if isinstance(candidate.get("legacy"), dict) else {}
+    flags = (
+        ("reply", ("reply_to", "reply_to_user", "replying_to", "in_reply_to_status_id",
+                   "in_reply_to_status_id_str", "in_reply_to_user_id", "in_reply_to_user_id_str", "is_reply")),
+        ("retweet", ("retweeted_status", "retweeted_tweet", "retweeted_status_id", "retweeted_tweet_id",
+                     "retweeted_status_result", "repost_of", "is_retweet", "retweeted")),
+        ("quote", ("quoted", "quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id",
+                   "quoted_status_id_str", "is_quote", "is_quote_status")),
+    )
+    for reason, names in flags:
+        for source in (candidate, legacy):
+            for name in names:
+                value = source.get(name)
+                if value is True or (isinstance(value, (dict, list)) and bool(value)) or (
+                    isinstance(value, str) and value.strip().casefold() not in {"", "0", "false", "none", "null"}
+                ):
+                    return reason
+    caption = str(candidate.get("original_caption") or candidate.get("caption") or "").strip()
+    if caption.lstrip().startswith("RT @"):
+        return "retweet"
+    media_type = str(candidate.get("media_type") or "").casefold()
+    media_url = str(candidate.get("media_url") or "")
+    if not caption:
+        return "text_only"
+    if media_type not in {"image", "video"} or not media_url.startswith("https://"):
+        return "text_only_or_media_invalid"
+    return since_rule_rejection(candidate, since_utc)
+
+
+def _mob_x_backlog_candidate(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Rehydrate only the explicit, still-discovered Mob X backlog envelope."""
+    if row.get("status") != "discovered":
+        return None
+    raw_validation = row.get("validation_json")
+    try:
+        validation = json.loads(raw_validation) if isinstance(raw_validation, str) else raw_validation
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(validation, dict):
+        return None
+    stored = validation.get("mob_x_discovery")
+    if not isinstance(stored, dict) or stored.get("version") != 1:
+        return None
+    external_id = str(row.get("external_id") or "")
+    canonical = str(row.get("canonical_url") or "")
+    media_url = str(stored.get("media_url") or "")
+    author = str(stored.get("author") or "").strip().lstrip("@").casefold()
+    published_at = str(row.get("published_at") or stored.get("published_at") or "")
+    if (
+        not re.fullmatch(r"x-[0-9]{15,22}", external_id)
+        or canonical != "https://x.com/mobgamesstudios/status/" + external_id[2:]
+        or author != "mobgamesstudios"
+        or not media_url.startswith("https://")
+        or stored.get("pinned") is not False
+        or stored.get("pin_state") not in {"known_not_pinned", "inferred_not_pinned"}
+        or not str(stored.get("pin_state_source") or "").strip()
+        or stored.get("source_platform") != "x"
+        or stored.get("official_source") is not True
+    ):
+        return None
+    media_type = str(row.get("media_type") or stored.get("media_type") or "")
+    original_caption = str(row.get("original_caption") or stored.get("original_caption") or row.get("caption") or "")
+    if media_type not in {"image", "video"} or not original_caption.strip():
+        return None
+    return {
+        "platform": "mob_official",
+        "id": external_id,
+        "external_id": external_id,
+        "url": canonical,
+        "canonical_url": canonical,
+        "title": str(row.get("title") or stored.get("title") or ""),
+        "caption": original_caption,
+        "original_caption": original_caption,
+        "author": "@mobgamesstudios",
+        "source_key": str(row.get("source_key") or "x.com/mobgamesstudios"),
+        "source_name": "Mob Entertainment on X",
+        "source_platform": "x",
+        "official_source": True,
+        "published_at": published_at,
+        "freshness_verified": True,
+        "freshness_source": "d1_mob_x_discovery_backlog",
+        "media_type": media_type,
+        "media_url": media_url,
+        "pinned": False,
+        "pin_state": str(stored["pin_state"]),
+        "pin_state_source": str(stored["pin_state_source"]),
+        "pin_flags": stored.get("pin_flags", []) if isinstance(stored.get("pin_flags"), list) else [],
+        "profile_pinned_ids": stored.get("profile_pinned_ids", []) if isinstance(stored.get("profile_pinned_ids"), list) else [],
+        "discovery_source": str(stored.get("discovery_source") or stored.get("id_source") or "stored_backlog"),
+        "id_source": str(stored.get("id_source") or stored.get("discovery_source") or "stored_backlog"),
+    }
+
+
+def _mob_x_discovery_payload(item: dict[str, Any]) -> dict[str, Any]:
+    """Store only the verified fields required to resume one Mob X candidate."""
+    return {
+        "platform": "mob_official",
+        "source_key": str(item.get("source_key") or "x.com/mobgamesstudios"),
+        "external_id": str(item["external_id"]),
+        "canonical_url": str(item["canonical_url"]),
+        "title": str(item.get("title") or ""),
+        "caption": str(item.get("original_caption") or item.get("caption") or ""),
+        "original_caption": str(item.get("original_caption") or item.get("caption") or ""),
+        "published_at": str(item["published_at"]),
+        "status": "discovered",
+        "review_state": "pending",
+        "media_type": str(item["media_type"]),
+        "source_tier": "official",
+        "validation": {
+            "mob_x_discovery": {
+                "version": 1,
+                "source_platform": "x",
+                "official_source": True,
+                "author": "@mobgamesstudios",
+                "pinned": item.get("pinned"),
+                "pin_state": str(item["pin_state"]),
+                "pin_state_source": str(item["pin_state_source"]),
+                "pin_flags": item.get("pin_flags", []) if isinstance(item.get("pin_flags"), list) else [],
+                "profile_pinned_ids": item.get("profile_pinned_ids", []) if isinstance(item.get("profile_pinned_ids"), list) else [],
+                "published_at": str(item["published_at"]),
+                "media_type": str(item["media_type"]),
+                "media_url": str(item["media_url"]),
+                "original_caption": str(item.get("original_caption") or item.get("caption") or ""),
+                "title": str(item.get("title") or ""),
+                "discovery_source": str(item.get("discovery_source") or item.get("id_source") or "unknown"),
+                "id_source": str(item.get("id_source") or item.get("discovery_source") or "unknown"),
+            }
+        },
+    }
+
+
 def run_trial(
     *,
     publish: bool,
@@ -653,6 +807,8 @@ def run_trial(
     try:
         cloud = CloudState(api_base, token=token, timeout_seconds=20)
         seen = cloud.get_seen_index()
+        get_official_items = getattr(cloud, "get_official_items", None)
+        known_official_items = get_official_items() if callable(get_official_items) else []
     except Exception as exc:
         report["error"] = "cloud_state_unavailable_" + type(exc).__name__
         _report(output_report, report)
@@ -730,7 +886,7 @@ def run_trial(
         }]
     elif source_platform == "x":
         # Production X news and the read-only probe share this exact X-only discovery path.
-        candidates, source_attempts = discover_official_x_posts(max_results=25)
+        candidates, source_attempts = discover_official_x_posts(max_results=40)
     else:
         candidates, source_attempts = discover_all_official_posts(max_results=12)
 
@@ -749,11 +905,48 @@ def run_trial(
             "result": "lane_candidates_found" if candidates else "no_candidates_in_requested_lane",
         })
 
+    if source_platform == "x":
+        configured_since = _official_publishing_policy().get("since_utc")
+        strictly_verified: list[dict[str, Any]] = []
+        strict_rejections: list[dict[str, str]] = []
+        for item in candidates:
+            reason = _mob_x_candidate_rejection(item, configured_since)
+            if reason:
+                strict_rejections.append({
+                    "id": str(item.get("external_id") or item.get("id") or "")[:120],
+                    "reason": reason,
+                })
+            else:
+                strictly_verified.append(item)
+        candidates = strictly_verified
+        source_attempts.append({
+            "source": "mob_x_strict_original_media_filter",
+            "result": "eligible_candidates_found" if candidates else "empty",
+            "candidate_count": len(candidates),
+            "rejected_count": len(strict_rejections),
+            "rejected": strict_rejections[:50],
+        })
+
     since_rejections: list[dict[str, str]] = []
-    if source_platform == "x" and (publish or test_channel_publish):
+    backlog_candidates: list[dict[str, Any]] = []
+    known_item_ids: set[str] = set()
+    if source_platform == "x":
         since_utc = _official_publishing_policy().get("since_utc")
+        for stored_item in known_official_items:
+            if not isinstance(stored_item, dict):
+                continue
+            stored_external_id = str(stored_item.get("external_id") or "")
+            if stored_external_id:
+                known_item_ids.add("mob_official:" + stored_external_id)
+                known_item_ids.add(stored_external_id)
+            restored = _mob_x_backlog_candidate(stored_item)
+            if restored is not None:
+                backlog_candidates.append(restored)
+        known_item_ids.update(seen["ids"])
         candidates, since_rejections = filter_candidates_by_since(candidates, since_utc)
-        candidates = sort_candidates_oldest_first(candidates)
+        backlog_candidates, backlog_rejections = filter_candidates_by_since(backlog_candidates, since_utc)
+        since_rejections.extend(backlog_rejections)
+        candidates = sort_candidates_oldest_first([*backlog_candidates, *candidates])
         report["since_filter"] = {
             "source_platform": "x",
             "since_utc": since_utc,
@@ -761,6 +954,40 @@ def run_trial(
             "rejections": since_rejections[:50],
             "ordering": "oldest_first",
         }
+
+        backlog_ids = {
+            str(item.get("external_id") or "") for item in backlog_candidates
+            if str(item.get("external_id") or "")
+        }
+        newly_persisted: list[dict[str, Any]] = []
+        if publish or test_channel_publish:
+            for item in candidates:
+                external_id = str(item.get("external_id") or "")
+                identity = "mob_official:" + external_id
+                if not external_id or external_id in backlog_ids:
+                    continue
+                if identity in known_item_ids or external_id in known_item_ids:
+                    continue
+                try:
+                    cloud.upsert_item(_mob_x_discovery_payload(item))
+                except Exception as exc:
+                    report["error"] = "mob_x_backlog_persist_failed_" + type(exc).__name__
+                    report["publishing"] = False
+                    _report(output_report, report)
+                    return report
+                known_item_ids.add(identity)
+                known_item_ids.add(external_id)
+                newly_persisted.append(item)
+        backlog_candidates.extend(newly_persisted)
+        pending = backlog_candidates if (publish or test_channel_publish) else candidates
+        candidates = sort_candidates_oldest_first(pending)
+        source_attempts.append({
+            "source": "d1_mob_x_discovery_backlog",
+            "result": "restored_and_persisted" if candidates else "empty",
+            "restored_count": len(backlog_candidates) - len(newly_persisted),
+            "newly_persisted_count": len(newly_persisted),
+            "candidate_post_ids": [str(item.get("external_id") or "") for item in candidates],
+        })
 
     candidates, birth_rejections = filter_candidates_by_birth_for_trial(candidates, lifecycle_policy)
     preview_rejections: list[dict[str, str]] = []
@@ -838,6 +1065,11 @@ def run_trial(
         identity = "mob_official:" + external_id
         if identity in seen["ids"] or external_id in seen["ids"]:
             continue
+        # Every existing D1 row is a dedupe barrier; only records restored above
+        # from status=discovered are allowed through this candidate loop.
+        if identity in known_item_ids or external_id in known_item_ids:
+            if not any(str(backlog.get("external_id") or "") == external_id for backlog in backlog_candidates):
+                continue
         unseen_candidate_count += 1
 
         candidate_formatted = format_mob_post(
@@ -866,6 +1098,7 @@ def run_trial(
         report["candidate_evaluations"].append({
             "source_platform": item.get("source_platform"),
             "external_id": external_id,
+            "id_source": item.get("id_source") or item.get("discovery_source") or "unknown",
             "result": result,
             "original_caption_chars": len(original),
             "persian_translation_chars": len(translated),
@@ -896,7 +1129,7 @@ def run_trial(
         # A bad or temporarily unreachable video must not block another valid official
         # post. Each candidate gets an isolated directory so a partial download can
         # never be mistaken for a later candidate's media.
-        for index, (item, candidate_formatted) in enumerate(ready_candidates[:12], start=1):
+        for index, (item, candidate_formatted) in enumerate(ready_candidates[:40], start=1):
             external_id = str(item.get("external_id") or "")
             safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", external_id)[:80] or f"candidate-{index}"
             candidate_dir = output_dir / f".candidate-{index:02d}-{safe_id}"
@@ -926,10 +1159,29 @@ def run_trial(
 
             if candidate_validation["sha256"] in seen["hashes"]:
                 duplicate_media_count += 1
+                if str(item.get("external_id") or "") in {
+                    str(backlog.get("external_id") or "") for backlog in backlog_candidates
+                } and (publish or test_channel_publish):
+                    try:
+                        cloud.upsert_item({**_mob_x_discovery_payload(item), "status": "filtered"})
+                    except Exception:
+                        pass
                 for evaluation in report["candidate_evaluations"]:
                     if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
                         evaluation["result"] = "duplicate_media_hash"
                         break
+                if source_platform == "x":
+                    filtered_payload = _mob_x_discovery_payload(item)
+                    filtered_payload["status"] = "filtered"
+                    filtered_payload["validation"]["mob_x_discovery"]["filtered_reason"] = "duplicate_media_hash"
+                    try:
+                        cloud.upsert_item(filtered_payload)
+                    except Exception as exc:
+                        report["error"] = "mob_x_duplicate_media_ledger_failed_" + type(exc).__name__
+                        report["publishing"] = False
+                        _report(output_report, report)
+                        shutil.rmtree(candidate_dir, ignore_errors=True)
+                        return report
                 shutil.rmtree(candidate_dir, ignore_errors=True)
                 continue
 
@@ -965,6 +1217,7 @@ def run_trial(
         report["selected"] = {
             "source": selected.get("source_name"),
             "source_platform": selected.get("source_platform"),
+            "id_source": selected.get("id_source") or selected.get("discovery_source") or "unknown",
             "external_id": selected.get("external_id"),
             "title": selected.get("title"),
             "published_at": selected.get("published_at"),

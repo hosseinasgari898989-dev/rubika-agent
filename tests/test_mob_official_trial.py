@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -40,8 +41,11 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             "source_name": "Mob Entertainment on X",
             "source_platform": "x",
             "official_source": True,
-            "published_at": "2026-10-20T12:00:00+00:00",
+            "published_at": "2026-11-05T12:00:00+00:00",
             "freshness_verified": True,
+            "pinned": False,
+            "pin_state": "known_not_pinned",
+            "pin_state_source": "test_fixture.syndication.is_pinned",
             "media_type": "image",
             "media_url": "https://pbs.twimg.com/media/photo.jpg",
         }
@@ -333,6 +337,9 @@ class TestChannelPublishingGateTests(unittest.TestCase):
                 "official_source": True,
                 "published_at": "2026-10-19T23:59:59Z",
                 "freshness_verified": True,
+                "pinned": False,
+                "pin_state": "known_not_pinned",
+                "pin_state_source": "test_fixture.syndication.is_pinned",
                 "media_type": "image",
                 "media_url": "https://pbs.twimg.com/media/photo.jpg",
             }
@@ -474,8 +481,16 @@ class OfficialSinceRuleTests(unittest.TestCase):
             "platform": "mob_official",
             "external_id": external_id,
             "id": external_id,
-            "url": "https://x.com/mobgamesstudios/status/1734258130186559716",
-            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
+            "url": (
+                "https://x.com/mobgamesstudios/status/" + external_id.removeprefix("x-")
+                if re.fullmatch(r"x-[0-9]{15,22}", external_id)
+                else "https://x.com/mobgamesstudios/status/1734258130186559716"
+            ),
+            "canonical_url": (
+                "https://x.com/mobgamesstudios/status/" + external_id.removeprefix("x-")
+                if re.fullmatch(r"x-[0-9]{15,22}", external_id)
+                else "https://x.com/mobgamesstudios/status/1734258130186559716"
+            ),
             "title": "Official post",
             "caption": "Original Mob caption",
             "original_caption": "Original Mob caption",
@@ -484,6 +499,9 @@ class OfficialSinceRuleTests(unittest.TestCase):
             "source_name": "Mob Entertainment on X",
             "source_platform": "x",
             "official_source": True,
+            "pinned": False,
+            "pin_state": "known_not_pinned",
+            "pin_state_source": "test_fixture.syndication.is_pinned",
             "freshness_verified": True,
             "published_at": published_at,
             "media_type": "image",
@@ -493,26 +511,26 @@ class OfficialSinceRuleTests(unittest.TestCase):
         return row
 
     def test_since_cutoff_rejects_old_accepts_new_and_rejects_unverified_time(self):
-        cutoff = "2026-10-20T00:00:00Z"
-        now = datetime(2026, 10, 24, tzinfo=timezone.utc)
-        old = self.row("old", "2026-10-19T23:59:59Z")
+        cutoff = "2026-11-05T00:00:00Z"
+        now = datetime(2026, 11, 7, tzinfo=timezone.utc)
+        old = self.row("old", "2026-11-04T23:59:59Z")
         boundary = self.row("boundary", cutoff)
-        newer = self.row("newer", "2026-10-21T00:00:00Z")
-        unverified = self.row("unverified", "2026-10-22T00:00:00Z", freshness_verified=False)
+        newer = self.row("newer", "2026-11-05T12:00:00Z")
+        unverified = self.row("unverified", "2026-11-06T12:00:00Z", freshness_verified=False)
 
         self.assertEqual(since_rule_rejection(old, cutoff, now=now), "before_since_utc")
         self.assertIsNone(since_rule_rejection(boundary, cutoff, now=now))
         self.assertIsNone(since_rule_rejection(newer, cutoff, now=now))
         self.assertEqual(since_rule_rejection(unverified, cutoff, now=now), "publication_time_unverified")
-        accepted, rejected = filter_candidates_by_since([newer, old, boundary, unverified], cutoff)
+        accepted, rejected = filter_candidates_by_since([newer, old, boundary, unverified], cutoff, now=now)
         self.assertEqual([row["external_id"] for row in accepted], ["newer", "boundary"])
         self.assertEqual([row["reason"] for row in rejected], ["before_since_utc", "publication_time_unverified"])
 
     def test_candidates_are_sorted_oldest_first_stably(self):
         candidates = [
-            self.row("newest", "2026-10-23T00:00:00Z"),
-            self.row("oldest", "2026-10-20T00:00:01Z"),
-            self.row("middle", "2026-10-21T00:00:00Z"),
+            self.row("newest", "2026-11-05T06:00:00Z"),
+            self.row("oldest", "2026-11-05T00:00:01Z"),
+            self.row("middle", "2026-11-05T03:00:00Z"),
         ]
         self.assertEqual(
             [row["external_id"] for row in sort_candidates_oldest_first(candidates)],
@@ -526,7 +544,10 @@ class OfficialSinceRuleTests(unittest.TestCase):
                 self.attempts = []
 
             def get_seen_index(self):
-                return {"ids": {"mob_official:x-seen", "x-seen"}, "hashes": {"sha-known"}}
+                return {
+                    "ids": {"mob_official:x-2111111111111111113", "x-2111111111111111113"},
+                    "hashes": {"sha-known"},
+                }
 
             def upsert_item(self, item):
                 self.upserted.append(item)
@@ -542,29 +563,29 @@ class OfficialSinceRuleTests(unittest.TestCase):
                 self.calls.append((str(media_path), media_type, caption))
                 return {"status": "OK", "data": {"message_id": "message-1"}}
 
-        cutoff = "2026-10-20T00:00:00Z"
+        cutoff = "2026-11-05T00:00:00Z"
         policy = {
             "mode": "production",
             "born_at": cutoff,
-            "birth_datetime": datetime(2026, 10, 20, tzinfo=timezone.utc),
+            "birth_datetime": datetime(2026, 11, 5, tzinfo=timezone.utc),
         }
         candidates = [
-            self.row("x-newer", "2026-10-23T00:00:00Z"),
-            self.row("x-oldhash", "2026-10-20T00:30:00Z"),
-            self.row("x-seen", "2026-10-20T01:00:00Z"),
-            self.row("x-oldest-valid", "2026-10-20T02:00:00Z"),
+            self.row("x-2111111111111111111", "2026-11-05T05:00:00Z"),
+            self.row("x-2111111111111111112", "2026-11-05T00:30:00Z"),
+            self.row("x-2111111111111111113", "2026-11-05T01:00:00Z"),
+            self.row("x-2111111111111111114", "2026-11-05T02:00:00Z"),
         ]
         publisher = FakePublisher()
         media_hash = {
-            "x-oldhash": "sha-known",
-            "x-oldest-valid": "sha-new",
-            "x-newer": "sha-newer",
+            "x-2111111111111111112": "sha-known",
+            "x-2111111111111111114": "sha-new",
+            "x-2111111111111111111": "sha-newer",
         }
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             source_media = {}
             for candidate in candidates:
-                if candidate["external_id"] == "x-seen":
+                if candidate["external_id"] == "x-2111111111111111113":
                     continue
                 media_path = root / (candidate["external_id"] + ".jpg")
                 media_path.write_bytes(b"fake image bytes")
@@ -605,12 +626,287 @@ class OfficialSinceRuleTests(unittest.TestCase):
                 )
 
         self.assertEqual(result["status"], "published")
-        self.assertEqual(result["selected"]["external_id"], "x-oldest-valid")
+        self.assertEqual(result["selected"]["external_id"], "x-2111111111111111114")
         self.assertEqual(len(publisher.calls), 1)
         self.assertEqual(result["backlog_count"], 1)
         evaluations = {row.get("external_id"): row.get("result") for row in result["candidate_evaluations"]}
-        self.assertEqual(evaluations["x-oldhash"], "duplicate_media_hash")
-        self.assertNotIn("x-seen", evaluations)
+        self.assertEqual(evaluations["x-2111111111111111112"], "duplicate_media_hash")
+        self.assertNotIn("x-2111111111111111113", evaluations)
+
+    def test_d1_backlog_survives_single_post_run_and_resumes_without_rediscovery(self):
+        class FakeCloud:
+            items = {}
+
+            def __init__(self, *args, **kwargs):
+                self.attempts = []
+
+            def get_official_items(self):
+                return [dict(row) for row in self.items.values()]
+
+            def get_seen_index(self):
+                ids = set()
+                hashes = set()
+                for row in self.items.values():
+                    if row.get("status") in {"sent", "sending", "uncertain"}:
+                        ids.add("mob_official:" + row["external_id"])
+                        ids.add(row["external_id"])
+                        if row.get("media_sha256"):
+                            hashes.add(row["media_sha256"])
+                return {"ids": ids, "hashes": hashes}
+
+            def upsert_item(self, payload):
+                external_id = str(payload["external_id"])
+                item_id = "mob_official:" + external_id
+                previous = self.items.get(external_id, {})
+                row = {
+                    **previous,
+                    **payload,
+                    "id": item_id,
+                    "validation_json": json.dumps(payload.get("validation"))
+                    if payload.get("validation") is not None else previous.get("validation_json"),
+                }
+                if previous and payload.get("status") == "discovered":
+                    row["status"] = previous.get("status")
+                self.items[external_id] = row
+                return {"ok": True, "item_id": item_id}
+
+            def record_attempt(self, item_id, attempt_number, status, **kwargs):
+                external_id = item_id.split(":", 1)[1]
+                row = self.items[external_id]
+                row["status"] = {"started": "sending", "sent": "sent",
+                                 "failed": "failed", "uncertain": "uncertain"}[status]
+                if status == "sent":
+                    row["sent_at"] = "2026-11-05T03:00:00Z"
+                self.attempts.append((item_id, status, kwargs))
+                return {"ok": True}
+
+        class FakePublisher:
+            def __init__(self):
+                self.sent = []
+
+            def send_media(self, media_path, media_type, caption):
+                self.sent.append((Path(media_path).name, media_type, caption))
+                return {"status": "OK", "data": {"message_id": "message-" + str(len(self.sent))}}
+
+        cutoff = "2026-11-05T00:00:00Z"
+        policy = {
+            "mode": "production",
+            "born_at": cutoff,
+            "birth_datetime": datetime(2026, 11, 5, tzinfo=timezone.utc),
+        }
+        first = self.row("x-2111111111111111201", "2026-11-05T01:00:00Z", id_source="x-cli")
+        second = self.row("x-2111111111111111202", "2026-11-05T02:00:00Z", id_source="x-cli")
+        discovered = [first, second]
+        publisher = FakePublisher()
+        media_hash = {
+            first["external_id"]: "a" * 64,
+            second["external_id"]: "b" * 64,
+        }
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            media_files = {}
+            for item in discovered:
+                path = root / (item["external_id"] + ".jpg")
+                path.write_bytes(b"validated media")
+                media_files[item["external_id"]] = path
+
+            def fake_download(item, _output_dir):
+                return media_files[item["external_id"]], {
+                    "sha256": media_hash[item["external_id"]],
+                    "media_type": "image",
+                    "size_bytes": 15,
+                    "mime_type": "image/jpeg",
+                }
+
+            with (
+                patch.object(mob_official_trial, "CloudState", FakeCloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=policy),
+                patch.object(mob_official_trial, "_official_publishing_config_enabled", return_value=True),
+                patch.object(mob_official_trial, "discover_official_x_posts", side_effect=[
+                    (discovered, []),
+                    ([], []),
+                ]) as discover,
+                patch.object(mob_official_trial, "format_mob_post", side_effect=lambda value: {
+                    "original_caption": value.get("original_caption") or "Original caption",
+                    "persian_translation": "ترجمه تأییدشده",
+                    "translation_status": "translated",
+                    "caption": "ترجمه تأییدشده",
+                }),
+                patch.object(mob_official_trial, "download_and_validate", side_effect=fake_download),
+                patch.object(mob_official_trial, "RubikaPublisher", return_value=publisher),
+                patch.dict("os.environ", {
+                    "RUBIKA_CHANNEL_GUID": TEST_CHANNEL_FOR_TESTS,
+                    "RUBIKA_TOKEN": "dummy-token",
+                }),
+            ):
+                first_result = run_trial(
+                    publish=True,
+                    limit=1,
+                    output_report=root / "first-report.json",
+                    output_dir=root / "first-media",
+                    source_platform="x",
+                )
+                self.assertEqual(first_result["status"], "published")
+                self.assertEqual(first_result["selected"]["external_id"], first["external_id"])
+                self.assertEqual(first_result["backlog_count"], 1)
+                self.assertEqual(FakeCloud.items[first["external_id"]]["status"], "sent")
+                self.assertEqual(FakeCloud.items[second["external_id"]]["status"], "discovered")
+
+                second_result = run_trial(
+                    publish=True,
+                    limit=1,
+                    output_report=root / "second-report.json",
+                    output_dir=root / "second-media",
+                    source_platform="x",
+                )
+
+        self.assertEqual(discover.call_count, 2)
+        self.assertEqual(second_result["status"], "published")
+        self.assertEqual(second_result["selected"]["external_id"], second["external_id"])
+        self.assertEqual(second_result["backlog_count"], 0)
+        self.assertEqual(FakeCloud.items[second["external_id"]]["status"], "sent")
+        self.assertEqual(len(publisher.sent), 2)
+
+
+
+class MobXBacklogSafetyTests(unittest.TestCase):
+    def test_only_explicit_discovered_mob_x_envelopes_are_restored(self):
+        metadata = {
+            "mob_x_discovery": {
+                "version": 1,
+                "source_platform": "x",
+                "official_source": True,
+                "author": "@mobgamesstudios",
+                "pinned": False,
+                "pin_state": "inferred_not_pinned",
+                "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence",
+                "pin_flags": [],
+                "profile_pinned_ids": [],
+                "published_at": "2026-11-05T01:00:00Z",
+                "media_type": "image",
+                "media_url": "https://pbs.twimg.com/media/example.jpg",
+                "original_caption": "Official Mob post",
+                "title": "Mob announcement",
+                "discovery_source": "x-cli",
+                "id_source": "x-cli",
+            }
+        }
+        stored = {
+            "status": "discovered",
+            "external_id": "x-2111111111111111250",
+            "canonical_url": "https://x.com/mobgamesstudios/status/2111111111111111250",
+            "source_key": "x.com/mobgamesstudios",
+            "title": "Mob announcement",
+            "caption": "Official Mob post",
+            "original_caption": "Official Mob post",
+            "published_at": "2026-11-05T01:00:00Z",
+            "media_type": "image",
+            "validation_json": json.dumps(metadata),
+        }
+        restored = mob_official_trial._mob_x_backlog_candidate(stored)
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored["external_id"], stored["external_id"])
+        self.assertEqual(restored["id_source"], "x-cli")
+        self.assertEqual(restored["pinned"], False)
+        self.assertEqual(restored["pin_state"], "inferred_not_pinned")
+        self.assertEqual(restored["pin_state_source"], "created_at_at_or_after_cutoff_without_pin_evidence")
+        self.assertIsNone(
+            mob_official_trial._mob_x_candidate_rejection(
+                restored,
+                "2026-11-05T00:00:00Z",
+            )
+        )
+        persisted = mob_official_trial._mob_x_discovery_payload(restored)["validation"]["mob_x_discovery"]
+        self.assertIs(persisted["pinned"], False)
+        self.assertEqual(persisted["pin_state"], "inferred_not_pinned")
+        self.assertEqual(
+            persisted["pin_state_source"],
+            "created_at_at_or_after_cutoff_without_pin_evidence",
+        )
+
+        for changes in (
+            {"status": "failed"},
+            {"canonical_url": "https://x.com/fanaccount/status/2111111111111111250"},
+            {"validation_json": json.dumps({"mob_x_discovery": {
+                **metadata["mob_x_discovery"],
+                "pin_state": "inferred_not_pinned",
+                "pin_state_source": "",
+            }})},
+            {"validation_json": json.dumps({"mob_x_discovery": {**metadata["mob_x_discovery"], "pinned": True}})},
+            {"validation_json": json.dumps({"mob_x_discovery": {**metadata["mob_x_discovery"], "official_source": False}})},
+        ):
+            candidate = {**stored, **changes}
+            self.assertIsNone(mob_official_trial._mob_x_backlog_candidate(candidate))
+
+    def test_dry_run_never_persists_new_discovery_rows(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                self.upsert_calls = []
+
+            def get_seen_index(self):
+                return {"ids": set(), "hashes": set()}
+
+            def upsert_item(self, payload):
+                self.upsert_calls.append(payload)
+                raise AssertionError("dry-run must not persist discovery rows")
+
+        policy = {"mode": "test", "born_at": None, "birth_datetime": None}
+        candidate = {
+            "platform": "mob_official",
+            "id": "x-2111111111111111251",
+            "external_id": "x-2111111111111111251",
+            "url": "https://x.com/mobgamesstudios/status/2111111111111111251",
+            "canonical_url": "https://x.com/mobgamesstudios/status/2111111111111111251",
+            "title": "Official Mob post",
+            "caption": "Official Mob caption",
+            "original_caption": "Official Mob caption",
+            "author": "@mobgamesstudios",
+            "source_key": "x.com/mobgamesstudios",
+            "source_name": "Mob Entertainment on X",
+            "source_platform": "x",
+            "official_source": True,
+            "published_at": "2026-11-05T10:00:00Z",
+            "freshness_verified": True,
+            "pinned": False,
+            "pin_state": "known_not_pinned",
+            "pin_state_source": "test_fixture.syndication.is_pinned",
+            "media_type": "image",
+            "media_url": "https://pbs.twimg.com/media/example.jpg",
+            "id_source": "x-cli",
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            media_path = root / "candidate.jpg"
+            media_path.write_bytes(b"fake image bytes")
+            fake_cloud = FakeCloud()
+            with (
+                patch.object(mob_official_trial, "CloudState", return_value=fake_cloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=policy),
+                patch.object(mob_official_trial, "discover_official_x_posts", return_value=([candidate], [])),
+                patch.object(mob_official_trial, "format_mob_post", return_value={
+                    "original_caption": "Official Mob caption",
+                    "persian_translation": "ترجمه",
+                    "translation_status": "translated",
+                    "caption": "ترجمه",
+                }),
+                patch.object(mob_official_trial, "download_and_validate", return_value=(media_path, {
+                    "sha256": "a" * 64,
+                    "media_type": "image",
+                    "size_bytes": 16,
+                    "mime_type": "image/jpeg",
+                })),
+            ):
+                result = run_trial(
+                    publish=False,
+                    limit=1,
+                    output_report=root / "dry-report.json",
+                    output_dir=root / "media",
+                    source_platform="x",
+                )
+        self.assertEqual(result["status"], "validated_preview")
+        self.assertEqual(fake_cloud.upsert_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

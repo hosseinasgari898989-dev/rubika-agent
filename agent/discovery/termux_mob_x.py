@@ -10,9 +10,13 @@ from __future__ import annotations
 import html
 import json
 import math
+import os
 import re
+import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any
@@ -23,7 +27,7 @@ import requests
 
 
 OFFICIAL_HANDLE = "mobgamesstudios"
-MAX_RESULTS = 12
+MAX_RESULTS = 40
 POST_ID_RE = re.compile(r"^[0-9]{15,22}$")
 POST_URL_RE = re.compile(
     r"https?://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/mobgamesstudios/status/([0-9]{15,22})",
@@ -185,6 +189,11 @@ def _timestamp(value: Any) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     raw = value.strip()
+    if raw.isdigit():
+        try:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc).isoformat()
+        except (ValueError, OverflowError, OSError):
+            return None
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
@@ -292,12 +301,136 @@ def _media_url(media: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
-def _parse_post(payload: dict[str, Any], post_id: str) -> dict[str, Any] | None:
+def _pin_evidence_for_row(row: dict[str, Any], source: str) -> dict[str, list[dict[str, Any]]]:
+    """Read boolean pin flags and verified profile pin-ID fields."""
+    flags: list[dict[str, Any]] = []
+    for container_name, container in (
+        ("", row), ("author.", row.get("author")), ("user.", row.get("user")),
+    ):
+        if not isinstance(container, dict):
+            continue
+        for key in ("is_pinned", "isPinned", "pinned"):
+            value = container.get(key)
+            if isinstance(value, bool):
+                flags.append({"value": value, "source": source + "." + container_name + key})
+
+    pinned_ids: list[dict[str, Any]] = []
+    # x-cli v0.5.0 exposes User.PinnedTweet as author.pinned_tweet.
+    # Its legacy syndication adapter maps user.pinned_tweet_ids_str.
+    for container_name, container in (
+        ("", row), ("author.", row.get("author")), ("user.", row.get("user")),
+    ):
+        if not isinstance(container, dict):
+            continue
+        pinned = container.get("pinned_tweet")
+        if isinstance(pinned, str) and POST_ID_RE.fullmatch(pinned.strip()):
+            pinned_ids.append({"id": pinned.strip(), "source": source + "." + container_name + "pinned_tweet"})
+        if container_name == "user.":
+            raw_ids = container.get("pinned_tweet_ids_str")
+            if isinstance(raw_ids, list):
+                for pinned_id in raw_ids:
+                    if isinstance(pinned_id, str) and POST_ID_RE.fullmatch(pinned_id.strip()):
+                        pinned_ids.append({"id": pinned_id.strip(), "source": source + ".user.pinned_tweet_ids_str"})
+    return {"flags": flags, "profile_pinned_ids": pinned_ids}
+
+
+def _merge_pin_evidence(*evidence_rows: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    merged: dict[str, list[dict[str, Any]]] = {"flags": [], "profile_pinned_ids": []}
+    seen: set[tuple[str, str, str]] = set()
+    for evidence in evidence_rows:
+        if not isinstance(evidence, dict):
+            continue
+        for group in ("flags", "profile_pinned_ids"):
+            values = evidence.get(group)
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                if group == "flags":
+                    flag = value.get("value")
+                    source = str(value.get("source") or "unknown")
+                    if not isinstance(flag, bool):
+                        continue
+                    key = (group, str(flag), source)
+                    normalized = {"value": flag, "source": source}
+                else:
+                    pinned_id = value.get("id")
+                    source = str(value.get("source") or "unknown")
+                    if not isinstance(pinned_id, str) or not POST_ID_RE.fullmatch(pinned_id):
+                        continue
+                    key = (group, pinned_id, source)
+                    normalized = {"id": pinned_id, "source": source}
+                if key not in seen:
+                    seen.add(key)
+                    merged[group].append(normalized)
+    return merged
+
+
+def _resolve_pin_state(
+    post_id: str, published_at: str, cutoff: datetime, evidence: dict[str, Any],
+) -> tuple[str | None, str]:
+    flags = evidence.get("flags") if isinstance(evidence.get("flags"), list) else []
+    pinned_ids = evidence.get("profile_pinned_ids") if isinstance(evidence.get("profile_pinned_ids"), list) else []
+    true_flags = [v for v in flags if isinstance(v, dict) and v.get("value") is True]
+    if true_flags:
+        sources = sorted({str(v.get("source") or "unknown") for v in true_flags})
+        return None, "known_pinned_flag:" + ",".join(sources)
+    matching_ids = [v for v in pinned_ids if isinstance(v, dict) and v.get("id") == post_id]
+    if matching_ids:
+        sources = sorted({str(v.get("source") or "unknown") for v in matching_ids})
+        return None, "profile_pinned_id_match:" + ",".join(sources)
+    false_flags = [v for v in flags if isinstance(v, dict) and v.get("value") is False]
+    if false_flags:
+        return "known_not_pinned", sorted(str(v.get("source") or "unknown") for v in false_flags)[0]
+    distinct_ids = {str(v.get("id")) for v in pinned_ids if isinstance(v, dict) and isinstance(v.get("id"), str)}
+    if distinct_ids:
+        source = sorted(str(v.get("source") or "unknown") for v in pinned_ids if isinstance(v, dict))[0]
+        return "known_not_pinned", "profile_pin_lookup:" + source
+    try:
+        created = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None, "created_at_unverified"
+    if created.tzinfo is not None and created.astimezone(timezone.utc) >= cutoff:
+        return "inferred_not_pinned", "created_at_at_or_after_cutoff_without_pin_evidence"
+    return None, "pin_state_unknown"
+
+
+def _parse_post(
+    payload: dict[str, Any],
+    post_id: str,
+    *,
+    pin_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     returned_id = str(payload.get("id_str") or payload.get("id") or "").strip()
     legacy = payload.get("legacy") if isinstance(payload.get("legacy"), dict) else {}
     returned_id = returned_id or str(legacy.get("id_str") or legacy.get("id") or "").strip()
-    if returned_id and returned_id != post_id:
+    if not returned_id or returned_id != post_id:
         return None
+
+    # Replies, reposts and quote-posts are never valid Mob news candidates.
+    flag_sources = (payload, legacy)
+    for names in (
+        ("reply_to", "reply_to_user", "in_reply_to_status_id", "in_reply_to_status_id_str",
+         "in_reply_to_user_id", "in_reply_to_user_id_str", "is_reply"),
+        ("retweeted_status", "retweeted_tweet", "retweeted_status_id", "retweeted_tweet_id",
+         "retweeted_status_result", "repost_of", "is_retweet", "retweeted"),
+        ("quoted", "quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id",
+         "quoted_status_id_str", "is_quote", "is_quote_status"),
+    ):
+        for source in flag_sources:
+            for name in names:
+                value = source.get(name)
+                if _safe_truthy(value):
+                    return None
+    if str(payload.get("text") or payload.get("full_text") or legacy.get("full_text") or "").lstrip().startswith("RT @"):
+        return None
+
+    merged_pin_evidence = _merge_pin_evidence(
+        pin_evidence,
+        _pin_evidence_for_row(payload, "syndication"),
+        _pin_evidence_for_row(legacy, "syndication.legacy"),
+    )
 
     user = _tweet_user(payload)
     handle = str(user.get("screen_name") or user.get("username") or "").lstrip("@").casefold()
@@ -340,6 +473,8 @@ def _parse_post(payload: dict[str, Any], post_id: str) -> dict[str, Any] | None:
         "thumbnail_url": None,
         "method": "x_public_search_index_plus_syndication",
         "query": "site:x.com/mobgamesstudios/status",
+        "pin_flags": merged_pin_evidence["flags"],
+        "profile_pinned_ids": merged_pin_evidence["profile_pinned_ids"],
     }
 
 
@@ -426,7 +561,13 @@ def _discover_ids_from_public_mirror(
     }
 
 
-def _fetch_post(client: Any, post_id: str, timeout_seconds: int) -> tuple[dict[str, Any] | None, str]:
+def _fetch_post(
+    client: Any,
+    post_id: str,
+    timeout_seconds: int,
+    *,
+    pin_evidence: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, str]:
     endpoint = "https://cdn.syndication.twimg.com/tweet-result"
     tokens = ["0", _syndication_token(post_id)]
     for token in dict.fromkeys(tokens):
@@ -448,7 +589,7 @@ def _fetch_post(client: Any, post_id: str, timeout_seconds: int) -> tuple[dict[s
             continue
         if not isinstance(payload, dict):
             continue
-        item = _parse_post(payload, post_id)
+        item = _parse_post(payload, post_id, pin_evidence=pin_evidence)
         if item is not None:
             return item, "ok"
         # A 200 response without usable media/canonical-author metadata may indicate
@@ -458,13 +599,15 @@ def _fetch_post(client: Any, post_id: str, timeout_seconds: int) -> tuple[dict[s
     return None, "syndication_unavailable"
 
 
-def discover_mob_x_posts(
+def _discover_legacy_mob_x_posts(
     *,
     max_results: int = MAX_RESULTS,
     timeout_seconds: int = 12,
     sleep_seconds: float = 0.15,
     session: Any | None = None,
     seed_urls: tuple[str, ...] = (),
+    pin_states: dict[str, bool] | None = None,
+    cutoff: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Find official X post IDs via free public indexes and validate posts via X syndication.
 
@@ -660,17 +803,43 @@ def discover_mob_x_posts(
         })
 
     post_ids = list(dict.fromkeys([*seed_ids, *index_ids]))[:limit]
+    source_by_id: dict[str, str] = {}
+    for source_name, source_ids in source_post_ids.items():
+        for source_id in source_ids:
+            source_by_id.setdefault(source_id, source_name)
     output: list[dict[str, Any]] = []
     skipped: dict[str, int] = {}
     for post_id in post_ids:
-        item, result = _fetch_post(client, post_id, timeout_seconds)
+        pin_state = (pin_states or {}).get(post_id)
+        legacy_pin_evidence = {
+            "flags": ([{"value": pin_state, "source": "legacy_public_index.pin_state"}]
+                      if isinstance(pin_state, bool) else []),
+            "profile_pinned_ids": [],
+        }
+        item, result = _fetch_post(
+            client,
+            post_id,
+            timeout_seconds,
+            pin_evidence=legacy_pin_evidence,
+        )
+        if item is None:
+            safe_cutoff = cutoff or datetime.fromisoformat("2026-11-05T00:00:00+00:00")
+            item, mirror_source = _fallback_post_by_id(
+                client,
+                post_id,
+                pin_evidence=legacy_pin_evidence,
+                cutoff=safe_cutoff,
+            )
+            if item is not None:
+                result = "verified_by_" + mirror_source
         if item:
+            item["discovery_source"] = source_by_id.get(post_id, "legacy_public_index")
             output.append(item)
         else:
             skipped[result] = skipped.get(result, 0) + 1
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
-    output.sort(key=lambda row: str(row.get("published_at") or ""), reverse=True)
+    output.sort(key=lambda row: _timestamp(row.get("published_at")) or "9999-12-31T23:59:59+00:00")
     verified_by_id = {
         str(row.get("external_id") or "").removeprefix("x-"): row
         for row in output
@@ -709,4 +878,605 @@ def discover_mob_x_posts(
         "skipped": skipped,
     })
     return output, attempts
+
+_X_CLI_TIMELINE_LIMIT = 40
+_FX_TIMELINE_URL = "https://api.fxtwitter.com/2/profile/{handle}/statuses"
+_FX_STATUS_URL = "https://api.fxtwitter.com/{handle}/status/{post_id}"
+_VX_STATUS_URL = "https://api.vxtwitter.com/Twitter/status/{post_id}"
+
+
+def _safe_truthy(value: Any) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, (dict, list)):
+        return bool(value)
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().casefold() not in {"", "0", "false", "none", "null", "no"}
+    return False
+
+
+def _row_author(row: dict[str, Any]) -> str:
+    for key in ("author", "user", "user_screen_name", "screen_name", "username", "handle"):
+        value = row.get(key)
+        if isinstance(value, dict):
+            value = value.get("username") or value.get("screen_name") or value.get("handle")
+        if isinstance(value, str) and value.strip():
+            return value.strip().lstrip("@").casefold()
+    return ""
+
+
+def _row_id(row: dict[str, Any]) -> str:
+    for key in ("id", "id_str", "tweetID", "rest_id", "post_id", "tweet_id"):
+        value = row.get(key)
+        if value is not None and POST_ID_RE.fullmatch(str(value).strip()):
+            return str(value).strip()
+    return ""
+
+
+def _timeline_objects(payload: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    visited: set[int] = set()
+
+    def walk(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+            return
+        if not isinstance(value, dict) or id(value) in visited:
+            return
+        visited.add(id(value))
+        if _row_id(value) and (value.get("created_at") or value.get("date") or value.get("published_at")):
+            rows.append(value)
+            return
+        for key in ("results", "tweets", "items", "statuses", "data", "timeline", "posts"):
+            child = value.get(key)
+            if isinstance(child, (dict, list)):
+                walk(child)
+
+    walk(payload)
+    unique: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        unique.setdefault(_row_id(row), row)
+    return list(unique.values())
+
+
+def _timeline_objects_from_jsonl(raw: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        rows.extend(_timeline_objects(payload))
+    unique: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        identifier = _row_id(row)
+        if identifier:
+            unique.setdefault(identifier, row)
+    return list(unique.values())
+
+
+def _row_skip_reason(row: dict[str, Any], cutoff: datetime) -> str | None:
+    if _row_author(row) != OFFICIAL_HANDLE:
+        return "not_official_author"
+    legacy = row.get("legacy") if isinstance(row.get("legacy"), dict) else {}
+    sources = (row, legacy)
+    published = _timestamp(
+        str(row.get("created_at") or row.get("date") or row.get("published_at") or "")
+    )
+    if not published:
+        return "created_at_unverified"
+    if datetime.fromisoformat(published) < cutoff:
+        return "before_since_utc"
+    flag_groups = (
+        ("reply", ("reply_to", "reply_to_user", "replying_to", "in_reply_to_status_id",
+                   "in_reply_to_user_id", "is_reply")),
+        ("retweet", ("retweeted_status", "retweeted_tweet", "retweeted_status_id",
+                     "retweeted_tweet_id", "repost_of", "is_retweet", "retweeted")),
+        ("quote", ("quoted", "quoted_tweet", "quoted_status", "quoted_tweet_id",
+                   "quoted_status_id", "is_quote", "is_quote_status")),
+    )
+    for reason, names in flag_groups:
+        if any(_safe_truthy(source.get(name)) for source in sources for name in names):
+            return reason
+    text_value = str(row.get("text") or row.get("full_text") or legacy.get("full_text") or "").lstrip()
+    if text_value.startswith("RT @"):
+        return "retweet"
+    media_keys = ("media", "media_extended", "mediaURLs", "mediaDetails", "media_details")
+    media_known = any(key in row for key in media_keys)
+    media = row.get("media")
+    has_media = isinstance(media, list) and bool(media)
+    if isinstance(media, dict):
+        has_media = any(
+            isinstance(media.get(key), list) and media.get(key)
+            for key in ("all", "videos", "photos", "images")
+        )
+    if not has_media:
+        extended = row.get("media_extended") or row.get("mediaDetails") or row.get("media_details")
+        urls = row.get("mediaURLs")
+        has_media = (isinstance(extended, list) and bool(extended)) or (isinstance(urls, list) and bool(urls))
+    # An absent media field is unknown until the authoritative per-post lookup;
+    # an explicitly empty media field is a verified text-only candidate.
+    if media_known and not has_media:
+        return "text_only"
+    return None
+
+
+def _fetch_fxtwitter_timeline(
+    client: Any,
+    *,
+    timeout_seconds: int = 10,
+) -> tuple[list[dict[str, Any]], dict[str, bool], dict[str, Any]]:
+    summary: dict[str, Any] = {
+        "source": "fxtwitter",
+        "engine": "fxtwitter_profile_timeline",
+        "http_status": None,
+        "result": "unavailable",
+        "candidate_count": 0,
+    }
+    try:
+        response = client.get(
+            _FX_TIMELINE_URL.format(handle=OFFICIAL_HANDLE),
+            params={"count": "100"},
+            headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+            timeout=timeout_seconds,
+            allow_redirects=False,
+        )
+        summary["http_status"] = int(getattr(response, "status_code", 0))
+        if summary["http_status"] != 200:
+            summary["result"] = "rate_limited" if summary["http_status"] == 429 else "http_error"
+            return [], {}, summary
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            summary["result"] = "invalid_json"
+            return [], {}, summary
+        rows = _timeline_objects(payload)
+        pin_states: dict[str, bool] = {}
+        profile_pin_evidence = (
+            _pin_evidence_for_row(payload, "fxtwitter_profile")
+            if _row_author(payload) == OFFICIAL_HANDLE
+            else {"flags": [], "profile_pinned_ids": []}
+        )
+        for row in rows:
+            post_id = _row_id(row)
+            pin = row.get("is_pinned")
+            if not isinstance(pin, bool):
+                pin = row.get("isPinned")
+            if not isinstance(pin, bool):
+                pin = row.get("pinned")
+            if post_id and isinstance(pin, bool):
+                pin_states[post_id] = pin
+        summary["result"] = "timeline_found" if rows else "empty"
+        summary["candidate_count"] = len(rows)
+        summary["candidate_post_ids"] = sorted(_row_id(row) for row in rows if _row_id(row))
+        summary["profile_pin_evidence"] = profile_pin_evidence
+        return rows, pin_states, summary
+    except requests.RequestException as exc:
+        summary["result"] = "request_failed"
+        summary["error_type"] = type(exc).__name__
+        return [], {}, summary
+
+
+def _run_x_cli_timeline(
+    binary: str,
+    *,
+    max_results: int = _X_CLI_TIMELINE_LIMIT,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    summary: dict[str, Any] = {
+        "source": "x-cli",
+        "engine": "x_cli_guest_timeline",
+        "result": "unavailable",
+        "exit_code": None,
+        "candidate_count": 0,
+        "rate_limited": False,
+    }
+    if not binary or not os.path.isfile(binary):
+        summary["result"] = "binary_unavailable"
+        return [], summary
+    try:
+        with tempfile.TemporaryDirectory(prefix="mob-x-x-cli-timeline-") as temporary:
+            root = Path(temporary)
+            home, config_dir, data_dir, cache_dir = (
+                root / "home", root / "config", root / "data", root / "cache"
+            )
+            for directory in (home, config_dir, data_dir, cache_dir):
+                directory.mkdir(parents=True, exist_ok=True)
+            child_env = {
+                "PATH": os.defpath,
+                "HOME": str(home),
+                "XDG_CONFIG_HOME": str(config_dir),
+                "XDG_DATA_HOME": str(data_dir),
+                "XDG_CACHE_HOME": str(cache_dir),
+                "LANG": "C.UTF-8",
+            }
+            command = [
+                binary,
+                "--tier=guest",
+                "--retries=0",
+                "--timeout=15s",
+                "--no-cache",
+                "--data-dir", str(data_dir),
+                "timeline", OFFICIAL_HANDLE, "--guest",
+                "-n", str(max(1, min(int(max_results), 100))),
+                "-o", "jsonl",
+            ]
+            completed = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+                env=child_env,
+            )
+    except subprocess.TimeoutExpired:
+        summary["result"] = "timeout"
+        return [], summary
+    except (OSError, subprocess.SubprocessError):
+        summary["result"] = "execution_failed"
+        return [], summary
+
+    summary["exit_code"] = int(completed.returncode)
+    stderr = str(completed.stderr or "")
+    if any(marker in stderr.casefold() for marker in ("429", "403", "rate limit", "rate_limit", "too many requests")):
+        summary["rate_limited"] = True
+        summary["result"] = "rate_limited"
+        return [], summary
+    if completed.returncode != 0:
+        summary["result"] = "command_failed"
+        return [], summary
+    rows = _timeline_objects_from_jsonl(str(completed.stdout or ""))
+    summary["candidate_count"] = len(rows)
+    summary["result"] = "timeline_found" if rows else "empty"
+    summary["candidate_post_ids"] = sorted(_row_id(row) for row in rows if _row_id(row))
+    return rows, summary
+
+
+def _mirror_media(row: dict[str, Any]) -> tuple[str, str] | None:
+    kind = str(row.get("type") or row.get("kind") or row.get("media_type") or "").casefold()
+    url = str(row.get("url") or row.get("media_url_https") or row.get("media_url") or "").strip()
+    if kind in {"photo", "image", "photos"}:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme == "https" and (host == "pbs.twimg.com" or host.endswith(".pbs.twimg.com")):
+            return "image", url
+        return None
+    variants = row.get("variants")
+    if not isinstance(variants, list):
+        info = row.get("video_info") if isinstance(row.get("video_info"), dict) else {}
+        variants = info.get("variants") if isinstance(info, dict) else []
+    valid: list[tuple[int, str]] = []
+    for variant in variants if isinstance(variants, list) else []:
+        if not isinstance(variant, dict):
+            continue
+        variant_url = str(variant.get("url") or "").strip()
+        content_type = str(variant.get("content_type") or "").casefold()
+        parsed = urlparse(variant_url)
+        host = (parsed.hostname or "").lower()
+        if content_type == "video/mp4" and parsed.scheme == "https" and (
+            host == "video.twimg.com" or host.endswith(".video.twimg.com")
+        ):
+            try:
+                bitrate = int(variant.get("bitrate") or 0)
+            except (TypeError, ValueError, OverflowError):
+                bitrate = 0
+            valid.append((bitrate, variant_url))
+    if valid:
+        return "video", max(valid, key=lambda item: item[0])[1]
+    if kind in {"video", "animated_gif", "gif"}:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme == "https" and (host == "video.twimg.com" or host.endswith(".video.twimg.com")) and url.split("?", 1)[0].lower().endswith((".mp4", ".m4v")):
+            return "video", url
+    return None
+
+
+def _fallback_post_by_id(
+    client: Any,
+    post_id: str,
+    *,
+    pin_evidence: dict[str, Any] | None,
+    cutoff: datetime,
+    timeout_seconds: int = 10,
+) -> tuple[dict[str, Any] | None, str]:
+    providers = (
+        ("fxtwitter", _FX_STATUS_URL.format(handle=OFFICIAL_HANDLE, post_id=post_id)),
+        ("vxtwitter", _VX_STATUS_URL.format(post_id=post_id)),
+    )
+    for provider, endpoint in providers:
+        try:
+            response = client.get(
+                endpoint,
+                headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+                timeout=timeout_seconds,
+                allow_redirects=False,
+            )
+        except requests.RequestException:
+            continue
+        if int(getattr(response, "status_code", 0)) != 200:
+            continue
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        post = (payload.get("tweet") or payload.get("status")) if provider == "fxtwitter" else payload
+        if not isinstance(post, dict):
+            continue
+        if _row_id(post) != post_id or _row_author(post) != OFFICIAL_HANDLE:
+            continue
+        reason = _row_skip_reason(post, cutoff)
+        if reason:
+            continue
+        merged_pin_evidence = _merge_pin_evidence(
+            pin_evidence,
+            _pin_evidence_for_row(post, provider),
+        )
+        text_value = str(post.get("text") or post.get("full_text") or post.get("tweet") or "").strip()
+        media_block = post.get("media")
+        if provider == "fxtwitter" and isinstance(media_block, dict):
+            preferred_rows = media_block.get("all")
+            if not isinstance(preferred_rows, list) or not preferred_rows:
+                preferred_rows = (
+                    media_block.get("videos") or media_block.get("photos")
+                    or media_block.get("images") or []
+                )
+            raw_rows = [item for item in preferred_rows if isinstance(item, dict)]
+        else:
+            value = post.get("media_extended")
+            raw_rows = value if isinstance(value, list) else []
+        if len(raw_rows) != 1:
+            continue
+        selected = _mirror_media(raw_rows[0])
+        if selected is None and provider == "vxtwitter":
+            values = post.get("mediaURLs")
+            if isinstance(values, list) and len(values) == 1:
+                selected = _mirror_media({
+                    "type": "video" if str(values[0]).split("?", 1)[0].lower().endswith(".mp4") else "photo",
+                    "url": values[0],
+                })
+        if selected is None:
+            continue
+        created = _timestamp(str(post.get("created_at") or post.get("date") or post.get("published_at") or ""))
+        if not created or datetime.fromisoformat(created) < cutoff:
+            continue
+        media_type, media_url = selected
+        canonical = f"https://x.com/{OFFICIAL_HANDLE}/status/{post_id}"
+        return {
+            "platform": "mob_official",
+            "id": "x-" + post_id,
+            "external_id": "x-" + post_id,
+            "url": canonical,
+            "canonical_url": canonical,
+            "title": str(post.get("title") or text_value[:1200])[:1200],
+            "caption": text_value[:4500],
+            "original_caption": text_value[:4500],
+            "author": "@" + OFFICIAL_HANDLE,
+            "source_key": "x.com/" + OFFICIAL_HANDLE,
+            "source_name": "Mob Entertainment on X",
+            "source_platform": "x",
+            "official_source": True,
+            "published_at": created,
+            "freshness_verified": True,
+            "freshness_source": provider + "_created_at",
+            "media_type": media_type,
+            "media_url": media_url,
+            "thumbnail_url": None,
+            "method": provider + "_status_fallback",
+            "discovery_source": provider,
+            "pin_flags": merged_pin_evidence["flags"],
+            "profile_pinned_ids": merged_pin_evidence["profile_pinned_ids"],
+        }, provider
+    return None, "unavailable"
+
+
+def discover_mob_x_posts(
+    *,
+    max_results: int = MAX_RESULTS,
+    timeout_seconds: int = 12,
+    sleep_seconds: float = 0.0,
+    session: Any | None = None,
+    seed_urls: tuple[str, ...] = (),
+    since_utc: str = "2026-11-05T00:00:00Z",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Use unordered guest x-cli IDs first, then FxTwitter and legacy ID fallbacks."""
+    client = session or requests.Session()
+    try:
+        cutoff = datetime.fromisoformat(str(since_utc).replace("Z", "+00:00"))
+        if cutoff.tzinfo is None:
+            raise ValueError
+        cutoff = cutoff.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return [], [{"source": "policy", "result": "invalid_since_utc"}]
+
+    x_cli_path = str(os.getenv("MOB_X_CLI_PATH") or "").strip()
+    x_cli_rows, x_cli_attempt = _run_x_cli_timeline(x_cli_path, max_results=_X_CLI_TIMELINE_LIMIT) if x_cli_path else ([], {
+        "source": "x-cli", "engine": "x_cli_guest_timeline", "result": "not_configured",
+        "candidate_count": 0, "rate_limited": False,
+    })
+    fx_rows, pin_states, fx_attempt = _fetch_fxtwitter_timeline(client)
+    attempts: list[dict[str, Any]] = [x_cli_attempt, fx_attempt]
+    verified: dict[str, dict[str, Any]] = {}
+    skipped: dict[str, int] = {}
+    cutoff_rows: dict[str, dict[str, Any]] = {}
+    pin_evidence_by_id: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    candidate_rows: dict[str, dict[str, Any]] = {}
+    id_source_by_id: dict[str, str] = {}
+    global_profile_pin_evidence: dict[str, list[dict[str, Any]]] = _merge_pin_evidence(
+        fx_attempt.get("profile_pin_evidence")
+        if isinstance(fx_attempt, dict) else None,
+    )
+
+    # The two timelines are already fetched in this run. Keep their union, with
+    # x-cli preferred only as the recorded ID source when both list the same ID.
+    for source_name, rows in (("x-cli", x_cli_rows), ("fxtwitter", fx_rows)):
+        source_eligible_count = 0
+        for row in rows:
+            post_id = _row_id(row)
+            if not post_id:
+                continue
+            row_evidence = _pin_evidence_for_row(row, source_name)
+            if _row_author(row) == OFFICIAL_HANDLE:
+                # A pinned Mob post is usually older than the cutoff; retain its
+                # profile pin ID evidence even though the post itself is ineligible.
+                global_profile_pin_evidence = _merge_pin_evidence(
+                    global_profile_pin_evidence,
+                    {"flags": [], "profile_pinned_ids": row_evidence["profile_pinned_ids"]},
+                )
+            reason = _row_skip_reason(row, cutoff)
+            if reason:
+                skipped[reason] = skipped.get(reason, 0) + 1
+                continue
+            pin_evidence_by_id[post_id] = _merge_pin_evidence(
+                pin_evidence_by_id.get(post_id),
+                row_evidence,
+            )
+            candidate_rows.setdefault(post_id, row)
+            id_source_by_id.setdefault(post_id, source_name)
+            source_eligible_count += 1
+        attempts.append({
+            "source": source_name + "_eligible_ids",
+            "result": "ids_found" if source_eligible_count else "empty_or_no_eligible_ids",
+            "candidate_count": source_eligible_count,
+        })
+
+    union_ids = list(candidate_rows)
+    # Provider order can be a ranked sample. Use their created_at values only to
+    # choose the bounded oldest 40; authoritative timestamps are checked below.
+    union_ids.sort(key=lambda post_id: (
+        _timestamp(str(candidate_rows[post_id].get("created_at")
+                        or candidate_rows[post_id].get("date")
+                        or candidate_rows[post_id].get("published_at") or ""))
+        or "9999-12-31T23:59:59+00:00",
+        post_id,
+    ))
+    limit = max(1, min(int(max_results), MAX_RESULTS))
+    selected_ids = union_ids[:limit]
+    attempts.append({
+        "source": "mob_x_id_union",
+        "result": "ids_found" if selected_ids else "empty",
+        "candidate_count": len(union_ids),
+        "selected_count": len(selected_ids),
+        "selected_ids": [
+            {"external_id": "x-" + post_id, "id_source": id_source_by_id[post_id]}
+            for post_id in selected_ids
+        ],
+        "ordering": "created_at_oldest_first",
+        "cap": limit,
+    })
+
+    for post_id in selected_ids:
+        evidence = _merge_pin_evidence(
+            pin_evidence_by_id.get(post_id),
+            global_profile_pin_evidence,
+        )
+        item, result = _fetch_post(
+            client,
+            post_id,
+            timeout_seconds,
+            pin_evidence=evidence,
+        )
+        if item is None:
+            item, fallback_source = _fallback_post_by_id(
+                client,
+                post_id,
+                pin_evidence=evidence,
+                cutoff=cutoff,
+            )
+            result = "verified_by_" + fallback_source if item else result
+        if item is not None:
+            source_name = id_source_by_id[post_id]
+            item["discovery_source"] = source_name
+            item["id_source"] = source_name
+            verified[post_id] = item
+        else:
+            skip_key = "post_" + result
+            skipped[skip_key] = skipped.get(skip_key, 0) + 1
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+
+    if not verified:
+        legacy_rows, legacy_attempts = _discover_legacy_mob_x_posts(
+            max_results=max_results,
+            timeout_seconds=timeout_seconds,
+            sleep_seconds=sleep_seconds,
+            session=client,
+            seed_urls=seed_urls,
+            pin_states=pin_states,
+            cutoff=cutoff,
+        )
+        attempts.extend(legacy_attempts)
+        for row in legacy_rows:
+            post_id = str(row.get("external_id") or "").removeprefix("x-")
+            if post_id and post_id not in verified:
+                row["id_source"] = row.get("discovery_source") or "legacy_public_index"
+                verified[post_id] = row
+
+    for post_id, row in verified.items():
+        published = _timestamp(str(row.get("published_at") or ""))
+        if not published or datetime.fromisoformat(published) < cutoff:
+            skipped["before_since_utc_or_unverified"] = skipped.get("before_since_utc_or_unverified", 0) + 1
+            continue
+        if not str(row.get("original_caption") or "").strip() or row.get("media_type") not in {"image", "video"}:
+            skipped["text_only_or_media_invalid"] = skipped.get("text_only_or_media_invalid", 0) + 1
+            continue
+        row_evidence = _merge_pin_evidence(
+            pin_evidence_by_id.get(post_id),
+            {
+                "flags": row.get("pin_flags") if isinstance(row.get("pin_flags"), list) else [],
+                "profile_pinned_ids": row.get("profile_pinned_ids")
+                if isinstance(row.get("profile_pinned_ids"), list) else [],
+            },
+            global_profile_pin_evidence,
+        )
+        pin_state, pin_state_source = _resolve_pin_state(post_id, published, cutoff, row_evidence)
+        if pin_state is None:
+            reason = "pinned" if pin_state_source.startswith(("known_pinned_flag:", "profile_pinned_id_match:")) else "pin_state_unknown"
+            skipped[reason] = skipped.get(reason, 0) + 1
+            continue
+        row["published_at"] = published
+        row["pinned"] = False
+        row["pin_state"] = pin_state
+        row["pin_state_source"] = pin_state_source
+        row["pin_flags"] = row_evidence["flags"]
+        row["profile_pinned_ids"] = row_evidence["profile_pinned_ids"]
+        row["id_source"] = str(row.get("id_source") or row.get("discovery_source") or "legacy_public_index")
+        row["discovery_source"] = row["id_source"]
+        cutoff_rows[post_id] = row
+
+    final = sorted(
+        cutoff_rows.values(),
+        key=lambda row: (str(row.get("published_at") or ""), str(row.get("external_id") or "")),
+    )
+    attempts.append({
+        "source": "mob_x_final_filter",
+        "result": "eligible_candidates_found" if final else "empty",
+        "candidate_count": min(len(final), max_results),
+        "candidate_post_ids": sorted(str(row.get("external_id") or "").removeprefix("x-") for row in final),
+        "ordering": "oldest_first",
+        "id_sources": [
+            {"external_id": str(row.get("external_id") or ""), "id_source": row.get("id_source")}
+            for row in final
+        ],
+        "pin_states": [
+            {
+                "external_id": str(row.get("external_id") or ""),
+                "pin_state": row.get("pin_state"),
+                "pin_state_source": row.get("pin_state_source"),
+            }
+            for row in final
+        ],
+        "pin_state_counts": {
+            state: sum(1 for row in final if row.get("pin_state") == state)
+            for state in ("known_not_pinned", "inferred_not_pinned")
+        },
+        "skipped": skipped,
+    })
+    return final[:max(1, min(int(max_results), MAX_RESULTS))], attempts
 
