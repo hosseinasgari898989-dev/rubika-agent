@@ -1210,7 +1210,7 @@ def process_one(report_path: str | None = None, panel_link_id: int | None = None
                 worker_failure_detail = transition_exc.error_detail or worker_failure_detail
         except Exception:
             report["transition_error"] = "mob_x_failure_transition_failed"
-        if code in {"mob_x_source_unavailable", "mob_x_author_mismatch", "mob_x_post_id_mismatch"}:
+        if code in {"mob_x_source_unavailable", "mob_x_author_mismatch", "mob_x_post_id_mismatch", "mob_x_metadata_http_403", "mob_x_metadata_http_404", "mob_x_metadata_http_429"}:
             try:
                 send_owner_metadata_failure(
                     os.getenv("RUBIKA_TOKEN", ""), os.getenv("RUBIKA_OWNER_CHAT_ID", ""), job["id"],
