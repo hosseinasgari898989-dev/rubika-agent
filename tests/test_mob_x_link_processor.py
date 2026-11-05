@@ -15,6 +15,7 @@ from agent.brain.mob_x_link_processor import (
     build_mob_x_caption,
     clean_caption,
     download_public_media,
+    fetch_public_post,
     normalize_published_at,
     parse_official_link,
     process_job,
@@ -168,6 +169,164 @@ class MobXLinkParserTests(unittest.TestCase):
         self.assertEqual(post["provider"], "vxtwitter")
         with self.assertRaisesRegex(MobXLinkError, "mob_x_author_mismatch"):
             _vxtwitter({**payload, "user_screen_name": "not_mob"}, POST_ID)
+
+    def test_fx_success_returns_before_x_cli_fallback_and_logs_only_fx_source(self):
+        session = Mock()
+        fx_post = {"provider": "fxtwitter", "text": "unchanged Fx result", "media": []}
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
+            patch("agent.brain.mob_x_link_processor._fetch_provider",
+                  return_value=(fx_post, {"provider": "fxtwitter"})) as provider,
+            patch("agent.brain.mob_x_link_processor._x_cli_public_post") as x_cli,
+            patch("builtins.print") as log,
+        ):
+            result = fetch_public_post(POST_ID, session=session)
+        self.assertIs(result, fx_post)
+        provider.assert_called_once_with(session, "fxtwitter", POST_ID)
+        x_cli.assert_not_called()
+        self.assertEqual(json.loads(log.call_args.args[0]), {
+            "event": "mob_x_fetch_source", "source": "fxtwitter",
+        })
+
+    def test_fx_failure_then_vx_success_never_invokes_x_cli(self):
+        session = Mock()
+        vx_post = {"provider": "vxtwitter", "text": "unchanged Vx result", "media": []}
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
+            patch("agent.brain.mob_x_link_processor._fetch_provider", side_effect=[
+                (None, {"error_code": "mob_x_metadata_http_503"}),
+                (vx_post, {"provider": "vxtwitter"}),
+            ]) as provider,
+            patch("agent.brain.mob_x_link_processor._x_cli_public_post") as x_cli,
+            patch("builtins.print") as log,
+        ):
+            result = fetch_public_post(POST_ID, session=session)
+        self.assertIs(result, vx_post)
+        self.assertEqual([call.args[1] for call in provider.call_args_list],
+                         ["fxtwitter", "vxtwitter"])
+        x_cli.assert_not_called()
+        self.assertEqual(json.loads(log.call_args.args[0]), {
+            "event": "mob_x_fetch_source", "source": "vxtwitter",
+        })
+
+    def test_both_mirrors_fail_then_guest_x_cli_answers_without_account_secrets(self):
+        fixture = {
+            "id": POST_ID,
+            "text": "Official Mob guest fallback",
+            "created_at": "2026-11-01T12:30:00Z",
+            "author": {"username": "mobgamesstudios"},
+            "media": [{"type": "photo", "url": IMAGE_URL}],
+        }
+        completed = Mock(returncode=0, stdout=json.dumps(fixture), stderr="must-not-be-logged")
+        session = Mock()
+        with (
+            patch.dict(os.environ, {
+                "MOB_X_CLI_PATH": "/tmp/x-cli",
+                "X_AUTH_TOKEN": "not-for-child-process",
+                "CT0": "not-for-child-process-either",
+            }),
+            patch("agent.brain.mob_x_link_processor._fetch_provider", side_effect=[
+                (None, {"error_code": "mob_x_metadata_http_503"}),
+                (None, {"error_code": "mob_x_metadata_http_429"}),
+            ]),
+            patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed) as run,
+            patch("agent.brain.mob_x_link_processor.Path.is_file", return_value=True),
+            patch("agent.brain.mob_x_link_processor.socket.getaddrinfo",
+                  return_value=[(None, None, None, None, ("8.8.8.8", 443))]),
+            patch("builtins.print") as log,
+        ):
+            result = fetch_public_post(POST_ID, session=session)
+        self.assertEqual(result["provider"], "x-cli")
+        self.assertEqual(result["external_id"], POST_ID)
+        run.assert_called_once()
+        command = run.call_args.args[0]
+        self.assertIn("--guest", command)
+        self.assertIn("--tier=guest", command)
+        self.assertIn("--retries=0", command)
+        self.assertIn("--timeout=15s", command)
+        self.assertIn("--no-cache", command)
+        self.assertEqual(run.call_args.kwargs["timeout"], 20)
+        child_env = run.call_args.kwargs["env"]
+        self.assertNotIn("X_AUTH_TOKEN", child_env)
+        self.assertNotIn("CT0", child_env)
+        self.assertNotIn("not-for-child-process", str(child_env))
+        self.assertEqual(json.loads(log.call_args.args[0]), {
+            "event": "mob_x_fetch_source", "source": "x-cli",
+        })
+        self.assertNotIn(fixture["text"], str(log.call_args_list))
+        self.assertNotIn("must-not-be-logged", str(log.call_args_list))
+
+    def test_x_cli_failure_returns_original_fx_vx_error_priority(self):
+        session = Mock()
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
+            patch("agent.brain.mob_x_link_processor._fetch_provider", side_effect=[
+                (None, {"error_code": "mob_x_metadata_http_404"}),
+                (None, {"error_code": "mob_x_metadata_http_403"}),
+            ]),
+            patch("agent.brain.mob_x_link_processor._x_cli_public_post",
+                  side_effect=MobXLinkError("mob_x_x_cli_failed")) as x_cli,
+        ):
+            with self.assertRaises(MobXLinkError) as caught:
+                fetch_public_post(POST_ID, session=session)
+        self.assertEqual(caught.exception.code, "mob_x_metadata_http_403")
+        x_cli.assert_called_once_with(POST_ID, "/tmp/x-cli")
+
+    def test_x_cli_wrong_author_and_post_id_are_rejected(self):
+        base = {
+            "id": POST_ID,
+            "text": "Official Mob guest fallback",
+            "created_at": "2026-11-01T12:30:00Z",
+            "author": {"username": "mobgamesstudios"},
+            "media": [{"type": "photo", "url": IMAGE_URL}],
+        }
+        cases = [
+            ({**base, "author": {"username": "imposter"}}, "mob_x_author_mismatch"),
+            ({**base, "id": "2107878755079213477"}, "mob_x_post_id_mismatch"),
+        ]
+        for payload, expected_code in cases:
+            completed = Mock(returncode=0, stdout=json.dumps(payload), stderr="")
+            session = Mock()
+            with (
+                self.subTest(expected_code=expected_code),
+                patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
+                patch("agent.brain.mob_x_link_processor._fetch_provider", return_value=(
+                    None, {"error_code": "mob_x_metadata_http_503"},
+                )),
+                patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
+                patch("agent.brain.mob_x_link_processor.Path.is_file", return_value=True),
+                patch("agent.brain.mob_x_link_processor.socket.getaddrinfo",
+                      return_value=[(None, None, None, None, ("8.8.8.8", 443))]),
+            ):
+                with self.assertRaises(MobXLinkError) as caught:
+                    fetch_public_post(POST_ID, session=session)
+            self.assertEqual(caught.exception.code, expected_code)
+
+    def test_checksum_failure_keeps_x_cli_disabled_and_original_error_clean(self):
+        workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mob-x-link-processor.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        start = workflow.index("      - name: Install pinned x-cli v0.5.0 guest fallback")
+        end = workflow.index("      - name: Check required existing secret names", start)
+        block = workflow[start:end]
+        export_at = block.index('echo "MOB_X_CLI_PATH=$binary"')
+        checksum_checks = [i for i in range(len(block)) if block.startswith("sha256sum --check --status", i)]
+        self.assertEqual(len(checksum_checks), 2)
+        self.assertTrue(all(pos < export_at for pos in checksum_checks))
+        self.assertIn("x-cli release checksums file verification failed", block)
+        self.assertIn("x-cli binary checksum verification failed", block)
+        self.assertIn("exit 0", block)
+
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": ""}),
+            patch("agent.brain.mob_x_link_processor._fetch_provider", return_value=(
+                None, {"error_code": "mob_x_metadata_http_503"},
+            )),
+            patch("agent.brain.mob_x_link_processor._x_cli_public_post") as x_cli,
+        ):
+            with self.assertRaises(MobXLinkError) as caught:
+                fetch_public_post(POST_ID, session=Mock())
+        self.assertEqual(caught.exception.code, "mob_x_source_unavailable")
+        x_cli.assert_not_called()
 
     def test_probe_is_read_only_and_uses_no_api_key(self):
         session = Mock()
