@@ -116,7 +116,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             def get_console_tiktok_sources(self):
                 return source_rows
 
-        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"AGENT_API_TOKEN": "test-token-that-is-never-real"}), patch.object(daily_discovery, "CloudState", SourceCloud) as cloud_type, patch.object(daily_discovery, "discover_tiktok_profiles") as discover, patch.object(daily_discovery, "discover_official_x_posts", return_value=([], [])):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"AGENT_API_TOKEN": "test-token-that-is-never-real-123456"}), patch.object(daily_discovery, "CloudState", SourceCloud) as cloud_type, patch.object(daily_discovery, "discover_tiktok_profiles") as discover, patch.object(daily_discovery, "discover_official_x_posts", return_value=([], [])):
             def collect(**kwargs):
                 self.assertEqual(kwargs["profiles"], ("newcreator",))
                 self.assertEqual(kwargs["created_after_by_profile"], {"newcreator": source_rows[0]["created_at"]})
@@ -170,7 +170,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
         )
         for error in failures:
             with self.subTest(error=error.code), tempfile.TemporaryDirectory() as folder, patch.dict(
-                os.environ, {"AGENT_API_TOKEN": "test-token-that-is-never-real"}
+                os.environ, {"AGENT_API_TOKEN": "test-token-that-is-never-real-123456"}
             ), patch.object(daily_discovery, "CloudState") as cloud_type, patch.object(
                 daily_discovery, "discover_tiktok_profiles", return_value=([], [])
             ) as discover, patch.object(
@@ -193,7 +193,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 self.assertIs(report["summary"]["tiktok_account_removals_applied"], False)
                 serialized = json.dumps(report)
                 output_json = output_path.read_text(encoding="utf-8")
-                token = "test-token-that-is-never-real"
+                token = "test-token-that-is-never-real-123456"
                 self.assertNotIn(token, serialized)
                 self.assertNotIn(token, output_json)
                 self.assertNotIn(token, log_capture.getvalue())
