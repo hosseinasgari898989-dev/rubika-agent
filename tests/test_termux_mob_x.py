@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import unittest
 from unittest.mock import Mock, patch
+
+IMAGE_URL = "https://pbs.twimg.com/media/example.jpg"
 from urllib.parse import urlparse
 
 from agent.discovery.termux_mob_x import (
@@ -321,7 +323,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         return row
 
     def run_x_cli(self, rows, session, *, exit_code=0, stderr=""):
-        stdout = "".join(json.dumps(row) + "\\n" for row in rows)
+        stdout = "".join(json.dumps(row) + "\n" for row in rows)
         completed = Mock(returncode=exit_code, stdout=stdout, stderr=stderr)
         with (
             patch.dict("os.environ", {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
@@ -436,6 +438,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         timeline = {
             "id": post_id, "created_at": "2026-11-05T02:00:00Z",
             "author": {"username": "mobgamesstudios"}, "is_pinned": False,
+            "media": [{"type": "photo", "url": IMAGE_URL}],
         }
         session = FakeSession(
             "<rss><channel></channel></rss>",
