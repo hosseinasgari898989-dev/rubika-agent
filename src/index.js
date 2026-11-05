@@ -472,9 +472,11 @@ async function seenItems(env, url) {
     return json({ ok: false, error: "invalid_platform_filter" }, 400);
   }
   try {
-    const sql = platform
-      ? "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform = ? ORDER BY discovered_at DESC LIMIT ? OFFSET ?"
-      : "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform IN ('tiktok','mob_official') ORDER BY discovered_at DESC LIMIT ? OFFSET ?";
+    const sql = platform === "mob_official"
+      ? "SELECT id, platform, external_id, canonical_url, source_key, title, caption, published_at, media_type, validation_json, original_caption, persian_translation, media_sha256, status, sent_at, review_state FROM items WHERE platform = ? ORDER BY discovered_at DESC LIMIT ? OFFSET ?"
+      : platform
+        ? "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform = ? ORDER BY discovered_at DESC LIMIT ? OFFSET ?"
+        : "SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items WHERE platform IN ('tiktok','mob_official') ORDER BY discovered_at DESC LIMIT ? OFFSET ?";
     const statement = env.DB.prepare(sql);
     const result = platform
       ? await statement.bind(platform, limit, offset).all()
