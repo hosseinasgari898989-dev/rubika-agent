@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from termux import daily_discovery
@@ -95,6 +97,10 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             "id": "tiktok:missingcutoff", "platform": "tiktok",
             "source_key": "missingcutoff", "enabled": 1, "managed": True,
             "created_at": None,
+        }, {
+            "id": "tiktok:invalidcutoff", "platform": "tiktok",
+            "source_key": "invalidcutoff", "enabled": 1, "managed": True,
+            "created_at": "not-a-valid-timestamp",
         }]
         candidate = {
             "platform": "tiktok", "id": "7610592632179297558",
@@ -117,8 +123,9 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
         self.assertEqual(report["summary"]["tiktok_candidates"], 1)
         self.assertEqual(report["summary"]["tiktok_source_overlay_status"], "console_sources_loaded")
         self.assertTrue(report["summary"]["tiktok_account_removals_applied"])
-        self.assertEqual(report["summary"]["tiktok_missing_created_at_cutoff_count"], 1)
-        self.assertTrue(any(row.get("reason") == "missing_created_at_cutoff" for row in report["attempts"]))
+        self.assertEqual(report["summary"]["tiktok_missing_created_at_cutoff_count"], 2)
+        missing_cutoffs = [row for row in report["attempts"] if row.get("reason") == "missing_created_at_cutoff"]
+        self.assertEqual({row.get("query") for row in missing_cutoffs}, {"@missingcutoff", "@invalidcutoff"})
         self.assertEqual(report["candidates"]["tiktok"][0]["author"], "newcreator")
         set_dynamic_tiktok_sources([])
 
@@ -164,9 +171,12 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 daily_discovery, "discover_official_x_posts", return_value=([], [])
             ) as mob_discover:
                 cloud_type.return_value.get_console_tiktok_sources.side_effect = error
-                report = daily_discovery.collect_daily_report(
-                    output_path=Path(folder) / "report.json", load_remote_sources=True
-                )
+                output_path = Path(folder) / "report.json"
+                log_capture = io.StringIO()
+                with redirect_stdout(log_capture):
+                    report = daily_discovery.collect_daily_report(
+                        output_path=output_path, load_remote_sources=True
+                    )
                 discover.assert_called_once_with(
                     profiles=TIKTOK_PROFILES, selected_profiles=TIKTOK_PROFILES,
                     max_results=48, max_per_profile=8, created_after_by_profile={},
@@ -176,7 +186,11 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                                  "console_sources_unavailable_using_legacy_six")
                 self.assertIs(report["summary"]["tiktok_account_removals_applied"], False)
                 serialized = json.dumps(report)
-                self.assertNotIn("test-token-that-is-never-real", serialized)
+                output_json = output_path.read_text(encoding="utf-8")
+                token = "test-token-that-is-never-real"
+                self.assertNotIn(token, serialized)
+                self.assertNotIn(token, output_json)
+                self.assertNotIn(token, log_capture.getvalue())
                 self.assertNotIn("Authorization", serialized)
         set_dynamic_tiktok_sources([])
 
