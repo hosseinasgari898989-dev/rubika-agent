@@ -109,8 +109,14 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             "title": "Poppy Playtime edit", "caption": "A public edit",
             "published_at": "2026-11-05T11:00:00+00:00", "media_type": "video",
         }
-        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"AGENT_API_TOKEN": "test-token-that-is-never-real"}), patch.object(daily_discovery, "CloudState") as cloud_type, patch.object(daily_discovery, "discover_tiktok_profiles") as discover, patch.object(daily_discovery, "discover_official_x_posts", return_value=([], [])):
-            cloud_type.return_value.get_console_tiktok_sources.return_value = source_rows
+        class SourceCloud:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def get_console_tiktok_sources(self):
+                return source_rows
+
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"AGENT_API_TOKEN": "test-token-that-is-never-real"}), patch.object(daily_discovery, "CloudState", SourceCloud) as cloud_type, patch.object(daily_discovery, "discover_tiktok_profiles") as discover, patch.object(daily_discovery, "discover_official_x_posts", return_value=([], [])):
             def collect(**kwargs):
                 self.assertEqual(kwargs["profiles"], ("newcreator",))
                 self.assertEqual(kwargs["created_after_by_profile"], {"newcreator": source_rows[0]["created_at"]})
@@ -119,7 +125,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             report = daily_discovery.collect_daily_report(
                 output_path=Path(folder) / "report.json", load_remote_sources=True
             )
-        cloud_type.assert_called_once()
+        discover.assert_called_once()
         self.assertEqual(report["summary"]["tiktok_candidates"], 1)
         self.assertEqual(report["summary"]["tiktok_source_overlay_status"], "console_sources_loaded")
         self.assertTrue(report["summary"]["tiktok_account_removals_applied"])
