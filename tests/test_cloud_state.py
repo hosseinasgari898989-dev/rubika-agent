@@ -137,6 +137,41 @@ class CloudStateTests(unittest.TestCase):
         self.assertTrue(urls[0].endswith("/api/brain/items/seen?limit=2&offset=0"))
         self.assertTrue(urls[1].endswith("/api/brain/items/seen?limit=2&offset=2"))
 
+    def test_get_official_items_returns_all_mob_statuses_across_pages(self):
+        state = CloudState("https://worker.example", TOKEN)
+        pages = iter([
+            {
+                "ok": True,
+                "items": [
+                    {"platform": "mob_official", "external_id": "x-2111111111111111111",
+                     "status": "discovered", "validation_json": "{\"mob_x_discovery\":{\"version\":1}}"},
+                    {"platform": "mob_official", "external_id": "x-2111111111111111112",
+                     "status": "failed", "validation_json": None},
+                ],
+            },
+            {
+                "ok": True,
+                "items": [
+                    {"platform": "mob_official", "external_id": "x-2111111111111111113",
+                     "status": "sent", "validation_json": None},
+                ],
+            },
+        ])
+        urls = []
+
+        def fake_open(request, timeout):
+            urls.append(request.full_url)
+            return io.BytesIO(json.dumps(next(pages)).encode("utf-8"))
+
+        with patch("urllib.request.urlopen", side_effect=fake_open):
+            rows = state.get_official_items(page_size=2)
+
+        self.assertEqual([row["status"] for row in rows], ["discovered", "failed", "sent"])
+        self.assertEqual(rows[0]["external_id"], "x-2111111111111111111")
+        self.assertEqual(rows[0]["validation_json"], "{\"mob_x_discovery\":{\"version\":1}}")
+        self.assertTrue(urls[0].endswith("/api/brain/items/seen?limit=2&offset=0&platform=mob_official"))
+        self.assertTrue(urls[1].endswith("/api/brain/items/seen?limit=2&offset=2&platform=mob_official"))
+
     def test_seen_index_allows_recovery_of_nonterminal_items(self):
         state = CloudState("https://worker.example", TOKEN)
         rows = [
