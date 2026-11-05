@@ -562,7 +562,7 @@ class OfficialSinceRuleTests(unittest.TestCase):
             "birth_datetime": datetime(2026, 11, 5, tzinfo=timezone.utc),
         }
         candidates = [
-            self.row("x-2111111111111111111", "2026-11-06T00:00:00Z"),
+            self.row("x-2111111111111111111", "2026-11-05T05:00:00Z"),
             self.row("x-2111111111111111112", "2026-11-05T00:30:00Z"),
             self.row("x-2111111111111111113", "2026-11-05T01:00:00Z"),
             self.row("x-2111111111111111114", "2026-11-05T02:00:00Z"),
