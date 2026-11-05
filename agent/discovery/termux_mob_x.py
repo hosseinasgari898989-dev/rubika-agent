@@ -888,15 +888,22 @@ def _row_skip_reason(row: dict[str, Any], cutoff: datetime) -> str | None:
     text_value = str(row.get("text") or row.get("full_text") or legacy.get("full_text") or "").lstrip()
     if text_value.startswith("RT @"):
         return "retweet"
+    media_keys = ("media", "media_extended", "mediaURLs", "mediaDetails", "media_details")
+    media_known = any(key in row for key in media_keys)
     media = row.get("media")
     has_media = isinstance(media, list) and bool(media)
     if isinstance(media, dict):
-        has_media = any(isinstance(media.get(key), list) and media.get(key) for key in ("all", "videos", "photos", "images"))
+        has_media = any(
+            isinstance(media.get(key), list) and media.get(key)
+            for key in ("all", "videos", "photos", "images")
+        )
     if not has_media:
-        extended = row.get("media_extended")
+        extended = row.get("media_extended") or row.get("mediaDetails") or row.get("media_details")
         urls = row.get("mediaURLs")
         has_media = (isinstance(extended, list) and bool(extended)) or (isinstance(urls, list) and bool(urls))
-    if not has_media:
+    # An absent media field is unknown until the authoritative per-post lookup;
+    # an explicitly empty media field is a verified text-only candidate.
+    if media_known and not has_media:
         return "text_only"
     return None
 
