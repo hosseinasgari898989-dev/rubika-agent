@@ -746,6 +746,10 @@ def main() -> int:
                 page.locator('#nav button[data-id="inst"]').click()
                 page.locator("#ins_u").fill("https://x.com/mobgamesstudios/status/123456789")
                 click_action(page, '#view button[data-a="insAdd"]', "save instant Mob X link")
+                page.wait_for_function(
+                    "() => document.querySelector('#view')?.innerText.includes('مرحلهٔ ۲')",
+                    timeout=5000,
+                )
                 if "مرحلهٔ ۲" not in page.locator("#view").inner_text():
                     failures.append("inst: adding a link did not display the مرحلهٔ ۲ confirmation card")
                 click_action(page, '#view button[data-a="insOk"]', "confirm instant Mob X link")
