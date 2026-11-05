@@ -1,0 +1,320 @@
+name: X-CLI read-only probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Install pinned x-cli v0.5.0 with checksum verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="0.5.0"
+          archive_name="x_0.5.0_linux_amd64.tar.gz"
+          expected_archive_sha256="d722fd04f05c3785202846a1400caa9bcc0f8237947c0e35f6e8cf9efcbd1dd7"
+          expected_checksums_sha256="ed391cfa2726d34e7de61ee93aca443731d10bca382da17f0b9683a8cac7c887"
+          root="$RUNNER_TEMP/x-cli-probe-install-$version"
+          archive="$root/$archive_name"
+          checksums="$root/checksums.txt"
+          base="https://github.com/tamnd/x-cli/releases/download/v$version"
+          fail_closed() {
+            printf '## X-CLI probe blocked\n\n- Installation: **FAILED**\n- Reason: %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::X-CLI read-only probe stopped: $1"
+            exit 1
+          }
+          mkdir -p "$root"
+          if ! curl --fail --silent --show-error --location --max-time 15 --retry 0 "$base/$archive_name" --output "$archive" 2>/dev/null; then
+            fail_closed "pinned v0.5.0 Linux archive download failed"
+          fi
+          if ! curl --fail --silent --show-error --location --max-time 15 --retry 0 "$base/checksums.txt" --output "$checksums" 2>/dev/null; then
+            fail_closed "pinned v0.5.0 checksums file download failed"
+          fi
+          if ! printf '%s  %s\n' "$expected_checksums_sha256" "$checksums" | sha256sum --check --status; then
+            fail_closed "checksums file SHA-256 did not match the pinned digest"
+          fi
+          published_checksum="$(awk -v target="$archive_name" '$2 == target { print $1; exit }' "$checksums")"
+          if [[ "$published_checksum" != "$expected_archive_sha256" ]]; then
+            fail_closed "release archive digest did not match the pinned v0.5.0 digest"
+          fi
+          if ! printf '%s  %s\n' "$published_checksum" "$archive" | sha256sum --check --status; then
+            fail_closed "downloaded x-cli archive SHA-256 verification failed"
+          fi
+          if ! tar -tzf "$archive" >/dev/null 2>&1; then
+            fail_closed "verified x-cli archive could not be validated"
+          fi
+          extract="$root/extract"
+          mkdir -p "$extract"
+          if ! tar -xzf "$archive" -C "$extract" >/dev/null 2>&1; then
+            fail_closed "verified x-cli archive extraction failed"
+          fi
+          binary="$(find "$extract" -maxdepth 3 -type f -name x -perm -u+x -print -quit)"
+          if [[ -z "$binary" ]]; then
+            fail_closed "verified x-cli executable was not found"
+          fi
+          printf 'X_CLI_PATH=%s\n' "$binary" >> "$GITHUB_ENV"
+          printf '## X-CLI probe installation\n\n- Pinned version: **v0.5.0**\n- Checksums: **verified**\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run read-only probes A through E and write safe summaries only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/x-cli-probe"
+          mkdir -p "$work"
+          summary_script="$work/summarize.py"
+          cat > "$summary_script" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from collections import Counter
+          from datetime import datetime, timezone, timedelta
+
+          CUTOFF = datetime(2026, 11, 5, 0, 0, 0, tzinfo=timezone.utc)
+          ID_RE = re.compile(r"^[0-9]{15,22}$")
+          RATE_RE = re.compile(r"(?i)(?:\b429\b|\b403\b|rate[\s_-]*limit|too many requests|rate limited)")
+
+          def read_payload(path, json_mode=False):
+              try:
+                  raw = open(path, "r", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return [], [], ""
+              if not raw.strip():
+                  return [], [], raw
+              objects = []
+              if json_mode:
+                  try:
+                      value = json.loads(raw)
+                      objects = value if isinstance(value, list) else [value]
+                  except Exception:
+                      return [], [], raw
+              else:
+                  for line in raw.splitlines():
+                      if not line.strip():
+                          continue
+                      try:
+                          objects.append(json.loads(line))
+                      except Exception:
+                          continue
+              rows = []
+              diagnostics = []
+              def walk(value):
+                  if isinstance(value, list):
+                      for part in value:
+                          walk(part)
+                  elif isinstance(value, dict):
+                      kind = str(value.get("kind") or "").lower()
+                      if kind in {"failure", "error"}:
+                          diagnostics.extend(str(value.get(key) or "") for key in ("message", "reason", "error", "missed"))
+                      if value.get("id") is not None and value.get("created_at"):
+                          rows.append(value)
+                      else:
+                          for key in ("data", "tweets", "items", "records", "results", "tweet"):
+                              child = value.get(key)
+                              if isinstance(child, (dict, list)):
+                                  walk(child)
+              for obj in objects:
+                  walk(obj)
+              return rows, diagnostics, raw
+
+          def parse_time(value):
+              if not isinstance(value, str) or not value.strip():
+                  return None
+              try:
+                  parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+                  if parsed.tzinfo is None:
+                      return None
+                  return parsed.astimezone(timezone.utc)
+              except Exception:
+                  return None
+
+          def author_name(row):
+              author = row.get("author")
+              if isinstance(author, dict):
+                  return str(author.get("username") or author.get("screen_name") or "")
+              return str(author or "")
+
+          def media_stats(row):
+              media = row.get("media")
+              media = media if isinstance(media, list) else []
+              kinds = Counter()
+              variants = 0
+              highest = 0
+              for item in media:
+                  if not isinstance(item, dict):
+                      continue
+                  kind = str(item.get("type") or item.get("kind") or "unknown").lower()
+                  kinds[kind] += 1
+                  values = item.get("variants")
+                  for variant in values if isinstance(values, list) else []:
+                      if not isinstance(variant, dict):
+                          continue
+                      content_type = str(variant.get("content_type") or "").lower()
+                      url = str(variant.get("url") or "").lower()
+                      if content_type == "video/mp4" or url.split("?", 1)[0].endswith(".mp4"):
+                          variants += 1
+                          try:
+                              highest = max(highest, int(variant.get("bitrate") or 0))
+                          except Exception:
+                              pass
+              return len(media), ",".join(sorted(kinds)) if kinds else "none", variants, highest
+
+          def id_match(row, expected):
+              identifier = str(row.get("id") or "")
+              if expected != "-":
+                  return identifier == expected
+              if not ID_RE.fullmatch(identifier):
+                  return False
+              url = str(row.get("url") or row.get("permalink") or "")
+              match = re.search(r"/status/([0-9]{15,22})(?:[/?#]|$)", url)
+              return bool(match and match.group(1) == identifier)
+
+          def truthy_field(row, names):
+              for key in names:
+                  value = row.get(key)
+                  if value is True or (isinstance(value, (dict, list)) and bool(value)):
+                      return True
+              return False
+
+          def skip_reasons(row, when):
+              reasons = []
+              if not isinstance(row.get("media"), list) or not row.get("media"):
+                  reasons.append("no_media")
+              if author_name(row).lstrip("@").casefold() != "mobgamesstudios":
+                  reasons.append("not_official_author")
+              if when is None:
+                  reasons.append("created_at_unverified")
+              elif when < CUTOFF:
+                  reasons.append("older_than_2026-11-05T00:00:00Z")
+              if truthy_field(row, ("reply_to", "reply_to_user", "in_reply_to_status_id", "in_reply_to_user_id", "is_reply")):
+                  reasons.append("reply")
+              if truthy_field(row, ("retweeted_status", "retweeted_tweet", "is_retweet", "retweeted")):
+                  reasons.append("retweet")
+              if str(row.get("text") or "").lstrip().startswith("RT @"):
+                  reasons.append("retweet")
+              if truthy_field(row, ("quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id", "is_quote", "is_quote_status")):
+                  reasons.append("quote")
+              if truthy_field(row, ("pinned", "is_pinned", "pinned_tweet", "isPinned")):
+                  reasons.append("pinned")
+              return list(dict.fromkeys(reasons))
+
+          def newest_id(path):
+              rows, _, _ = read_payload(path, False)
+              valid = [r for r in rows if ID_RE.fullmatch(str(r.get("id") or ""))]
+              valid.sort(key=lambda r: parse_time(r.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+              if valid:
+                  print(str(valid[0]["id"]))
+
+          def append_summary(text):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+                  stream.write(text + "\n")
+
+          mode = sys.argv[1]
+          if mode == "newest-id":
+              newest_id(sys.argv[2])
+              raise SystemExit(0)
+          if mode == "skip":
+              append_summary("### Probe D\n\n- Exit code: **SKIPPED**\n- ID match: **N/A**\n- Reason: Probe B returned no usable post ID.")
+              raise SystemExit(0)
+
+          try:
+              name, exit_code, elapsed, output_format, expected, stdout_path, stderr_path = sys.argv[1:8]
+              rows, diagnostics, _ = read_payload(stdout_path, output_format == "json")
+              try:
+                  stderr = open(stderr_path, "r", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  stderr = ""
+              rate_limited = bool(RATE_RE.search("\n".join([stderr, *diagnostics])))
+              lines = [
+                  "### Probe " + name,
+                  "",
+                  "- Exit code: **" + exit_code + "**",
+                  "- ID match: **" + ("yes" if rows and all(id_match(row, expected) for row in rows) else "no") + "**",
+                  "- Posts parsed: **" + str(len(rows)) + "**",
+                  "- Elapsed: **" + elapsed + " ms**",
+                  "- 429/403/rate-limit sign: **" + ("yes" if rate_limited else "no") + "**",
+              ]
+              for index, row in enumerate(rows, 1):
+                  count, kinds, mp4_count, bitrate = media_stats(row)
+                  lines.extend([
+                      "",
+                      "- Item " + str(index) + ": id " + str(row.get("id") or "missing") + "; author " + (author_name(row) or "missing") + "; created_at " + str(row.get("created_at") or "missing") + "; text length **" + str(len(str(row.get("text") or ""))) + "**; media **" + str(count) + " (" + kinds + ")**; MP4 variants **" + str(mp4_count) + "**; highest bitrate **" + str(bitrate) + " bps**."
+                  ])
+              if name == "E":
+                  entries = []
+                  skipped = []
+                  for row in rows:
+                      when = parse_time(row.get("created_at"))
+                      reasons = skip_reasons(row, when)
+                      identifier = str(row.get("id") or "missing")
+                      if reasons:
+                          skipped.append((when or datetime.min.replace(tzinfo=timezone.utc), identifier, str(row.get("created_at") or "unknown"), reasons))
+                      else:
+                          entries.append((when, identifier, row))
+                  entries.sort(key=lambda item: (item[0], item[1]))
+                  skipped.sort(key=lambda item: (item[0], item[1]))
+                  times = [parse_time(row.get("created_at")) for row in rows]
+                  valid_times = [value for value in times if value is not None]
+                  now = datetime.now(timezone.utc)
+                  oldest = min(valid_times) if valid_times else None
+                  newest = max(valid_times) if valid_times else None
+                  back_hours = ((now - oldest).total_seconds() / 3600) if oldest else None
+                  span_hours = ((newest - oldest).total_seconds() / 3600) if oldest and newest else None
+                  at_cutoff = sum(1 for row in rows if parse_time(row.get("created_at")) is not None and parse_time(row.get("created_at")) >= CUTOFF)
+                  reaches_5h = bool(oldest and oldest <= now - timedelta(hours=5))
+                  lines.extend([
+                      "",
+                      "#### Probe E discovery window",
+                      "- Timeline posts parsed: **" + str(len(rows)) + "**",
+                      "- Oldest created_at: **" + (oldest.isoformat() if oldest else "unknown") + "**",
+                      "- Newest created_at: **" + (newest.isoformat() if newest else "unknown") + "**",
+                      "- Reach back from probe time: **" + (f"{back_hours:.2f} hours" if back_hours is not None else "unknown") + "**",
+                      "- Span newest-to-oldest: **" + (f"{span_hours:.2f} hours" if span_hours is not None else "unknown") + "**",
+                      "- Window reaches at least 5 hours back: **" + ("yes" if reaches_5h else "no/unknown") + "**",
+                      "- At/after cutoff: **" + str(at_cutoff) + "**",
+                      "- Eligible after all checks (oldest to newest): **" + str(len(entries)) + "**",
+                  ])
+                  lines.append("- Eligible IDs (oldest to newest): " + (", ".join(item[1] for item in entries) if entries else "none"))
+                  lines.append("- Skipped posts:")
+                  if skipped:
+                      for _, identifier, created, reasons in skipped:
+                          lines.append("  - " + identifier + " · " + created + " · " + ", ".join(reasons))
+                  else:
+                      lines.append("  - none")
+              append_summary("\n".join(lines))
+          except Exception:
+              append_summary("### Probe summary\n\n- Parsing result: **SAFE_SUMMARY_ERROR**. Raw command output was not printed.")
+          PY
+
+          run_probe() {
+            name="$1"
+            format="$2"
+            expected="$3"
+            shift 3
+            probe_dir="$work/$name"
+            mkdir -p "$probe_dir/home" "$probe_dir/config" "$probe_dir/data" "$probe_dir/cache"
+            start_ms="$(date +%s%3N)"
+            set +e
+            env -i PATH=/usr/bin:/bin HOME="$probe_dir/home" XDG_CONFIG_HOME="$probe_dir/config" XDG_DATA_HOME="$probe_dir/data" XDG_CACHE_HOME="$probe_dir/cache" LANG=C.UTF-8 timeout 20s "$X_CLI_PATH" --retries=0 --timeout=15s --no-cache --data-dir "$probe_dir/data" "$@" > "$probe_dir/stdout" 2> "$probe_dir/stderr"
+            exit_code="$?"
+            set -e
+            end_ms="$(date +%s%3N)"
+            elapsed_ms="$((end_ms - start_ms))"
+            python3 "$summary_script" "$name" "$exit_code" "$elapsed_ms" "$format" "$expected" "$probe_dir/stdout" "$probe_dir/stderr"
+          }
+
+          run_probe A json 1731735864110424148 --guest --tier=guest tweet https://x.com/mobgamesstudios/status/1731735864110424148 -o json
+          run_probe B jsonl - --guest --tier=guest timeline mobgamesstudios --guest -n 10 -o jsonl
+          d_id="$(python3 "$summary_script" newest-id "$work/B/stdout")"
+          if [[ -n "$d_id" ]]; then
+            run_probe D json "$d_id" --guest --tier=guest tweet "https://x.com/mobgamesstudios/status/$d_id" -o json
+          else
+            python3 "$summary_script" skip
+          fi
+          run_probe C jsonl - --tier=0 timeline mobgamesstudios -n 10 -o jsonl
+          run_probe E jsonl - --guest --tier=guest timeline mobgamesstudios --guest -n 40 -o jsonl
