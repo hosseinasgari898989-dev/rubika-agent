@@ -4868,7 +4868,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(fetches.length, 2);
   assert.equal(dispatches.length, 1);
   assert.equal(dispatches[0].workflow, "mob-x-link-processor.yml");
-  assert.equal(dispatches[0].inputs, undefined);
+  assert.equal(dispatches[0].inputs, null);
   assert.equal(dispatches[0].options.maxAttempts, 1);
   assert.equal(result.entries.find(x => x.workflow === "termux-docker-discovery.yml").result, "skipped");
   assert.equal(result.entries.find(x => x.workflow === "mob-x-link-processor.yml").result, "dispatched");
