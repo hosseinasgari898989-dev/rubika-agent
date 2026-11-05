@@ -41,8 +41,11 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             "source_name": "Mob Entertainment on X",
             "source_platform": "x",
             "official_source": True,
-            "published_at": "2026-10-20T12:00:00+00:00",
+            "published_at": "2026-11-05T12:00:00+00:00",
             "freshness_verified": True,
+            "pinned": False,
+            "pin_state": "known_not_pinned",
+            "pin_state_source": "test_fixture.syndication.is_pinned",
             "media_type": "image",
             "media_url": "https://pbs.twimg.com/media/photo.jpg",
         }
@@ -334,6 +337,9 @@ class TestChannelPublishingGateTests(unittest.TestCase):
                 "official_source": True,
                 "published_at": "2026-10-19T23:59:59Z",
                 "freshness_verified": True,
+                "pinned": False,
+                "pin_state": "known_not_pinned",
+                "pin_state_source": "test_fixture.syndication.is_pinned",
                 "media_type": "image",
                 "media_url": "https://pbs.twimg.com/media/photo.jpg",
             }
@@ -365,7 +371,7 @@ class TestChannelPublishingGateTests(unittest.TestCase):
         self.assertEqual(result["status"], "nothing_new")
         self.assertEqual(result["lifecycle"]["mode"], "production")
         self.assertTrue(result["lifecycle"]["birth_cutoff_enabled"])
-        self.assertEqual(result["lifecycle"]["rejected_before_or_unverified"], 1)
+        self.assertEqual(result["since_filter"]["rejected_count"], 1)
         self.assertEqual(result["candidate_count"], 0)
         self.assertFalse(result["publishing"])
 
@@ -771,6 +777,10 @@ class MobXBacklogSafetyTests(unittest.TestCase):
                 "official_source": True,
                 "author": "@mobgamesstudios",
                 "pinned": False,
+                "pin_state": "inferred_not_pinned",
+                "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence",
+                "pin_flags": [],
+                "profile_pinned_ids": [],
                 "published_at": "2026-11-05T01:00:00Z",
                 "media_type": "image",
                 "media_url": "https://pbs.twimg.com/media/example.jpg",
@@ -797,10 +807,17 @@ class MobXBacklogSafetyTests(unittest.TestCase):
         self.assertEqual(restored["external_id"], stored["external_id"])
         self.assertEqual(restored["id_source"], "x-cli")
         self.assertEqual(restored["pinned"], False)
+        self.assertEqual(restored["pin_state"], "inferred_not_pinned")
+        self.assertEqual(restored["pin_state_source"], "created_at_at_or_after_cutoff_without_pin_evidence")
 
         for changes in (
             {"status": "failed"},
             {"canonical_url": "https://x.com/fanaccount/status/2111111111111111250"},
+            {"validation_json": json.dumps({"mob_x_discovery": {
+                **metadata["mob_x_discovery"],
+                "pin_state": "inferred_not_pinned",
+                "pin_state_source": "",
+            }})},
             {"validation_json": json.dumps({"mob_x_discovery": {**metadata["mob_x_discovery"], "pinned": True}})},
             {"validation_json": json.dumps({"mob_x_discovery": {**metadata["mob_x_discovery"], "official_source": False}})},
         ):
@@ -837,6 +854,8 @@ class MobXBacklogSafetyTests(unittest.TestCase):
             "published_at": "2026-11-05T10:00:00Z",
             "freshness_verified": True,
             "pinned": False,
+            "pin_state": "known_not_pinned",
+            "pin_state_source": "test_fixture.syndication.is_pinned",
             "media_type": "image",
             "media_url": "https://pbs.twimg.com/media/example.jpg",
             "id_source": "x-cli",
