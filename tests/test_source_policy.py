@@ -2,7 +2,7 @@ from __future__ import annotations
 import unittest
 from agent.brain.models import Candidate, InspectionResult
 from agent.brain.policy import evaluate_edit_candidate, precheck_edit_candidate
-from agent.source_policy import allow_upscale, delivery_enabled, download_quality_max, known_tiktok_profiles, load_source_policy_config, resolve_source_policy
+from agent.source_policy import allow_upscale, delivery_enabled, download_quality_max, known_tiktok_profiles, load_source_policy_config, resolve_source_policy, set_dynamic_tiktok_sources
 
 
 class TikTokSourcePolicyTests(unittest.TestCase):
@@ -60,6 +60,22 @@ class TikTokSourcePolicyTests(unittest.TestCase):
     def test_no_audio_rejects_with_exact_reason(self):
         result=evaluate_edit_candidate(self.candidate("meloaep_"),self.inspection(audio=False),moderation={})
         self.assertIn("no_audio",result.reasons)
+
+    def test_console_managed_sources_use_existing_tiktok_filters_and_soft_disable(self):
+        rows = [
+            {"platform": "tiktok", "source_key": "newcreator", "enabled": 1, "managed": True},
+        ]
+        set_dynamic_tiktok_sources(rows)
+        enabled = resolve_source_policy("tiktok", "newcreator")
+        self.assertTrue(enabled["known_source"])
+        self.assertTrue(enabled["enabled"])
+        self.assertEqual(enabled["minimum_source_short_side"], 480)
+        self.assertEqual(enabled["output_format"], "preserve_source")
+        self.assertTrue(enabled["require_poppy_relevance_check"])
+        disabled = {"platform": "tiktok", "source_key": "newcreator", "enabled": 0, "managed": True}
+        set_dynamic_tiktok_sources([disabled])
+        self.assertFalse(resolve_source_policy("tiktok", "newcreator")["enabled"])
+        set_dynamic_tiktok_sources([], include_disabled=True)
 
     def test_basic_minimum_quality_remains_and_upscale_is_disabled(self):
         result=evaluate_edit_candidate(self.candidate("meloaep_"),self.inspection(width=320,height=240),moderation={"has_music":True})

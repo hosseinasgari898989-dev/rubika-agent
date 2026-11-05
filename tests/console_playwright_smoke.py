@@ -33,6 +33,8 @@ PAGES = [
     ("soon", "به‌زودی"),
     ("set", "اتصال"),
     ("unsent", "ارسال‌نشده‌ها"),
+    ("tkaccounts", "حساب‌های TikTok"),
+    ("tiktok-unsent", "تیک‌تاک - ارسال‌نشده"),
 ]
 NOW = "2026-10-27T00:00:00Z"
 MEGA_KEY = "A" * 43
@@ -150,10 +152,28 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
     if path == "/api/console/sources":
         if method == "GET":
             return {"ok": True, "items": [{
-                "id": 1, "platform": "tiktok", "source_key": "@fixture",
-                "display_name": "Fixture source", "enabled": 1, "last_checked_at": NOW,
+                "id": "tiktok:fixture", "platform": "tiktok", "source_key": "fixture",
+                "display_name": "Fixture source", "enabled": 1,
+                "created_at": "2026-11-05T18:00:00Z", "last_checked_at": NOW,
+                "managed": True,
             }]}
-        return {"ok": True, "id": 2}
+        return {"ok": True, "id": "tiktok:newfixture"}
+    if path.startswith("/api/console/sources/") and method == "DELETE":
+        return {"ok": True, "history_preserved": True}
+    if path == "/api/console/tiktok-unsent":
+        return {"ok": True, "items": [{
+            "id": "tiktok:7616247520657771796", "item_id": "tiktok:7616247520657771796",
+            "account": "fixture", "caption": "Fixture failed TikTok video",
+            "reason": "rubika_rejected_upload_failed", "created_at": NOW,
+            "status": "stored", "queue_status": "failed", "already_sent": 0, "can_resend": 1,
+        }, {
+            "id": "tiktok:7616247520657771797", "item_id": "tiktok:7616247520657771797",
+            "account": "fixture", "caption": "Fixture already sent video",
+            "reason": "delivery_receipt_missing", "created_at": NOW,
+            "status": "stored", "queue_status": "sent", "already_sent": 1, "can_resend": 0,
+        }]}
+    if path.startswith("/api/console/tiktok-unsent/") and path.endswith("/resend") and method == "POST":
+        return {"ok": True, "queued": True, "status": "queued"}
     if path == "/api/console/links":
         if method == "GET":
             return {"ok": True, "items": [{
@@ -261,11 +281,10 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
                 "id": "fixture-failed-valid", "status": "stored", "source": "mob_x",
                 "media_type": "video", "caption": "Preview fixture",
                 "reason": "rubika_send_failed", "size_bytes": 1048576,
-                "created_at": NOW,
-                "share_url": MEGA_URL,
+                "created_at": NOW, "share_url": MEGA_URL,
             },
             {
-                "id": "fixture-failed-invalid", "status": "stored", "source": "tiktok",
+                "id": "fixture-failed-invalid", "status": "stored", "source": "mob_x",
                 "media_type": "video", "caption": "Invalid link fixture",
                 "reason": "rubika_send_failed", "size_bytes": 2048,
                 "created_at": NOW,
@@ -364,6 +383,7 @@ def main() -> int:
             "localStorage.setItem('rc_owner_token', 'playwright-owner-fixture-only');"
         )
         page = context.new_page()
+        page.on("dialog", lambda dialog: dialog.accept())
         page.route(f"{MOCK_BASE}/**", mock_worker)
         # Never contact the live MEGA embed from the mocked smoke test.
         page.route(
@@ -472,6 +492,8 @@ def main() -> int:
                 ("inst", "حالت فوری"),
                 ("report", "گزارش"),
                 ("unsent", "ارسال‌نشده‌ها"),
+                ("tkaccounts", "حساب‌های TikTok"),
+                ("tiktok-unsent", "تیک‌تاک - ارسال‌نشده"),
             ]
             for viewport in ({"width": 390, "height": 844}, {"width": 1280, "height": 800}):
                 page.set_viewport_size(viewport)
@@ -493,8 +515,18 @@ def main() -> int:
                             failures.append(f"direct inst at {viewport['width']}: instant-link form is missing")
                         if route_id == "report" and "خلاصهٔ ۲۴ ساعت" not in view_text:
                             failures.append(f"direct report at {viewport['width']}: report body missing; dashboard fallback suspected")
-                        if route_id == "unsent" and page.locator('#view button[data-a="fmPreview"]').count() != 2:
-                            failures.append(f"direct unsent at {viewport['width']}: failed-media controls are missing")
+                        if route_id == "unsent":
+                            if page.locator('#view button[data-a="fmPreview"]').count() != 2:
+                                failures.append(f"direct unsent at {viewport['width']}: failed-media controls are missing")
+                            if "TikTok" in view_text or "تیک‌تاک" in view_text:
+                                failures.append(f"direct unsent at {viewport['width']}: TikTok row leaked into generic unsent section")
+                        if route_id == "tkaccounts" and page.locator('#view #tk_account').count() != 1:
+                            failures.append(f"direct account page at {viewport['width']}: TikTok account input missing")
+                        if route_id == "tiktok-unsent":
+                            if "Fixture failed TikTok video" not in view_text and page.locator('#view button[data-a="tkResend"]').count() != 1:
+                                failures.append(f"direct TikTok unsent at {viewport['width']}: dedicated item/action missing")
+                            if page.locator('#view button[data-a="tkResend"]').count() != 1:
+                                failures.append(f"direct TikTok unsent at {viewport['width']}: sent item must hide its resend button")
                         dimensions = page.evaluate("() => ({scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth})")
                         if dimensions["scrollWidth"] > dimensions["innerWidth"]:
                             failures.append(f"direct {route_id} at {viewport['width']}: horizontal overflow ({dimensions['scrollWidth']} > {dimensions['innerWidth']})")
@@ -517,6 +549,31 @@ def main() -> int:
                         failures.append(f"direct {route_id} at {viewport['width']} failed: {exc}")
 
             page.set_viewport_size({"width": 1280, "height": 800})
+
+            # Account add/remove and the dedicated TikTok unsent action use the owner token.
+            active_page[0] = "tkaccounts-actions"
+            page.locator('#nav button[data-id="tkaccounts"]').click()
+            page.wait_for_selector("#tk_account", timeout=5000)
+            page.locator("#tk_account").fill("@newfixture")
+            click_action(page, '#view button[data-a="tkAdd"]', "add TikTok account")
+            if "POST /api/console/sources" not in mocked_requests:
+                failures.append("TikTok account add did not use the existing console sources API")
+            page.locator('#nav button[data-id="tkaccounts"]').click()
+            page.wait_for_selector('#view button[data-a="tkRemove"]', timeout=5000)
+            click_action(page, '#view button[data-a="tkRemove"]', "remove TikTok account")
+            if "DELETE /api/console/sources/tiktok%3Afixture" not in mocked_requests:
+                failures.append("TikTok account remove did not use the existing source API")
+
+            active_page[0] = "tiktok-unsent-actions"
+            page.locator('#nav button[data-id="tiktok-unsent"]').click()
+            page.wait_for_selector('#view button[data-a="tkResend"]', timeout=5000)
+            resend = page.locator('#view button[data-a="tkResend"]')
+            resend.click()
+            page.wait_for_function("() => document.querySelector('#view')?.innerText.includes('در صف')", timeout=5000)
+            if sum(1 for item in mocked_requests if item.startswith("POST /api/console/tiktok-unsent/")) != 1:
+                failures.append("TikTok resend did not issue exactly one POST")
+            if "ارسال دوباره" in page.locator("#view").inner_text() and page.locator('#view button[data-a="tkResend"]').count() == 0:
+                failures.append("TikTok resend state rendered inconsistently")
 
             # Reject-post styling must differ from a primary action on both target viewports.
             for viewport in ({"width": 390, "height": 844}, {"width": 1280, "height": 800}):

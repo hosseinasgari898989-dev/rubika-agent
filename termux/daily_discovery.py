@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -16,6 +17,8 @@ from typing import Any
 from agent.discovery.mob_official_complete import discover_official_x_posts
 from agent.discovery.termux_sources import discover_tiktok_profiles
 from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
+from agent.brain.cloud_state import CloudState
+from agent.source_policy import set_dynamic_tiktok_sources
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,13 +41,45 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
-def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, Any]:
+def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_sources: bool = False) -> dict[str, Any]:
     """Collect TikTok edit metadata and official Mob X posts without downloads or publishing."""
-    print("1/2 TikTok: checking the six selected creator profiles (metadata only)...", flush=True)
-    tiktok_candidates, tiktok_attempts = discover_tiktok_profiles(
-        max_results=48,
-        max_per_profile=8,
-    )
+    print("1/2 TikTok: loading owner-selected creator profiles (metadata only)...", flush=True)
+    dynamic_cutoffs: dict[str, str] = {}
+    token = os.getenv("AGENT_API_TOKEN", "").strip()
+    if load_remote_sources and token:
+        cloud = CloudState(
+            os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
+            token=token, timeout_seconds=25,
+        )
+        source_rows = cloud.get_console_tiktok_sources()
+        set_dynamic_tiktok_sources(source_rows)
+        profiles = tuple(
+            str(row.get("source_key") or "").lstrip("@")
+            for row in source_rows
+            if row.get("enabled") is True or row.get("enabled") == 1
+        )
+        for row in source_rows:
+            handle = str(row.get("source_key") or "").lstrip("@").lower()
+            created_at = row.get("created_at")
+            if handle and row.get("managed") is True and isinstance(created_at, str) and created_at:
+                dynamic_cutoffs[handle] = created_at
+    else:
+        from agent.discovery.termux_sources import TIKTOK_PROFILES
+        profiles = TIKTOK_PROFILES
+
+    max_tiktok_results = max(48, len(profiles) * 8) if profiles else 0
+    if not profiles:
+        tiktok_candidates, tiktok_attempts = [], [
+            {"platform": "tiktok", "result": "no_enabled_sources"}
+        ]
+    else:
+        tiktok_candidates, tiktok_attempts = discover_tiktok_profiles(
+            profiles=profiles,
+            selected_profiles=profiles,
+            max_results=max_tiktok_results,
+            max_per_profile=8,
+            created_after_by_profile=dynamic_cutoffs,
+        )
     print("2/2 Mob Entertainment: checking only official X posts via public discovery and X syndication (metadata only)...", flush=True)
     mob_candidates, mob_attempts = discover_official_x_posts(max_results=12)
 
@@ -108,10 +143,10 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         "candidates": normalized,
         "attempts": [*tiktok_attempts, *mob_attempts, lifecycle_attempt],
         "limits": {
-            "tiktok_max_creator_profiles": 6,
+            "tiktok_max_creator_profiles": len(profiles),
             "tiktok_max_per_known_profile": 8,
-            "tiktok_date_filtering": "deferred_to_phase_6_since_utc_engine",
-            "tiktok_max_results": 60,
+            "tiktok_date_filtering": "new_d1_sources_since_created_at; legacy_profiles_unchanged",
+            "tiktok_max_results": max_tiktok_results,
             "mob_x_max_candidates_per_run": 12,
             "mob_official_source_lanes": ["x"],
             "mob_x_source_handle": "@mobgamesstudios",
@@ -129,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.parse_args(argv)
 
     try:
-        report = collect_daily_report()
+        report = collect_daily_report(load_remote_sources=True)
     except Exception as exc:
         print(f"Discovery failed safely: {type(exc).__name__}", file=sys.stderr, flush=True)
         return 2

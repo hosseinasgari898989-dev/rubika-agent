@@ -72,8 +72,9 @@ class CloudState:
         *,
         max_body_bytes: int = 32 * 1024,
     ) -> dict[str, Any]:
-        if not path.startswith("/api/brain/"):
-            raise ValueError("path_outside_brain_api")
+        allowed_console_source_read = method == "GET" and path.split("?", 1)[0] == "/api/console/sources"
+        if not path.startswith("/api/brain/") and not allowed_console_source_read:
+            raise ValueError("path_outside_control_api")
         if method not in {"GET", "POST"}:
             raise ValueError("unsupported_method")
         if payload is not None:
@@ -450,6 +451,14 @@ class CloudState:
                 return {"ids": ids, "hashes": hashes}
         # Refuse to report a complete index when the cap was reached.
         raise CloudStateError("control_api_seen_index_page_limit")
+
+    def get_console_tiktok_sources(self) -> list[dict[str, Any]]:
+        """Read the active/disabled owner-managed source overlay through the console API."""
+        response = self._request("GET", "/api/console/sources?platform=tiktok")
+        rows = response.get("items")
+        if not isinstance(rows, list):
+            raise CloudStateError("control_api_invalid_tiktok_sources")
+        return [row for row in rows if isinstance(row, dict)]
 
     def get_approved_queue(self, limit: int = 25) -> list[dict[str, Any]]:
         bounded = min(100, max(1, int(limit)))

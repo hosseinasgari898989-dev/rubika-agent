@@ -4,6 +4,7 @@
 
 import { handleConsoleRetry } from "./console_retry.js";
 import { handleFailedMedia } from "./console_failed_media.js";
+import { handleTikTokConsoleApi } from "./console_tiktok.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
 
 const CORS = {
@@ -84,6 +85,8 @@ export async function handleConsoleApi(request, env, h) {
     if (retryRes) return retryRes;
     const failedMediaRes = await handleFailedMedia(request, env, h, sub, m);
     if (failedMediaRes) return failedMediaRes;
+    const tiktokConsoleRes = await handleTikTokConsoleApi(request, env, h, sub, m);
+    if (tiktokConsoleRes) return tiktokConsoleRes;
     // ---------- read-only 24-hour owner digest ----------
     if (m === "GET" && sub === "/digest") {
       const state = await first(

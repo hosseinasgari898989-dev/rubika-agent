@@ -17,6 +17,7 @@ from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.delivery import _is_rate_limit_error
 from agent.brain.e2e_from_report import run_one
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
+from agent.source_policy import set_dynamic_tiktok_sources
 # The global lifecycle birth gate is reserved for official Mob news, not TikTok edits.
 
 
@@ -283,6 +284,11 @@ def run_daily(
         os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
         token=os.getenv("AGENT_API_TOKEN", ""),
         timeout_seconds=25,
+    )
+    source_reader = getattr(cloud, "get_console_tiktok_sources", None)
+    # Removing an account stops future discovery, but items already in the queue remain valid.
+    set_dynamic_tiktok_sources(
+        source_reader() if callable(source_reader) else [], include_disabled=True
     )
     report: dict[str, Any] = {
         "ok": True,

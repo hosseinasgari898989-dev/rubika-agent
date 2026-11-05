@@ -144,7 +144,7 @@ jobs:
           from termux.daily_discovery import collect_daily_report
 
           report_path = Path("/out/termux_discovery.json")
-          report = collect_daily_report(output_path=report_path)
+          report = collect_daily_report(output_path=report_path, load_remote_sources=True)
           # The Termux container writes as its own UID; grant the host runner read access.
           report_path.chmod(0o644)
           summary = report.get("summary", {})
@@ -196,6 +196,8 @@ jobs:
             -v "$output_dir:/out" \
             -w /workspace \
             -e PYTHONPATH=/workspace \
+            -e AGENT_API_TOKEN \
+            -e AGENT_API_BASE_URL \
             termux/termux-docker:x86_64 \
             sh -lc '
               set -eu

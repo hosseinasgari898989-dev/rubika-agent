@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from termux import daily_discovery
-from agent.source_policy import resolve_source_policy
+from agent.source_policy import resolve_source_policy, set_dynamic_tiktok_sources
 
 
 class TermuxDailyDiscoveryTests(unittest.TestCase):
@@ -76,6 +77,34 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 json.loads(written)["candidates"]["mob_official"][0]["id"],
                 "x-1734258130186559716",
             )
+
+    def test_live_collection_loads_console_managed_profiles_through_authenticated_api(self):
+        source_rows = [{
+            "id": "tiktok:newcreator", "platform": "tiktok",
+            "source_key": "newcreator", "enabled": 1, "managed": True,
+            "created_at": "2026-11-05T10:00:00Z",
+        }]
+        candidate = {
+            "platform": "tiktok", "id": "7610592632179297558",
+            "url": "https://www.tiktok.com/@newcreator/video/7610592632179297558",
+            "author": "newcreator", "hashtags": ["#PoppyPlaytime"],
+            "title": "Poppy Playtime edit", "caption": "A public edit",
+            "published_at": "2026-11-05T11:00:00+00:00", "media_type": "video",
+        }
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"AGENT_API_TOKEN": "test-token-that-is-never-real"}), patch.object(daily_discovery, "CloudState") as cloud_type, patch.object(daily_discovery, "discover_tiktok_profiles") as discover, patch.object(daily_discovery, "discover_official_x_posts", return_value=([], [])):
+            cloud_type.return_value.get_console_tiktok_sources.return_value = source_rows
+            def collect(**kwargs):
+                self.assertEqual(kwargs["profiles"], ("newcreator",))
+                self.assertEqual(kwargs["created_after_by_profile"], {"newcreator": source_rows[0]["created_at"]})
+                return [{**candidate, "source_policy": resolve_source_policy("tiktok", "newcreator")}], []
+            discover.side_effect = collect
+            report = daily_discovery.collect_daily_report(
+                output_path=Path(folder) / "report.json", load_remote_sources=True
+            )
+        cloud_type.assert_called_once()
+        self.assertEqual(report["summary"]["tiktok_candidates"], 1)
+        self.assertEqual(report["candidates"]["tiktok"][0]["author"], "newcreator")
+        set_dynamic_tiktok_sources([])
 
     def test_manual_cli_cannot_push_a_report_to_github(self):
         self.assertFalse(hasattr(daily_discovery, "push_report_to_main_branch"))

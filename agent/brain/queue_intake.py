@@ -18,7 +18,7 @@ from typing import Any, Mapping
 from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
 # Official Mob news lifecycle cutoffs are not applied to the TikTok edit queue.
-from agent.source_policy import has_required_any_keyword, resolve_source_policy
+from agent.source_policy import has_required_any_keyword, resolve_source_policy, set_dynamic_tiktok_sources
 from agent.brain.tiktok_urls import normalize_tiktok_url
 
 
@@ -250,6 +250,8 @@ def run_intake(
     base_url = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
     token = os.getenv("AGENT_API_TOKEN", "").strip()
     cloud = CloudState(base_url, token=token, timeout_seconds=25)
+    source_reader = getattr(cloud, "get_console_tiktok_sources", None)
+    set_dynamic_tiktok_sources(source_reader() if callable(source_reader) else [])
     payload = load_report(report_path)
     filter_diagnostics: dict[str, Any] = {}
     candidates = candidates_for_queue(payload, diagnostics=filter_diagnostics)

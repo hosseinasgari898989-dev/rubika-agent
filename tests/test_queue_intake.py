@@ -33,6 +33,10 @@ class FakeCloudState:
             "created_at": "2026-10-14T01:00:00Z"})
         self.blocking_seen_ids = {"tiktok:" + _video_id(0,99)}
         self.duplicate_once = {_video_id(2,0)}
+        self.console_sources = []
+
+    def get_console_tiktok_sources(self):
+        return list(self.console_sources)
 
     def get_automation_queue(self, *, status="queued", limit=100, offset=0):
         values = self.items[status]
@@ -122,6 +126,28 @@ class QueueIntakeTests(unittest.TestCase):
             rows.extend([{"external_id": str(i)+"1", "source_key": creator}, {"external_id": str(i)+"2", "source_key": creator}])
         self.assertEqual([row["external_id"] for row in fair_round_robin(rows)[:4]], ["01","11","21","31"])
         self.assertEqual([row["external_id"] for row in fair_round_robin(rows, last_source_key=PROFILES[1])[:3]], ["21","31","41"])
+
+    def test_intake_accepts_active_console_managed_account_without_weakening_keyword_filter(self):
+        cloud = FakeCloud()
+        cloud.console_sources = [{
+            "platform": "tiktok", "source_key": "console_creator",
+            "enabled": 1, "managed": True, "created_at": _now_iso(),
+        }]
+        candidate = _row("7616247520657771888", "console_creator", title="Poppy Playtime edit")
+        payload = {
+            "schema_version": 1, "source": "github_actions_termux_docker",
+            "mode": "metadata_only_no_download_no_publish", "generated_at": _now_iso(),
+            "candidates": {"tiktok": [candidate], "mob_official": []},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch("agent.brain.queue_intake.CloudState", return_value=cloud):
+                result = run_intake(path, max_new_items=1)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["inserted_count"], 1)
+        self.assertEqual(result["selected_items"][0]["source_key"], "console_creator")
+        set_dynamic_tiktok_sources([])
 
     def test_intake_skips_existing_ids_refills_duplicates_and_caps_four_new_items(self):
         candidates = []

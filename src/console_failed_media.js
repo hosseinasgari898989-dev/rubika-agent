@@ -214,11 +214,12 @@ async function list(request, env, h, fail) {
   if (limit === null) return fail("invalid_limit");
   if (offset === null) return fail("invalid_offset");
   try {
+    // TikTok originals are rendered in their own section; filter them at SQL level only.
     const rows = await env.DB.prepare(
       "SELECT id, source, job_id, item_id, media_type, storage_key, share_url, caption, reason, size_bytes, status, created_at " +
-      "FROM failed_media ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+      "FROM failed_media WHERE source <> 'tiktok' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
     ).bind(limit, offset).all();
-    const total = await env.DB.prepare("SELECT COUNT(*) AS n FROM failed_media").bind().first();
+    const total = await env.DB.prepare("SELECT COUNT(*) AS n FROM failed_media WHERE source <> 'tiktok'").bind().first();
     return h.json({ ok: true, items: rows?.results || [], total: total?.n ?? 0, limit, offset });
   } catch {
     return fail("console_db_error", 503);
@@ -244,7 +245,7 @@ async function deleteRequest(request, env, h, fail) {
     const values = rows.flatMap((row) => [row.id, row.status, row.updated_at, row.storage_key]);
     const sql = "UPDATE failed_media SET status = 'delete_requested', " +
       "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') " +
-      `WHERE (${predicate}) AND (SELECT COUNT(*) FROM failed_media WHERE (${predicate})) = ?`;
+      `WHERE (${predicate}) AND source <> 'tiktok' AND (SELECT COUNT(*) FROM failed_media WHERE (${predicate}) AND source <> 'tiktok') = ?`;
     try {
       const out = await env.DB.prepare(sql).bind(...values, ...values, rows.length).run();
       const requested = Number(out?.meta?.changes || 0);
@@ -266,7 +267,7 @@ async function deleteRequest(request, env, h, fail) {
     try {
       const result = await env.DB.prepare(
         "SELECT id, storage_key, status, updated_at FROM failed_media " +
-        "WHERE status IN ('stored','delete_failed','delete_requested') " +
+        "WHERE source <> 'tiktok' AND status IN ('stored','delete_failed','delete_requested') " +
         "ORDER BY updated_at, id LIMIT ?"
       ).bind(MAX_IDS).all();
       rows = result?.results || [];
@@ -283,7 +284,7 @@ async function deleteRequest(request, env, h, fail) {
     try {
       const result = await env.DB.prepare(
         "SELECT id, storage_key, status, updated_at FROM failed_media " +
-        `WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY id`
+`WHERE id IN (${ids.map(() => "?").join(",")}) AND source <> 'tiktok' ORDER BY id`
       ).bind(...ids).all();
       rows = result?.results || [];
     } catch {

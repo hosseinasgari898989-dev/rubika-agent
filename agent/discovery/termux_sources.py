@@ -8,7 +8,7 @@ import html
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from agent.source_policy import known_tiktok_profiles, resolve_source_policy
 from agent.brain.tiktok_urls import normalize_tiktok_url
@@ -31,6 +31,11 @@ def _to_iso_timestamp(value: Any) -> str | None:
             return None
         return datetime.fromtimestamp(numeric, tz=timezone.utc).isoformat()
     except (TypeError, ValueError, OverflowError, OSError):
+        if isinstance(value, str) and len(value) == 8 and value.isdigit():
+            try:
+                return datetime.strptime(value, "%Y%m%d").replace(tzinfo=timezone.utc).isoformat()
+            except ValueError:
+                return None
         return None
 
 
@@ -155,8 +160,10 @@ def discover_tiktok_profiles(
     sleep_seconds: float = 0.35,
     max_per_profile: int = 8,
     ydl_factory: Any | None = None,
+    selected_profiles: tuple[str, ...] | None = None,
+    created_after_by_profile: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Read metadata from the six configured creator feeds only; no hashtag/search fallback."""
+    """Read metadata from configured/owner-registered feeds only; no hashtag/search fallback."""
     if ydl_factory is None:
         try:
             import yt_dlp
@@ -165,6 +172,15 @@ def discover_tiktok_profiles(
         ydl_factory = yt_dlp.YoutubeDL
 
     selected = {handle.casefold(): handle for handle in TIKTOK_PROFILES}
+    for raw_selected in selected_profiles or ():
+        clean_selected = str(raw_selected).strip().removeprefix("@")
+        if clean_selected:
+            selected[clean_selected.casefold()] = clean_selected
+    created_after = {
+        str(key).strip().lstrip("@").casefold(): str(value)
+        for key, value in (created_after_by_profile or {}).items()
+        if isinstance(key, str) and isinstance(value, str) and value.strip()
+    }
     options = {
         "quiet": True, "no_warnings": True, "ignoreerrors": True,
         "skip_download": True, "extract_flat": "in_playlist",
@@ -193,6 +209,18 @@ def discover_tiktok_profiles(
         if not isinstance(entries, list):
             entries = [info] if isinstance(info, dict) and info.get("id") else []
         parsed = added = 0
+        skipped_before_add = 0
+        cutoff_text = created_after.get(handle.casefold())
+        cutoff = None
+        if cutoff_text:
+            try:
+                cutoff = datetime.fromisoformat(cutoff_text.replace("Z", "+00:00"))
+                if cutoff.tzinfo is None:
+                    cutoff = cutoff.replace(tzinfo=timezone.utc)
+                cutoff = cutoff.astimezone(timezone.utc)
+            except ValueError:
+                attempts.append({"platform": "tiktok", "query": "@" + handle, "result": "invalid_source_created_at"})
+                continue
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
@@ -225,6 +253,21 @@ def discover_tiktok_profiles(
                 },
             )
             row["url"] = canonical_url
+            if cutoff is not None:
+                published = row.get("published_at")
+                if not published:
+                    skipped_before_add += 1
+                    continue
+                try:
+                    published_dt = datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+                    if published_dt.tzinfo is None:
+                        published_dt = published_dt.replace(tzinfo=timezone.utc)
+                    if published_dt.astimezone(timezone.utc) < cutoff:
+                        skipped_before_add += 1
+                        continue
+                except ValueError:
+                    skipped_before_add += 1
+                    continue
             try:
                 row["duration_seconds"] = float(entry["duration"]) if entry.get("duration") is not None else None
             except (TypeError, ValueError, OverflowError):
@@ -236,6 +279,7 @@ def discover_tiktok_profiles(
         attempts.append({
             "platform": "tiktok", "query": "@" + handle,
             "parsed": parsed, "new_unique": added,
+            "skipped_before_account_added": skipped_before_add,
             "result": "metadata_found" if added else "no_public_video_metadata",
         })
         if sleep_seconds > 0:

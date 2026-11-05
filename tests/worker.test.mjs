@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./tiktok_console.test.mjs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -19,6 +20,8 @@ const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
 const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
 const consoleFailedMediaModuleUrl = dataModuleUrl(consoleFailedMediaSource);
 const failedMedia = await import(consoleFailedMediaModuleUrl);
+const consoleTikTokSource = fs.readFileSync(path.join(root, "src/console_tiktok.js"), "utf8");
+const consoleTikTokModuleUrl = dataModuleUrl(consoleTikTokSource);
 const retryScreensSource = fs.readFileSync(path.join(root, "src/panel_retry_screens.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
 const retryScreensModuleUrl = dataModuleUrl(retryScreensSource);
@@ -37,6 +40,7 @@ const screens = await import(screensModuleUrl);
 const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";')
   .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";')
+  .replace('from "./console_tiktok.js";', 'from "' + consoleTikTokModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";');
 const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
@@ -68,6 +72,9 @@ class FakeStatement {
     return this;
   }
   async first() {
+    if (this.sql.includes("COUNT(*) AS n FROM failed_media WHERE source <> 'tiktok'")) {
+      return { n: [...this.db.failedMedia.values()].filter(row => row.source !== "tiktok").length };
+    }
     if (this.sql.includes("FROM failed_media WHERE id = ?")) {
       const row = this.db.failedMedia.get(this.values[0]);
       return row ? { ...row } : null;
@@ -229,17 +236,33 @@ class FakeStatement {
     return null;
   }
   async all() {
+    if (this.sql.includes("FROM failed_media WHERE source <> 'tiktok'") && this.sql.includes("ORDER BY created_at DESC")) {
+      const [limit, offset] = this.values;
+      const rows = [...this.db.failedMedia.values()]
+        .filter(row => row.source !== "tiktok")
+        .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
+        .slice(Number(offset || 0), Number(offset || 0) + Number(limit || 50));
+      return { results: rows.map(row => ({ ...row })) };
+    }
+    if (this.sql.includes("FROM failed_media WHERE source <> 'tiktok' AND status IN")) {
+      const limit = Number(this.values[0] || 0);
+      const rows = [...this.db.failedMedia.values()]
+        .filter(row => row.source !== "tiktok" && ["stored", "delete_failed", "delete_requested"].includes(row.status))
+        .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)) || String(a.id).localeCompare(String(b.id)))
+        .slice(0, limit);
+      return { results: rows.map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
+    }
     if (this.sql.includes("FROM failed_media WHERE status IN")) {
       const limit = Number(this.values[0] || 0);
       const rows = [...this.db.failedMedia.values()]
-        .filter(row => ["stored", "delete_failed", "delete_requested"].includes(row.status))
+        .filter(row => row.source !== "tiktok" && ["stored", "delete_failed", "delete_requested"].includes(row.status))
         .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)) || String(a.id).localeCompare(String(b.id)))
         .slice(0, limit);
       return { results: rows.map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
     }
     if (this.sql.includes("FROM failed_media WHERE id IN")) {
       const ids = new Set(this.values);
-      return { results: [...this.db.failedMedia.values()].filter(row => ids.has(row.id))
+      return { results: [...this.db.failedMedia.values()].filter(row => ids.has(row.id) && row.source !== "tiktok")
         .sort((a, b) => String(a.id).localeCompare(String(b.id)))
         .map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
     }
@@ -345,7 +368,7 @@ class FakeStatement {
       for (let i = 0; i < count; i += 1) {
         const [id, status, updatedAt, storageKey] = first.slice(i * 4, i * 4 + 4);
         const row = this.db.failedMedia.get(id);
-        if (!row || row.status !== status || String(row.updated_at ?? "") !== updatedAt || row.storage_key !== storageKey) {
+        if (!row || row.source === "tiktok" || row.status !== status || String(row.updated_at ?? "") !== updatedAt || row.storage_key !== storageKey) {
           return { meta: { changes: 0 } };
         }
         rows.push(row);
