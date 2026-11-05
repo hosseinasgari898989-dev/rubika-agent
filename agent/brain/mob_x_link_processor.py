@@ -1210,6 +1210,14 @@ def process_one(report_path: str | None = None, panel_link_id: int | None = None
                 worker_failure_detail = transition_exc.error_detail or worker_failure_detail
         except Exception:
             report["transition_error"] = "mob_x_failure_transition_failed"
+        if code in {"mob_x_source_unavailable", "mob_x_author_mismatch", "mob_x_post_id_mismatch"}:
+            try:
+                send_owner_metadata_failure(
+                    os.getenv("RUBIKA_TOKEN", ""), os.getenv("RUBIKA_OWNER_CHAT_ID", ""), job["id"],
+                )
+                report["owner_pv_notice"] = "sent"
+            except Exception:
+                report["owner_pv_notice"] = "failed"
         if code == "mob_x_translation_failed":
             try:
                 send_owner_translation_failure(
