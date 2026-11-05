@@ -507,7 +507,7 @@ def _x_cli_public_post(external_id: str, binary: str) -> dict:
         # Do not inherit runner environment variables, HOME, XDG config, or any
         # account/session credentials. x-cli gets a fresh guest-only data root.
         child_env = {
-            "PATH": os.environ.get("PATH") or os.defpath,
+            "PATH": os.defpath,
             "HOME": str(home),
             "XDG_CONFIG_HOME": str(config_dir),
             "XDG_DATA_HOME": str(data_dir),
