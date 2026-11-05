@@ -49,9 +49,9 @@ assert.ok(originalSource.includes(consoleApiImport), "Worker must import console
 const cronSourceForWorker = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
 const cronModuleUrlForWorker = dataModuleUrl(cronSourceForWorker);
 const source = originalSource
-  .replace(workerImport, \`const { dispatchMobXWorkflow, handleOwnerPanel } = await import("\${panelModuleUrl}");\`)
-  .replace(cronImport, \`const { getLastWorkflowCronResult, runWorkflowCron } = await import("\${cronModuleUrlForWorker}");\`)
-  .replace(consoleApiImport, \`const { handleConsoleApi, corsPreflight, withCors } = await import("\${consoleApiModuleUrl}");\`);
+  .replace(workerImport, `const { dispatchMobXWorkflow, handleOwnerPanel } = await import("${panelModuleUrl}");`)
+  .replace(cronImport, `const { getLastWorkflowCronResult, runWorkflowCron } = await import("${cronModuleUrlForWorker}");`)
+  .replace(consoleApiImport, `const { handleConsoleApi, corsPreflight, withCors } = await import("${consoleApiModuleUrl}");`);
 const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString("base64");
 const imported = await import(moduleUrl);
 const worker = imported.default;
@@ -4897,6 +4897,27 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.ok(result.entries.every(x => x.result === "skipped" && x.http_status === null));
 }
 
+// The switch is ON when unset, and the real Worker entrypoint delegates to the cron runner.
+{
+  const cronSource = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
+  const cron = await import(dataModuleUrl(cronSource));
+  let dispatchCount = 0;
+  const result = await cron.runWorkflowCron(
+    { scheduledTime: 0 },
+    { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real" },
+    async () => { dispatchCount += 1; return { ok: true, status: 204 }; },
+    { fetcher: async () => new Response(JSON.stringify({ workflow_runs: [] }), { status: 200 }), logger: () => {} },
+  );
+  assert.equal(result.enabled, true);
+  assert.equal(dispatchCount, 2);
+  const workerResult = await worker.scheduled(
+    { scheduledTime: 0 },
+    { WORKFLOW_CRON_DISPATCH_ENABLED: "false" },
+  );
+  assert.equal(workerResult.entries.length, 2);
+  assert.ok(workerResult.entries.every(x => x.result === "skipped"));
+}
+
 // GitHub API errors are logged safely and never retried or dispatched.
 {
   const cronSource = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
@@ -4952,6 +4973,28 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     );
     assert.equal(calls.length, 1);
     assert.equal(termux.status, 503);
+    assert.deepEqual(JSON.parse(calls[0].options.body), { ref: "main" });
+
+    calls.length = 0;
+    const news = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real" },
+      "mob-x-news-production.yml",
+      undefined,
+      { maxAttempts: 1, safeStatusOnly: true },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(news.status, 503);
+    assert.deepEqual(JSON.parse(calls[0].options.body), { ref: "main" });
+
+    calls.length = 0;
+    const link = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real" },
+      "mob-x-link-processor.yml",
+      undefined,
+      { maxAttempts: 1, safeStatusOnly: true },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(link.status, 503);
     assert.deepEqual(JSON.parse(calls[0].options.body), { ref: "main" });
 
     calls.length = 0;
