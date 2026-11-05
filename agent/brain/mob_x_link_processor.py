@@ -13,6 +13,7 @@ import mimetypes
 import os
 import re
 import socket
+import subprocess
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -34,7 +35,7 @@ from agent.storage.mega import MegaStorage
 from agent.brain.failed_media import preserve_failed_media
 from agent.brain.mob_x_rubika import (
     upload_preview_media, send_owner_preview, send_owner_translation_failure,
-    send_owner_worker_request_failure,
+    send_owner_worker_request_failure, send_owner_metadata_failure,
 )
 
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
@@ -487,18 +488,174 @@ def probe_public_sources(external_id: str, *, session: requests.Session | None =
     }
 
 
+def _x_cli_public_post(external_id: str, binary: str) -> dict:
+    """Read one official post with the pinned, guest-only x-cli binary."""
+    if not re.fullmatch(r"[0-9]{15,22}", external_id):
+        raise MobXLinkError("invalid_external_id")
+    if not binary or not Path(binary).is_file():
+        raise MobXLinkError("mob_x_x_cli_unavailable")
+
+    with tempfile.TemporaryDirectory(prefix="mob-x-x-cli-guest-") as temporary:
+        root = Path(temporary)
+        home = root / "home"
+        config_dir = root / "config"
+        data_dir = root / "data"
+        cache_dir = root / "cache"
+        for directory in (home, config_dir, data_dir, cache_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+
+        # Do not inherit runner environment variables, HOME, XDG config, or any
+        # account/session credentials. x-cli gets a fresh guest-only data root.
+        child_env = {
+            "PATH": os.environ.get("PATH") or os.defpath,
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(config_dir),
+            "XDG_DATA_HOME": str(data_dir),
+            "XDG_CACHE_HOME": str(cache_dir),
+            "LANG": "C.UTF-8",
+        }
+        command = [
+            binary,
+            "--guest",
+            "--tier=guest",
+            "--retries=0",
+            "--timeout=15s",
+            "--data-dir", str(data_dir),
+            "--no-cache",
+            "tweet", f"https://x.com/{HANDLE}/status/{external_id}",
+            "-o", "json",
+        ]
+        try:
+            completed = subprocess.run(
+                command, stdin=subprocess.DEVNULL, capture_output=True,
+                text=True, timeout=20, check=False, env=child_env,
+            )
+        except subprocess.TimeoutExpired:
+            raise MobXLinkError("mob_x_x_cli_timeout") from None
+        except (OSError, subprocess.SubprocessError):
+            raise MobXLinkError("mob_x_x_cli_unavailable") from None
+
+    if completed.returncode != 0:
+        raise MobXLinkError("mob_x_x_cli_failed")
+    try:
+        payload = json.loads(completed.stdout or "")
+    except (ValueError, TypeError):
+        raise MobXLinkError("mob_x_x_cli_invalid_json") from None
+    if isinstance(payload, list):
+        if len(payload) != 1 or not isinstance(payload[0], dict):
+            raise MobXLinkError("mob_x_x_cli_response_shape_invalid")
+        payload = payload[0]
+    if not isinstance(payload, dict):
+        raise MobXLinkError("mob_x_x_cli_response_shape_invalid")
+
+    if str(payload.get("id") or "") != external_id:
+        raise MobXLinkError("mob_x_post_id_mismatch")
+    author = payload.get("author")
+    if not author_is_official(author):
+        raise MobXLinkError("mob_x_author_mismatch")
+    source_text = payload.get("text") or payload.get("full_text")
+    if not isinstance(source_text, str) or not source_text.strip():
+        raise MobXLinkError("mob_x_x_cli_text_missing")
+    published_at = normalize_published_at(payload.get("created_at"))
+    if not published_at:
+        raise MobXLinkError("mob_x_x_cli_created_at_missing")
+
+    media_rows = []
+    raw_media = payload.get("media")
+    if isinstance(raw_media, list):
+        for source in raw_media:
+            if not isinstance(source, dict):
+                continue
+            kind = str(source.get("type") or "").casefold()
+            row = {
+                "type": kind,
+                "url": str(source.get("url") or ""),
+                "preview_image": str(source.get("preview_image") or ""),
+                "width": max(0, int(source.get("width") or 0)),
+                "height": max(0, int(source.get("height") or 0)),
+                "duration_ms": max(0, int(source.get("duration_ms") or 0)),
+                "variants": source.get("variants") if isinstance(source.get("variants"), list) else [],
+            }
+            if kind in {"video", "animated_gif"}:
+                mp4_variants = []
+                for variant in row["variants"]:
+                    if not isinstance(variant, dict):
+                        continue
+                    variant_url = str(variant.get("url") or "")
+                    content_type = str(variant.get("content_type") or "").split(";", 1)[0].strip().lower()
+                    if variant_url and content_type == "video/mp4":
+                        try:
+                            bitrate = max(0, int(variant.get("bitrate") or 0))
+                        except (TypeError, ValueError, OverflowError):
+                            bitrate = 0
+                        mp4_variants.append((bitrate, variant_url))
+                if mp4_variants:
+                    mp4_variants.sort(key=lambda item: item[0], reverse=True)
+                    # The media row URL from x-cli may be a poster; the existing
+                    # downloader needs a direct, validated video.twimg.com MP4.
+                    row["url"] = mp4_variants[0][1]
+                else:
+                    row["url"] = ""
+            if kind in {"photo", "video", "animated_gif"}:
+                media_rows.append(row)
+
+    post = {
+        "provider": "x-cli",
+        "external_id": external_id,
+        "text": source_text.strip()[:5000],
+        "title": "",
+        "published_at": published_at,
+        "media": media_rows,
+        "media_url_list": [],
+    }
+    # A post without a supported media URL is not a usable answer for this
+    # pipeline; let FxTwitter/VxTwitter try before the job fails.
+    select_media(post)
+    return post
+
+
+def _log_fetch_source(source: str) -> None:
+    """Log only the answering source name; never log post data or tool output."""
+    if source in {"x-cli", "fxtwitter", "vxtwitter"}:
+        print(json.dumps({"event": "mob_x_fetch_source", "source": source}, sort_keys=True))
+
+
 def fetch_public_post(external_id: str, *, session: requests.Session | None = None) -> dict:
     if not re.fullmatch(r"[0-9]{15,22}", external_id):
         raise MobXLinkError("invalid_external_id")
     session = session or requests.Session()
-    summaries = []
+    failures = []
+
+    x_cli_path = str(os.getenv("MOB_X_CLI_PATH") or "").strip()
+    if x_cli_path:
+        try:
+            post = _x_cli_public_post(external_id, x_cli_path)
+            _log_fetch_source("x-cli")
+            return post
+        except MobXLinkError as exc:
+            failures.append(exc.code)
+        except Exception:
+            failures.append("mob_x_x_cli_failed")
+
     for provider in ("fxtwitter", "vxtwitter"):
         post, summary = _fetch_provider(session, provider, external_id)
-        summaries.append(summary)
         if post is not None:
+            try:
+                select_media(post)
+            except MobXLinkError as exc:
+                summary["error_code"] = exc.code
+                failures.append(exc.code)
+                continue
+            _log_fetch_source(provider)
             return post
-    codes = {item.get("error_code") for item in summaries}
-    for code in ("mob_x_author_mismatch", "mob_x_post_id_mismatch", "mob_x_metadata_http_403", "mob_x_metadata_http_404", "mob_x_metadata_http_429"):
+        failures.append(str(summary.get("error_code") or "mob_x_metadata_request_failed"))
+
+    codes = set(failures)
+    for code in (
+        "mob_x_author_mismatch", "mob_x_post_id_mismatch",
+        "mob_x_metadata_http_403", "mob_x_metadata_http_404",
+        "mob_x_metadata_http_429",
+    ):
         if code in codes:
             raise MobXLinkError(code)
     raise MobXLinkError("mob_x_source_unavailable")
