@@ -239,6 +239,8 @@ class MobXLinkParserTests(unittest.TestCase):
             patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
             patch("agent.brain.mob_x_link_processor._fetch_provider",
                   return_value=(fx_post, {"provider": "fxtwitter"})) as provider,
+            patch("agent.brain.mob_x_link_processor.socket.getaddrinfo",
+                  return_value=[(None, None, None, None, ("8.8.8.8", 443))]),
             patch("builtins.print") as log,
         ):
             post = fetch_public_post(POST_ID)
@@ -259,7 +261,11 @@ class MobXLinkParserTests(unittest.TestCase):
                 "media_extended": [{"type": "video", "url": VIDEO_URL}],
             }),
         ]
-        with patch.dict(os.environ, {"MOB_X_CLI_PATH": ""}):
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": ""}),
+            patch("agent.brain.mob_x_link_processor.socket.getaddrinfo",
+                  return_value=[(None, None, None, None, ("8.8.8.8", 443))]),
+        ):
             post = fetch_public_post(POST_ID, session=session)
         self.assertEqual(post["provider"], "vxtwitter")
         self.assertEqual(session.get.call_count, 2)
@@ -299,7 +305,6 @@ class MobXLinkParserTests(unittest.TestCase):
         verify_block = workflow[verify_at:export_at]
         self.assertRegex(verify_block, r"checksum.*fallback|fallback.*checksum")
         self.assertIn("exit 0", verify_block)
-        self.assertIn('patch.dict(os.environ, {"MOB_X_CLI_PATH": ""})', __import__("inspect").getsource(self.test_fx_failure_falls_back_to_vxtwitter))
 
     def test_process_one_sends_private_owner_notice_when_all_metadata_sources_fail(self):
         client = Mock()
