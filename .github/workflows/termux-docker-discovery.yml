@@ -62,15 +62,18 @@ jobs:
           ref: main
           persist-credentials: true
 
-      - name: Validate queue credential without exposing it
+      - name: Check optional agent API credential without exposing it
+        id: agent_api_credential
         env:
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 ]]; then
-            echo "::error::AGENT_API_TOKEN is missing or invalid; discovery and queue sync stopped safely."
-            exit 2
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::AGENT_API_TOKEN is missing or invalid; discovery will use the legacy six, and D1 intake will be skipped."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
           fi
           docker version
 
@@ -286,7 +289,7 @@ jobs:
       # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
       - name: Add TikTok metadata to the persistent D1 edit queue
         id: queue_intake
-        if: steps.push_report.outcome == 'success'
+        if: steps.push_report.outcome == 'success' && steps.agent_api_credential.outputs.available == 'true'
         env:
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
@@ -475,6 +478,7 @@ jobs:
             echo "- Schedule: twice-hourly UTC gate; full collection after five hours from successful D1 intake"
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
+            echo "- Agent API credential available: ${{ steps.agent_api_credential.outputs.available || 'unknown' }}"
             echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
             echo "- Live candidates evaluated by intake filter: ${{ steps.queue_intake.outputs.discovered_candidate_count || 'n/a' }}"
             echo "- Eligible candidates after content/edit/freshness checks: ${{ steps.queue_intake.outputs.filter_eligible_count || 'n/a' }}"
