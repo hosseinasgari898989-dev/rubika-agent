@@ -944,25 +944,27 @@ def run_trial(
             if str(item.get("external_id") or "")
         }
         newly_persisted: list[dict[str, Any]] = []
-        for item in candidates:
-            external_id = str(item.get("external_id") or "")
-            identity = "mob_official:" + external_id
-            if not external_id or external_id in backlog_ids:
-                continue
-            if identity in known_item_ids or external_id in known_item_ids:
-                continue
-            try:
-                cloud.upsert_item(_mob_x_discovery_payload(item))
-            except Exception as exc:
-                report["error"] = "mob_x_backlog_persist_failed_" + type(exc).__name__
-                report["publishing"] = False
-                _report(output_report, report)
-                return report
-            known_item_ids.add(identity)
-            known_item_ids.add(external_id)
-            newly_persisted.append(item)
+        if publish or test_channel_publish:
+            for item in candidates:
+                external_id = str(item.get("external_id") or "")
+                identity = "mob_official:" + external_id
+                if not external_id or external_id in backlog_ids:
+                    continue
+                if identity in known_item_ids or external_id in known_item_ids:
+                    continue
+                try:
+                    cloud.upsert_item(_mob_x_discovery_payload(item))
+                except Exception as exc:
+                    report["error"] = "mob_x_backlog_persist_failed_" + type(exc).__name__
+                    report["publishing"] = False
+                    _report(output_report, report)
+                    return report
+                known_item_ids.add(identity)
+                known_item_ids.add(external_id)
+                newly_persisted.append(item)
         backlog_candidates.extend(newly_persisted)
-        candidates = sort_candidates_oldest_first(backlog_candidates)
+        pending = backlog_candidates if (publish or test_channel_publish) else candidates
+        candidates = sort_candidates_oldest_first(pending)
         source_attempts.append({
             "source": "d1_mob_x_discovery_backlog",
             "result": "restored_and_persisted" if candidates else "empty",
@@ -1141,6 +1143,13 @@ def run_trial(
 
             if candidate_validation["sha256"] in seen["hashes"]:
                 duplicate_media_count += 1
+                if str(item.get("external_id") or "") in {
+                    str(backlog.get("external_id") or "") for backlog in backlog_candidates
+                } and (publish or test_channel_publish):
+                    try:
+                        cloud.upsert_item({**_mob_x_discovery_payload(item), "status": "filtered"})
+                    except Exception:
+                        pass
                 for evaluation in report["candidate_evaluations"]:
                     if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
                         evaluation["result"] = "duplicate_media_hash"
