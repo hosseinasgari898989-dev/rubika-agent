@@ -15,6 +15,7 @@ import re
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
@@ -313,21 +314,28 @@ def _parse_post(
         return None
 
     # Replies, reposts and quote-posts are never valid Mob news candidates.
+    flag_sources = (payload, legacy)
     for names in (
-        ("reply_to", "reply_to_user", "in_reply_to_status_id", "in_reply_to_user_id", "is_reply"),
-        ("retweeted_status", "retweeted_tweet", "retweeted_status_id", "retweeted_tweet_id", "repost_of", "is_retweet", "retweeted"),
-        ("quoted", "quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id", "is_quote", "is_quote_status"),
+        ("reply_to", "reply_to_user", "in_reply_to_status_id", "in_reply_to_status_id_str",
+         "in_reply_to_user_id", "in_reply_to_user_id_str", "is_reply"),
+        ("retweeted_status", "retweeted_tweet", "retweeted_status_id", "retweeted_tweet_id",
+         "retweeted_status_result", "repost_of", "is_retweet", "retweeted"),
+        ("quoted", "quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id",
+         "quoted_status_id_str", "is_quote", "is_quote_status"),
     ):
-        for name in names:
-            value = payload.get(name)
+        for source in flag_sources:
+            for name in names:
+                value = source.get(name)
             if value is True or (isinstance(value, (dict, list)) and bool(value)) or (
                 isinstance(value, str) and value.strip().casefold() not in {"", "0", "false", "none", "null"}
             ):
                 return None
-    if str(payload.get("text") or payload.get("full_text") or "").lstrip().startswith("RT @"):
+    if str(payload.get("text") or payload.get("full_text") or legacy.get("full_text") or "").lstrip().startswith("RT @"):
         return None
 
     pin_value = payload.get("is_pinned")
+    if not isinstance(pin_value, bool):
+        pin_value = legacy.get("is_pinned")
     if not isinstance(pin_value, bool):
         pin_value = pinned_state
     if pin_value is not False:
@@ -367,6 +375,7 @@ def _parse_post(
         "source_platform": "x",
         "official_source": True,
         "published_at": created,
+        "pinned": False,
         "freshness_verified": created is not None,
         "freshness_source": "x_syndication_created_at" if created else "",
         "media_type": media_type,
@@ -988,7 +997,7 @@ def _run_x_cli_timeline(
 
     summary["exit_code"] = int(completed.returncode)
     stderr = str(completed.stderr or "")
-    if re.search(r"(?i)(\\b429\\b|\\b403\\b|rate[\\s_-]*limit|too many requests)", stderr):
+    if any(marker in stderr.casefold() for marker in ("429", "403", "rate limit", "rate_limit", "too many requests")):
         summary["rate_limited"] = True
         summary["result"] = "rate_limited"
         return [], summary
@@ -1136,6 +1145,7 @@ def _fallback_post_by_id(
             "thumbnail_url": None,
             "method": provider + "_status_fallback",
             "discovery_source": provider,
+            "pinned": False,
         }, provider
     return None, "unavailable"
 
@@ -1183,8 +1193,8 @@ def discover_mob_x_posts(
             direct_pin = row.get("pinned")
         if isinstance(direct_pin, bool):
             pin_states[post_id] = direct_pin
-        if pin_states.get(post_id) is not False:
-            skipped["pinned_or_pin_state_unknown"] = skipped.get("pinned_or_pin_state_unknown", 0) + 1
+        if pin_states.get(post_id) is True:
+            skipped["pinned"] = skipped.get("pinned", 0) + 1
             continue
         eligible_xcli.setdefault(post_id, row)
 
@@ -1201,8 +1211,8 @@ def discover_mob_x_posts(
             if reason:
                 skipped[reason] = skipped.get(reason, 0) + 1
                 continue
-            if pin_states.get(post_id) is not False:
-                skipped["pinned_or_pin_state_unknown"] = skipped.get("pinned_or_pin_state_unknown", 0) + 1
+            if pin_states.get(post_id) is True:
+                skipped["pinned"] = skipped.get("pinned", 0) + 1
                 continue
             fx_eligible.setdefault(post_id, row)
         selected_ids = list(fx_eligible)
