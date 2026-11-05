@@ -32,11 +32,7 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             "id": "x-1734258130186559716",
             "external_id": "x-1734258130186559716",
             "url": "https://x.com/mobgamesstudios/status/1734258130186559716",
-            "canonical_url": (
-                "https://x.com/mobgamesstudios/status/" + external_id.removeprefix("x-")
-                if re.fullmatch(r"x-[0-9]{15,22}", external_id)
-                else "https://x.com/mobgamesstudios/status/1734258130186559716"
-            ),
+            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559716",
             "title": "Official post",
             "caption": "Original Mob caption",
             "original_caption": "Original Mob caption",
@@ -511,22 +507,22 @@ class OfficialSinceRuleTests(unittest.TestCase):
         now = datetime(2026, 11, 7, tzinfo=timezone.utc)
         old = self.row("old", "2026-11-04T23:59:59Z")
         boundary = self.row("boundary", cutoff)
-        newer = self.row("newer", "2026-11-06T00:00:00Z")
+        newer = self.row("newer", "2026-11-05T12:00:00Z")
         unverified = self.row("unverified", "2026-11-06T12:00:00Z", freshness_verified=False)
 
         self.assertEqual(since_rule_rejection(old, cutoff, now=now), "before_since_utc")
         self.assertIsNone(since_rule_rejection(boundary, cutoff, now=now))
         self.assertIsNone(since_rule_rejection(newer, cutoff, now=now))
         self.assertEqual(since_rule_rejection(unverified, cutoff, now=now), "publication_time_unverified")
-        accepted, rejected = filter_candidates_by_since([newer, old, boundary, unverified], cutoff)
+        accepted, rejected = filter_candidates_by_since([newer, old, boundary, unverified], cutoff, now=now)
         self.assertEqual([row["external_id"] for row in accepted], ["newer", "boundary"])
         self.assertEqual([row["reason"] for row in rejected], ["before_since_utc", "publication_time_unverified"])
 
     def test_candidates_are_sorted_oldest_first_stably(self):
         candidates = [
-            self.row("newest", "2026-11-07T00:00:00Z"),
+            self.row("newest", "2026-11-05T06:00:00Z"),
             self.row("oldest", "2026-11-05T00:00:01Z"),
-            self.row("middle", "2026-11-06T00:00:00Z"),
+            self.row("middle", "2026-11-05T03:00:00Z"),
         ]
         self.assertEqual(
             [row["external_id"] for row in sort_candidates_oldest_first(candidates)],
