@@ -287,6 +287,21 @@ class MobXLinkParserTests(unittest.TestCase):
                 fetch_public_post(POST_ID, session=session)
         self.assertEqual(session.get.call_count, 2)
 
+    def test_x_cli_post_id_mismatch_is_rejected_before_fallback_failure(self):
+        fixture = self._x_cli_video_payload()
+        fixture["id"] = "2107878755079213477"
+        completed = Mock(returncode=0, stdout=json.dumps(fixture), stderr="")
+        session = Mock()
+        session.get.side_effect = [response(status=403), response(status=403)]
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
+            patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
+            patch("agent.brain.mob_x_link_processor.Path.is_file", return_value=True),
+        ):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_post_id_mismatch"):
+                fetch_public_post(POST_ID, session=session)
+        self.assertEqual(session.get.call_count, 2)
+
     def test_all_fetchers_failed_returns_clean_source_unavailable(self):
         completed = Mock(returncode=1, stdout="", stderr="private token must not be shown")
         session = Mock()
