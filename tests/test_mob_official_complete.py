@@ -37,7 +37,11 @@ class FakeSession:
 
 def config_file(folder, sources):
     path = Path(folder) / "sources.json"
-    path.write_text(json.dumps({"version": 1, "official_sources": sources}), encoding="utf-8")
+    path.write_text(json.dumps({
+        "version": 1,
+        "publishing": {"since_utc": "2026-11-05T00:00:00Z"},
+        "official_sources": sources,
+    }), encoding="utf-8")
     return path
 
 
@@ -371,7 +375,7 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             "original_caption": shared,
             "caption": shared,
             "author": "@mobgamesstudios",
-            "published_at": "2026-10-14T12:00:00+00:00",
+            "published_at": "2026-11-05T12:00:00+00:00",
             "media_type": "image",
             "media_url": "https://pbs.twimg.com/media/chapter.jpg",
         }
@@ -382,7 +386,7 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559717",
             "original_caption": "A different verified official announcement with a fresh media attachment.",
             "caption": "A different verified official announcement with a fresh media attachment.",
-            "published_at": "2026-10-14T13:00:00+00:00",
+            "published_at": "2026-11-05T13:00:00+00:00",
             "media_url": "https://pbs.twimg.com/media/latest.jpg",
         }
         with (
@@ -462,11 +466,12 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             "external_id": "1734258130186559716",
             "source_platform": "x",
             "official_source": True,
+            "pinned": False,
             "canonical_url": x_url,
             "url": x_url,
             "caption": "Official Mob X post",
             "original_caption": "Official Mob X post",
-            "published_at": "2026-10-14T12:00:00Z",
+            "published_at": "2026-11-05T12:00:00Z",
             "media_type": "image",
             "media_url": "https://pbs.twimg.com/media/example.jpg",
         }
@@ -490,6 +495,7 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         self.assertEqual(candidates[0]["canonical_url"], x_url)
         x_search.assert_called_once()
         self.assertEqual(x_search.call_args.kwargs["seed_urls"], (x_url,))
+        self.assertEqual(x_search.call_args.kwargs["since_utc"], "2026-11-05T00:00:00Z")
         self.assertEqual(attempts[-1]["enabled_lanes"], ["x"])
 
 
