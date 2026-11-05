@@ -32,7 +32,8 @@ class XCliReadOnlyProbeWorkflowTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         curl_lines = [line for line in workflow.splitlines() if re.search(r"\bcurl\b", line)]
         self.assertEqual(len(curl_lines), 2)
-        self.assertTrue(all("https://github.com/tamnd/x-cli/releases/download/v" in line for line in curl_lines))
+        self.assertIn('base="https://github.com/tamnd/x-cli/releases/download/v$version"', workflow)
+        self.assertTrue(all('"$base/' in line for line in curl_lines))
         self.assertIn("https://x.com/mobgamesstudios/status/1731735864110424148", workflow)
         self.assertNotIn("requests.", workflow)
         self.assertNotIn("wget ", workflow)
