@@ -199,6 +199,7 @@ class MobXLinkParserTests(unittest.TestCase):
                 "CT0": "do-not-pass-this-cookie",
             }),
             patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed) as run,
+            patch("agent.brain.mob_x_link_processor.Path.is_file", return_value=True),
             patch("agent.brain.mob_x_link_processor.socket.getaddrinfo",
                   return_value=[(None, None, None, None, ("8.8.8.8", 443))]),
             patch("builtins.print") as log,
@@ -237,6 +238,7 @@ class MobXLinkParserTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
             patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
+            patch("agent.brain.mob_x_link_processor.Path.is_file", return_value=True),
             patch("agent.brain.mob_x_link_processor._fetch_provider",
                   return_value=(fx_post, {"provider": "fxtwitter"})) as provider,
             patch("agent.brain.mob_x_link_processor.socket.getaddrinfo",
@@ -279,6 +281,7 @@ class MobXLinkParserTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
             patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
+            patch("agent.brain.mob_x_link_processor.Path.is_file", return_value=True),
         ):
             with self.assertRaisesRegex(MobXLinkError, "mob_x_author_mismatch"):
                 fetch_public_post(POST_ID, session=session)
