@@ -56,7 +56,8 @@ function makeEnv({ fail = false, changes = null, token = "", allCount = 7 } = {}
                   for (let i = 0; i < count; i += 1) {
                     const [id, status, updatedAt, storageKey] = snapshot.slice(i * 4, i * 4 + 4);
                     const row = rows.get(id);
-                    if (!row || row.source === "tiktok" || row.status !== status || row.updated_at !== updatedAt || row.storage_key !== storageKey) {
+                    const tiktokOnly = sql.includes("source = 'tiktok'");
+                    if (!row || (tiktokOnly ? row.source !== "tiktok" : row.source === "tiktok") || row.status !== status || row.updated_at !== updatedAt || row.storage_key !== storageKey) {
                       return { meta: { changes: 0 } };
                     }
                     selected.push(row);
@@ -83,7 +84,8 @@ function makeEnv({ fail = false, changes = null, token = "", allCount = 7 } = {}
               async all() {
                 record();
                 if (sql.includes("FROM failed_media WHERE id IN")) {
-                  const selected = args.map(id => rows.get(id)).filter(row => row && row.source !== "tiktok");
+                  const tiktokOnly = sql.includes("source = 'tiktok'");
+                  const selected = args.map(id => rows.get(id)).filter(row => row && (tiktokOnly ? row.source === "tiktok" : row.source !== "tiktok"));
                   return { results: selected.map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
                 }
                 if (sql.includes("FROM failed_media WHERE source <> 'tiktok' AND status IN")) {
@@ -256,6 +258,50 @@ test("selected requests reject empty, invalid, duplicate, and over-limit ids", a
     env = makeEnv();
     assert.equal((await post("/failed-media/delete-request", body)).status, 400, JSON.stringify(body));
     assert.equal(env.calls.length, 0);
+  }
+});
+
+test("TikTok originals use the signed delete flow with an exact source-only scope", async () => {
+  env = makeEnv({ token: "test-dispatch-token" });
+  const tiktokId = "fm_" + "c".repeat(24);
+  env.rows.set(tiktokId, {
+    id: tiktokId, storage_key: keyFor(tiktokId), status: "stored",
+    updated_at: "2026-11-04T00:00:00Z", source: "tiktok",
+    media_type: "video", caption: "TikTok original",
+  });
+
+  const genericDenied = await post("/failed-media/delete-request", { ids: [tiktokId] });
+  assert.equal(genericDenied.status, 409);
+  const crossSourceDenied = await post("/failed-media/delete-request", { ids: [ID1], source: "tiktok" });
+  assert.equal(crossSourceDenied.status, 409);
+  assert.equal(env.rows.get(tiktokId).status, "stored");
+  assert.equal(env.rows.get(ID1).status, "stored");
+
+  const firstResponse = await post("/failed-media/delete-request", { ids: [tiktokId], source: "tiktok" });
+  const challenge = await firstResponse.json();
+  assert.equal(firstResponse.status, 200);
+  assert.equal(challenge.confirmation_required, true);
+  assert.equal(challenge.requested, 1);
+  const selects = env.calls.filter(call => call.sql.startsWith("SELECT id, storage_key, status, updated_at FROM failed_media"));
+  assert.match(selects.at(-1).sql, /source = 'tiktok'/);
+  assert.equal(env.rows.get(tiktokId).status, "stored");
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 204 });
+  try {
+    const secondResponse = await post("/failed-media/delete-request", {
+      confirmation: challenge.confirmation, phrase: "DELETE",
+    });
+    const second = await secondResponse.json();
+    assert.equal(secondResponse.status, 200);
+    assert.deepEqual([second.requested, second.dispatched], [1, true]);
+    const update = env.calls.find(call => call.sql.startsWith("UPDATE failed_media SET status = 'delete_requested'"));
+    assert.match(update.sql, /source = 'tiktok'/);
+    assert.equal(env.rows.get(tiktokId).status, "delete_requested");
+    assert.equal(env.rows.get(ID1).status, "stored");
+    assert.equal(env.rows.get(ID2).status, "stored");
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });
 

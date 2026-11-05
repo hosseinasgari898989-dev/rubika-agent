@@ -50,6 +50,7 @@ CORS = {
 
 MOB_REVIEW_JOBS: dict[str, dict] = {}
 MOB_REVIEW_ACTIONS: list[dict] = []
+TIKTOK_DELETE_BODIES: list[dict] = []
 MOB_NO_CAPTION = "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
 
 
@@ -166,14 +167,21 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
             "account": "fixture", "caption": "Fixture failed TikTok video",
             "reason": "rubika_rejected_upload_failed", "created_at": NOW,
             "status": "stored", "queue_status": "failed", "already_sent": 0, "can_resend": 1,
+            "failed_media_id": "fm_" + "a" * 24, "original_share_url": MEGA_URL, "failed_media_status": "stored",
         }, {
             "id": "tiktok:7616247520657771797", "item_id": "tiktok:7616247520657771797",
             "account": "fixture", "caption": "Fixture already sent video",
             "reason": "delivery_receipt_missing", "created_at": NOW,
             "status": "stored", "queue_status": "sent", "already_sent": 1, "can_resend": 0,
+            "failed_media_id": "fm_" + "b" * 24, "original_share_url": "https://example.com/file/AbCd1234#bad", "failed_media_status": "stored",
         }]}
     if path.startswith("/api/console/tiktok-unsent/") and path.endswith("/resend") and method == "POST":
         return {"ok": True, "queued": True, "status": "queued"}
+    if path == "/api/console/failed-media/delete-request" and method == "POST":
+        TIKTOK_DELETE_BODIES.append(dict(body))
+        if "confirmation" in body:
+            return {"ok": True, "requested": 1, "dispatched": True}
+        return {"ok": True, "requested": 1, "confirmation_required": True, "confirmation": "fixture-signed-delete-challenge"}
     if path == "/api/console/links":
         if method == "GET":
             return {"ok": True, "items": [{
@@ -300,8 +308,9 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
 
 
 def main() -> int:
-    global MOB_REVIEW_JOBS, MOB_REVIEW_ACTIONS
+    global MOB_REVIEW_JOBS, MOB_REVIEW_ACTIONS, TIKTOK_DELETE_BODIES
     MOB_REVIEW_ACTIONS = []
+    TIKTOK_DELETE_BODIES = []
     MOB_REVIEW_JOBS = {
         "fixture-mob-ready": {
             "type": "mob_x_link", "status": "ready_for_review", "progress": 100,
@@ -522,6 +531,12 @@ def main() -> int:
                         if route_id == "tkaccounts" and page.locator('#view #tk_account').count() != 1:
                             failures.append(f"direct account page at {viewport['width']}: TikTok account input missing")
                         if route_id == "tiktok-unsent":
+                            if page.locator('#view button[data-a="tkPreview"]').count() != 2:
+                                failures.append(f"direct TikTok unsent at {viewport['width']}: original preview controls missing")
+                            if not page.locator('#view button[data-a="tkPreview"]').nth(0).is_enabled():
+                                failures.append(f"direct TikTok unsent at {viewport['width']}: valid MEGA preview is disabled")
+                            if page.locator('#view button[data-a="tkPreview"]').nth(1).is_enabled():
+                                failures.append(f"direct TikTok unsent at {viewport['width']}: invalid MEGA preview is enabled")
                             if "Fixture failed TikTok video" not in view_text and page.locator('#view button[data-a="tkResend"]').count() != 1:
                                 failures.append(f"direct TikTok unsent at {viewport['width']}: dedicated item/action missing")
                             if page.locator('#view button[data-a="tkResend"]').count() != 1:
@@ -580,6 +595,32 @@ def main() -> int:
                 failures.append("TikTok resend button remained visible after being queued")
             if page.locator('#view .bd.info').filter(has_text="در صف").count() != 1:
                 failures.append("TikTok resend did not render exactly one queued status")
+
+            # The dedicated preview accepts only the same strict MEGA share URL as generic unsent.
+            tiktok_previews = page.locator('#view button[data-a="tkPreview"]')
+            if tiktok_previews.count() != 2 or tiktok_previews.nth(0).is_disabled() or not tiktok_previews.nth(1).is_disabled():
+                failures.append("TikTok original preview did not accept only the strict MEGA share URL")
+            else:
+                tiktok_previews.nth(0).click()
+                page.wait_for_selector('#modal iframe.fm-preview-frame', timeout=5000)
+                preview_frame = page.locator('#modal iframe.fm-preview-frame')
+                if preview_frame.get_attribute("src") != MEGA_EMBED_URL:
+                    failures.append("TikTok preview iframe did not use the validated MEGA embed URL")
+                if preview_frame.get_attribute("sandbox") != "allow-scripts allow-same-origin":
+                    failures.append("TikTok preview iframe sandbox is not restricted")
+                page.locator('#modal button[data-a="tkPreviewClose"]').click()
+                page.wait_for_function("() => !document.querySelector('#modal')?.classList.contains('on')", timeout=3000)
+
+            # Delete must call phase one and signed phase two of the existing endpoint.
+            page.once("dialog", lambda dialog: dialog.accept("DELETE"))
+            click_action(page, '#view button[data-a="tkDelete"]', "delete TikTok original")
+            page.wait_for_function("() => document.querySelector('#toast')?.innerText.includes('درخواست حذف نسخهٔ اصلی')", timeout=5000)
+            if len(TIKTOK_DELETE_BODIES) != 2:
+                failures.append(f"TikTok delete did not make exactly two signed-flow requests: {len(TIKTOK_DELETE_BODIES)}")
+            elif TIKTOK_DELETE_BODIES[0].get("source") != "tiktok" or TIKTOK_DELETE_BODIES[0].get("ids") != ["fm_" + "a" * 24]:
+                failures.append("TikTok deletion phase one was not scoped to the selected TikTok original")
+            elif TIKTOK_DELETE_BODIES[1].get("phrase") != "DELETE" or "source" in TIKTOK_DELETE_BODIES[1]:
+                failures.append("TikTok deletion phase two did not consume the signed confirmation payload")
 
             # Reject-post styling must differ from a primary action on both target viewports.
             for viewport in ({"width": 390, "height": 844}, {"width": 1280, "height": 800}):

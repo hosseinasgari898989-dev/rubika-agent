@@ -169,5 +169,31 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertTrue(all(row["queue_status"]=="queued" for row in result["selected_items"]))
 
 
+    def test_console_source_read_failure_falls_back_to_legacy_profiles_and_continues_intake(self):
+        class SourceReadFailureCloud(FakeCloudState):
+            def get_console_tiktok_sources(self):
+                raise TimeoutError("private details must not be logged")
+
+        legacy = _row(_video_id(0, 77), PROFILES[0])
+        custom = _row(_video_id(6, 77), "newcreator")
+        payload = {
+            "schema_version": 1, "source": "github_actions_termux_docker",
+            "mode": "metadata_only_no_download_no_publish", "generated_at": _now_iso(),
+            "candidates": {"tiktok": [legacy, custom], "mob_official": []},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch("agent.brain.queue_intake.CloudState", SourceReadFailureCloud):
+                result = run_intake(path, max_new_items=1)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tiktok_source_overlay_status"],
+                         "console_sources_unavailable_using_legacy_six")
+        self.assertIs(result["tiktok_account_removals_applied"], False)
+        self.assertEqual(result["inserted_count"], 1)
+        self.assertEqual(result["filter_rejected_by_reason"].get("source_not_selected"), 1)
+        self.assertNotIn("private details", json.dumps(result))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,9 @@ class FakeCloud:
             make_item("tiktok", "7616247520657771801", "Remain queued"),
         ]
 
+    def get_console_tiktok_sources(self):
+        return []
+
     def get_automation_queue(self, *, status="queued", limit=100, offset=0):
         rows = [dict(item) for item in self.items if item["status"] == status]
         return {"ok": True, "items": rows[offset:offset + limit]}
@@ -504,6 +507,31 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertNotIn("private", encoded)
         self.assertEqual(set(timing), set(queue_worker._TIMING_FIELDS))
 
+
+
+    def test_console_source_read_failure_does_not_abort_existing_queue_processing(self):
+        class SourceReadFailureCloud(FakeCloud):
+            def get_console_tiktok_sources(self):
+                raise TimeoutError("private details must not enter the report")
+
+        cloud = SourceReadFailureCloud()
+        def fake_run_one(*_args, **_kwargs):
+            return {"ok": True, "status": "sent", "title": "Sent through existing queue"}
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one) as mocked_run,
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0)
+
+        self.assertEqual(mocked_run.call_count, 6)
+        self.assertEqual(report["sent_count"], 6)
+        self.assertEqual(report["tiktok_source_overlay_status"],
+                         "console_sources_unavailable_using_legacy_six")
+        self.assertIs(report["tiktok_account_removals_applied"], False)
+        self.assertNotIn("private details", json.dumps(report))
 
 
 if __name__ == "__main__":
