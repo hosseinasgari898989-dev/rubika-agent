@@ -284,10 +284,18 @@ class FakeStatement {
       this.db.queueLimit = this.values[0];
       return { results: [...this.db.items.values()].filter(x => x.review_state === "approved" && x.status === "ready").slice(0, this.values[0]) };
     }
-    if (this.sql.includes("SELECT id, platform, external_id, media_sha256, status, sent_at, review_state FROM items")) {
+    if (
+      this.sql.includes("FROM items WHERE platform = ?") &&
+      (this.sql.includes("SELECT id, platform, external_id, media_sha256") ||
+       this.sql.includes("SELECT id, platform, external_id, canonical_url"))
+    ) {
       this.db.seenQuery = { sql: this.sql, values: this.values };
       const all = [...this.db.items.values()].map(item => ({
         id: item.id, platform: item.platform, external_id: item.external_id,
+        canonical_url: item.canonical_url, source_key: item.source_key,
+        title: item.title, caption: item.caption, published_at: item.published_at,
+        media_type: item.media_type, validation_json: item.validation_json,
+        original_caption: item.original_caption, persian_translation: item.persian_translation,
         media_sha256: item.media_sha256, status: item.status,
         sent_at: item.sent_at || null, review_state: item.review_state,
       }));
@@ -698,7 +706,9 @@ class FakeStatement {
         original_caption: v[18], persian_translation: v[19],
       };
       const previous = this.db.items.get(item.id);
-      if (previous && ["sent", "uncertain", "sending"].includes(previous.status) &&
+      if (previous && item.status === "discovered") {
+        item.status = previous.status;
+      } else if (previous && ["sent", "uncertain", "sending"].includes(previous.status) &&
           !["sent", "uncertain", "sending"].includes(item.status)) {
         item.status = previous.status;
       }
@@ -1273,6 +1283,86 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.body.items[0].external_id, "vkVFgmgLo1s");
   assert.deepEqual(state.DB.seenQuery.values, ["tiktok", 500, 0]);
 }
+
+{
+  const state = env();
+  const discoveryMetadata = {
+    mob_x_discovery: {
+      version: 1, source_platform: "x", official_source: true,
+      author: "@mobgamesstudios", pinned: false,
+      published_at: "2026-11-05T01:00:00Z", media_type: "image",
+      media_url: "https://pbs.twimg.com/media/example.jpg",
+      original_caption: "Official Mob caption", discovery_source: "x-cli",
+    },
+  };
+  const mobItem = {
+    id: "mob_official:x-2111111111111111111",
+    platform: "mob_official",
+    external_id: "x-2111111111111111111",
+    canonical_url: "https://x.com/mobgamesstudios/status/2111111111111111111",
+    source_key: "x.com/mobgamesstudios",
+    title: "Mob announcement",
+    caption: "Official Mob caption",
+    original_caption: "Official Mob caption",
+    published_at: "2026-11-05T01:00:00Z",
+    media_type: "image",
+    validation_json: JSON.stringify(discoveryMetadata),
+    status: "discovered",
+    review_state: "pending",
+  };
+  state.DB.items.set(mobItem.id, mobItem);
+  const response = await read(await worker.fetch(request(
+    "/api/brain/items/seen?limit=50&offset=0&platform=mob_official"
+  ), state));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].validation_json, JSON.stringify(discoveryMetadata));
+  assert.equal(response.body.items[0].canonical_url, mobItem.canonical_url);
+  assert.equal(response.body.items[0].original_caption, mobItem.original_caption);
+  const result = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST",
+    body: {
+      platform: "mob_official",
+      external_id: mobItem.external_id,
+      canonical_url: mobItem.canonical_url,
+      source_key: mobItem.source_key,
+      status: "discovered",
+      review_state: "pending",
+      media_type: "image",
+      source_tier: "official",
+      validation: discoveryMetadata,
+    },
+  }), state));
+  assert.equal(result.status, 200);
+  assert.equal(state.DB.items.get(mobItem.id).status, "discovered");
+}
+{
+  const state = env();
+  const previous = {
+    id: "mob_official:x-2111111111111111112",
+    platform: "mob_official",
+    external_id: "x-2111111111111111112",
+    status: "failed",
+    review_state: "pending",
+  };
+  state.DB.items.set(previous.id, previous);
+  const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
+    method: "POST",
+    body: {
+      platform: "mob_official",
+      external_id: previous.external_id,
+      canonical_url: "https://x.com/mobgamesstudios/status/2111111111111111112",
+      source_key: "x.com/mobgamesstudios",
+      status: "discovered",
+      review_state: "pending",
+      media_type: "image",
+      source_tier: "official",
+    },
+  }), state));
+  assert.equal(response.status, 200);
+  assert.equal(state.DB.items.get(previous.id).status, "failed");
+}
+
 {
   const state = env();
   const invalid = {
