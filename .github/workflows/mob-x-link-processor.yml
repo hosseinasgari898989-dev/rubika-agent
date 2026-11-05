@@ -84,6 +84,62 @@ jobs:
           MOB_X_PANEL_LINK_ID: ${{ inputs.panel_link_id }}
         run: python scripts/mob_x_preflight.py
 
+      - name: Install pinned x-cli v0.5.0 guest fetcher
+        if: steps.preflight.outputs.has_job == 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          version="0.5.0"
+          archive_name="x_0.5.0_linux_amd64.tar.gz"
+          expected_archive_sha256="d722fd04f05c3785202846a1400caa9bcc0f8237947c0e35f6e8cf9efcbd1dd7"
+          expected_checksums_sha256="ed391cfa2726d34e7de61ee93aca443731d10bca382da17f0b9683a8cac7c887"
+          root="$RUNNER_TEMP/mob-x-x-cli-$version"
+          archive="$root/$archive_name"
+          checksums="$root/checksums.txt"
+          base="https://github.com/tamnd/x-cli/releases/download/v$version"
+          fallback() {
+            echo "x-cli setup failed closed; FxTwitter/VxTwitter fallback remains enabled."
+            exit 0
+          }
+          mkdir -p "$root"
+          if ! curl --fail --silent --show-error --location --max-time 15 --retry 0 \
+            "$base/$archive_name" --output "$archive" 2>/dev/null; then
+            fallback
+          fi
+          if ! curl --fail --silent --show-error --location --max-time 15 --retry 0 \
+            "$base/checksums.txt" --output "$checksums" 2>/dev/null; then
+            fallback
+          fi
+          if ! printf '%s  %s\n' "$expected_checksums_sha256" "$checksums" | sha256sum --check --status; then
+            echo "x-cli release checksums file verification failed; FxTwitter/VxTwitter fallback remains enabled."
+            exit 0
+          fi
+          published_checksum="$(awk -v target="$archive_name" '$2 == target { print $1; exit }' "$checksums")"
+          if [[ "$published_checksum" != "$expected_archive_sha256" ]]; then
+            echo "x-cli release checksum does not match the pinned v$version asset digest; FxTwitter/VxTwitter fallback remains enabled."
+            exit 0
+          fi
+          if ! printf '%s  %s\n' "$published_checksum" "$archive" | sha256sum --check --status; then
+            echo "x-cli binary checksum verification failed; FxTwitter/VxTwitter fallback remains enabled."
+            exit 0
+          fi
+          if ! tar -tzf "$archive" >/dev/null 2>&1; then
+            echo "x-cli release archive is invalid; FxTwitter/VxTwitter fallback remains enabled."
+            exit 0
+          fi
+          extract="$root/extract"
+          mkdir -p "$extract"
+          if ! tar -xzf "$archive" -C "$extract" >/dev/null 2>&1; then
+            echo "x-cli release extraction failed; FxTwitter/VxTwitter fallback remains enabled."
+            exit 0
+          fi
+          binary="$(find "$extract" -maxdepth 3 -type f -name x -perm -u+x -print -quit)"
+          if [[ -z "$binary" ]]; then
+            echo "x-cli executable missing; FxTwitter/VxTwitter fallback remains enabled."
+            exit 0
+          fi
+          echo "MOB_X_CLI_PATH=$binary" >> "$GITHUB_ENV"
+          echo "x-cli v$version verified against checksums; guest-only primary fetcher enabled."
       - name: Check required existing secret names without printing values
         if: ${{ steps.preflight.outputs.has_job == 'true' }}
         env:
