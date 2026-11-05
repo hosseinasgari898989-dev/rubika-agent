@@ -285,7 +285,8 @@ class FakeStatement {
       return { results: [...this.db.items.values()].filter(x => x.review_state === "approved" && x.status === "ready").slice(0, this.values[0]) };
     }
     if (
-      this.sql.includes("FROM items WHERE platform = ?") &&
+      (this.sql.includes("FROM items WHERE platform = ?") ||
+       this.sql.includes("FROM items WHERE platform IN")) &&
       (this.sql.includes("SELECT id, platform, external_id, media_sha256") ||
        this.sql.includes("SELECT id, platform, external_id, canonical_url"))
     ) {
