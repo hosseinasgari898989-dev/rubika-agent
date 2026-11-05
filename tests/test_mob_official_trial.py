@@ -493,12 +493,12 @@ class OfficialSinceRuleTests(unittest.TestCase):
         return row
 
     def test_since_cutoff_rejects_old_accepts_new_and_rejects_unverified_time(self):
-        cutoff = "2026-10-20T00:00:00Z"
-        now = datetime(2026, 10, 24, tzinfo=timezone.utc)
-        old = self.row("old", "2026-10-19T23:59:59Z")
+        cutoff = "2026-11-05T00:00:00Z"
+        now = datetime(2026, 11, 7, tzinfo=timezone.utc)
+        old = self.row("old", "2026-11-04T23:59:59Z")
         boundary = self.row("boundary", cutoff)
-        newer = self.row("newer", "2026-10-21T00:00:00Z")
-        unverified = self.row("unverified", "2026-10-22T00:00:00Z", freshness_verified=False)
+        newer = self.row("newer", "2026-11-06T00:00:00Z")
+        unverified = self.row("unverified", "2026-11-06T12:00:00Z", freshness_verified=False)
 
         self.assertEqual(since_rule_rejection(old, cutoff, now=now), "before_since_utc")
         self.assertIsNone(since_rule_rejection(boundary, cutoff, now=now))
@@ -510,9 +510,9 @@ class OfficialSinceRuleTests(unittest.TestCase):
 
     def test_candidates_are_sorted_oldest_first_stably(self):
         candidates = [
-            self.row("newest", "2026-10-23T00:00:00Z"),
-            self.row("oldest", "2026-10-20T00:00:01Z"),
-            self.row("middle", "2026-10-21T00:00:00Z"),
+            self.row("newest", "2026-11-07T00:00:00Z"),
+            self.row("oldest", "2026-11-05T00:00:01Z"),
+            self.row("middle", "2026-11-06T00:00:00Z"),
         ]
         self.assertEqual(
             [row["external_id"] for row in sort_candidates_oldest_first(candidates)],
@@ -542,17 +542,17 @@ class OfficialSinceRuleTests(unittest.TestCase):
                 self.calls.append((str(media_path), media_type, caption))
                 return {"status": "OK", "data": {"message_id": "message-1"}}
 
-        cutoff = "2026-10-20T00:00:00Z"
+        cutoff = "2026-11-05T00:00:00Z"
         policy = {
             "mode": "production",
             "born_at": cutoff,
-            "birth_datetime": datetime(2026, 10, 20, tzinfo=timezone.utc),
+            "birth_datetime": datetime(2026, 11, 5, tzinfo=timezone.utc),
         }
         candidates = [
-            self.row("x-newer", "2026-10-23T00:00:00Z"),
-            self.row("x-oldhash", "2026-10-20T00:30:00Z"),
-            self.row("x-seen", "2026-10-20T01:00:00Z"),
-            self.row("x-oldest-valid", "2026-10-20T02:00:00Z"),
+            self.row("x-newer", "2026-11-06T00:00:00Z"),
+            self.row("x-oldhash", "2026-11-05T00:30:00Z"),
+            self.row("x-seen", "2026-11-05T01:00:00Z"),
+            self.row("x-oldest-valid", "2026-11-05T02:00:00Z"),
         ]
         publisher = FakePublisher()
         media_hash = {
