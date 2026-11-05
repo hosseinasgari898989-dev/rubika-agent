@@ -1,5 +1,6 @@
 import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";
-import { handleOwnerPanel } from "./owner_panel.js";
+import { dispatchMobXWorkflow, handleOwnerPanel } from "./owner_panel.js";
+import { getLastWorkflowCronResult, runWorkflowCron } from "./workflow_cron.js";
 const SERVICE = "rubika-agent";
 const PUBLISHING_ENABLED = false;
 const MAX_BODY_BYTES = 32 * 1024;
@@ -217,6 +218,7 @@ async function health(env) {
       database: "connected",
       mode: "bootstrap",
       publishing: PUBLISHING_ENABLED,
+      workflow_cron: getLastWorkflowCronResult(),
       timestamp: new Date().toISOString()
     });
   } catch {
@@ -1534,6 +1536,9 @@ const worker = {
     const response = await route(request, env, ctx);
     if (url.pathname.startsWith("/api/")) return withCors(response);
     return response;
+  },
+  async scheduled(controller, env) {
+    return runWorkflowCron(controller, env, dispatchMobXWorkflow);
   }
 };
 

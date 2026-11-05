@@ -133,31 +133,64 @@ export function parseXLink(text) {
   return m ? "https://x.com/mobgamesstudios/status/" + m[1] : null;
 }
 
-const GITHUB_DISPATCH_WORKFLOWS = new Set(["mob-x-link-processor.yml", "mob-x-news-production.yml"]);
+const GITHUB_DISPATCH_WORKFLOWS = new Set([
+  "termux-docker-discovery.yml",
+  "daily-queue-processor.yml",
+  "mob-x-news-production.yml",
+  "mob-x-link-processor.yml",
+]);
 
-export async function dispatchMobXWorkflow(env, workflow, inputs) {
-  if (!GITHUB_DISPATCH_WORKFLOWS.has(String(workflow || ""))) return { ok: false, error: "github_dispatch_workflow_not_allowed" };
+export async function dispatchMobXWorkflow(env, workflow, inputs, options = {}) {
+  if (!GITHUB_DISPATCH_WORKFLOWS.has(String(workflow || ""))) {
+    return { ok: false, error: "github_dispatch_workflow_not_allowed" };
+  }
   const token = typeof env?.GITHUB_DISPATCH_TOKEN === "string" ? env.GITHUB_DISPATCH_TOKEN.trim() : "";
   if (!token) return { ok: false, error: "github_dispatch_not_configured" };
-  let cleanInputs;
+
+  let cleanInputs = null;
   if (workflow === "mob-x-link-processor.yml") {
-    const panelLinkId = Number(inputs && inputs.panel_link_id);
-    if (!Number.isSafeInteger(panelLinkId) || panelLinkId < 1) return { ok: false, error: "github_dispatch_input_invalid" };
-    cleanInputs = { panel_link_id: String(panelLinkId) };
-  } else {
+    const rawLinkId = inputs && inputs.panel_link_id;
+    if (rawLinkId != null && String(rawLinkId).trim() !== "") {
+      const panelLinkId = Number(rawLinkId);
+      if (!Number.isSafeInteger(panelLinkId) || panelLinkId < 1) {
+        return { ok: false, error: "github_dispatch_input_invalid" };
+      }
+      cleanInputs = { panel_link_id: String(panelLinkId) };
+    }
+  } else if (workflow === "mob-x-news-production.yml") {
     const jobId = String(inputs && inputs.panel_link_job_id || "").trim();
-    if (!/^job_[A-Fa-f0-9]{8,80}$/.test(jobId)) return { ok: false, error: "github_dispatch_input_invalid" };
-    cleanInputs = { panel_link_job_id: jobId };
+    if (jobId) {
+      if (!/^job_[A-Fa-f0-9]{8,80}$/.test(jobId)) {
+        return { ok: false, error: "github_dispatch_input_invalid" };
+      }
+      cleanInputs = { panel_link_job_id: jobId };
+    }
+  } else if (workflow === "daily-queue-processor.yml") {
+    const confirmed = inputs && (
+      inputs.publish_four_tiktok_test === true ||
+      inputs.publish_four_tiktok_test === "true"
+    );
+    if (!confirmed) return { ok: false, error: "github_dispatch_input_invalid" };
+    cleanInputs = { publish_four_tiktok_test: "true" };
   }
+
   const endpoint = "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/workflows/" + workflow + "/dispatches";
   let lastError = "github_dispatch_network";
   let lastErrorDetail = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  let lastStatus = null;
+  const maxAttempts = options && options.maxAttempts === 1 ? 1 : 3;
+  const safeStatusOnly = Boolean(options && options.safeStatusOnly);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let response;
     const timing = env && env[PANEL_TIMING];
     const externalStartedAt = performance.now();
     if (timing) timing.external_calls += 1;
     try {
+      const payload = workflow === "mob-x-link-processor.yml" ||
+        workflow === "termux-docker-discovery.yml" || cleanInputs === null
+        ? { ref: "main" }
+        : { ref: "main", inputs: cleanInputs };
       response = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -167,33 +200,40 @@ export async function dispatchMobXWorkflow(env, workflow, inputs) {
           Authorization: "Bearer " + token,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(workflow === "mob-x-link-processor.yml"
-          ? { ref: "main" }
-          : { ref: "main", inputs: cleanInputs }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(2500),
       });
     } catch (error) {
-      lastError = error && (error.name === "TimeoutError" || error.name === "AbortError") ? "github_dispatch_timeout" : "github_dispatch_network";
+      lastError = error && (error.name === "TimeoutError" || error.name === "AbortError")
+        ? "github_dispatch_timeout"
+        : "github_dispatch_network";
       lastErrorDetail = null;
-      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 120));
+      if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, attempt * 120));
       continue;
     } finally {
       if (timing) timing.external_ms += elapsedMs(externalStartedAt);
     }
-    if (response.ok) return { ok: true };
-    const status = Number(response.status) || 0;
-    lastError = status ? "github_dispatch_http_" + status : "github_dispatch_http_unknown";
+    lastStatus = Number(response.status) || null;
+    if (response.ok) return safeStatusOnly ? { ok: true, status: lastStatus } : { ok: true };
+    lastError = lastStatus ? "github_dispatch_http_" + lastStatus : "github_dispatch_http_unknown";
+    if (safeStatusOnly) {
+      return { ok: false, error: lastError, status: lastStatus };
+    }
     let responseBody = "";
     try { responseBody = await response.text(); } catch { /* keep HTTP status diagnostic if body is unreadable */ }
     responseBody = String(responseBody)
       .replaceAll(token, "[REDACTED]")
       .replace(/Bearer\s+[^\s"')]+/gi, "Bearer [REDACTED]")
       .slice(0, 200);
-    lastErrorDetail = "status=" + status + " body=" + responseBody;
-    if (status !== 429 && status < 500) return { ok: false, error: lastError, error_detail: lastErrorDetail };
-    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 120));
+    lastErrorDetail = "status=" + lastStatus + " body=" + responseBody;
+    if (lastStatus !== 429 && lastStatus < 500) {
+      return { ok: false, error: lastError, error_detail: lastErrorDetail };
+    }
+    if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, attempt * 120));
   }
-  return { ok: false, error: lastError, ...(lastErrorDetail ? { error_detail: lastErrorDetail } : {}) };
+  return safeStatusOnly
+    ? { ok: false, error: lastError, status: lastStatus }
+    : { ok: false, error: lastError, ...(lastErrorDetail ? { error_detail: lastErrorDetail } : {}) };
 }
 
 export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, inputs, allowedStatuses) {
