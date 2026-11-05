@@ -383,6 +383,29 @@ class CloudState:
             query += "&platform=" + urllib.parse.quote(platform, safe="")
         return self._request("GET", "/api/brain/items/seen" + query)
 
+    def get_official_items(self, *, page_size: int = 500, max_pages: int = 100) -> list[dict[str, Any]]:
+        """Return every known Mob X item so discovery can resume durable pending rows.
+
+        Unlike get_seen_index(), this deliberately includes all statuses. A row with
+        status=discovered and our metadata envelope is resumable backlog; every other
+        existing row is a dedupe barrier.
+        """
+        page_size = min(500, max(1, int(page_size)))
+        max_pages = min(1000, max(1, int(max_pages)))
+        items: list[dict[str, Any]] = []
+        offset = 0
+        for _ in range(max_pages):
+            page = self.get_seen_items(platform="mob_official", limit=page_size, offset=offset)
+            rows = page.get("items")
+            if not isinstance(rows, list):
+                raise CloudStateError("control_api_invalid_official_items")
+            items.extend(row for row in rows if isinstance(row, dict))
+            returned = len(rows)
+            offset += returned
+            if returned < page_size:
+                return items
+        raise CloudStateError("control_api_official_items_page_limit")
+
     def get_seen_index(self, *, page_size: int = 500, max_pages: int = 100) -> dict[str, set[str]]:
         """Return delivery-blocking IDs/hashes, not every historical metadata row.
 
