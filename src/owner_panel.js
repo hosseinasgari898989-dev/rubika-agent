@@ -214,7 +214,7 @@ export async function dispatchMobXWorkflow(env, workflow, inputs, options = {}) 
       if (timing) timing.external_ms += elapsedMs(externalStartedAt);
     }
     lastStatus = Number(response.status) || null;
-    if (response.ok) return { ok: true, status: lastStatus };
+    if (response.ok) return safeStatusOnly ? { ok: true, status: lastStatus } : { ok: true };
     lastError = lastStatus ? "github_dispatch_http_" + lastStatus : "github_dispatch_http_unknown";
     if (safeStatusOnly) {
       return { ok: false, error: lastError, status: lastStatus };
@@ -227,16 +227,13 @@ export async function dispatchMobXWorkflow(env, workflow, inputs, options = {}) 
       .slice(0, 200);
     lastErrorDetail = "status=" + lastStatus + " body=" + responseBody;
     if (lastStatus !== 429 && lastStatus < 500) {
-      return { ok: false, error: lastError, status: lastStatus, error_detail: lastErrorDetail };
+      return { ok: false, error: lastError, error_detail: lastErrorDetail };
     }
     if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, attempt * 120));
   }
-  return {
-    ok: false,
-    error: lastError,
-    status: lastStatus,
-    ...(lastErrorDetail ? { error_detail: lastErrorDetail } : {}),
-  };
+  return safeStatusOnly
+    ? { ok: false, error: lastError, status: lastStatus }
+    : { ok: false, error: lastError, ...(lastErrorDetail ? { error_detail: lastErrorDetail } : {}) };
 }
 
 export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, inputs, allowedStatuses) {
