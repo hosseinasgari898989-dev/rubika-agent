@@ -16,7 +16,8 @@ class XCliReadOnlyProbeWorkflowTests(unittest.TestCase):
         self.assertRegex(trigger, r"(?m)^on:\s*\n\s+workflow_dispatch:\s*$")
         for forbidden in ("  schedule:", "  push:", "  pull_request:", "  workflow_run:"):
             self.assertNotIn(forbidden, trigger)
-        self.assertRegex(workflow, r"(?ms)^permissions:\s*\n\s+contents:\s*read\s*$")
+        permissions = workflow.split("permissions:", 1)[1].split("jobs:", 1)[0]
+        self.assertRegex(permissions, r"(?m)^\s+contents:\s*read\s*$")
         self.assertNotIn("secrets.", workflow)
         self.assertNotIn("GITHUB_TOKEN", workflow)
         self.assertNotIn("RUBIKA_", workflow)
