@@ -1296,34 +1296,22 @@ def discover_mob_x_posts(
     })
     fx_rows, pin_states, fx_attempt = _fetch_fxtwitter_timeline(client)
     attempts: list[dict[str, Any]] = [x_cli_attempt, fx_attempt]
-    cutoff_rows: dict[str, dict[str, Any]] = {}
+    verified: dict[str, dict[str, Any]] = {}
     skipped: dict[str, int] = {}
+    cutoff_rows: dict[str, dict[str, Any]] = {}
+    pin_evidence_by_id: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    candidate_rows: dict[str, dict[str, Any]] = {}
+    id_source_by_id: dict[str, str] = {}
+    global_profile_pin_evidence: dict[str, list[dict[str, Any]]] = {
+        "flags": [],
+        "profile_pinned_ids": [],
+    }
 
-    eligible_xcli: dict[str, dict[str, Any]] = {}
-    for row in x_cli_rows:
-        post_id = _row_id(row)
-        if not post_id:
-            continue
-        reason = _row_skip_reason(row, cutoff)
-        if reason:
-            skipped[reason] = skipped.get(reason, 0) + 1
-            continue
-        direct_pin = row.get("is_pinned")
-        if not isinstance(direct_pin, bool):
-            direct_pin = row.get("pinned")
-        if isinstance(direct_pin, bool):
-            pin_states[post_id] = direct_pin
-        if pin_states.get(post_id) is True:
-            skipped["pinned"] = skipped.get("pinned", 0) + 1
-            continue
-        eligible_xcli.setdefault(post_id, row)
-
-    if eligible_xcli:
-        selected_ids = list(eligible_xcli)
-        id_source = "x-cli"
-    else:
-        fx_eligible: dict[str, dict[str, Any]] = {}
-        for row in fx_rows:
+    # The two timelines are already fetched in this run. Keep their union, with
+    # x-cli preferred only as the recorded ID source when both list the same ID.
+    for source_name, rows in (("x-cli", x_cli_rows), ("fxtwitter", fx_rows)):
+        source_eligible_count = 0
+        for row in rows:
             post_id = _row_id(row)
             if not post_id:
                 continue
@@ -1331,75 +1319,78 @@ def discover_mob_x_posts(
             if reason:
                 skipped[reason] = skipped.get(reason, 0) + 1
                 continue
-            if pin_states.get(post_id) is True:
-                skipped["pinned"] = skipped.get("pinned", 0) + 1
-                continue
-            fx_eligible.setdefault(post_id, row)
-        selected_ids = list(fx_eligible)
-        id_source = "fxtwitter"
+            row_evidence = _pin_evidence_for_row(row, source_name)
+            pin_evidence_by_id[post_id] = _merge_pin_evidence(
+                pin_evidence_by_id.get(post_id),
+                row_evidence,
+            )
+            global_profile_pin_evidence = _merge_pin_evidence(
+                global_profile_pin_evidence,
+                {"flags": [], "profile_pinned_ids": row_evidence["profile_pinned_ids"]},
+            )
+            candidate_rows.setdefault(post_id, row)
+            id_source_by_id.setdefault(post_id, source_name)
+            source_eligible_count += 1
         attempts.append({
-            "source": "fxtwitter",
-            "engine": "fxtwitter_profile_timeline_fallback",
-            "result": "eligible_ids_found" if selected_ids else "empty_or_no_eligible_ids",
-            "candidate_count": len(selected_ids),
-            "candidate_post_ids": sorted(selected_ids),
+            "source": source_name + "_eligible_ids",
+            "result": "ids_found" if source_eligible_count else "empty_or_no_eligible_ids",
+            "candidate_count": source_eligible_count,
         })
 
-    verified: dict[str, dict[str, Any]] = {}
+    union_ids = list(candidate_rows)
+    # Provider order can be a ranked sample. Use their created_at values only to
+    # choose the bounded oldest 40; authoritative timestamps are checked below.
+    union_ids.sort(key=lambda post_id: (
+        _timestamp(str(candidate_rows[post_id].get("created_at")
+                        or candidate_rows[post_id].get("date")
+                        or candidate_rows[post_id].get("published_at") or ""))
+        or "9999-12-31T23:59:59+00:00",
+        post_id,
+    ))
+    limit = max(1, min(int(max_results), MAX_RESULTS))
+    selected_ids = union_ids[:limit]
+    attempts.append({
+        "source": "mob_x_id_union",
+        "result": "ids_found" if selected_ids else "empty",
+        "candidate_count": len(union_ids),
+        "selected_count": len(selected_ids),
+        "selected_ids": [
+            {"external_id": "x-" + post_id, "id_source": id_source_by_id[post_id]}
+            for post_id in selected_ids
+        ],
+        "ordering": "created_at_oldest_first",
+        "cap": limit,
+    })
+
     for post_id in selected_ids:
-        item, result = _fetch_post(client, post_id, timeout_seconds, pinned_state=pin_states.get(post_id))
+        evidence = _merge_pin_evidence(
+            pin_evidence_by_id.get(post_id),
+            global_profile_pin_evidence,
+        )
+        item, result = _fetch_post(
+            client,
+            post_id,
+            timeout_seconds,
+            pin_evidence=evidence,
+        )
         if item is None:
-            item, fallback_source = _fallback_post_by_id(client, post_id, pinned_state=pin_states.get(post_id), cutoff=cutoff)
+            item, fallback_source = _fallback_post_by_id(
+                client,
+                post_id,
+                pin_evidence=evidence,
+                cutoff=cutoff,
+            )
             result = "verified_by_" + fallback_source if item else result
         if item is not None:
-            item["discovery_source"] = id_source
-            item["id_source"] = id_source
+            source_name = id_source_by_id[post_id]
+            item["discovery_source"] = source_name
+            item["id_source"] = source_name
             verified[post_id] = item
         else:
             skip_key = "post_" + result
             skipped[skip_key] = skipped.get(skip_key, 0) + 1
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
-
-    if not verified and id_source == "x-cli":
-        # A successful ID listing is not enough if every post detail fails to verify.
-        # Fall back to FxTwitter's unordered profile timeline before legacy indexers.
-        fx_eligible: dict[str, dict[str, Any]] = {}
-        for row in fx_rows:
-            post_id = _row_id(row)
-            if not post_id:
-                continue
-            reason = _row_skip_reason(row, cutoff)
-            if reason:
-                skipped[reason] = skipped.get(reason, 0) + 1
-                continue
-            if pin_states.get(post_id) is True:
-                skipped["pinned"] = skipped.get("pinned", 0) + 1
-                continue
-            fx_eligible.setdefault(post_id, row)
-        for post_id in fx_eligible:
-            item, result = _fetch_post(client, post_id, timeout_seconds, pinned_state=pin_states.get(post_id))
-            if item is None:
-                item, fallback_source = _fallback_post_by_id(
-                    client, post_id, pinned_state=pin_states.get(post_id), cutoff=cutoff
-                )
-                result = "verified_by_" + fallback_source if item else result
-            if item is not None:
-                item["discovery_source"] = "fxtwitter"
-                item["id_source"] = "fxtwitter"
-                verified[post_id] = item
-            else:
-                skip_key = "post_" + result
-                skipped[skip_key] = skipped.get(skip_key, 0) + 1
-        if verified:
-            id_source = "fxtwitter"
-        attempts.append({
-            "source": "fxtwitter",
-            "engine": "fxtwitter_post_verification_fallback",
-            "result": "eligible_ids_found" if verified else "empty_or_unverified",
-            "candidate_count": len(verified),
-            "candidate_post_ids": sorted(verified),
-        })
 
     if not verified:
         legacy_rows, legacy_attempts = _discover_legacy_mob_x_posts(
@@ -1426,11 +1417,27 @@ def discover_mob_x_posts(
         if not str(row.get("original_caption") or "").strip() or row.get("media_type") not in {"image", "video"}:
             skipped["text_only_or_media_invalid"] = skipped.get("text_only_or_media_invalid", 0) + 1
             continue
-        if pin_states.get(post_id) is not False and row.get("pinned") is not False:
-            skipped["pinned_or_pin_state_unknown"] = skipped.get("pinned_or_pin_state_unknown", 0) + 1
+        row_evidence = _merge_pin_evidence(
+            pin_evidence_by_id.get(post_id),
+            {
+                "flags": row.get("pin_flags") if isinstance(row.get("pin_flags"), list) else [],
+                "profile_pinned_ids": row.get("profile_pinned_ids")
+                if isinstance(row.get("profile_pinned_ids"), list) else [],
+            },
+            global_profile_pin_evidence,
+        )
+        pin_state, pin_state_source = _resolve_pin_state(post_id, published, cutoff, row_evidence)
+        if pin_state is None:
+            reason = "pinned" if pin_state_source.startswith(("known_pinned_flag:", "profile_pinned_id_match:")) else "pin_state_unknown"
+            skipped[reason] = skipped.get(reason, 0) + 1
             continue
         row["published_at"] = published
-        row["id_source"] = str(row.get("id_source") or row.get("discovery_source") or id_source)
+        row["pinned"] = False
+        row["pin_state"] = pin_state
+        row["pin_state_source"] = pin_state_source
+        row["pin_flags"] = row_evidence["flags"]
+        row["profile_pinned_ids"] = row_evidence["profile_pinned_ids"]
+        row["id_source"] = str(row.get("id_source") or row.get("discovery_source") or "legacy_public_index")
         row["discovery_source"] = row["id_source"]
         cutoff_rows[post_id] = row
 
@@ -1444,6 +1451,22 @@ def discover_mob_x_posts(
         "candidate_count": min(len(final), max_results),
         "candidate_post_ids": sorted(str(row.get("external_id") or "").removeprefix("x-") for row in final),
         "ordering": "oldest_first",
+        "id_sources": [
+            {"external_id": str(row.get("external_id") or ""), "id_source": row.get("id_source")}
+            for row in final
+        ],
+        "pin_states": [
+            {
+                "external_id": str(row.get("external_id") or ""),
+                "pin_state": row.get("pin_state"),
+                "pin_state_source": row.get("pin_state_source"),
+            }
+            for row in final
+        ],
+        "pin_state_counts": {
+            state: sum(1 for row in final if row.get("pin_state") == state)
+            for state in ("known_not_pinned", "inferred_not_pinned")
+        },
         "skipped": skipped,
     })
     return final[:max(1, min(int(max_results), MAX_RESULTS))], attempts
