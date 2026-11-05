@@ -76,6 +76,7 @@ class XCliReadOnlyProbeWorkflowTests(unittest.TestCase):
         self.assertIn("not_official_author", workflow)
         self.assertIn("retweeted_status_id", workflow)
         self.assertIn("quoted_status_id", workflow)
+        self.assertIn('"quoted", "quoted_tweet"', workflow)
         self.assertIn("pinned_tweet", workflow)
         self.assertNotIn("print(raw", workflow)
         self.assertNotIn("print(stderr", workflow)
