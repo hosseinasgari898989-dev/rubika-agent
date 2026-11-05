@@ -199,7 +199,7 @@ jobs:
                   reasons.append("retweet")
               if str(row.get("text") or "").lstrip().startswith("RT @"):
                   reasons.append("retweet")
-              if truthy_field(row, ("quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id", "is_quote", "is_quote_status")):
+              if truthy_field(row, ("quoted", "quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id", "is_quote", "is_quote_status")):
                   reasons.append("quote")
               if truthy_field(row, ("pinned", "is_pinned", "pinned_tweet", "isPinned")):
                   reasons.append("pinned")
