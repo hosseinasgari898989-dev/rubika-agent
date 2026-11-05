@@ -154,7 +154,7 @@ async function listTikTokUnsent(env, h) {
     "i.rubika_message_id IS NOT NULL OR EXISTS (" +
     "SELECT 1 FROM delivery_attempts da WHERE da.item_id = i.id " +
     "AND da.status IN ('sent','uncertain','started')) THEN 1 ELSE 0 END AS already_sent, " +
-    "CASE WHEN q.status = 'failed' AND i.id IS NOT NULL AND " +
+    "CASE WHEN q.status IN ('failed','skipped') AND i.id IS NOT NULL AND " +
     "COALESCE(i.status,'') NOT IN ('sent','sending','uncertain') AND " +
     "i.sent_at IS NULL AND i.rubika_message_id IS NULL AND NOT EXISTS (" +
     "SELECT 1 FROM delivery_attempts da WHERE da.item_id = i.id " +
@@ -176,7 +176,7 @@ async function resendTikTokUnsent(env, h, id) {
   const result = await env.DB.prepare(
     "UPDATE automation_queue SET status = 'queued', last_error_code = NULL, " +
     "updated_at = " + NOW_SQL + " WHERE id = ? AND platform = 'tiktok' " +
-    "AND status = 'failed' " +
+    "AND status IN ('failed','skipped') " +
     "AND EXISTS (SELECT 1 FROM items i WHERE i.platform = 'tiktok' " +
     "AND i.external_id = automation_queue.external_id) " +
     "AND NOT EXISTS (SELECT 1 FROM items i WHERE i.platform = 'tiktok' " +

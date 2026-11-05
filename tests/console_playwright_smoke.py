@@ -566,6 +566,10 @@ def main() -> int:
 
             active_page[0] = "tiktok-unsent-actions"
             page.locator('#nav button[data-id="tiktok-unsent"]').click()
+            page.wait_for_function(
+                "(expected) => document.querySelector('#ttl')?.textContent === expected",
+                arg="تیک‌تاک - ارسال‌نشده", timeout=5000,
+            )
             page.wait_for_selector('#view button[data-a="tkResend"]', timeout=5000)
             resend = page.locator('#view button[data-a="tkResend"]')
             resend.click()

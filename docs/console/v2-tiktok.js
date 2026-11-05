@@ -64,6 +64,15 @@ A.tkRemove=async el=>{
 const reasonFa=value=>{
   const key=String(value||'').toLowerCase();
   const map={
+    not_sent:'این آیتم به مقصد نرسیده است',
+    send_failed:'ارسال آیتم ناموفق بود',
+    already_seen_or_unavailable:'آیتم قبلاً دیده شده یا در دسترس نیست',
+    required_keyword_missing:'کپشن یا هشتگ کلیدواژهٔ لازم را ندارد',
+    source_not_selected:'این حساب در فهرست فعال نیست',
+    media_validation_failed:'اعتبارسنجی رسانه ناموفق بود',
+    no_audio:'ویدئو صدای قابل قبول ندارد',
+    source_below_policy_minimum_resolution:'کیفیت تصویر کمتر از حد مجاز است',
+    media_duration_out_of_range:'مدت ویدئو خارج از بازهٔ مجاز است',
     rubika_upload_failed:'ارسال رسانه به روبیکا ناموفق بود',
     rubika_rejected_upload_failed:'روبیکا فایل را نپذیرفت',
     rubika_rejected_file_too_large:'حجم فایل از حد پذیرفته‌شده بیشتر بود',
@@ -89,7 +98,7 @@ const sendState=row=>{
   return '<span class="s">قابل ارسال مجدد نیست</span>';
 };
 
-V.tiktokUnsent=async()=>{
+V['tiktok-unsent']=async()=>{
   const r=await api('/api/console/tiktok-unsent');
   unsentRows=r.items||[];
   return card('تیک‌تاک - ارسال‌نشده', '<div class="s">فقط موارد TikTok که ارسالشان ناموفق مانده یا به مقصد نرسیده‌اند. ارسال دوباره هر ردیف فقط همان آیتم را به صف موجود برمی‌گرداند؛ مقصد از تنظیم فعلی پردازشگر گرفته می‌شود. نتیجهٔ نامشخص یا ارسال‌شده دوباره صف نمی‌شود.</div>')+

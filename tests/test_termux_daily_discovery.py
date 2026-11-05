@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from termux import daily_discovery
 from agent.source_policy import resolve_source_policy, set_dynamic_tiktok_sources
+from agent.discovery.termux_sources import TIKTOK_PROFILES
 
 
 class TermuxDailyDiscoveryTests(unittest.TestCase):
@@ -54,7 +55,13 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             ) as official_search:
                 report = daily_discovery.collect_daily_report(output_path=output)
 
-            tiktok_search.assert_called_once_with(max_results=48, max_per_profile=8)
+            tiktok_search.assert_called_once_with(
+                profiles=TIKTOK_PROFILES,
+                selected_profiles=TIKTOK_PROFILES,
+                max_results=48,
+                max_per_profile=8,
+                created_after_by_profile={},
+            )
             official_search.assert_called_once_with(max_results=12)
             self.assertEqual(report["source"], "github_actions_termux_docker")
             self.assertEqual(report["summary"]["tiktok_candidates"], 1)

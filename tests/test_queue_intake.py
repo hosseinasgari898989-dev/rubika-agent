@@ -128,7 +128,7 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertEqual([row["external_id"] for row in fair_round_robin(rows, last_source_key=PROFILES[1])[:3]], ["21","31","41"])
 
     def test_intake_accepts_active_console_managed_account_without_weakening_keyword_filter(self):
-        cloud = FakeCloud()
+        cloud = FakeCloudState()
         cloud.console_sources = [{
             "platform": "tiktok", "source_key": "console_creator",
             "enabled": 1, "managed": True, "created_at": _now_iso(),

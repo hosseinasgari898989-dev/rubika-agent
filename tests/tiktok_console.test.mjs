@@ -87,7 +87,7 @@ class FakeStatement {
     }
     if (this.sql.startsWith("UPDATE automation_queue SET status = 'queued'")) {
       const queue = this.db.queue.get(v[0]);
-      if (!queue || queue.platform !== "tiktok" || queue.status !== "failed") {
+      if (!queue || queue.platform !== "tiktok" || !["failed","skipped"].includes(queue.status)) {
         return { meta: { changes: 0 } };
       }
       const item = [...this.db.items.values()].find(x =>
