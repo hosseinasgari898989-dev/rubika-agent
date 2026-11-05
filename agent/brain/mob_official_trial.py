@@ -641,6 +641,10 @@ def _mob_x_candidate_rejection(candidate: dict[str, Any], since_utc: str | None)
         return "not_official_author"
     if candidate.get("pinned") is not False:
         return "pinned_or_pin_state_unknown"
+    pin_state = str(candidate.get("pin_state") or "")
+    pin_state_source = str(candidate.get("pin_state_source") or "")
+    if pin_state not in {"known_not_pinned", "inferred_not_pinned"} or not pin_state_source:
+        return "pin_state_provenance_missing"
     legacy = candidate.get("legacy") if isinstance(candidate.get("legacy"), dict) else {}
     flags = (
         ("reply", ("reply_to", "reply_to_user", "replying_to", "in_reply_to_status_id",
@@ -695,6 +699,8 @@ def _mob_x_backlog_candidate(row: dict[str, Any]) -> dict[str, Any] | None:
         or author != "mobgamesstudios"
         or not media_url.startswith("https://")
         or stored.get("pinned") is not False
+        or stored.get("pin_state") not in {"known_not_pinned", "inferred_not_pinned"}
+        or not str(stored.get("pin_state_source") or "").strip()
         or stored.get("source_platform") != "x"
         or stored.get("official_source") is not True
     ):
@@ -723,6 +729,10 @@ def _mob_x_backlog_candidate(row: dict[str, Any]) -> dict[str, Any] | None:
         "media_type": media_type,
         "media_url": media_url,
         "pinned": False,
+        "pin_state": str(stored["pin_state"]),
+        "pin_state_source": str(stored["pin_state_source"]),
+        "pin_flags": stored.get("pin_flags", []) if isinstance(stored.get("pin_flags"), list) else [],
+        "profile_pinned_ids": stored.get("profile_pinned_ids", []) if isinstance(stored.get("profile_pinned_ids"), list) else [],
         "discovery_source": str(stored.get("discovery_source") or stored.get("id_source") or "stored_backlog"),
         "id_source": str(stored.get("id_source") or stored.get("discovery_source") or "stored_backlog"),
     }
@@ -749,7 +759,11 @@ def _mob_x_discovery_payload(item: dict[str, Any]) -> dict[str, Any]:
                 "source_platform": "x",
                 "official_source": True,
                 "author": "@mobgamesstudios",
-                "pinned": False,
+                "pinned": item.get("pinned") is False,
+                "pin_state": str(item["pin_state"]),
+                "pin_state_source": str(item["pin_state_source"]),
+                "pin_flags": item.get("pin_flags", []) if isinstance(item.get("pin_flags"), list) else [],
+                "profile_pinned_ids": item.get("profile_pinned_ids", []) if isinstance(item.get("profile_pinned_ids"), list) else [],
                 "published_at": str(item["published_at"]),
                 "media_type": str(item["media_type"]),
                 "media_url": str(item["media_url"]),
