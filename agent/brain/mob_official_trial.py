@@ -622,6 +622,52 @@ def filter_official_candidates_by_source(
     ]
 
 
+def _mob_x_candidate_rejection(candidate: dict[str, Any], since_utc: str | None) -> str | None:
+    """Fail closed on unverified or non-original Mob X candidates from any input path."""
+    if candidate.get("platform") != "mob_official" or candidate.get("source_platform") != "x":
+        return "official_x_source_required"
+    if candidate.get("official_source") is not True:
+        return "official_source_unverified"
+    external_id = str(candidate.get("external_id") or "")
+    if not re.fullmatch(r"x-[0-9]{15,22}", external_id):
+        return "invalid_external_id"
+    canonical = str(candidate.get("canonical_url") or "")
+    if canonical != "https://x.com/mobgamesstudios/status/" + external_id[2:]:
+        return "official_post_url_unverified"
+    author = str(candidate.get("author") or "").strip().lstrip("@").casefold()
+    if author != "mobgamesstudios":
+        return "not_official_author"
+    if candidate.get("pinned") is not False:
+        return "pinned_or_pin_state_unknown"
+    legacy = candidate.get("legacy") if isinstance(candidate.get("legacy"), dict) else {}
+    flags = (
+        ("reply", ("reply_to", "reply_to_user", "replying_to", "in_reply_to_status_id",
+                   "in_reply_to_status_id_str", "in_reply_to_user_id", "in_reply_to_user_id_str", "is_reply")),
+        ("retweet", ("retweeted_status", "retweeted_tweet", "retweeted_status_id", "retweeted_tweet_id",
+                     "retweeted_status_result", "repost_of", "is_retweet", "retweeted")),
+        ("quote", ("quoted", "quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id",
+                   "quoted_status_id_str", "is_quote", "is_quote_status")),
+    )
+    for reason, names in flags:
+        for source in (candidate, legacy):
+            for name in names:
+                value = source.get(name)
+                if value is True or (isinstance(value, (dict, list)) and bool(value)) or (
+                    isinstance(value, str) and value.strip().casefold() not in {"", "0", "false", "none", "null"}
+                ):
+                    return reason
+    caption = str(candidate.get("original_caption") or candidate.get("caption") or "").strip()
+    if caption.lstrip().startswith("RT @"):
+        return "retweet"
+    media_type = str(candidate.get("media_type") or "").casefold()
+    media_url = str(candidate.get("media_url") or "")
+    if not caption:
+        return "text_only"
+    if media_type not in {"image", "video"} or not media_url.startswith("https://"):
+        return "text_only_or_media_invalid"
+    return since_rule_rejection(candidate, since_utc)
+
+
 def _mob_x_backlog_candidate(row: dict[str, Any]) -> dict[str, Any] | None:
     """Rehydrate only the explicit, still-discovered Mob X backlog envelope."""
     if row.get("status") != "discovered":
@@ -841,6 +887,28 @@ def run_trial(
             "input_candidate_count": source_filter_input_count,
             "candidate_count": len(candidates),
             "result": "lane_candidates_found" if candidates else "no_candidates_in_requested_lane",
+        })
+
+    if source_platform == "x":
+        configured_since = _official_publishing_policy().get("since_utc")
+        strictly_verified: list[dict[str, Any]] = []
+        strict_rejections: list[dict[str, str]] = []
+        for item in candidates:
+            reason = _mob_x_candidate_rejection(item, configured_since)
+            if reason:
+                strict_rejections.append({
+                    "id": str(item.get("external_id") or item.get("id") or "")[:120],
+                    "reason": reason,
+                })
+            else:
+                strictly_verified.append(item)
+        candidates = strictly_verified
+        source_attempts.append({
+            "source": "mob_x_strict_original_media_filter",
+            "result": "eligible_candidates_found" if candidates else "empty",
+            "candidate_count": len(candidates),
+            "rejected_count": len(strict_rejections),
+            "rejected": strict_rejections[:50],
         })
 
     since_rejections: list[dict[str, str]] = []
