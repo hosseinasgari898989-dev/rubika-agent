@@ -10,7 +10,10 @@ from __future__ import annotations
 import html
 import json
 import math
+import os
 import re
+import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -23,7 +26,7 @@ import requests
 
 
 OFFICIAL_HANDLE = "mobgamesstudios"
-MAX_RESULTS = 12
+MAX_RESULTS = 40
 POST_ID_RE = re.compile(r"^[0-9]{15,22}$")
 POST_URL_RE = re.compile(
     r"https?://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/mobgamesstudios/status/([0-9]{15,22})",
@@ -185,6 +188,11 @@ def _timestamp(value: Any) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     raw = value.strip()
+    if raw.isdigit():
+        try:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc).isoformat()
+        except (ValueError, OverflowError, OSError):
+            return None
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
@@ -292,11 +300,37 @@ def _media_url(media: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
-def _parse_post(payload: dict[str, Any], post_id: str) -> dict[str, Any] | None:
+def _parse_post(
+    payload: dict[str, Any],
+    post_id: str,
+    *,
+    pinned_state: bool | None = None,
+) -> dict[str, Any] | None:
     returned_id = str(payload.get("id_str") or payload.get("id") or "").strip()
     legacy = payload.get("legacy") if isinstance(payload.get("legacy"), dict) else {}
     returned_id = returned_id or str(legacy.get("id_str") or legacy.get("id") or "").strip()
-    if returned_id and returned_id != post_id:
+    if not returned_id or returned_id != post_id:
+        return None
+
+    # Replies, reposts and quote-posts are never valid Mob news candidates.
+    for names in (
+        ("reply_to", "reply_to_user", "in_reply_to_status_id", "in_reply_to_user_id", "is_reply"),
+        ("retweeted_status", "retweeted_tweet", "retweeted_status_id", "retweeted_tweet_id", "repost_of", "is_retweet", "retweeted"),
+        ("quoted", "quoted_tweet", "quoted_status", "quoted_tweet_id", "quoted_status_id", "is_quote", "is_quote_status"),
+    ):
+        for name in names:
+            value = payload.get(name)
+            if value is True or (isinstance(value, (dict, list)) and bool(value)) or (
+                isinstance(value, str) and value.strip().casefold() not in {"", "0", "false", "none", "null"}
+            ):
+                return None
+    if str(payload.get("text") or payload.get("full_text") or "").lstrip().startswith("RT @"):
+        return None
+
+    pin_value = payload.get("is_pinned")
+    if not isinstance(pin_value, bool):
+        pin_value = pinned_state
+    if pin_value is not False:
         return None
 
     user = _tweet_user(payload)
@@ -426,7 +460,13 @@ def _discover_ids_from_public_mirror(
     }
 
 
-def _fetch_post(client: Any, post_id: str, timeout_seconds: int) -> tuple[dict[str, Any] | None, str]:
+def _fetch_post(
+    client: Any,
+    post_id: str,
+    timeout_seconds: int,
+    *,
+    pinned_state: bool | None = None,
+) -> tuple[dict[str, Any] | None, str]:
     endpoint = "https://cdn.syndication.twimg.com/tweet-result"
     tokens = ["0", _syndication_token(post_id)]
     for token in dict.fromkeys(tokens):
@@ -448,7 +488,7 @@ def _fetch_post(client: Any, post_id: str, timeout_seconds: int) -> tuple[dict[s
             continue
         if not isinstance(payload, dict):
             continue
-        item = _parse_post(payload, post_id)
+        item = _parse_post(payload, post_id, pinned_state=pinned_state)
         if item is not None:
             return item, "ok"
         # A 200 response without usable media/canonical-author metadata may indicate
@@ -458,13 +498,14 @@ def _fetch_post(client: Any, post_id: str, timeout_seconds: int) -> tuple[dict[s
     return None, "syndication_unavailable"
 
 
-def discover_mob_x_posts(
+def _discover_legacy_mob_x_posts(
     *,
     max_results: int = MAX_RESULTS,
     timeout_seconds: int = 12,
     sleep_seconds: float = 0.15,
     session: Any | None = None,
     seed_urls: tuple[str, ...] = (),
+    pin_states: dict[str, bool] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Find official X post IDs via free public indexes and validate posts via X syndication.
 
