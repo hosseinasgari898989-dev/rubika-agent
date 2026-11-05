@@ -15,6 +15,7 @@ from agent.brain.mob_x_link_processor import (
     build_mob_x_caption,
     clean_caption,
     download_public_media,
+    fetch_public_post,
     normalize_published_at,
     parse_official_link,
     process_job,
@@ -168,6 +169,156 @@ class MobXLinkParserTests(unittest.TestCase):
         self.assertEqual(post["provider"], "vxtwitter")
         with self.assertRaisesRegex(MobXLinkError, "mob_x_author_mismatch"):
             _vxtwitter({**payload, "user_screen_name": "not_mob"}, POST_ID)
+
+    @staticmethod
+    def _x_cli_video_payload(author="mobgamesstudios"):
+        return {
+            "id": POST_ID,
+            "text": "Official Mob guest announcement",
+            "created_at": "2026-11-01T12:30:00Z",
+            "author": {"username": author, "rest_id": "987654321"},
+            "media": [{
+                "type": "video",
+                "url": IMAGE_URL,
+                "preview_image": IMAGE_URL,
+                "variants": [
+                    {"bitrate": 900000, "content_type": "video/mp4", "url": VIDEO_URL},
+                    {"bitrate": 2100000, "content_type": "video/mp4", "url": VIDEO_URL + "?quality=high"},
+                    {"bitrate": 0, "content_type": "application/x-mpegURL", "url": "https://video.twimg.com/ext_tw_video/playlist.m3u8"},
+                ],
+            }],
+        }
+
+    def test_x_cli_guest_success_normalizes_full_text_author_date_and_best_video_variant(self):
+        fixture = self._x_cli_video_payload()
+        completed = Mock(returncode=0, stdout=json.dumps(fixture), stderr="private-test-secret")
+        with (
+            patch.dict(os.environ, {
+                "MOB_X_CLI_PATH": "/tmp/x-cli",
+                "X_AUTH_TOKEN": "do-not-pass-this-account-secret",
+                "CT0": "do-not-pass-this-cookie",
+            }),
+            patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed) as run,
+            patch("agent.brain.mob_x_link_processor.socket.getaddrinfo",
+                  return_value=[(None, None, None, None, ("8.8.8.8", 443))]),
+            patch("builtins.print") as log,
+        ):
+            post = fetch_public_post(POST_ID)
+        self.assertEqual(post["provider"], "x-cli")
+        self.assertEqual(post["external_id"], POST_ID)
+        self.assertEqual(post["text"], fixture["text"])
+        self.assertEqual(post["published_at"], fixture["created_at"])
+        self.assertEqual(post["media"][0]["url"], VIDEO_URL + "?quality=high")
+        self.assertEqual(post["media"][0]["variants"][0]["bitrate"], 900000)
+        command = run.call_args.args[0]
+        self.assertIn("--guest", command)
+        self.assertIn("--tier=guest", command)
+        self.assertIn("--retries=0", command)
+        self.assertIn("--timeout=15s", command)
+        self.assertIn("--data-dir", command)
+        self.assertIn("--no-cache", command)
+        self.assertEqual(run.call_args.kwargs["timeout"], 20)
+        child_env = run.call_args.kwargs["env"]
+        self.assertNotIn("X_AUTH_TOKEN", child_env)
+        self.assertNotIn("CT0", child_env)
+        self.assertNotIn("do-not-pass-this-account-secret", str(child_env))
+        rendered_logs = str(log.call_args_list)
+        self.assertIn('"source": "x-cli"', rendered_logs)
+        self.assertNotIn("private-test-secret", rendered_logs)
+        self.assertNotIn(fixture["text"], rendered_logs)
+
+    def test_x_cli_nonzero_exit_falls_back_to_fxtwitter_without_logging_stderr(self):
+        completed = Mock(returncode=8, stdout="", stderr="token=private-test-secret")
+        fx_post = {
+            "provider": "fxtwitter", "external_id": POST_ID, "text": "Fx fallback",
+            "published_at": "2026-11-01T12:30:00Z",
+            "media": [{"type": "photo", "url": IMAGE_URL}], "media_url_list": [],
+        }
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
+            patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
+            patch("agent.brain.mob_x_link_processor._fetch_provider",
+                  return_value=(fx_post, {"provider": "fxtwitter"})) as provider,
+            patch("builtins.print") as log,
+        ):
+            post = fetch_public_post(POST_ID)
+        self.assertEqual(post["provider"], "fxtwitter")
+        provider.assert_called_once()
+        self.assertEqual(provider.call_args.args[1], "fxtwitter")
+        self.assertNotIn("private-test-secret", str(log.call_args_list))
+
+    def test_fx_failure_falls_back_to_vxtwitter(self):
+        session = Mock()
+        session.get.side_effect = [
+            response(status=503),
+            response(payload={
+                "tweetID": POST_ID,
+                "user_screen_name": "mobgamesstudios",
+                "text": "Vx fallback video",
+                "date": "2026-11-01T12:30:00Z",
+                "media_extended": [{"type": "video", "url": VIDEO_URL}],
+            }),
+        ]
+        with patch.dict(os.environ, {"MOB_X_CLI_PATH": ""}):
+            post = fetch_public_post(POST_ID, session=session)
+        self.assertEqual(post["provider"], "vxtwitter")
+        self.assertEqual(session.get.call_count, 2)
+        self.assertIn("api.fxtwitter.com", session.get.call_args_list[0].args[0])
+        self.assertIn("api.vxtwitter.com", session.get.call_args_list[1].args[0])
+
+    def test_x_cli_wrong_author_is_rejected_and_does_not_block_fallback_checks(self):
+        completed = Mock(returncode=0, stdout=json.dumps(self._x_cli_video_payload("imposter")), stderr="")
+        session = Mock()
+        session.get.side_effect = [response(status=403), response(status=403)]
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
+            patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
+        ):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_author_mismatch"):
+                fetch_public_post(POST_ID, session=session)
+        self.assertEqual(session.get.call_count, 2)
+
+    def test_all_fetchers_failed_returns_clean_source_unavailable(self):
+        completed = Mock(returncode=1, stdout="", stderr="private token must not be shown")
+        session = Mock()
+        session.get.side_effect = [response(status=503), response(status=503)]
+        with (
+            patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
+            patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
+        ):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_source_unavailable"):
+                fetch_public_post(POST_ID, session=session)
+        self.assertEqual(session.get.call_count, 2)
+
+    def test_checksum_failure_keeps_x_cli_unconfigured_and_uses_fx_fallback(self):
+        workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mob-x-link-processor.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        verify_at = workflow.index("sha256sum --check")
+        export_at = workflow.index("MOB_X_CLI_PATH=", verify_at)
+        self.assertLess(verify_at, export_at)
+        verify_block = workflow[verify_at:export_at]
+        self.assertRegex(verify_block, r"checksum.*fallback|fallback.*checksum")
+        self.assertIn("exit 0", verify_block)
+        self.assertIn('patch.dict(os.environ, {"MOB_X_CLI_PATH": ""})', __import__("inspect").getsource(self.test_fx_failure_falls_back_to_vxtwitter))
+
+    def test_process_one_sends_private_owner_notice_when_all_metadata_sources_fail(self):
+        client = Mock()
+        client.claim.return_value = {
+            "id": "job_abcdef1234567890",
+            "params": {"url": f"https://x.com/mobgamesstudios/status/{POST_ID}"},
+            "external_id": POST_ID,
+        }
+        with (
+            patch.dict(os.environ, {"RUBIKA_TOKEN": "rubika-test", "RUBIKA_OWNER_CHAT_ID": "owner-test"}),
+            patch("agent.brain.mob_x_link_processor.WorkerClient", return_value=client),
+            patch("agent.brain.mob_x_link_processor.process_job",
+                  side_effect=MobXLinkError("mob_x_source_unavailable")),
+            patch("agent.brain.mob_x_link_processor.send_owner_metadata_failure") as notice,
+            tempfile.TemporaryDirectory() as folder,
+        ):
+            result = process_one(str(Path(folder) / "report.json"))
+        self.assertEqual(result, 1)
+        notice.assert_called_once_with("rubika-test", "owner-test", "job_abcdef1234567890")
 
     def test_probe_is_read_only_and_uses_no_api_key(self):
         session = Mock()
