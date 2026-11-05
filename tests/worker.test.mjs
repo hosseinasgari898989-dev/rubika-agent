@@ -40,13 +40,18 @@ const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), 
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";');
 const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
-const workerImport = 'import { handleOwnerPanel } from "./owner_panel.js";';
+const workerImport = 'import { dispatchMobXWorkflow, handleOwnerPanel } from "./owner_panel.js";';
+const cronImport = 'import { getLastWorkflowCronResult, runWorkflowCron } from "./workflow_cron.js";';
 const consoleApiImport = 'import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";';
-assert.ok(originalSource.includes(workerImport), "Worker must import owner panel handler");
+assert.ok(originalSource.includes(workerImport), "Worker must import owner panel handler and shared dispatcher");
+assert.ok(originalSource.includes(cronImport), "Worker must import cron dispatcher");
 assert.ok(originalSource.includes(consoleApiImport), "Worker must import console API handler");
+const cronSourceForWorker = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
+const cronModuleUrlForWorker = dataModuleUrl(cronSourceForWorker);
 const source = originalSource
-  .replace(workerImport, `const { handleOwnerPanel } = await import("${panelModuleUrl}");`)
-  .replace(consoleApiImport, `const { handleConsoleApi, corsPreflight, withCors } = await import("${consoleApiModuleUrl}");`);
+  .replace(workerImport, \`const { dispatchMobXWorkflow, handleOwnerPanel } = await import("\${panelModuleUrl}");\`)
+  .replace(cronImport, \`const { getLastWorkflowCronResult, runWorkflowCron } = await import("\${cronModuleUrlForWorker}");\`)
+  .replace(consoleApiImport, \`const { handleConsoleApi, corsPreflight, withCors } = await import("\${consoleApiModuleUrl}");\`);
 const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString("base64");
 const imported = await import(moduleUrl);
 const worker = imported.default;
