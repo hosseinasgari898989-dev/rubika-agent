@@ -1037,7 +1037,11 @@ def _fetch_fxtwitter_timeline(
             return [], {}, summary
         rows = _timeline_objects(payload)
         pin_states: dict[str, bool] = {}
-        profile_pin_evidence = _pin_evidence_for_row(payload, "fxtwitter_profile")
+        profile_pin_evidence = (
+            _pin_evidence_for_row(payload, "fxtwitter_profile")
+            if _row_author(payload) == OFFICIAL_HANDLE
+            else {"flags": [], "profile_pinned_ids": []}
+        )
         for row in rows:
             post_id = _row_id(row)
             pin = row.get("is_pinned")
