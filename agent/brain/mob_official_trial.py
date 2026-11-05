@@ -759,7 +759,7 @@ def _mob_x_discovery_payload(item: dict[str, Any]) -> dict[str, Any]:
                 "source_platform": "x",
                 "official_source": True,
                 "author": "@mobgamesstudios",
-                "pinned": item.get("pinned") is False,
+                "pinned": item.get("pinned"),
                 "pin_state": str(item["pin_state"]),
                 "pin_state_source": str(item["pin_state_source"]),
                 "pin_flags": item.get("pin_flags", []) if isinstance(item.get("pin_flags"), list) else [],
