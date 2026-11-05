@@ -697,7 +697,7 @@ class FakeStatement {
       run.status = v[0];
       return { meta: { changes: 1 } };
     }
-    if (sql.startsWith("INSERT INTO items")) {
+    if (sql.startsWith("INSERT INTO items") || sql.startsWith("INSERT OR IGNORE INTO items")) {
       const item = {
         id: v[0], platform: v[1], source_key: v[2], external_id: v[3],
         canonical_url: v[4], title: v[5], caption: v[6], published_at: v[7],
