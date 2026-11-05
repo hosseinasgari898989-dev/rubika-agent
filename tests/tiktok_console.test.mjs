@@ -123,8 +123,11 @@ const request = (path, method = "GET", body = undefined) => new Request(
   { method, headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body) },
 );
-const call = (db, path, method = "GET", body = undefined) =>
-  handleTikTokConsoleApi(request(path, method, body), { DB: db }, helpers, path, method);
+const call = (db, path, method = "GET", body = undefined) => {
+  const req = request(path, method, body);
+  const sub = new URL(req.url).pathname.slice("/api/console".length).replace(/\/+$/, "");
+  return handleTikTokConsoleApi(req, { DB: db }, helpers, sub, method);
+};
 
 assert.equal(normalizeTikTokAccount("@New_Creator.1"), "new_creator.1");
 assert.equal(normalizeTikTokAccount("https://www.tiktok.com/@New_Creator.1/"), "new_creator.1");
