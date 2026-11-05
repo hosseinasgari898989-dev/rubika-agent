@@ -294,6 +294,7 @@ class MobXLinkParserTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {"MOB_X_CLI_PATH": "/tmp/x-cli"}),
             patch("agent.brain.mob_x_link_processor.subprocess.run", return_value=completed),
+            patch("agent.brain.mob_x_link_processor.Path.is_file", return_value=True),
         ):
             with self.assertRaisesRegex(MobXLinkError, "mob_x_source_unavailable"):
                 fetch_public_post(POST_ID, session=session)
