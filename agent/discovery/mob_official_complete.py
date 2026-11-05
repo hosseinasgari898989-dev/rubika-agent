@@ -909,6 +909,9 @@ def discover_official_x_posts(
             continue
         if row.get("pinned") is not False:
             continue
+        pin_state = str(row.get("pin_state") or "")
+        if pin_state not in {"known_not_pinned", "inferred_not_pinned"} or not str(row.get("pin_state_source") or "").strip():
+            continue
         if not str(row.get("original_caption") or row.get("caption") or "").strip():
             continue
         media_url = str(row.get("media_url") or "")
