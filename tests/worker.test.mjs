@@ -4807,4 +4807,160 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   });
 }
 
+
+
+// Worker cron dispatcher: deterministic cadence, strict allowlist, fail-closed status checks.
+{
+  const cronSource = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
+  const cron = await import(dataModuleUrl(cronSource));
+  const expectedAllowlist = [
+    "termux-docker-discovery.yml",
+    "daily-queue-processor.yml",
+    "mob-x-news-production.yml",
+    "mob-x-link-processor.yml",
+  ];
+  assert.deepEqual(cron.WORKFLOW_CRON_ALLOWLIST, expectedAllowlist);
+  assert.deepEqual(cron.workflowsDueForTick(1), [
+    "termux-docker-discovery.yml", "mob-x-link-processor.yml",
+  ]);
+  assert.deepEqual(cron.workflowsDueForTick(6), [
+    "termux-docker-discovery.yml", "daily-queue-processor.yml", "mob-x-link-processor.yml",
+  ]);
+  assert.deepEqual(cron.workflowsDueForTick(10), [
+    "termux-docker-discovery.yml", "mob-x-news-production.yml", "mob-x-link-processor.yml",
+  ]);
+  assert.deepEqual(cron.workflowsDueForTick(30), expectedAllowlist);
+  assert.deepEqual(cron.workflowsDueForTick(0), []);
+  assert.deepEqual(cron.workflowsDueForTick(-1), []);
+  assert.deepEqual(cron.workflowsDueForTick(Number.NaN), []);
+}
+
+// An in-progress workflow is skipped; only the idle workflow is dispatched once.
+{
+  const cronSource = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
+  const cron = await import(dataModuleUrl(cronSource));
+  const fetches = [];
+  const dispatches = [];
+  const logs = [];
+  const result = await cron.runWorkflowCron(
+    { scheduledTime: 0 },
+    { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real", WORKFLOW_CRON_DISPATCH_ENABLED: "true" },
+    async (_env, workflow, inputs, options) => {
+      dispatches.push({ workflow, inputs, options });
+      return { ok: true, status: 204 };
+    },
+    {
+      fetcher: async url => {
+        fetches.push(String(url));
+        const active = String(url).includes("termux-docker-discovery.yml");
+        return new Response(JSON.stringify({
+          workflow_runs: active ? [{ status: "in_progress" }] : [],
+        }), { status: 200 });
+      },
+      logger: entry => logs.push(entry),
+    },
+  );
+  assert.equal(fetches.length, 2);
+  assert.equal(dispatches.length, 1);
+  assert.equal(dispatches[0].workflow, "mob-x-link-processor.yml");
+  assert.equal(dispatches[0].inputs, undefined);
+  assert.equal(dispatches[0].options.maxAttempts, 1);
+  assert.equal(result.entries.find(x => x.workflow === "termux-docker-discovery.yml").result, "skipped");
+  assert.equal(result.entries.find(x => x.workflow === "mob-x-link-processor.yml").result, "dispatched");
+  assert.deepEqual(logs.map(x => Object.keys(x).sort()), [
+    ["http_status", "result", "workflow"],
+    ["http_status", "result", "workflow"],
+  ]);
+  assert.equal(JSON.stringify(logs).includes("cron-test-token-never-real"), false);
+}
+
+// The kill switch defaults ON but an explicit false value prevents all GitHub calls.
+{
+  const cronSource = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
+  const cron = await import(dataModuleUrl(cronSource));
+  let calls = 0;
+  const result = await cron.runWorkflowCron(
+    { scheduledTime: 0 },
+    { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real", WORKFLOW_CRON_DISPATCH_ENABLED: "false" },
+    async () => { calls += 1; return { ok: true, status: 204 }; },
+    {
+      fetcher: async () => { calls += 1; return new Response("{}", { status: 200 }); },
+      logger: () => {},
+    },
+  );
+  assert.equal(calls, 0);
+  assert.ok(result.entries.every(x => x.result === "skipped" && x.http_status === null));
+}
+
+// GitHub API errors are logged safely and never retried or dispatched.
+{
+  const cronSource = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
+  const cron = await import(dataModuleUrl(cronSource));
+  let fetchCount = 0;
+  let dispatchCount = 0;
+  const logs = [];
+  const result = await cron.runWorkflowCron(
+    { scheduledTime: 0 },
+    { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real", WORKFLOW_CRON_DISPATCH_ENABLED: "true" },
+    async () => { dispatchCount += 1; return { ok: true, status: 204 }; },
+    {
+      fetcher: async () => { fetchCount += 1; return new Response("private response body", { status: 403 }); },
+      logger: entry => logs.push(entry),
+    },
+  );
+  assert.equal(fetchCount, 2);
+  assert.equal(dispatchCount, 0);
+  assert.ok(result.entries.every(x => x.result === "error" && x.http_status === 403));
+  assert.equal(JSON.stringify(logs).includes("private response body"), false);
+  assert.equal(JSON.stringify(logs).includes("cron-test-token-never-real"), false);
+}
+
+// The shared dispatch helper accepts the exact scheduled inputs and performs one safe attempt.
+{
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), options });
+    return new Response("response body must not be surfaced", { status: 503 });
+  };
+  try {
+    const daily = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real" },
+      "daily-queue-processor.yml",
+      { publish_four_tiktok_test: true },
+      { maxAttempts: 1, safeStatusOnly: true },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(daily.ok, false);
+    assert.equal(daily.status, 503);
+    assert.equal(daily.error_detail, undefined);
+    assert.deepEqual(JSON.parse(calls[0].options.body), {
+      ref: "main", inputs: { publish_four_tiktok_test: "true" },
+    });
+
+    calls.length = 0;
+    const termux = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real" },
+      "termux-docker-discovery.yml",
+      undefined,
+      { maxAttempts: 1, safeStatusOnly: true },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(termux.status, 503);
+    assert.deepEqual(JSON.parse(calls[0].options.body), { ref: "main" });
+
+    calls.length = 0;
+    const denied = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real" },
+      "not-allowlisted.yml",
+      {},
+      { maxAttempts: 1, safeStatusOnly: true },
+    );
+    assert.equal(denied.ok, false);
+    assert.equal(calls.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
