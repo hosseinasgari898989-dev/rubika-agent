@@ -60,7 +60,7 @@ class FakeStatement {
     this.db.writes += 1;
     const v = this.values;
     if (this.sql.startsWith("INSERT INTO sources")) {
-      const disabled = this.sql.includes("VALUES (?, 'tiktok', ?, 0)");
+      const disabled = this.sql.includes("VALUES (?, 'tiktok', ?, 0,");
       const row = {
         id: v[0], platform: "tiktok", source_key: v[1],
         display_name: disabled ? null : v[2],
@@ -106,6 +106,7 @@ class FakeStatement {
 }
 class FakeDB {
   constructor() {
+    this.sql = [];
     this.sources = new Map();
     this.failedMedia = new Map();
     this.items = new Map();
@@ -116,7 +117,7 @@ class FakeDB {
     this.reads = 0;
     this.writes = 0;
   }
-  prepare(sql) { return new FakeStatement(this, sql); }
+  prepare(sql) { this.sql.push(sql); return new FakeStatement(this, sql); }
 }
 const request = (path, method = "GET", body = undefined) => new Request(
   "https://worker.test/api/console" + path,
@@ -141,6 +142,9 @@ assert.equal(normalizeTikTokAccount("new..creator"), null);
   let response = await call(db, "/sources", "POST", { platform: "tiktok", source_key: "@NewCreator" });
   assert.equal(response.status, 201);
   assert.equal((await response.json()).source_key, "newcreator");
+  const insertSql = db.sql.find(sql => sql.startsWith("INSERT INTO sources"));
+  assert.match(insertSql, /created_at/);
+  assert.match(insertSql, /strftime\('%Y-%m-%dT%H:%M:%fZ','now'\)/);
   response = await call(db, "/sources", "POST", {
     platform: "tiktok", source_key: "https://www.tiktok.com/@newcreator/",
   });
@@ -213,7 +217,7 @@ assert.equal(normalizeTikTokAccount("new..creator"), null);
 {
   const db = new FakeDB();
   db.unsentRows = [
-    { id: "tiktok:7616247520657771796", account: "newcreator", created_at: "2026-11-05T20:00:00Z", can_resend: 1, already_sent: 0 },
+    { id: "tiktok:7616247520657771796", account: "newcreator", created_at: "2026-11-05T20:00:00Z", can_resend: 1, already_sent: 0, failed_media_id: "fm_" + "a".repeat(24), original_share_url: "https://mega.nz/file/AbCd1234#" + "A".repeat(43), failed_media_status: "stored" },
     { id: "tiktok:7616247520657771797", account: "oldcreator", created_at: "2026-11-04T20:00:00Z", can_resend: 0, already_sent: 1 },
   ];
   const response = await call(db, "/tiktok-unsent");
@@ -221,7 +225,13 @@ assert.equal(normalizeTikTokAccount("new..creator"), null);
   const data = await response.json();
   assert.equal(data.items.length, 2);
   assert.equal(data.items[0].account, "newcreator");
+  assert.ok(data.items[0].failed_media_id);
+  assert.match(data.items[0].original_share_url, /^https:\/\/mega\.nz\/file\//);
+  assert.equal(data.items[0].failed_media_status, "stored");
   assert.equal(db.reads, 1);
+  const listSql = db.sql.find(sql => sql.includes("FROM automation_queue q"));
+  assert.match(listSql, /fm\.share_url AS original_share_url/);
+  assert.match(listSql, /fm\.id AS failed_media_id/);
 }
 
 // The generic list query excludes TikTok at SQL level; no row is changed.
