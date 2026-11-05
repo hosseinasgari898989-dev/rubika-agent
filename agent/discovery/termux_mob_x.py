@@ -1141,7 +1141,7 @@ def _fallback_post_by_id(
             "external_id": "x-" + post_id,
             "url": canonical,
             "canonical_url": canonical,
-            "title": str(post.get("title") or text_value.split("\\n", 1)[0])[:1200],
+            "title": str(post.get("title") or text_value[:1200])[:1200],
             "caption": text_value[:4500],
             "original_caption": text_value[:4500],
             "author": "@" + OFFICIAL_HANDLE,
@@ -1252,6 +1252,46 @@ def discover_mob_x_posts(
             skipped[skip_key] = skipped.get(skip_key, 0) + 1
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
+
+    if not verified and id_source == "x-cli":
+        # A successful ID listing is not enough if every post detail fails to verify.
+        # Fall back to FxTwitter's unordered profile timeline before legacy indexers.
+        fx_eligible: dict[str, dict[str, Any]] = {}
+        for row in fx_rows:
+            post_id = _row_id(row)
+            if not post_id:
+                continue
+            reason = _row_skip_reason(row, cutoff)
+            if reason:
+                skipped[reason] = skipped.get(reason, 0) + 1
+                continue
+            if pin_states.get(post_id) is True:
+                skipped["pinned"] = skipped.get("pinned", 0) + 1
+                continue
+            fx_eligible.setdefault(post_id, row)
+        for post_id in fx_eligible:
+            item, result = _fetch_post(client, post_id, timeout_seconds, pinned_state=pin_states.get(post_id))
+            if item is None:
+                item, fallback_source = _fallback_post_by_id(
+                    client, post_id, pinned_state=pin_states.get(post_id), cutoff=cutoff
+                )
+                result = "verified_by_" + fallback_source if item else result
+            if item is not None:
+                item["discovery_source"] = "fxtwitter"
+                item["id_source"] = "fxtwitter"
+                verified[post_id] = item
+            else:
+                skip_key = "post_" + result
+                skipped[skip_key] = skipped.get(skip_key, 0) + 1
+        if verified:
+            id_source = "fxtwitter"
+        attempts.append({
+            "source": "fxtwitter",
+            "engine": "fxtwitter_post_verification_fallback",
+            "result": "eligible_ids_found" if verified else "empty_or_unverified",
+            "candidate_count": len(verified),
+            "candidate_post_ids": sorted(verified),
+        })
 
     if not verified:
         legacy_rows, legacy_attempts = _discover_legacy_mob_x_posts(
