@@ -9,6 +9,7 @@ from agent.brain import test_channel
 from agent.brain.mob_x_rubika import (
     owner_preview_keypad,
     send_owner_preview,
+    send_owner_metadata_failure,
     send_test_channel_once,
     send_uncertain_notice,
     upload_preview_media,
@@ -205,6 +206,26 @@ class MobXRubikaTests(unittest.TestCase):
         self.assertEqual(method,"sendMessage");self.assertEqual(payload["chat_id"],"owner-chat")
         self.assertIn("mob_x_translation_failed",payload["text"]);self.assertNotIn("inline_keypad",payload)
         with self.assertRaises(ValueError): send_owner_translation_failure("test-token","owner-chat","bad-job",bot_factory=factory)
+
+    def test_metadata_failure_notice_is_private_clean_and_noninteractive(self):
+        holder = {}
+        def factory(**kwargs):
+            holder["bot"] = RubikaMediaMock(**kwargs)
+            return holder["bot"]
+        send_owner_metadata_failure(
+            "test-token", "owner-chat", "job_abcdef1234567890", bot_factory=factory,
+        )
+        holder["bot"]._post.assert_called_once()
+        method, payload = holder["bot"]._post.call_args.args
+        self.assertEqual(method, "sendMessage")
+        self.assertEqual(payload["chat_id"], "owner-chat")
+        self.assertIn("x-cli", payload["text"])
+        self.assertIn("FxTwitter", payload["text"])
+        self.assertIn("VxTwitter", payload["text"])
+        self.assertIn("هیچ انتشاری انجام نشد", payload["text"])
+        self.assertNotIn("inline_keypad", payload)
+        with self.assertRaises(ValueError):
+            send_owner_metadata_failure("test-token", "owner-chat", "bad-job", bot_factory=factory)
 
     def test_uncertain_notice_has_manual_confirmation_not_retry(self):
         holder = {}
