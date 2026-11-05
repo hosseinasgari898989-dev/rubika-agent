@@ -111,6 +111,8 @@ jobs:
                       kind = str(value.get("kind") or "").lower()
                       if kind in {"failure", "error"}:
                           diagnostics.extend(str(value.get(key) or "") for key in ("message", "reason", "error", "missed"))
+                      if value.get("missed"):
+                          diagnostics.append(str(value.get("missed")))
                       if value.get("id") is not None and value.get("created_at"):
                           rows.append(value)
                       else:
@@ -177,7 +179,7 @@ jobs:
           def truthy_field(row, names):
               for key in names:
                   value = row.get(key)
-                  if value is True or (isinstance(value, (dict, list)) and bool(value)):
+                  if value is not None and value is not False and value != "" and value != 0:
                       return True
               return False
 
@@ -193,7 +195,7 @@ jobs:
                   reasons.append("older_than_2026-11-05T00:00:00Z")
               if truthy_field(row, ("reply_to", "reply_to_user", "in_reply_to_status_id", "in_reply_to_user_id", "is_reply")):
                   reasons.append("reply")
-              if truthy_field(row, ("retweeted_status", "retweeted_tweet", "is_retweet", "retweeted")):
+              if truthy_field(row, ("retweeted_status", "retweeted_tweet", "retweeted_status_id", "retweeted_tweet_id", "repost_of", "is_retweet", "retweeted")):
                   reasons.append("retweet")
               if str(row.get("text") or "").lstrip().startswith("RT @"):
                   reasons.append("retweet")
