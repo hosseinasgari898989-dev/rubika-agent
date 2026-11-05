@@ -484,6 +484,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
     def test_known_pinned_flag_and_x_cli_profile_pinned_id_are_rejected(self):
         flag_id = "2111111111111111302"
         profile_id = "2111111111111111303"
+        other_id = "2111111111111111307"
         rows = [
             self.x_cli_row(flag_id, "2026-11-05T01:00:00Z", is_pinned=True),
             self.x_cli_row(
@@ -491,18 +492,27 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
                 "2026-11-05T02:00:00Z",
                 author={"username": "mobgamesstudios", "pinned_tweet": profile_id},
             ),
+            self.x_cli_row(
+                other_id,
+                "2026-11-05T03:00:00Z",
+                author={"username": "mobgamesstudios", "pinned_tweet": profile_id},
+            ),
         ]
         flag_post = syndication_post(flag_id, created_at="Thu Nov 05 01:00:00 +0000 2026")
         profile_post = syndication_post(profile_id, created_at="Thu Nov 05 02:00:00 +0000 2026")
+        other_post = syndication_post(other_id, created_at="Thu Nov 05 03:00:00 +0000 2026")
         flag_post.pop("is_pinned")
         profile_post.pop("is_pinned")
+        other_post.pop("is_pinned")
         session = FakeSession(
             "<rss><channel></channel></rss>",
-            {flag_id: flag_post, profile_id: profile_post},
+            {flag_id: flag_post, profile_id: profile_post, other_id: other_post},
         )
         candidates, attempts, _run = self.run_x_cli(rows, session)
 
-        self.assertEqual(candidates, [])
+        self.assertEqual([row["external_id"] for row in candidates], ["x-" + other_id])
+        self.assertEqual(candidates[0]["pin_state"], "known_not_pinned")
+        self.assertTrue(candidates[0]["pin_state_source"].startswith("profile_pin_lookup:"))
         final = next(row for row in attempts if row.get("source") == "mob_x_final_filter")
         self.assertEqual(final["skipped"].get("pinned"), 2)
 
