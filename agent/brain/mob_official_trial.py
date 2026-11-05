@@ -147,13 +147,15 @@ def since_rule_rejection(
 def filter_candidates_by_since(
     candidates: list[dict[str, Any]],
     since_utc: str | None,
+    *,
+    now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        reason = since_rule_rejection(candidate, since_utc)
+        reason = since_rule_rejection(candidate, since_utc, now=now)
         if reason:
             rejected.append({
                 "id": str(candidate.get("external_id") or candidate.get("id") or "")[:120],
