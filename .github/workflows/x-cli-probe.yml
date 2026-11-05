@@ -309,7 +309,7 @@ jobs:
           }
 
           run_probe A json 1731735864110424148 --guest --tier=guest tweet https://x.com/mobgamesstudios/status/1731735864110424148 -o json
-          run_probe B jsonl - --guest --tier=guest timeline mobgamesstudios --guest -n 10 -o jsonl
+          run_probe B jsonl - --tier=guest timeline mobgamesstudios --guest -n 10 -o jsonl
           d_id="$(python3 "$summary_script" newest-id "$work/B/stdout")"
           if [[ -n "$d_id" ]]; then
             run_probe D json "$d_id" --guest --tier=guest tweet "https://x.com/mobgamesstudios/status/$d_id" -o json
@@ -317,4 +317,4 @@ jobs:
             python3 "$summary_script" skip
           fi
           run_probe C jsonl - --tier=0 timeline mobgamesstudios -n 10 -o jsonl
-          run_probe E jsonl - --guest --tier=guest timeline mobgamesstudios --guest -n 40 -o jsonl
+          run_probe E jsonl - --tier=guest timeline mobgamesstudios --guest -n 40 -o jsonl
