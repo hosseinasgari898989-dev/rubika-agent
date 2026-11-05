@@ -371,7 +371,7 @@ class TestChannelPublishingGateTests(unittest.TestCase):
         self.assertEqual(result["status"], "nothing_new")
         self.assertEqual(result["lifecycle"]["mode"], "production")
         self.assertTrue(result["lifecycle"]["birth_cutoff_enabled"])
-        self.assertEqual(result["since_filter"]["rejected_count"], 1)
+        self.assertEqual(result["lifecycle"]["rejected_before_or_unverified"], 1)
         self.assertEqual(result["candidate_count"], 0)
         self.assertFalse(result["publishing"])
 
@@ -500,6 +500,8 @@ class OfficialSinceRuleTests(unittest.TestCase):
             "source_platform": "x",
             "official_source": True,
             "pinned": False,
+            "pin_state": "known_not_pinned",
+            "pin_state_source": "test_fixture.syndication.is_pinned",
             "freshness_verified": True,
             "published_at": published_at,
             "media_type": "image",
