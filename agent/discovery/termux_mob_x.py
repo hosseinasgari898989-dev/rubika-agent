@@ -331,12 +331,13 @@ def _parse_post(
     if str(payload.get("text") or payload.get("full_text") or legacy.get("full_text") or "").lstrip().startswith("RT @"):
         return None
 
-    pin_value = payload.get("is_pinned")
-    if not isinstance(pin_value, bool):
-        pin_value = legacy.get("is_pinned")
-    if not isinstance(pin_value, bool):
-        pin_value = pinned_state
-    if pin_value is not False:
+    pin_values = (
+        payload.get("is_pinned"), payload.get("isPinned"),
+        legacy.get("is_pinned"), legacy.get("isPinned"), pinned_state,
+    )
+    if any(value is True for value in pin_values):
+        return None
+    if not any(value is False for value in pin_values if isinstance(value, bool)):
         return None
 
     user = _tweet_user(payload)
@@ -1100,21 +1101,21 @@ def _fallback_post_by_id(
         reason = _row_skip_reason(post, cutoff)
         if reason:
             continue
-        pin = post.get("is_pinned")
-        if not isinstance(pin, bool):
-            pin = post.get("pinned")
-        if not isinstance(pin, bool):
-            pin = pinned_state
-        if pin is not False:
+        pin_values = (post.get("is_pinned"), post.get("isPinned"), post.get("pinned"), pinned_state)
+        if any(value is True for value in pin_values):
+            continue
+        if not any(value is False for value in pin_values if isinstance(value, bool)):
             continue
         text_value = str(post.get("text") or post.get("full_text") or post.get("tweet") or "").strip()
         media_block = post.get("media")
         if provider == "fxtwitter" and isinstance(media_block, dict):
-            raw_rows: list[dict[str, Any]] = []
-            for key in ("all", "videos", "photos", "images"):
-                value = media_block.get(key)
-                if isinstance(value, list):
-                    raw_rows.extend(item for item in value if isinstance(item, dict))
+            preferred_rows = media_block.get("all")
+            if not isinstance(preferred_rows, list) or not preferred_rows:
+                preferred_rows = (
+                    media_block.get("videos") or media_block.get("photos")
+                    or media_block.get("images") or []
+                )
+            raw_rows = [item for item in preferred_rows if isinstance(item, dict)]
         else:
             value = post.get("media_extended")
             raw_rows = value if isinstance(value, list) else []
