@@ -816,7 +816,7 @@ class MobXBacklogSafetyTests(unittest.TestCase):
             )
         )
         persisted = mob_official_trial._mob_x_discovery_payload(restored)["validation"]["mob_x_discovery"]
-        self.assertIs(persisted["pinned"], True if restored["pinned"] else False)
+        self.assertIs(persisted["pinned"], False)
         self.assertEqual(persisted["pin_state"], "inferred_not_pinned")
         self.assertEqual(
             persisted["pin_state_source"],
