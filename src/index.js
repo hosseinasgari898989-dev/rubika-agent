@@ -374,9 +374,12 @@ async function upsertItem(env, body) {
   try {
     const insertSql = "INSERT INTO items (id, platform, source_key, external_id, canonical_url, title, caption, published_at, status, media_sha256, media_bytes, media_mime, media_type, source_tier, storage_key, validation_json, moderation_json, review_state, original_caption, persian_translation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     const conflictSql = platform === "mob_official" && statusValue === "discovered"
-      ? " ON CONFLICT(platform, external_id) DO NOTHING"
+      ? ""
       : " ON CONFLICT(platform, external_id) DO UPDATE SET source_key = excluded.source_key, canonical_url = excluded.canonical_url, title = excluded.title, caption = excluded.caption, published_at = COALESCE(excluded.published_at, items.published_at), status = CASE WHEN items.status IN ('sent','uncertain','sending') AND excluded.status NOT IN ('sent','uncertain','sending') THEN items.status ELSE excluded.status END, media_sha256 = COALESCE(excluded.media_sha256, items.media_sha256), media_bytes = COALESCE(excluded.media_bytes, items.media_bytes), media_mime = COALESCE(excluded.media_mime, items.media_mime), media_type = excluded.media_type, source_tier = excluded.source_tier, storage_key = COALESCE(excluded.storage_key, items.storage_key), validation_json = COALESCE(excluded.validation_json, items.validation_json), moderation_json = COALESCE(excluded.moderation_json, items.moderation_json), review_state = CASE WHEN items.review_state = 'approved' AND excluded.review_state = 'pending' THEN items.review_state ELSE excluded.review_state END, original_caption = COALESCE(excluded.original_caption, items.original_caption), persian_translation = COALESCE(excluded.persian_translation, items.persian_translation)";
-    await env.DB.prepare(insertSql + conflictSql).bind(
+    const insertModeSql = platform === "mob_official" && statusValue === "discovered"
+      ? insertSql.replace("INSERT INTO items", "INSERT OR IGNORE INTO items")
+      : insertSql + conflictSql;
+    await env.DB.prepare(insertModeSql).bind(
       id, platform, sourceKey, externalId, canonicalUrl, title || null, caption || null,
       publishedAt || null, statusValue, hash.toLowerCase() || null, bytes, mime || null,
       mediaType, sourceTier, storageKey, validationJson, moderationJson, reviewState,
