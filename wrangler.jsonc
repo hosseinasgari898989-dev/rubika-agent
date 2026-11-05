@@ -21,8 +21,7 @@
   ],
   "ai": {
     "binding": "AI"
-  }
-,
+  },
   "vars": {
     "WORKFLOW_CRON_DISPATCH_ENABLED": "true"
   },
