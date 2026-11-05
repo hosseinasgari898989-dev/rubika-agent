@@ -765,5 +765,118 @@ class OfficialSinceRuleTests(unittest.TestCase):
         self.assertEqual(len(publisher.sent), 2)
 
 
+
+class MobXBacklogSafetyTests(unittest.TestCase):
+    def test_only_explicit_discovered_mob_x_envelopes_are_restored(self):
+        metadata = {
+            "mob_x_discovery": {
+                "version": 1,
+                "source_platform": "x",
+                "official_source": True,
+                "author": "@mobgamesstudios",
+                "pinned": False,
+                "published_at": "2026-11-05T01:00:00Z",
+                "media_type": "image",
+                "media_url": "https://pbs.twimg.com/media/example.jpg",
+                "original_caption": "Official Mob post",
+                "title": "Mob announcement",
+                "discovery_source": "x-cli",
+                "id_source": "x-cli",
+            }
+        }
+        stored = {
+            "status": "discovered",
+            "external_id": "x-2111111111111111250",
+            "canonical_url": "https://x.com/mobgamesstudios/status/2111111111111111250",
+            "source_key": "x.com/mobgamesstudios",
+            "title": "Mob announcement",
+            "caption": "Official Mob post",
+            "original_caption": "Official Mob post",
+            "published_at": "2026-11-05T01:00:00Z",
+            "media_type": "image",
+            "validation_json": json.dumps(metadata),
+        }
+        restored = mob_official_trial._mob_x_backlog_candidate(stored)
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored["external_id"], stored["external_id"])
+        self.assertEqual(restored["id_source"], "x-cli")
+        self.assertEqual(restored["pinned"], False)
+
+        for changes in (
+            {"status": "failed"},
+            {"canonical_url": "https://x.com/fanaccount/status/2111111111111111250"},
+            {"validation_json": json.dumps({"mob_x_discovery": {**metadata["mob_x_discovery"], "pinned": True}})},
+            {"validation_json": json.dumps({"mob_x_discovery": {**metadata["mob_x_discovery"], "official_source": False}})},
+        ):
+            candidate = {**stored, **changes}
+            self.assertIsNone(mob_official_trial._mob_x_backlog_candidate(candidate))
+
+    def test_dry_run_never_persists_new_discovery_rows(self):
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                self.upsert_calls = []
+
+            def get_seen_index(self):
+                return {"ids": set(), "hashes": set()}
+
+            def upsert_item(self, payload):
+                self.upsert_calls.append(payload)
+                raise AssertionError("dry-run must not persist discovery rows")
+
+        policy = {"mode": "test", "born_at": None, "birth_datetime": None}
+        candidate = {
+            "platform": "mob_official",
+            "id": "x-2111111111111111251",
+            "external_id": "x-2111111111111111251",
+            "url": "https://x.com/mobgamesstudios/status/2111111111111111251",
+            "canonical_url": "https://x.com/mobgamesstudios/status/2111111111111111251",
+            "title": "Official Mob post",
+            "caption": "Official Mob caption",
+            "original_caption": "Official Mob caption",
+            "author": "@mobgamesstudios",
+            "source_key": "x.com/mobgamesstudios",
+            "source_name": "Mob Entertainment on X",
+            "source_platform": "x",
+            "official_source": True,
+            "published_at": "2026-11-05T10:00:00Z",
+            "freshness_verified": True,
+            "pinned": False,
+            "media_type": "image",
+            "media_url": "https://pbs.twimg.com/media/example.jpg",
+            "id_source": "x-cli",
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            media_path = root / "candidate.jpg"
+            media_path.write_bytes(b"fake image bytes")
+            fake_cloud = FakeCloud()
+            with (
+                patch.object(mob_official_trial, "CloudState", return_value=fake_cloud),
+                patch.object(mob_official_trial, "load_lifecycle_policy", return_value=policy),
+                patch.object(mob_official_trial, "discover_official_x_posts", return_value=([candidate], [])),
+                patch.object(mob_official_trial, "format_mob_post", return_value={
+                    "original_caption": "Official Mob caption",
+                    "persian_translation": "ترجمه",
+                    "translation_status": "translated",
+                    "caption": "ترجمه",
+                }),
+                patch.object(mob_official_trial, "download_and_validate", return_value=(media_path, {
+                    "sha256": "a" * 64,
+                    "media_type": "image",
+                    "size_bytes": 16,
+                    "mime_type": "image/jpeg",
+                })),
+            ):
+                result = run_trial(
+                    publish=False,
+                    limit=1,
+                    output_report=root / "dry-report.json",
+                    output_dir=root / "media",
+                    source_platform="x",
+                )
+        self.assertEqual(result["status"], "validated_preview")
+        self.assertEqual(fake_cloud.upsert_calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
