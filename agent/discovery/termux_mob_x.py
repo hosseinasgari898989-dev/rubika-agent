@@ -326,10 +326,8 @@ def _parse_post(
         for source in flag_sources:
             for name in names:
                 value = source.get(name)
-            if value is True or (isinstance(value, (dict, list)) and bool(value)) or (
-                isinstance(value, str) and value.strip().casefold() not in {"", "0", "false", "none", "null"}
-            ):
-                return None
+                if _safe_truthy(value):
+                    return None
     if str(payload.get("text") or payload.get("full_text") or legacy.get("full_text") or "").lstrip().startswith("RT @"):
         return None
 
