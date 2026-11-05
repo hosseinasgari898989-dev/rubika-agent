@@ -309,7 +309,7 @@ def _pin_evidence_for_row(row: dict[str, Any], source: str) -> dict[str, list[di
     ):
         if not isinstance(container, dict):
             continue
-        for key in ("is_pinned", "pinned"):
+        for key in ("is_pinned", "isPinned", "pinned"):
             value = container.get(key)
             if isinstance(value, bool):
                 flags.append({"value": value, "source": source + "." + container_name + key})
@@ -1037,6 +1037,7 @@ def _fetch_fxtwitter_timeline(
             return [], {}, summary
         rows = _timeline_objects(payload)
         pin_states: dict[str, bool] = {}
+        profile_pin_evidence = _pin_evidence_for_row(payload, "fxtwitter_profile")
         for row in rows:
             post_id = _row_id(row)
             pin = row.get("is_pinned")
@@ -1049,6 +1050,7 @@ def _fetch_fxtwitter_timeline(
         summary["result"] = "timeline_found" if rows else "empty"
         summary["candidate_count"] = len(rows)
         summary["candidate_post_ids"] = sorted(_row_id(row) for row in rows if _row_id(row))
+        summary["profile_pin_evidence"] = profile_pin_evidence
         return rows, pin_states, summary
     except requests.RequestException as exc:
         summary["result"] = "request_failed"
@@ -1302,10 +1304,10 @@ def discover_mob_x_posts(
     pin_evidence_by_id: dict[str, dict[str, list[dict[str, Any]]]] = {}
     candidate_rows: dict[str, dict[str, Any]] = {}
     id_source_by_id: dict[str, str] = {}
-    global_profile_pin_evidence: dict[str, list[dict[str, Any]]] = {
-        "flags": [],
-        "profile_pinned_ids": [],
-    }
+    global_profile_pin_evidence: dict[str, list[dict[str, Any]]] = _merge_pin_evidence(
+        fx_attempt.get("profile_pin_evidence")
+        if isinstance(fx_attempt, dict) else None,
+    )
 
     # The two timelines are already fetched in this run. Keep their union, with
     # x-cli preferred only as the recorded ID source when both list the same ID.
