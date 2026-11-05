@@ -707,7 +707,7 @@ class FakeStatement {
         original_caption: v[18], persian_translation: v[19],
       };
       const previous = this.db.items.get(item.id);
-      if (sql.includes("ON CONFLICT(platform, external_id) DO NOTHING") && previous) {
+      if (sql.startsWith("INSERT OR IGNORE INTO items") && previous) {
         return { meta: { changes: 0 } };
       }
       if (previous && ["sent", "uncertain", "sending"].includes(previous.status) &&
