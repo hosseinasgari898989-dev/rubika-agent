@@ -809,6 +809,19 @@ class MobXBacklogSafetyTests(unittest.TestCase):
         self.assertEqual(restored["pinned"], False)
         self.assertEqual(restored["pin_state"], "inferred_not_pinned")
         self.assertEqual(restored["pin_state_source"], "created_at_at_or_after_cutoff_without_pin_evidence")
+        self.assertIsNone(
+            mob_official_trial._mob_x_candidate_rejection(
+                restored,
+                "2026-11-05T00:00:00Z",
+            )
+        )
+        persisted = mob_official_trial._mob_x_discovery_payload(restored)["validation"]["mob_x_discovery"]
+        self.assertIs(persisted["pinned"], True if restored["pinned"] else False)
+        self.assertEqual(persisted["pin_state"], "inferred_not_pinned")
+        self.assertEqual(
+            persisted["pin_state_source"],
+            "created_at_at_or_after_cutoff_without_pin_evidence",
+        )
 
         for changes in (
             {"status": "failed"},
