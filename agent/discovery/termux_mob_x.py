@@ -513,6 +513,7 @@ def _discover_legacy_mob_x_posts(
     session: Any | None = None,
     seed_urls: tuple[str, ...] = (),
     pin_states: dict[str, bool] | None = None,
+    cutoff: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Find official X post IDs via free public indexes and validate posts via X syndication.
 
@@ -715,12 +716,23 @@ def _discover_legacy_mob_x_posts(
     output: list[dict[str, Any]] = []
     skipped: dict[str, int] = {}
     for post_id in post_ids:
+        pin_state = (pin_states or {}).get(post_id)
         item, result = _fetch_post(
             client,
             post_id,
             timeout_seconds,
-            pinned_state=(pin_states or {}).get(post_id),
+            pinned_state=pin_state,
         )
+        if item is None:
+            safe_cutoff = cutoff or datetime.fromisoformat("2026-11-05T00:00:00+00:00")
+            item, mirror_source = _fallback_post_by_id(
+                client,
+                post_id,
+                pinned_state=pin_state,
+                cutoff=safe_cutoff,
+            )
+            if item is not None:
+                result = "verified_by_" + mirror_source
         if item:
             item["discovery_source"] = source_by_id.get(post_id, "legacy_public_index")
             output.append(item)
@@ -852,6 +864,8 @@ def _timeline_objects_from_jsonl(raw: str) -> list[dict[str, Any]]:
 def _row_skip_reason(row: dict[str, Any], cutoff: datetime) -> str | None:
     if _row_author(row) != OFFICIAL_HANDLE:
         return "not_official_author"
+    legacy = row.get("legacy") if isinstance(row.get("legacy"), dict) else {}
+    sources = (row, legacy)
     published = _timestamp(
         str(row.get("created_at") or row.get("date") or row.get("published_at") or "")
     )
@@ -868,9 +882,9 @@ def _row_skip_reason(row: dict[str, Any], cutoff: datetime) -> str | None:
                    "quoted_status_id", "is_quote", "is_quote_status")),
     )
     for reason, names in flag_groups:
-        if any(_safe_truthy(row.get(name)) for name in names):
+        if any(_safe_truthy(source.get(name)) for source in sources for name in names):
             return reason
-    text_value = str(row.get("text") or row.get("full_text") or "").lstrip()
+    text_value = str(row.get("text") or row.get("full_text") or legacy.get("full_text") or "").lstrip()
     if text_value.startswith("RT @"):
         return "retweet"
     media = row.get("media")
@@ -1247,6 +1261,7 @@ def discover_mob_x_posts(
             session=client,
             seed_urls=seed_urls,
             pin_states=pin_states,
+            cutoff=cutoff,
         )
         attempts.extend(legacy_attempts)
         for row in legacy_rows:
