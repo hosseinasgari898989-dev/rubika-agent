@@ -119,7 +119,7 @@ export async function runWorkflowCron(controller, env, dispatchWorkflow, options
               DISPATCH_INPUTS[workflow],
               { maxAttempts: 1, safeStatusOnly: true },
             );
-            httpStatus = Number(dispatched && dispatched.status) || httpStatus;
+            httpStatus = Number(dispatched && dispatched.status) || null;
             result = dispatched && dispatched.ok ? "dispatched" : "error";
           } catch {
             result = "error";
