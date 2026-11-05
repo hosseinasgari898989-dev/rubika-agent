@@ -236,7 +236,7 @@ assert.equal(normalizeTikTokAccount("new..creator"), null);
 {
   const db = new FakeDB(), id = "tiktok:7616247520657771796", externalId = "7616247520657771796";
   db.items.set("tiktok:" + externalId, {
-    id: "tiktok:" + externalId, external_id: externalId, status: "failed",
+    id: "tiktok:" + externalId, platform: "tiktok", external_id: externalId, status: "failed",
     sent_at: null, rubika_message_id: null,
   });
   db.queue.set("tiktok:" + externalId, {
@@ -258,7 +258,7 @@ assert.equal(normalizeTikTokAccount("new..creator"), null);
 {
   const db = new FakeDB(), id = "tiktok:7616247520657771797", externalId = "7616247520657771797";
   db.items.set("tiktok:" + externalId, {
-    id: "tiktok:" + externalId, external_id: externalId, status: "sent",
+    id: "tiktok:" + externalId, platform: "tiktok", external_id: externalId, status: "sent",
     sent_at: "2026-11-05T20:00:00Z", rubika_message_id: "message-1",
   });
   db.queue.set("tiktok:" + externalId, {
@@ -274,7 +274,7 @@ assert.equal(normalizeTikTokAccount("new..creator"), null);
 {
   const db = new FakeDB(), id = "tiktok:7616247520657771798", externalId = "7616247520657771798";
   db.items.set("tiktok:" + externalId, {
-    id: "tiktok:" + externalId, external_id: externalId, status: "failed",
+    id: "tiktok:" + externalId, platform: "tiktok", external_id: externalId, status: "failed",
     sent_at: null, rubika_message_id: null,
   });
   db.queue.set("tiktok:" + externalId, {
