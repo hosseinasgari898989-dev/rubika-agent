@@ -61,6 +61,8 @@ class FakeSession:
             return self.fx_status_responses[url]
         if url in self.vx_status_responses:
             return self.vx_status_responses[url]
+        if url.startswith("https://api.fxtwitter.com/") or url.startswith("https://api.vxtwitter.com/"):
+            return FakeResponse(status_code=403)
         if url == "https://www.bing.com/search":
             return FakeResponse(text=self.search_body)
         if url == "https://cdn.syndication.twimg.com/tweet-result":
@@ -335,7 +337,8 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
                 sleep_seconds=0,
                 since_utc="2026-11-05T00:00:00Z",
             )
-        return result, run
+        candidates, attempts = result
+        return candidates, attempts, run
 
     def test_x_cli_is_first_id_source_and_unordered_timeline_is_filtered_and_oldest_first(self):
         older = "2111111111111111111"
@@ -360,7 +363,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             },
             fx_timeline_response=FakeResponse(payload={"results": pin_rows}),
         )
-        candidates, attempts = self.run_x_cli(x_rows, session)
+        candidates, attempts, _run = self.run_x_cli(x_rows, session)
         self.assertEqual([row["external_id"] for row in candidates], ["x-" + older, "x-" + newer])
         self.assertEqual({row["id_source"] for row in candidates}, {"x-cli"})
         self.assertEqual(next(row for row in attempts if row["engine"] == "x_cli_guest_timeline")["candidate_count"], 3)
@@ -388,7 +391,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             {ids[6]: syndication_post(ids[6], created_at="Thu Nov 05 01:00:00 +0000 2026")},
             fx_timeline_response=FakeResponse(payload={"results": fx_rows}),
         )
-        candidates, attempts = self.run_x_cli(rows, session)
+        candidates, attempts, _run = self.run_x_cli(rows, session)
         self.assertEqual([row["external_id"] for row in candidates], ["x-" + ids[6]])
         final_attempt = next(row for row in attempts if row["engine"] == "mob_x_final_filter")
         self.assertGreaterEqual(final_attempt["skipped"].get("reply", 0), 1)
@@ -421,7 +424,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             fx_status_responses={fx_url: FakeResponse(status_code=503)},
             vx_status_responses={vx_url: FakeResponse(payload=vx_status)},
         )
-        candidates, run = self.run_x_cli([], session, exit_code=5, stderr="rate limit")
+        candidates, _attempts, run = self.run_x_cli([], session, exit_code=5, stderr="rate limit")
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
         self.assertEqual(candidates[0]["id_source"], "fxtwitter")
@@ -445,13 +448,13 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             {post_id: syndication_post(post_id, created_at="Thu Nov 05 02:00:00 +0000 2026")},
             fx_timeline_response=FakeResponse(payload={"results": [timeline]}),
         )
-        candidates, _ = self.run_x_cli([], session, exit_code=5, stderr="HTTP 429 rate limit")
+        candidates, _attempts, _run = self.run_x_cli([], session, exit_code=5, stderr="HTTP 429 rate limit")
         self.assertEqual([row["external_id"] for row in candidates], ["x-" + post_id])
         self.assertEqual(candidates[0]["id_source"], "fxtwitter")
 
     def test_empty_result_is_safe_and_has_no_candidates(self):
         session = FakeSession("<rss><channel></channel></rss>", {})
-        candidates, attempts = self.run_x_cli([], session, exit_code=5, stderr="rate limit")
+        candidates, attempts, _run = self.run_x_cli([], session, exit_code=5, stderr="rate limit")
         self.assertEqual(candidates, [])
         self.assertEqual(attempts[-1]["result"], "empty")
 
