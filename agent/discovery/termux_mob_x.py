@@ -318,7 +318,7 @@ def _pin_evidence_for_row(row: dict[str, Any], source: str) -> dict[str, list[di
     # x-cli v0.5.0 exposes User.PinnedTweet as author.pinned_tweet.
     # Its legacy syndication adapter maps user.pinned_tweet_ids_str.
     for container_name, container in (
-        ("author.", row.get("author")), ("user.", row.get("user")),
+        ("", row), ("author.", row.get("author")), ("user.", row.get("user")),
     ):
         if not isinstance(container, dict):
             continue
@@ -384,7 +384,7 @@ def _resolve_pin_state(
     if false_flags:
         return "known_not_pinned", sorted(str(v.get("source") or "unknown") for v in false_flags)[0]
     distinct_ids = {str(v.get("id")) for v in pinned_ids if isinstance(v, dict) and isinstance(v.get("id"), str)}
-    if len(distinct_ids) == 1:
+    if distinct_ids:
         source = sorted(str(v.get("source") or "unknown") for v in pinned_ids if isinstance(v, dict))[0]
         return "known_not_pinned", "profile_pin_lookup:" + source
     try:
