@@ -222,7 +222,7 @@ class MobXRubikaTests(unittest.TestCase):
         self.assertIn("x-cli", payload["text"])
         self.assertIn("FxTwitter", payload["text"])
         self.assertIn("VxTwitter", payload["text"])
-        self.assertIn("انتشار انجام نشد", payload["text"])
+        self.assertIn("هیچ انتشاری انجام نشد", payload["text"])
         self.assertNotIn("inline_keypad", payload)
         with self.assertRaises(ValueError):
             send_owner_metadata_failure("test-token", "owner-chat", "bad-job", bot_factory=factory)
