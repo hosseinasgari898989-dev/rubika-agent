@@ -317,7 +317,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         row = {
             "id": post_id,
             "created_at": created_at,
-            "author": {"username": author},
+            "author": author if isinstance(author, dict) else {"username": author},
             "text": "Official Mob post",
             "media": [{"type": "photo", "url": "https://pbs.twimg.com/media/example.jpg"}],
         }
