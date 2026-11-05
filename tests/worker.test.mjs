@@ -1292,6 +1292,7 @@ const read = async response => ({ status: response.status, body: await response.
     mob_x_discovery: {
       version: 1, source_platform: "x", official_source: true,
       author: "@mobgamesstudios", pinned: false,
+      pin_state: "known_not_pinned", pin_state_source: "test_fixture.syndication.is_pinned",
       published_at: "2026-11-05T01:00:00Z", media_type: "image",
       media_url: "https://pbs.twimg.com/media/example.jpg",
       original_caption: "Official Mob caption", discovery_source: "x-cli",
