@@ -46,6 +46,7 @@ class TermuxMetadataParserTests(unittest.TestCase):
             {"id":"7610592632179297558","title":"old Poppy Playtime video","timestamp":old},
             {"id":"7610592632179297559","title":"new Poppy Playtime video","timestamp":fresh},
             {"id":"7610592632179297560","title":"undated Poppy Playtime video"},
+            {"id":"7610592632179297561","title":"date-only Poppy Playtime video","upload_date":"20261106"},
         ]}
         set_dynamic_tiktok_sources([{
             "platform":"tiktok", "source_key":"newcreator", "enabled":1, "managed":True,
@@ -56,7 +57,12 @@ class TermuxMetadataParserTests(unittest.TestCase):
             sleep_seconds=0, ydl_factory=FakeYDL,
             created_after_by_profile={"newcreator": cutoff.isoformat()},
         )
-        self.assertEqual([row["id"] for row in found], ["7610592632179297559"])
+        self.assertEqual(
+            [row["id"] for row in found],
+            ["7610592632179297559", "7610592632179297561"],
+        )
+        date_only = next(row for row in found if row["id"].endswith("7561"))
+        self.assertEqual(date_only["published_at"], "2026-11-06T00:00:00+00:00")
         self.assertEqual(attempts[0]["skipped_before_account_added"], 2)
         set_dynamic_tiktok_sources([])
 

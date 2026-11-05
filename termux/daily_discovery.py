@@ -46,7 +46,9 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
     print("1/2 TikTok: loading owner-selected creator profiles (metadata only)...", flush=True)
     dynamic_cutoffs: dict[str, str] = {}
     token = os.getenv("AGENT_API_TOKEN", "").strip()
-    if load_remote_sources and token:
+    if load_remote_sources:
+        if not token:
+            raise RuntimeError("authenticated_tiktok_sources_unavailable")
         cloud = CloudState(
             os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
             token=token, timeout_seconds=25,

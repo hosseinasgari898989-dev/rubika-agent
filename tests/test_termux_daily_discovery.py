@@ -113,6 +113,16 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
         self.assertEqual(report["candidates"]["tiktok"][0]["author"], "newcreator")
         set_dynamic_tiktok_sources([])
 
+    def test_live_collection_without_worker_token_fails_closed_before_discovery(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"AGENT_API_TOKEN": ""}), patch.object(
+            daily_discovery, "discover_tiktok_profiles"
+        ) as discover:
+            with self.assertRaisesRegex(RuntimeError, "authenticated_tiktok_sources_unavailable"):
+                daily_discovery.collect_daily_report(
+                    output_path=Path(folder) / "report.json", load_remote_sources=True
+                )
+        discover.assert_not_called()
+
     def test_manual_cli_cannot_push_a_report_to_github(self):
         self.assertFalse(hasattr(daily_discovery, "push_report_to_main_branch"))
         with patch.object(daily_discovery.argparse.ArgumentParser, "error", side_effect=SystemExit(2)), \

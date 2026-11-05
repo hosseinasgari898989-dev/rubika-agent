@@ -25,17 +25,20 @@ HASHTAG_RE = re.compile(r"(?<!\w)#([A-Za-z0-9_]{2,64})")
 
 
 def _to_iso_timestamp(value: Any) -> str | None:
+    # yt-dlp can expose upload_date as YYYYMMDD; parse it before int() mistakes
+    # the calendar date for a Unix timestamp in August 1970.
+    date_text = str(value) if type(value) is int else value
+    if isinstance(date_text, str) and len(date_text) == 8 and date_text.isdigit():
+        try:
+            return datetime.strptime(date_text, "%Y%m%d").replace(tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            return None
     try:
         numeric = int(value)
         if numeric <= 0:
             return None
         return datetime.fromtimestamp(numeric, tz=timezone.utc).isoformat()
     except (TypeError, ValueError, OverflowError, OSError):
-        if isinstance(value, str) and len(value) == 8 and value.isdigit():
-            try:
-                return datetime.strptime(value, "%Y%m%d").replace(tzinfo=timezone.utc).isoformat()
-            except ValueError:
-                return None
         return None
 
 
