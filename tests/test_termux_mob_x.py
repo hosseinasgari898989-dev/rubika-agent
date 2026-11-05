@@ -346,9 +346,9 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             self.x_cli_row(newer, "2026-11-06T00:00:00Z"),
         ]
         pin_rows = [
-            {"id": older, "created_at": "2026-11-05T01:00:00Z", "author": {"username": "mobgamesstudios"}, "is_pinned": False},
-            {"id": newer, "created_at": "2026-11-06T00:00:00Z", "author": {"username": "mobgamesstudios"}, "is_pinned": False},
-            {"id": too_old, "created_at": "2026-11-04T23:59:59Z", "author": {"username": "mobgamesstudios"}, "is_pinned": False},
+            {"id": older, "created_at": "2026-11-05T01:00:00Z", "author": {"username": "mobgamesstudios"}, "is_pinned": False, "media": [{"type": "photo"}]},
+            {"id": newer, "created_at": "2026-11-06T00:00:00Z", "author": {"username": "mobgamesstudios"}, "is_pinned": False, "media": [{"type": "photo"}]},
+            {"id": too_old, "created_at": "2026-11-04T23:59:59Z", "author": {"username": "mobgamesstudios"}, "is_pinned": False, "media": [{"type": "photo"}]},
         ]
         session = FakeSession(
             "<rss><channel></channel></rss>",
@@ -378,7 +378,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         ]
         fx_rows = [
             {"id": post_id, "created_at": "2026-11-05T01:00:00Z",
-             "author": {"username": "mobgamesstudios"}, "is_pinned": post_id == ids[3]}
+             "author": {"username": "mobgamesstudios"}, "is_pinned": post_id == ids[3], "media": [{"type": "photo"}]}
             for post_id in ids
         ]
         session = FakeSession(
