@@ -301,11 +301,106 @@ def _media_url(media: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
+def _pin_evidence_for_row(row: dict[str, Any], source: str) -> dict[str, list[dict[str, Any]]]:
+    """Read boolean pin flags and verified profile pin-ID fields."""
+    flags: list[dict[str, Any]] = []
+    for container_name, container in (
+        ("", row), ("author.", row.get("author")), ("user.", row.get("user")),
+    ):
+        if not isinstance(container, dict):
+            continue
+        for key in ("is_pinned", "pinned"):
+            value = container.get(key)
+            if isinstance(value, bool):
+                flags.append({"value": value, "source": source + "." + container_name + key})
+
+    pinned_ids: list[dict[str, Any]] = []
+    # x-cli v0.5.0 exposes User.PinnedTweet as author.pinned_tweet.
+    # Its legacy syndication adapter maps user.pinned_tweet_ids_str.
+    for container_name, container in (
+        ("author.", row.get("author")), ("user.", row.get("user")),
+    ):
+        if not isinstance(container, dict):
+            continue
+        pinned = container.get("pinned_tweet")
+        if isinstance(pinned, str) and POST_ID_RE.fullmatch(pinned.strip()):
+            pinned_ids.append({"id": pinned.strip(), "source": source + "." + container_name + "pinned_tweet"})
+        if container_name == "user.":
+            raw_ids = container.get("pinned_tweet_ids_str")
+            if isinstance(raw_ids, list):
+                for pinned_id in raw_ids:
+                    if isinstance(pinned_id, str) and POST_ID_RE.fullmatch(pinned_id.strip()):
+                        pinned_ids.append({"id": pinned_id.strip(), "source": source + ".user.pinned_tweet_ids_str"})
+    return {"flags": flags, "profile_pinned_ids": pinned_ids}
+
+
+def _merge_pin_evidence(*evidence_rows: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    merged: dict[str, list[dict[str, Any]]] = {"flags": [], "profile_pinned_ids": []}
+    seen: set[tuple[str, str, str]] = set()
+    for evidence in evidence_rows:
+        if not isinstance(evidence, dict):
+            continue
+        for group in ("flags", "profile_pinned_ids"):
+            values = evidence.get(group)
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                if group == "flags":
+                    flag = value.get("value")
+                    source = str(value.get("source") or "unknown")
+                    if not isinstance(flag, bool):
+                        continue
+                    key = (group, str(flag), source)
+                    normalized = {"value": flag, "source": source}
+                else:
+                    pinned_id = value.get("id")
+                    source = str(value.get("source") or "unknown")
+                    if not isinstance(pinned_id, str) or not POST_ID_RE.fullmatch(pinned_id):
+                        continue
+                    key = (group, pinned_id, source)
+                    normalized = {"id": pinned_id, "source": source}
+                if key not in seen:
+                    seen.add(key)
+                    merged[group].append(normalized)
+    return merged
+
+
+def _resolve_pin_state(
+    post_id: str, published_at: str, cutoff: datetime, evidence: dict[str, Any],
+) -> tuple[str | None, str]:
+    flags = evidence.get("flags") if isinstance(evidence.get("flags"), list) else []
+    pinned_ids = evidence.get("profile_pinned_ids") if isinstance(evidence.get("profile_pinned_ids"), list) else []
+    true_flags = [v for v in flags if isinstance(v, dict) and v.get("value") is True]
+    if true_flags:
+        sources = sorted({str(v.get("source") or "unknown") for v in true_flags})
+        return None, "known_pinned_flag:" + ",".join(sources)
+    matching_ids = [v for v in pinned_ids if isinstance(v, dict) and v.get("id") == post_id]
+    if matching_ids:
+        sources = sorted({str(v.get("source") or "unknown") for v in matching_ids})
+        return None, "profile_pinned_id_match:" + ",".join(sources)
+    false_flags = [v for v in flags if isinstance(v, dict) and v.get("value") is False]
+    if false_flags:
+        return "known_not_pinned", sorted(str(v.get("source") or "unknown") for v in false_flags)[0]
+    distinct_ids = {str(v.get("id")) for v in pinned_ids if isinstance(v, dict) and isinstance(v.get("id"), str)}
+    if len(distinct_ids) == 1:
+        source = sorted(str(v.get("source") or "unknown") for v in pinned_ids if isinstance(v, dict))[0]
+        return "known_not_pinned", "profile_pin_lookup:" + source
+    try:
+        created = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None, "created_at_unverified"
+    if created.tzinfo is not None and created.astimezone(timezone.utc) >= cutoff:
+        return "inferred_not_pinned", "created_at_at_or_after_cutoff_without_pin_evidence"
+    return None, "pin_state_unknown"
+
+
 def _parse_post(
     payload: dict[str, Any],
     post_id: str,
     *,
-    pinned_state: bool | None = None,
+    pin_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     returned_id = str(payload.get("id_str") or payload.get("id") or "").strip()
     legacy = payload.get("legacy") if isinstance(payload.get("legacy"), dict) else {}
@@ -331,14 +426,11 @@ def _parse_post(
     if str(payload.get("text") or payload.get("full_text") or legacy.get("full_text") or "").lstrip().startswith("RT @"):
         return None
 
-    pin_values = (
-        payload.get("is_pinned"), payload.get("isPinned"),
-        legacy.get("is_pinned"), legacy.get("isPinned"), pinned_state,
+    merged_pin_evidence = _merge_pin_evidence(
+        pin_evidence,
+        _pin_evidence_for_row(payload, "syndication"),
+        _pin_evidence_for_row(legacy, "syndication.legacy"),
     )
-    if any(value is True for value in pin_values):
-        return None
-    if not any(value is False for value in pin_values if isinstance(value, bool)):
-        return None
 
     user = _tweet_user(payload)
     handle = str(user.get("screen_name") or user.get("username") or "").lstrip("@").casefold()
@@ -374,7 +466,6 @@ def _parse_post(
         "source_platform": "x",
         "official_source": True,
         "published_at": created,
-        "pinned": False,
         "freshness_verified": created is not None,
         "freshness_source": "x_syndication_created_at" if created else "",
         "media_type": media_type,
@@ -382,6 +473,8 @@ def _parse_post(
         "thumbnail_url": None,
         "method": "x_public_search_index_plus_syndication",
         "query": "site:x.com/mobgamesstudios/status",
+        "pin_flags": merged_pin_evidence["flags"],
+        "profile_pinned_ids": merged_pin_evidence["profile_pinned_ids"],
     }
 
 
