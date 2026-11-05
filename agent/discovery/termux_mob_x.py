@@ -15,8 +15,8 @@ import re
 import subprocess
 import tempfile
 import time
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any
@@ -935,6 +935,8 @@ def _fetch_fxtwitter_timeline(
         for row in rows:
             post_id = _row_id(row)
             pin = row.get("is_pinned")
+            if not isinstance(pin, bool):
+                pin = row.get("isPinned")
             if not isinstance(pin, bool):
                 pin = row.get("pinned")
             if post_id and isinstance(pin, bool):
