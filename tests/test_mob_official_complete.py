@@ -467,6 +467,8 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             "source_platform": "x",
             "official_source": True,
             "pinned": False,
+            "pin_state": "known_not_pinned",
+            "pin_state_source": "test_fixture.fxtwitter.is_pinned",
             "canonical_url": x_url,
             "url": x_url,
             "caption": "Official Mob X post",
@@ -474,6 +476,15 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             "published_at": "2026-11-05T12:00:00Z",
             "media_type": "image",
             "media_url": "https://pbs.twimg.com/media/example.jpg",
+        }
+        unknown_pin_state = {
+            **x_post,
+            "id": "x-1734258130186559717",
+            "external_id": "x-1734258130186559717",
+            "canonical_url": "https://x.com/mobgamesstudios/status/1734258130186559717",
+            "pinned": False,
+            "pin_state": None,
+            "pin_state_source": "",
         }
         other_lane = dict(x_post)
         other_lane.update({
@@ -487,7 +498,7 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
             path = config_file(folder, sources)
             with patch(
                 "agent.discovery.termux_mob_x.discover_mob_x_posts",
-                return_value=([x_post, other_lane], [{"source": "mob_x", "result": "ok"}]),
+                return_value=([x_post, unknown_pin_state, other_lane], [{"source": "mob_x", "result": "ok"}]),
             ) as x_search:
                 candidates, attempts = discover_official_x_posts(config_path=path, max_results=12)
 
