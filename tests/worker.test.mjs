@@ -707,9 +707,10 @@ class FakeStatement {
         original_caption: v[18], persian_translation: v[19],
       };
       const previous = this.db.items.get(item.id);
-      if (previous && item.status === "discovered") {
-        item.status = previous.status;
-      } else if (previous && ["sent", "uncertain", "sending"].includes(previous.status) &&
+      if (sql.includes("ON CONFLICT(platform, external_id) DO NOTHING") && previous) {
+        return { meta: { changes: 0 } };
+      }
+      if (previous && ["sent", "uncertain", "sending"].includes(previous.status) &&
           !["sent", "uncertain", "sending"].includes(item.status)) {
         item.status = previous.status;
       }
@@ -1336,6 +1337,7 @@ const read = async response => ({ status: response.status, body: await response.
   }), state));
   assert.equal(result.status, 200);
   assert.equal(state.DB.items.get(mobItem.id).status, "discovered");
+  assert.equal(state.DB.items.get(mobItem.id).caption, "Official Mob caption");
 }
 {
   const state = env();
@@ -1345,6 +1347,8 @@ const read = async response => ({ status: response.status, body: await response.
     external_id: "x-2111111111111111112",
     status: "failed",
     review_state: "pending",
+    caption: "Original failed caption",
+    validation_json: "{\\"previous\\":true}",
   };
   state.DB.items.set(previous.id, previous);
   const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
@@ -1362,6 +1366,8 @@ const read = async response => ({ status: response.status, body: await response.
   }), state));
   assert.equal(response.status, 200);
   assert.equal(state.DB.items.get(previous.id).status, "failed");
+  assert.equal(state.DB.items.get(previous.id).caption, "Original failed caption");
+  assert.equal(state.DB.items.get(previous.id).validation_json, "{\\"previous\\":true}");
 }
 
 {
