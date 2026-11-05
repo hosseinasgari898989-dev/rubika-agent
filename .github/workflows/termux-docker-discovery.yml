@@ -55,7 +55,6 @@ jobs:
     timeout-minutes: 40
     env:
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
-      AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
     steps:
       - name: Check out the main discovery code
         uses: actions/checkout@v4
@@ -63,13 +62,18 @@ jobs:
           ref: main
           persist-credentials: true
 
-      - name: Validate queue credential without exposing it
+      - name: Check optional agent API credential without exposing it
+        id: agent_api_credential
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 ]]; then
-            echo "::error::AGENT_API_TOKEN is missing or invalid; discovery and queue sync stopped safely."
-            exit 2
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::AGENT_API_TOKEN is missing or invalid; discovery will use the legacy six, and D1 intake will be skipped."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
           fi
           docker version
 
@@ -126,6 +130,8 @@ jobs:
 
       - name: Run real Termux Docker source tests and collect live metadata
         id: termux_discovery
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -144,7 +150,7 @@ jobs:
           from termux.daily_discovery import collect_daily_report
 
           report_path = Path("/out/termux_discovery.json")
-          report = collect_daily_report(output_path=report_path)
+          report = collect_daily_report(output_path=report_path, load_remote_sources=True)
           # The Termux container writes as its own UID; grant the host runner read access.
           report_path.chmod(0o644)
           summary = report.get("summary", {})
@@ -159,6 +165,9 @@ jobs:
               "paid_providers_used": summary.get("paid_providers_used", []),
               "media_downloads": report.get("limits", {}).get("media_downloads", 0),
               "rubika_posts": report.get("limits", {}).get("rubika_posts", 0),
+              "tiktok_source_overlay_status": summary.get("tiktok_source_overlay_status"),
+              "tiktok_account_removals_applied": summary.get("tiktok_account_removals_applied"),
+              "tiktok_missing_created_at_cutoff_count": summary.get("tiktok_missing_created_at_cutoff_count", 0),
           }
           print("ONLINE_TERMUX_SUMMARY=" + json.dumps(
               safe_summary, ensure_ascii=False, sort_keys=True
@@ -196,6 +205,8 @@ jobs:
             -v "$output_dir:/out" \
             -w /workspace \
             -e PYTHONPATH=/workspace \
+            -e AGENT_API_TOKEN \
+            -e AGENT_API_BASE_URL \
             termux/termux-docker:x86_64 \
             sh -lc '
               set -eu
@@ -278,7 +289,9 @@ jobs:
       # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
       - name: Add TikTok metadata to the persistent D1 edit queue
         id: queue_intake
-        if: steps.push_report.outcome == 'success'
+        if: steps.push_report.outcome == 'success' && steps.agent_api_credential.outputs.available == 'true'
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -465,6 +478,7 @@ jobs:
             echo "- Schedule: twice-hourly UTC gate; full collection after five hours from successful D1 intake"
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
+            echo "- Agent API credential available: ${{ steps.agent_api_credential.outputs.available || 'unknown' }}"
             echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
             echo "- Live candidates evaluated by intake filter: ${{ steps.queue_intake.outputs.discovered_candidate_count || 'n/a' }}"
             echo "- Eligible candidates after content/edit/freshness checks: ${{ steps.queue_intake.outputs.filter_eligible_count || 'n/a' }}"

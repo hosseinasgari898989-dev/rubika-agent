@@ -56,7 +56,8 @@ function makeEnv({ fail = false, changes = null, token = "", allCount = 7 } = {}
                   for (let i = 0; i < count; i += 1) {
                     const [id, status, updatedAt, storageKey] = snapshot.slice(i * 4, i * 4 + 4);
                     const row = rows.get(id);
-                    if (!row || row.status !== status || row.updated_at !== updatedAt || row.storage_key !== storageKey) {
+                    const tiktokOnly = sql.includes("source = 'tiktok'");
+                    if (!row || (tiktokOnly ? row.source !== "tiktok" : row.source === "tiktok") || row.status !== status || row.updated_at !== updatedAt || row.storage_key !== storageKey) {
                       return { meta: { changes: 0 } };
                     }
                     selected.push(row);
@@ -83,13 +84,22 @@ function makeEnv({ fail = false, changes = null, token = "", allCount = 7 } = {}
               async all() {
                 record();
                 if (sql.includes("FROM failed_media WHERE id IN")) {
-                  const selected = args.map(id => rows.get(id)).filter(Boolean);
+                  const tiktokOnly = sql.includes("source = 'tiktok'");
+                  const selected = args.map(id => rows.get(id)).filter(row => row && (tiktokOnly ? row.source === "tiktok" : row.source !== "tiktok"));
+                  return { results: selected.map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
+                }
+                if (sql.includes("FROM failed_media WHERE source <> 'tiktok' AND status IN")) {
+                  const limit = Number(args[0]);
+                  const selected = [...rows.values()]
+                    .filter(row => row.source !== "tiktok" && ["stored", "delete_failed", "delete_requested"].includes(row.status))
+                    .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.id.localeCompare(b.id))
+                    .slice(0, limit);
                   return { results: selected.map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
                 }
                 if (sql.includes("FROM failed_media WHERE status IN")) {
                   const limit = Number(args[0]);
                   const selected = [...rows.values()]
-                    .filter(row => ["stored", "delete_failed", "delete_requested"].includes(row.status))
+                    .filter(row => row.source !== "tiktok" && ["stored", "delete_failed", "delete_requested"].includes(row.status))
                     .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.id.localeCompare(b.id))
                     .slice(0, limit);
                   return { results: selected.map(({ id, storage_key, status, updated_at }) => ({ id, storage_key, status, updated_at })) };
@@ -98,14 +108,20 @@ function makeEnv({ fail = false, changes = null, token = "", allCount = 7 } = {}
                   const selected = [...rows.values()].filter(row => row.status === "delete_requested").slice(0, 50);
                   return { results: selected.map(({ id, storage_key }) => ({ id, storage_key })) };
                 }
-                if (sql.includes("FROM failed_media ORDER BY created_at DESC")) {
-                  return { results: [{ id: ID1, status: "stored", caption: "caption" }] };
+                if (sql.includes("FROM failed_media WHERE source <> 'tiktok' ORDER BY created_at DESC")) {
+                  const row = rows.get(ID1);
+                  return { results: row && row.source !== "tiktok"
+                    ? [{ id: row.id, source: row.source, status: row.status, caption: row.caption }]
+                    : [] };
                 }
                 return { results: [] };
               },
               async first() {
                 record();
-                if (sql.includes("SELECT COUNT(*) AS n FROM failed_media")) return { n: 7 };
+                if (sql.includes("SELECT COUNT(*) AS n FROM failed_media WHERE source <> 'tiktok'")) {
+                  return { n: [...rows.values()].filter(row => row.source !== "tiktok").length };
+                }
+                if (sql.includes("SELECT COUNT(*) AS n FROM failed_media")) return { n: rows.size };
                 if (sql.includes("SELECT id, storage_key, status FROM failed_media WHERE id = ?")) {
                   const row = rows.get(args[0]);
                   return row ? { id: row.id, storage_key: row.storage_key, status: row.status } : null;
@@ -131,11 +147,17 @@ const post = (sub, body, token = OWNER_TOKEN) => handleFailedMedia(
 
 test("list returns items and total with defaults", async () => {
   env = makeEnv();
+  env.rows.set("fm_tiktok", {
+    id: "fm_tiktok", storage_key: keyFor("fm_tiktok"), status: "stored",
+    updated_at: "2026-11-04T00:00:00Z", source: "tiktok",
+    media_type: "video", caption: "TikTok original",
+  });
   const res = await post("/failed-media/list", {});
   const body = await res.json();
   assert.equal(res.status, 200);
   assert.deepEqual([body.ok, body.total, body.limit, body.offset, body.items.length], [true, 7, 50, 0, 1]);
-  assert.match(env.calls[0].sql, /ORDER BY created_at DESC/);
+  assert.match(env.calls[0].sql, /source <> 'tiktok'.*ORDER BY created_at DESC/);
+  assert.equal(body.items[0].source, "mob_x");
   assert.deepEqual(env.calls[0].args, [50, 0]);
 });
 
@@ -239,20 +261,71 @@ test("selected requests reject empty, invalid, duplicate, and over-limit ids", a
   }
 });
 
+test("TikTok originals use the signed delete flow with an exact source-only scope", async () => {
+  env = makeEnv({ token: "test-dispatch-token" });
+  const tiktokId = "fm_" + "c".repeat(24);
+  env.rows.set(tiktokId, {
+    id: tiktokId, storage_key: keyFor(tiktokId), status: "stored",
+    updated_at: "2026-11-04T00:00:00Z", source: "tiktok",
+    media_type: "video", caption: "TikTok original",
+  });
+
+  const genericDenied = await post("/failed-media/delete-request", { ids: [tiktokId] });
+  assert.equal(genericDenied.status, 409);
+  const crossSourceDenied = await post("/failed-media/delete-request", { ids: [ID1], source: "tiktok" });
+  assert.equal(crossSourceDenied.status, 409);
+  assert.equal(env.rows.get(tiktokId).status, "stored");
+  assert.equal(env.rows.get(ID1).status, "stored");
+
+  const firstResponse = await post("/failed-media/delete-request", { ids: [tiktokId], source: "tiktok" });
+  const challenge = await firstResponse.json();
+  assert.equal(firstResponse.status, 200);
+  assert.equal(challenge.confirmation_required, true);
+  assert.equal(challenge.requested, 1);
+  const selects = env.calls.filter(call => call.sql.startsWith("SELECT id, storage_key, status, updated_at FROM failed_media"));
+  assert.match(selects.at(-1).sql, /source = 'tiktok'/);
+  assert.equal(env.rows.get(tiktokId).status, "stored");
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 204 });
+  try {
+    const secondResponse = await post("/failed-media/delete-request", {
+      confirmation: challenge.confirmation, phrase: "DELETE",
+    });
+    const second = await secondResponse.json();
+    assert.equal(secondResponse.status, 200);
+    assert.deepEqual([second.requested, second.dispatched], [1, true]);
+    const update = env.calls.find(call => call.sql.startsWith("UPDATE failed_media SET status = 'delete_requested'"));
+    assert.match(update.sql, /source = 'tiktok'/);
+    assert.equal(env.rows.get(tiktokId).status, "delete_requested");
+    assert.equal(env.rows.get(ID1).status, "stored");
+    assert.equal(env.rows.get(ID2).status, "stored");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("delete-all only stages up to 50 rows and requires signed second step", async () => {
   env = makeEnv({ allCount: 55 });
+  env.rows.set("fm_tiktok", {
+    id: "fm_tiktok", storage_key: keyFor("fm_tiktok"), status: "stored",
+    updated_at: "2026-11-04T00:00:00Z", source: "tiktok",
+    media_type: "video", caption: "TikTok original",
+  });
   const firstResponse = await post("/failed-media/delete-request", { all: true });
   const first = await firstResponse.json();
   assert.equal(firstResponse.status, 200);
   assert.equal(first.requested, 50);
   assert.equal(first.limited, true);
-  assert.equal([...env.rows.values()].filter(row => row.status === "stored").length, 55);
+  assert.equal([...env.rows.values()].filter(row => row.source !== "tiktok" && row.status === "stored").length, 55);
+  assert.equal(env.rows.get("fm_tiktok").status, "stored");
   const secondResponse = await post("/failed-media/delete-request", { confirmation: first.confirmation, phrase: "DELETE" });
   const second = await secondResponse.json();
   assert.equal(secondResponse.status, 200);
   assert.equal(second.requested, 50);
-  assert.equal([...env.rows.values()].filter(row => row.status === "delete_requested").length, 50);
-  assert.equal([...env.rows.values()].filter(row => row.status === "stored").length, 5);
+  assert.equal([...env.rows.values()].filter(row => row.source !== "tiktok" && row.status === "delete_requested").length, 50);
+  assert.equal([...env.rows.values()].filter(row => row.source !== "tiktok" && row.status === "stored").length, 5);
+  assert.equal(env.rows.get("fm_tiktok").status, "stored");
 });
 
 test("delete-all rejects the old client-only confirmation fields", async () => {

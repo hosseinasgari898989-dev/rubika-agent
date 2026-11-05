@@ -1,4 +1,4 @@
-"""Fail-closed TikTok source configuration for the six owner-selected channels."""
+"""Fail-closed TikTok source configuration with a D1-managed owner overlay."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,52 @@ _CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "tiktok_source_p
 DEFAULT_REQUIRED_ANY_KEYWORDS = ("poppy", "playtime")
 DEFAULT_DOWNLOAD_QUALITY_MAX = 1080
 DEFAULT_ALLOW_UPSCALE = False
+
+# Runtime overlay loaded from the existing D1 sources table. Disabled accounts are
+# excluded from discovery/intake; the queue worker may include them to preserve
+# processing of items discovered before an owner removed an account.
+_DYNAMIC_TIKTOK_SOURCE_OVERRIDES: dict[str, bool] = {}
+
+
+def set_dynamic_tiktok_sources(rows: Any, *, include_disabled: bool = False) -> None:
+    global _DYNAMIC_TIKTOK_SOURCE_OVERRIDES
+    static = set(known_tiktok_profiles())
+    overrides: dict[str, bool] = {}
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict) or row.get("platform", "tiktok") != "tiktok":
+                continue
+            raw = row.get("source_key") or row.get("handle")
+            if not isinstance(raw, str):
+                continue
+            handle = raw.strip().lstrip("@").lower()
+            if not handle or len(handle) > 24:
+                continue
+            enabled = row.get("enabled", True) is True or row.get("enabled") == 1
+            if handle in static and (enabled or include_disabled):
+                continue
+            overrides[handle] = enabled or include_disabled
+    _DYNAMIC_TIKTOK_SOURCE_OVERRIDES = overrides
+
+
+
+
+def refresh_dynamic_tiktok_sources(
+    cloud: Any, *, include_disabled: bool = False
+) -> tuple[list[dict[str, Any]], bool]:
+    """Refresh the optional console overlay; read failures reset to legacy-only policy."""
+    try:
+        source_reader = getattr(cloud, "get_console_tiktok_sources", None)
+        if not callable(source_reader):
+            raise RuntimeError("console_source_reader_unavailable")
+        rows = source_reader()
+        if not isinstance(rows, list):
+            raise RuntimeError("console_sources_invalid")
+    except Exception:
+        set_dynamic_tiktok_sources([])
+        return [], False
+    set_dynamic_tiktok_sources(rows, include_disabled=include_disabled)
+    return rows, True
 
 
 @lru_cache(maxsize=1)
@@ -79,6 +125,22 @@ def resolve_source_policy(platform: str, source_key: str) -> dict[str, Any]:
     """Resolve a configured source. Unlisted TikTok handles are ineligible for processing."""
     handle = str(source_key or "").strip().lstrip("@")
     rows = load_source_policy_config().get("sources", [])
+    if platform == "tiktok" and handle.casefold() in _DYNAMIC_TIKTOK_SOURCE_OVERRIDES:
+        enabled = _DYNAMIC_TIKTOK_SOURCE_OVERRIDES[handle.casefold()]
+        if enabled:
+            return {
+                "known_source": True, "enabled": True, "trust_tier": "owner_selected",
+                "source_handle": handle, "minimum_source_short_side": 480,
+                "output_format": "preserve_source",
+                "require_poppy_relevance_check": True,
+                "require_edit_signal_check": False,
+            }
+        return {
+            "known_source": False, "enabled": False, "trust_tier": "unselected",
+            "source_handle": handle, "minimum_source_short_side": 0,
+            "output_format": None, "require_poppy_relevance_check": False,
+            "require_edit_signal_check": False,
+        }
     if platform == "tiktok" and isinstance(rows, list):
         for row in rows:
             if (

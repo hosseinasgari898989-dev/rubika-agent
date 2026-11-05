@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -14,8 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from agent.discovery.mob_official_complete import discover_official_x_posts
-from agent.discovery.termux_sources import discover_tiktok_profiles
+from agent.discovery.termux_sources import TIKTOK_PROFILES, discover_tiktok_profiles
 from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
+from agent.brain.cloud_state import CloudState
+from agent.source_policy import refresh_dynamic_tiktok_sources, set_dynamic_tiktok_sources
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,13 +41,86 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
-def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, Any]:
+def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_sources: bool = False) -> dict[str, Any]:
     """Collect TikTok edit metadata and official Mob X posts without downloads or publishing."""
-    print("1/2 TikTok: checking the six selected creator profiles (metadata only)...", flush=True)
-    tiktok_candidates, tiktok_attempts = discover_tiktok_profiles(
-        max_results=48,
-        max_per_profile=8,
-    )
+    print("1/2 TikTok: loading owner-selected creator profiles (metadata only)...", flush=True)
+    dynamic_cutoffs: dict[str, str] = {}
+    missing_cutoff_attempts: list[dict[str, str]] = []
+    source_diagnostics: list[dict[str, str]] = []
+    source_rows_available = False
+    source_status = "legacy_six_local"
+
+    if load_remote_sources:
+        try:
+            token = os.getenv("AGENT_API_TOKEN", "").strip()
+            if len(token) < 32:
+                raise RuntimeError("console_sources_auth_unavailable")
+            cloud = CloudState(
+                os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
+                token=token, timeout_seconds=25,
+            )
+            source_rows, source_rows_available = refresh_dynamic_tiktok_sources(cloud)
+            if not source_rows_available:
+                raise RuntimeError("console_sources_unavailable")
+            selected_profiles: list[str] = []
+            for row in source_rows:
+                if not isinstance(row, dict) or not (row.get("enabled") is True or row.get("enabled") == 1):
+                    continue
+                handle = str(row.get("source_key") or "").strip().lstrip("@")
+                if not handle:
+                    continue
+                if row.get("managed") is True:
+                    created_at = row.get("created_at")
+                    cutoff_valid = False
+                    if isinstance(created_at, str) and created_at.strip():
+                        try:
+                            datetime.fromisoformat(created_at.strip().replace("Z", "+00:00"))
+                            cutoff_valid = True
+                        except ValueError:
+                            cutoff_valid = False
+                    if not cutoff_valid:
+                        missing_cutoff_attempts.append({
+                            "platform": "tiktok",
+                            "source": "console_sources",
+                            "query": "@" + handle[:24],
+                            "reason": "missing_created_at_cutoff",
+                        })
+                        continue
+                    dynamic_cutoffs[handle.casefold()] = created_at.strip()
+                selected_profiles.append(handle)
+            profiles = tuple(selected_profiles)
+            source_status = "console_sources_loaded"
+        except Exception:
+            # The optional overlay must never block either public discovery lane.
+            # Do not log exception text: it can include request or transport details.
+            set_dynamic_tiktok_sources([])
+            dynamic_cutoffs = {}
+            profiles = TIKTOK_PROFILES
+            source_rows_available = False
+            source_status = "console_sources_unavailable_using_legacy_six"
+            source_diagnostics.append({
+                "source": "tiktok_console_sources",
+                "reason": "console_sources_unavailable_using_legacy_six",
+            })
+    else:
+        set_dynamic_tiktok_sources([])
+        profiles = TIKTOK_PROFILES
+
+    max_tiktok_results = max(48, len(profiles) * 8) if profiles else 0
+    if not profiles:
+        tiktok_candidates, tiktok_attempts = [], [
+            {"platform": "tiktok", "result": "no_enabled_sources"}
+        ]
+    else:
+        tiktok_candidates, tiktok_attempts = discover_tiktok_profiles(
+            profiles=profiles,
+            selected_profiles=profiles,
+            max_results=max_tiktok_results,
+            max_per_profile=8,
+            created_after_by_profile=dynamic_cutoffs,
+        )
+    tiktok_attempts.extend(missing_cutoff_attempts)
+    tiktok_attempts.extend(source_diagnostics)
     print("2/2 Mob Entertainment: checking only official X posts via public discovery and X syndication (metadata only)...", flush=True)
     mob_candidates, mob_attempts = discover_official_x_posts(max_results=12)
 
@@ -101,6 +177,9 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
             "mob_official_birth_cutoff_rejected": len(stale_mob),
             "tiktok_selected_source_candidates": len(normalized["tiktok"]),
             "tiktok_method": "yt_dlp_selected_creator_profiles_only",
+            "tiktok_source_overlay_status": source_status,
+            "tiktok_account_removals_applied": source_rows_available if load_remote_sources else None,
+            "tiktok_missing_created_at_cutoff_count": len(missing_cutoff_attempts),
             "agent_lifecycle_mode": lifecycle_policy["mode"],
             "paid_providers_used": [],
             "ready_to_publish": False,
@@ -108,10 +187,10 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH) -> dict[str, 
         "candidates": normalized,
         "attempts": [*tiktok_attempts, *mob_attempts, lifecycle_attempt],
         "limits": {
-            "tiktok_max_creator_profiles": 6,
+            "tiktok_max_creator_profiles": len(profiles),
             "tiktok_max_per_known_profile": 8,
-            "tiktok_date_filtering": "deferred_to_phase_6_since_utc_engine",
-            "tiktok_max_results": 60,
+            "tiktok_date_filtering": "new_d1_sources_since_created_at; legacy_profiles_unchanged",
+            "tiktok_max_results": max_tiktok_results,
             "mob_x_max_candidates_per_run": 12,
             "mob_official_source_lanes": ["x"],
             "mob_x_source_handle": "@mobgamesstudios",
@@ -129,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.parse_args(argv)
 
     try:
-        report = collect_daily_report()
+        report = collect_daily_report(load_remote_sources=True)
     except Exception as exc:
         print(f"Discovery failed safely: {type(exc).__name__}", file=sys.stderr, flush=True)
         return 2

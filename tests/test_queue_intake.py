@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from agent.brain.queue_intake import candidates_for_queue, fair_round_robin, load_report, run_intake
-from agent.source_policy import known_tiktok_profiles
+from agent.source_policy import known_tiktok_profiles, set_dynamic_tiktok_sources
 
 PROFILES = known_tiktok_profiles()
 
@@ -33,6 +33,10 @@ class FakeCloudState:
             "created_at": "2026-10-14T01:00:00Z"})
         self.blocking_seen_ids = {"tiktok:" + _video_id(0,99)}
         self.duplicate_once = {_video_id(2,0)}
+        self.console_sources = []
+
+    def get_console_tiktok_sources(self):
+        return list(self.console_sources)
 
     def get_automation_queue(self, *, status="queued", limit=100, offset=0):
         values = self.items[status]
@@ -123,6 +127,28 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertEqual([row["external_id"] for row in fair_round_robin(rows)[:4]], ["01","11","21","31"])
         self.assertEqual([row["external_id"] for row in fair_round_robin(rows, last_source_key=PROFILES[1])[:3]], ["21","31","41"])
 
+    def test_intake_accepts_active_console_managed_account_without_weakening_keyword_filter(self):
+        cloud = FakeCloudState()
+        cloud.console_sources = [{
+            "platform": "tiktok", "source_key": "console_creator",
+            "enabled": 1, "managed": True, "created_at": _now_iso(),
+        }]
+        candidate = _row("7616247520657771888", "console_creator", title="Poppy Playtime edit")
+        payload = {
+            "schema_version": 1, "source": "github_actions_termux_docker",
+            "mode": "metadata_only_no_download_no_publish", "generated_at": _now_iso(),
+            "candidates": {"tiktok": [candidate], "mob_official": []},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch("agent.brain.queue_intake.CloudState", return_value=cloud):
+                result = run_intake(path, max_new_items=1)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["inserted_count"], 1)
+        self.assertEqual(result["selected_items"][0]["source_key"], "console_creator")
+        set_dynamic_tiktok_sources([])
+
     def test_intake_skips_existing_ids_refills_duplicates_and_caps_four_new_items(self):
         candidates = []
         for i, creator in enumerate(PROFILES):
@@ -141,6 +167,32 @@ class QueueIntakeTests(unittest.TestCase):
         self.assertNotIn(_video_id(0,99),ids); self.assertNotIn(_video_id(5,99),ids)
         self.assertEqual(result["duplicate_count"],1)
         self.assertTrue(all(row["queue_status"]=="queued" for row in result["selected_items"]))
+
+
+    def test_console_source_read_failure_falls_back_to_legacy_profiles_and_continues_intake(self):
+        class SourceReadFailureCloud(FakeCloudState):
+            def get_console_tiktok_sources(self):
+                raise TimeoutError("private details must not be logged")
+
+        legacy = _row(_video_id(0, 77), PROFILES[0])
+        custom = _row(_video_id(6, 77), "newcreator")
+        payload = {
+            "schema_version": 1, "source": "github_actions_termux_docker",
+            "mode": "metadata_only_no_download_no_publish", "generated_at": _now_iso(),
+            "candidates": {"tiktok": [legacy, custom], "mob_official": []},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch("agent.brain.queue_intake.CloudState", SourceReadFailureCloud):
+                result = run_intake(path, max_new_items=1)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tiktok_source_overlay_status"],
+                         "console_sources_unavailable_using_legacy_six")
+        self.assertIs(result["tiktok_account_removals_applied"], False)
+        self.assertEqual(result["inserted_count"], 1)
+        self.assertEqual(result["filter_rejected_by_reason"].get("source_not_selected"), 1)
+        self.assertNotIn("private details", json.dumps(result))
 
 
 if __name__ == "__main__":
