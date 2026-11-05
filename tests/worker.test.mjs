@@ -1348,7 +1348,7 @@ const read = async response => ({ status: response.status, body: await response.
     status: "failed",
     review_state: "pending",
     caption: "Original failed caption",
-    validation_json: "{\\"previous\\":true}",
+    validation_json: '{"previous":true}',
   };
   state.DB.items.set(previous.id, previous);
   const response = await read(await worker.fetch(request("/api/brain/items/upsert", {
@@ -1367,7 +1367,7 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.status, 200);
   assert.equal(state.DB.items.get(previous.id).status, "failed");
   assert.equal(state.DB.items.get(previous.id).caption, "Original failed caption");
-  assert.equal(state.DB.items.get(previous.id).validation_json, "{\\"previous\\":true}");
+  assert.equal(state.DB.items.get(previous.id).validation_json, '{"previous":true}');
 }
 
 {
