@@ -459,5 +459,116 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         self.assertEqual(attempts[-1]["result"], "empty")
 
 
+    def test_missing_pin_flags_and_fx_timeline_down_infers_only_new_unpinned_candidate(self):
+        post_id = "2111111111111111301"
+        row = self.x_cli_row(post_id, "2026-11-05T00:15:00Z")
+        post = syndication_post(post_id, created_at="Thu Nov 05 00:15:00 +0000 2026")
+        post.pop("is_pinned")
+        session = FakeSession("<rss><channel></channel></rss>", {post_id: post})
+        candidates, attempts, _run = self.run_x_cli([row], session)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertFalse(candidates[0]["pinned"])
+        self.assertEqual(candidates[0]["pin_state"], "inferred_not_pinned")
+        self.assertEqual(
+            candidates[0]["pin_state_source"],
+            "created_at_at_or_after_cutoff_without_pin_evidence",
+        )
+        fx_attempt = next(row for row in attempts if row.get("engine") == "fxtwitter_profile_timeline")
+        self.assertEqual(fx_attempt["result"], "http_error")
+        final = next(row for row in attempts if row.get("source") == "mob_x_final_filter")
+        self.assertEqual(final["pin_state_counts"]["inferred_not_pinned"], 1)
+        self.assertEqual(final["pin_states"][0]["pin_state"], "inferred_not_pinned")
+
+    def test_known_pinned_flag_and_x_cli_profile_pinned_id_are_rejected(self):
+        flag_id = "2111111111111111302"
+        profile_id = "2111111111111111303"
+        rows = [
+            self.x_cli_row(flag_id, "2026-11-05T01:00:00Z", is_pinned=True),
+            self.x_cli_row(
+                profile_id,
+                "2026-11-05T02:00:00Z",
+                author={"username": "mobgamesstudios", "pinned_tweet": profile_id},
+            ),
+        ]
+        flag_post = syndication_post(flag_id, created_at="Thu Nov 05 01:00:00 +0000 2026")
+        profile_post = syndication_post(profile_id, created_at="Thu Nov 05 02:00:00 +0000 2026")
+        flag_post.pop("is_pinned")
+        profile_post.pop("is_pinned")
+        session = FakeSession(
+            "<rss><channel></channel></rss>",
+            {flag_id: flag_post, profile_id: profile_post},
+        )
+        candidates, attempts, _run = self.run_x_cli(rows, session)
+
+        self.assertEqual(candidates, [])
+        final = next(row for row in attempts if row.get("source") == "mob_x_final_filter")
+        self.assertEqual(final["skipped"].get("pinned"), 2)
+
+    def test_x_cli_and_fxtwitter_ids_are_unioned_with_per_id_sources_and_oldest_first(self):
+        xcli_id = "2111111111111111304"
+        fx_id = "2111111111111111305"
+        xcli_row = self.x_cli_row(xcli_id, "2026-11-05T03:00:00Z")
+        fx_row = {
+            "id": fx_id,
+            "created_at": "2026-11-05T02:00:00Z",
+            "author": {"username": "mobgamesstudios"},
+            "is_pinned": False,
+            "media": [{"type": "photo", "url": IMAGE_URL}],
+            "text": "Official Mob FX-only timeline post",
+        }
+        session = FakeSession(
+            "<rss><channel></channel></rss>",
+            {
+                xcli_id: syndication_post(xcli_id, created_at="Thu Nov 05 03:00:00 +0000 2026"),
+                fx_id: syndication_post(fx_id, created_at="Thu Nov 05 02:00:00 +0000 2026"),
+            },
+            fx_timeline_response=FakeResponse(payload={"results": [fx_row]}),
+        )
+        candidates, attempts, _run = self.run_x_cli([xcli_row], session)
+
+        self.assertEqual(
+            [row["external_id"] for row in candidates],
+            ["x-" + fx_id, "x-" + xcli_id],
+        )
+        self.assertEqual(
+            [row["id_source"] for row in candidates],
+            ["fxtwitter", "x-cli"],
+        )
+        final = next(row for row in attempts if row.get("source") == "mob_x_final_filter")
+        self.assertEqual(
+            [row["id_source"] for row in final["id_sources"]],
+            ["fxtwitter", "x-cli"],
+        )
+        union = next(row for row in attempts if row.get("source") == "mob_x_id_union")
+        self.assertEqual(union["candidate_count"], 2)
+
+    def test_same_id_in_both_timelines_is_one_candidate_with_x_cli_source(self):
+        post_id = "2111111111111111306"
+        xcli_row = self.x_cli_row(post_id, "2026-11-05T01:00:00Z")
+        fx_row = {
+            "id": post_id,
+            "created_at": "2026-11-05T01:00:00Z",
+            "author": {"username": "mobgamesstudios"},
+            "is_pinned": False,
+            "media": [{"type": "photo", "url": IMAGE_URL}],
+            "text": "Same official Mob post",
+        }
+        session = FakeSession(
+            "<rss><channel></channel></rss>",
+            {post_id: syndication_post(post_id, created_at="Thu Nov 05 01:00:00 +0000 2026")},
+            fx_timeline_response=FakeResponse(payload={"results": [fx_row]}),
+        )
+        candidates, attempts, _run = self.run_x_cli([xcli_row], session)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["id_source"], "x-cli")
+        union = next(row for row in attempts if row.get("source") == "mob_x_id_union")
+        self.assertEqual(union["candidate_count"], 1)
+        self.assertEqual(union["selected_ids"][0]["id_source"], "x-cli")
+
+
 if __name__ == "__main__":
     unittest.main()
