@@ -926,19 +926,14 @@ def discover_official_x_posts(
     output: list[dict[str, Any]] = []
     seen_identity: set[tuple[str, str]] = set()
     seen_urls: set[str] = set()
-    seen_fingerprints: set[str] = set()
     for row in combined:
         external_id = str(row.get("external_id") or row.get("id") or "")
         canonical = str(row.get("canonical_url") or "").rstrip("/")
         identity = ("x", external_id)
-        fingerprints = _fingerprints(row)
         if identity in seen_identity or canonical in seen_urls:
-            continue
-        if fingerprints.intersection(seen_fingerprints):
             continue
         seen_identity.add(identity)
         seen_urls.add(canonical)
-        seen_fingerprints.update(fingerprints)
         output.append(row)
 
     limit = max(1, min(int(max_results), 40))
