@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from agent.brain.queue_intake import candidates_for_queue, fair_round_robin, load_report, run_intake
-from agent.source_policy import known_tiktok_profiles
+from agent.source_policy import known_tiktok_profiles, set_dynamic_tiktok_sources
 
 PROFILES = known_tiktok_profiles()
 

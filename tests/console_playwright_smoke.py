@@ -383,7 +383,6 @@ def main() -> int:
             "localStorage.setItem('rc_owner_token', 'playwright-owner-fixture-only');"
         )
         page = context.new_page()
-        page.on("dialog", lambda dialog: dialog.accept())
         page.route(f"{MOCK_BASE}/**", mock_worker)
         # Never contact the live MEGA embed from the mocked smoke test.
         page.route(
@@ -560,6 +559,7 @@ def main() -> int:
                 failures.append("TikTok account add did not use the existing console sources API")
             page.locator('#nav button[data-id="tkaccounts"]').click()
             page.wait_for_selector('#view button[data-a="tkRemove"]', timeout=5000)
+            page.once("dialog", lambda dialog: dialog.accept())
             click_action(page, '#view button[data-a="tkRemove"]', "remove TikTok account")
             if "DELETE /api/console/sources/tiktok%3Afixture" not in mocked_requests:
                 failures.append("TikTok account remove did not use the existing source API")
@@ -576,8 +576,10 @@ def main() -> int:
             page.wait_for_function("() => document.querySelector('#view')?.innerText.includes('در صف')", timeout=5000)
             if sum(1 for item in mocked_requests if item.startswith("POST /api/console/tiktok-unsent/")) != 1:
                 failures.append("TikTok resend did not issue exactly one POST")
-            if "ارسال دوباره" in page.locator("#view").inner_text() and page.locator('#view button[data-a="tkResend"]').count() == 0:
-                failures.append("TikTok resend state rendered inconsistently")
+            if page.locator('#view button[data-a="tkResend"]').count() != 0:
+                failures.append("TikTok resend button remained visible after being queued")
+            if page.locator('#view .bd.info').filter(has_text="در صف").count() != 1:
+                failures.append("TikTok resend did not render exactly one queued status")
 
             # Reject-post styling must differ from a primary action on both target viewports.
             for viewport in ({"width": 390, "height": 844}, {"width": 1280, "height": 800}):
