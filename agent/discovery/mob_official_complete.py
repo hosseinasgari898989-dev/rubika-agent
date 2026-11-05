@@ -810,10 +810,10 @@ def discover_complete_official_posts(
 def discover_official_x_posts(
     *,
     config_path: str | Path = DEFAULT_CONFIG,
-    max_results: int = 12,
+    max_results: int = 40,
     session: Any | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Discover only the verified Mob Entertainment X lane; never poll other sources."""
+    """Discover only verified Mob X posts at or after the fixed configured cutoff."""
     try:
         config = json.loads(Path(config_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -836,6 +836,18 @@ def discover_official_x_posts(
     if x_source is None:
         return [], [{"source": "mob_x", "result": "disabled", "candidate_count": 0}]
 
+    publishing = config.get("publishing", {})
+    since_utc = publishing.get("since_utc") if isinstance(publishing, dict) else None
+    if not isinstance(since_utc, str) or not since_utc.strip():
+        return [], [{"source": "mob_x", "result": "since_cutoff_missing"}]
+    try:
+        cutoff = datetime.fromisoformat(since_utc.strip().replace("Z", "+00:00"))
+        if cutoff.tzinfo is None:
+            raise ValueError
+        cutoff = cutoff.astimezone(timezone.utc)
+    except ValueError:
+        return [], [{"source": "mob_x", "result": "since_cutoff_invalid"}]
+
     raw_seed_urls = x_source.get("seed_urls", [])
     seed_urls = tuple(
         value.strip()
@@ -848,9 +860,10 @@ def discover_official_x_posts(
         # Import only the public X lane. No newsroom, YouTube, or Steam adapter is invoked.
         from .termux_mob_x import discover_mob_x_posts
         x_rows, x_attempts = discover_mob_x_posts(
-            max_results=max(1, min(int(max_results), 25)),
+            max_results=max(1, min(int(max_results), 40)),
             session=session,
             seed_urls=seed_urls,
+            since_utc=since_utc,
         )
     except Exception as exc:
         return [], [{
@@ -885,6 +898,17 @@ def discover_official_x_posts(
             or not re.fullmatch(r"/mobgamesstudios/status/[0-9]{15,22}/?", parsed.path)
         ):
             continue
+        published = _timestamp(row.get("published_at"))
+        if not published:
+            continue
+        try:
+            published_dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if published_dt < cutoff:
+            continue
+        if row.get("pinned") is not False:
+            continue
         if not str(row.get("original_caption") or row.get("caption") or "").strip():
             continue
         media_url = str(row.get("media_url") or "")
@@ -892,9 +916,11 @@ def discover_official_x_posts(
             continue
         combined.append(row)
 
+    # Preserve chronological safety even when upstream timeline providers return
+    # highlights or other non-chronological collections.
     combined.sort(key=lambda row: (
-        0 if published_epoch(row) > 0 else 1,
-        -published_epoch(row),
+        1 if published_epoch(row) <= 0 else 0,
+        published_epoch(row),
         str(row.get("external_id") or row.get("id") or ""),
     ))
     output: list[dict[str, Any]] = []
@@ -915,7 +941,7 @@ def discover_official_x_posts(
         seen_fingerprints.update(fingerprints)
         output.append(row)
 
-    limit = max(1, min(int(max_results), 25))
+    limit = max(1, min(int(max_results), 40))
     attempts = list(x_attempts) if isinstance(x_attempts, list) else []
     attempts.append({
         "source": "mob_x_only_policy",
