@@ -1145,6 +1145,18 @@ def run_trial(
                     if evaluation.get("external_id") == external_id and evaluation.get("result") == "ready":
                         evaluation["result"] = "duplicate_media_hash"
                         break
+                if source_platform == "x":
+                    filtered_payload = _mob_x_discovery_payload(item)
+                    filtered_payload["status"] = "filtered"
+                    filtered_payload["validation"]["mob_x_discovery"]["filtered_reason"] = "duplicate_media_hash"
+                    try:
+                        cloud.upsert_item(filtered_payload)
+                    except Exception as exc:
+                        report["error"] = "mob_x_duplicate_media_ledger_failed_" + type(exc).__name__
+                        report["publishing"] = False
+                        _report(output_report, report)
+                        shutil.rmtree(candidate_dir, ignore_errors=True)
+                        return report
                 shutil.rmtree(candidate_dir, ignore_errors=True)
                 continue
 
