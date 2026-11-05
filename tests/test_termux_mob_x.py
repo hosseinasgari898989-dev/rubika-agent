@@ -393,7 +393,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         )
         candidates, attempts, _run = self.run_x_cli(rows, session)
         self.assertEqual([row["external_id"] for row in candidates], ["x-" + ids[6]])
-        final_attempt = next(row for row in attempts if row["engine"] == "mob_x_final_filter")
+        final_attempt = next(row for row in attempts if row.get("source") == "mob_x_final_filter")
         self.assertGreaterEqual(final_attempt["skipped"].get("reply", 0), 1)
         self.assertGreaterEqual(final_attempt["skipped"].get("retweet", 0), 1)
         self.assertGreaterEqual(final_attempt["skipped"].get("quote", 0), 1)
