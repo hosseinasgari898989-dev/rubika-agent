@@ -148,31 +148,6 @@ def send_owner_translation_failure(token: str, owner_chat_id: str, job_id: str, 
     return _message_id(response)
 
 
-def send_owner_metadata_failure(
-    token: str, owner_chat_id: str, job_id: str, *,
-    bot_factory: Any | None = None,
-) -> str | None:
-    """Tell the owner privately when all read-only public metadata fetchers fail."""
-    if not re.fullmatch(r"job_[A-Fa-f0-9]{8,80}", str(job_id or "")):
-        raise ValueError("mob_x_job_id_invalid")
-    if not str(owner_chat_id or "").strip():
-        raise RuntimeError("rubika_owner_chat_missing")
-    bot = _bot(token, bot_factory)
-    post = getattr(bot, "_post", None)
-    if not callable(post):
-        raise RuntimeError("rubika_send_message_api_unavailable")
-    response = _assert_ok(post("sendMessage", {
-        "chat_id": str(owner_chat_id).strip(),
-        "text": (
-            "⚠️ دریافت اطلاعات پست رسمی Mob X از مسیر منابع عمومی ناموفق شد "
-            "(x-cli و در صورت نیاز FxTwitter/VxTwitter). این کار متوقف شد و هیچ انتشاری انجام نشد."
-        ),
-        "disable_notification": False,
-        "chat_keypad_type": "None",
-    }), "rubika_send_message_response_invalid")
-    return _message_id(response)
-
-
 def send_owner_worker_request_failure(
     token: str, owner_chat_id: str, job_id: str, error_detail: str, *,
     bot_factory: Any | None = None,
