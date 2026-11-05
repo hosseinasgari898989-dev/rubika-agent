@@ -164,8 +164,8 @@ def send_owner_metadata_failure(
     response = _assert_ok(post("sendMessage", {
         "chat_id": str(owner_chat_id).strip(),
         "text": (
-            "⚠️ دریافت اطلاعات پست رسمی Mob X از هر سه منبع x-cli، FxTwitter و "
-            "VxTwitter ناموفق شد. این کار متوقف شد و هیچ انتشاری انجام نشد."
+            "⚠️ دریافت اطلاعات پست رسمی Mob X از مسیر منابع عمومی ناموفق شد "
+            "(x-cli و در صورت نیاز FxTwitter/VxTwitter). این کار متوقف شد و هیچ انتشاری انجام نشد."
         ),
         "disable_notification": False,
         "chat_keypad_type": "None",
