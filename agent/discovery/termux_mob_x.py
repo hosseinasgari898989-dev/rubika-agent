@@ -1317,18 +1317,21 @@ def discover_mob_x_posts(
             post_id = _row_id(row)
             if not post_id:
                 continue
+            row_evidence = _pin_evidence_for_row(row, source_name)
+            if _row_author(row) == OFFICIAL_HANDLE:
+                # A pinned Mob post is usually older than the cutoff; retain its
+                # profile pin ID evidence even though the post itself is ineligible.
+                global_profile_pin_evidence = _merge_pin_evidence(
+                    global_profile_pin_evidence,
+                    {"flags": [], "profile_pinned_ids": row_evidence["profile_pinned_ids"]},
+                )
             reason = _row_skip_reason(row, cutoff)
             if reason:
                 skipped[reason] = skipped.get(reason, 0) + 1
                 continue
-            row_evidence = _pin_evidence_for_row(row, source_name)
             pin_evidence_by_id[post_id] = _merge_pin_evidence(
                 pin_evidence_by_id.get(post_id),
                 row_evidence,
-            )
-            global_profile_pin_evidence = _merge_pin_evidence(
-                global_profile_pin_evidence,
-                {"flags": [], "profile_pinned_ids": row_evidence["profile_pinned_ids"]},
             )
             candidate_rows.setdefault(post_id, row)
             id_source_by_id.setdefault(post_id, source_name)
