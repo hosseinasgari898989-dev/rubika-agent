@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 41,
   "candidate_pool_size": 41,
-  "completed_at": "2026-11-07T21:02:51+00:00",
+  "completed_at": "2026-11-07T21:33:08+00:00",
   "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -22,31 +22,25 @@
     "smyxae": 6
   },
   "filter_rejected_count": 7,
-  "inserted_count": 1,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 14,
     "processing": 0,
-    "queued": 31,
-    "sent": 75,
-    "sent_today": 3,
+    "queued": 30,
+    "sent": 76,
+    "sent_today": 4,
     "skipped": 7,
     "uncertain": 0,
     "usage_day": "2026-11-07"
   },
-  "queue_status": "enqueued",
-  "received_count": 1,
-  "report_generated_at": "2026-11-07T21:02:42.878757+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-11-07T21:32:58.031971+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7705243039903632648"
-  ],
-  "selected_source_distribution": {
-    "meloaep_": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@meloaep_/video/7705243039903632648"
-  ],
-  "skipped_existing_count": 40
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 41
 }
