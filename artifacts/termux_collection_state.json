@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 41,
   "candidate_pool_size": 41,
-  "completed_at": "2026-11-07T12:32:53+00:00",
+  "completed_at": "2026-11-07T13:02:54+00:00",
   "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -22,31 +22,25 @@
     "smyxae": 6
   },
   "filter_rejected_count": 7,
-  "inserted_count": 1,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 14,
     "processing": 0,
-    "queued": 31,
-    "sent": 74,
-    "sent_today": 2,
+    "queued": 30,
+    "sent": 75,
+    "sent_today": 3,
     "skipped": 7,
     "uncertain": 0,
     "usage_day": "2026-11-07"
   },
-  "queue_status": "enqueued",
-  "received_count": 1,
-  "report_generated_at": "2026-11-07T12:32:41.744482+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-11-07T13:02:44.394668+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7705401844247399694"
-  ],
-  "selected_source_distribution": {
-    "saylex.aep812": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@saylex.aep812/video/7705401844247399694"
-  ],
-  "skipped_existing_count": 40
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 41
 }
