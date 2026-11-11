@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 34,
   "candidate_pool_size": 34,
-  "completed_at": "2026-11-11T18:34:36+00:00",
+  "completed_at": "2026-11-11T19:03:05+00:00",
   "discovered_candidate_count": 40,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -35,7 +35,7 @@
   },
   "queue_status": "no_new_candidates",
   "received_count": 0,
-  "report_generated_at": "2026-11-11T18:34:27.169201+00:00",
+  "report_generated_at": "2026-11-11T19:02:49.782431+00:00",
   "schema_version": 1,
   "selected_external_ids": [],
   "selected_source_distribution": {},
