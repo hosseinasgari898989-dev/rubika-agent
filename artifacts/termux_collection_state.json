@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 35,
   "candidate_pool_size": 35,
-  "completed_at": "2026-11-12T17:33:09+00:00",
+  "completed_at": "2026-11-12T18:33:20+00:00",
   "discovered_candidate_count": 40,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -20,34 +20,25 @@
     "smyxae": 5
   },
   "filter_rejected_count": 5,
-  "inserted_count": 2,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 15,
     "processing": 0,
-    "queued": 32,
-    "sent": 81,
-    "sent_today": 0,
+    "queued": 30,
+    "sent": 83,
+    "sent_today": 2,
     "skipped": 7,
     "uncertain": 0,
     "usage_day": "2026-11-12"
   },
-  "queue_status": "enqueued",
-  "received_count": 2,
-  "report_generated_at": "2026-11-12T17:32:56.858126+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-11-12T18:33:10.787404+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7707331385089920276",
-    "7707330415266237717"
-  ],
-  "selected_source_distribution": {
-    "poppytv_ae": 1,
-    "smyxae": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@smyxae/video/7707331385089920276",
-    "https://www.tiktok.com/@poppytv_ae/video/7707330415266237717"
-  ],
-  "skipped_existing_count": 33
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 35
 }
