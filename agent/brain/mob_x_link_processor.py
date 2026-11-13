@@ -28,6 +28,7 @@ from agent.brain.cloud_state import CloudState
 from agent.brain.inspector import inspect_media
 from agent.brain.models import Candidate
 from agent.brain.mob_translation import translate_to_persian
+from agent.brain.mob_x_caption import build_mob_x_caption, clean_caption
 from scripts import subtitle_pipeline
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import StagedMedia
@@ -283,35 +284,6 @@ def parse_official_link(value: str) -> tuple[str, str] | None:
         return None
     external_id = match.group(1)
     return f"https://x.com/{HANDLE}/status/{external_id}", external_id
-
-
-def clean_caption(value: object, limit: int = 5000) -> str:
-    text = str(value or "").replace(chr(0), "").strip()
-    text = re.sub(r"https?://\S+", "", text)
-    text = text.replace(chr(96), "")
-    text = re.sub(r"[*_~]{1,3}", "", text)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()[:max(0, limit)]
-
-
-def _safe_markdown_body(value: object, limit: int = 4000) -> str:
-    """Keep caption content plain so source markup cannot inject Rubika metadata."""
-    body = clean_caption(value, limit)
-    body = body.replace("$", "＄")
-    return re.sub(r"(?m)^>", "›", body)
-
-
-def build_mob_x_caption(original_caption: object, translation: object = None) -> str:
-    """Format a media-backed official X post for Rubika bold and quote metadata."""
-    source = _safe_markdown_body(original_caption, 5000)
-    if not source:
-        return "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
-
-    heading = "**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**"
-    translated = _safe_markdown_body(translation, 4000)
-    if not translated:
-        return f"{heading}\n\n**{source}**"
-    return f"{heading}\n\n**{source}**\n\n$**ترجمه متن:**\n**{translated}**$"
 
 
 def build_owner_preview_caption(
