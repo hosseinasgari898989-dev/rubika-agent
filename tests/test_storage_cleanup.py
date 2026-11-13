@@ -116,6 +116,38 @@ class StorageCleanupTests(unittest.TestCase):
                 apply=True, min_age_hours=1, now=NOW,
             )
 
+    def test_explicitly_protected_item_and_shared_staging_file_are_never_deleted(self):
+        remote = "/Rubika-Agent/staging/mobx-7694421166508838165.mp4"
+        storage = FakeStorage(["mobx-7694421166508838165.mp4"])
+        state = {"items": {
+            "mob_x:7694421166508838165": record("sent", 96, remote),
+            "tiktok:shared-reference": record("sent", 96, remote),
+        }}
+
+        report = cleanup_stale_sent_media(storage, state, apply=True, now=NOW)
+
+        self.assertEqual(storage.deleted, [])
+        self.assertEqual(report["deleted_count"], 0)
+        self.assertIn("explicit_owner_protection", report["retained_counts_by_reason"])
+        self.assertEqual(
+            report["safety"]["explicitly_protected_item_ids"],
+            ["7694421166508838165"],
+        )
+
+    def test_explicitly_protected_id_in_ledger_record_also_protects_its_file(self):
+        remote = "/Rubika-Agent/staging/official-preserved.mp4"
+        protected = record("sent", 96, remote)
+        protected["external_id"] = "7694421166508838165"
+        storage = FakeStorage(["official-preserved.mp4"])
+
+        report = cleanup_stale_sent_media(
+            storage, {"legacy-key": protected}, apply=True, now=NOW
+        )
+
+        self.assertEqual(storage.deleted, [])
+        self.assertEqual(report["deleted_count"], 0)
+        self.assertIn("explicit_owner_protection", report["retained_counts_by_reason"])
+
     def test_invalid_ledger_fails_closed(self):
         storage = FakeStorage(["a.mp4"])
         with self.assertRaises(ValueError):
