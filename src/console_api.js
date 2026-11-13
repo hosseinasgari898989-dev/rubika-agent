@@ -559,6 +559,9 @@ export async function handleConsoleApi(request, env, h) {
     if (sub === "/jobs" && m === "GET") {
       const rawLimit = Number(url.searchParams.get("limit") || "20");
       const limit = Number.isInteger(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 20;
+      const rawOffset = Number(url.searchParams.get("offset") || "0");
+      if (!Number.isSafeInteger(rawOffset) || rawOffset < 0 || rawOffset > 1000000) return fail("invalid_job_offset", 400);
+      const offset = rawOffset;
       const jobType = text(url.searchParams.get("type"), 40);
       const jobStatus = text(url.searchParams.get("status"), 40);
       if (jobType && !jobTypes.has(jobType)) return fail("invalid_job_type", 400);
@@ -570,8 +573,8 @@ export async function handleConsoleApi(request, env, h) {
       const where = filters.length ? "WHERE " + filters.join(" AND ") + " " : "";
       const items = await all(
         "SELECT id, type, status, progress, result_json, error, panel_link_id, created_at, updated_at FROM console_jobs " +
-          where + "ORDER BY created_at DESC LIMIT ?",
-        ...args, limit,
+          where + "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        ...args, limit, offset,
       );
       return json({ ok: true, items: items.map((row) => ({
         id: row.id, type: row.type, status: row.status, progress: Number(row.progress || 0), panel_link_id: row.panel_link_id == null ? null : Number(row.panel_link_id),

@@ -248,6 +248,22 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("changed_count", workflow)
         self.assertNotIn("workflow_dispatch", workflow.split("jobs:", 1)[1])
 
+
+    def test_mob_x_terminal_media_cleanup_is_existing_schedule_and_unique_path_only(self):
+        workflow = (ROOT / ".github" / "workflows" / "mob-x-link-processor.yml").read_text(encoding="utf-8")
+        self.assertIn("cleanup-terminal-unique-media:", workflow)
+        self.assertIn("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'", workflow)
+        self.assertIn("secrets.AGENT_API_TOKEN", workflow)
+        self.assertIn("secrets.MEGA_EMAIL", workflow)
+        self.assertIn("secrets.MEGA_PASSWORD", workflow)
+        self.assertIn("python -m agent.brain.mob_x_media_cleanup", workflow)
+        cleanup = (ROOT / "agent" / "brain" / "mob_x_media_cleanup.py").read_text(encoding="utf-8")
+        self.assertIn("UNIQUE_OFFICIAL_KEY", cleanup)
+        self.assertIn('result.get("delivery_status") != "sent"', cleanup)
+        self.assertIn('TERMINAL_STATUSES = ("sent",)', cleanup)
+        self.assertNotIn('"POST"', cleanup)
+        self.assertNotIn("status=uncertain", cleanup)
+
 if __name__ == "__main__":
     unittest.main()
 

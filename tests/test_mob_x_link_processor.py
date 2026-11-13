@@ -23,6 +23,7 @@ from agent.brain.mob_x_link_processor import (
     run_video_speech_gate,
     probe_public_sources,
     select_media,
+    unique_mob_x_media_path,
     _safe_asr_diagnostics,
     WorkerClient,
 )
@@ -519,6 +520,21 @@ class MobXLinkParserTests(unittest.TestCase):
 
 
 class MobXSubtitleWiringTests(unittest.TestCase):
+
+    def test_unique_mob_x_media_path_is_post_scoped_and_preserves_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "mob_x_media.mp4"
+            source.write_bytes(b"the exact source media bytes")
+            first = unique_mob_x_media_path(source, POST_ID, directory, "video")
+            second = unique_mob_x_media_path(source, POST_ID, directory, "video")
+            other_post = unique_mob_x_media_path(source, "2107878755079213477", directory, "video")
+            self.assertRegex(first.name, rf"^mob_x_{POST_ID}_[a-f0-9]{{12}}\.mp4$")
+            self.assertEqual(first.name, second.name)
+            self.assertNotEqual(first.name, other_post.name)
+            self.assertEqual(first.read_bytes(), source.read_bytes())
+            self.assertEqual(other_post.read_bytes(), source.read_bytes())
+
+
     @staticmethod
     def _job():
         return {
@@ -609,6 +625,11 @@ class MobXSubtitleWiringTests(unittest.TestCase):
                                       side_effect=lambda text, **kwargs: events.append(("translate", text)) or "0|ترجمه 0"))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.evaluate_official_media",
                                       return_value=Mock(decision="eligible")))
+            stack.enter_context(patch(
+                "agent.brain.mob_x_link_processor.unique_mob_x_media_path",
+                side_effect=lambda source, external_id, directory, kind:
+                    Path(directory) / f"mob_x_{external_id}_{'a' * 12}{Path(source).suffix.lower()}",
+            ))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.upload_preview_media",
                                       side_effect=lambda token, path, kind: events.append(("rubika_upload", path)) or "file-id"))
             stack.enter_context(patch("agent.brain.mob_x_link_processor.send_owner_preview",
@@ -631,7 +652,8 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertLess(output_inspection_index, names.index("mega"))
         self.assertLess(names.index("mega"), names.index("rubika_upload"))
         self.assertLess(names.index("rubika_upload"), names.index("owner_preview"))
-        self.assertEqual(storage.upload.call_args.args, ("/tmp/subtitled.mp4", "official"))
+        self.assertEqual(storage.upload.call_args.args[1], "official")
+        self.assertRegex(Path(storage.upload.call_args.args[0]).name, rf"^mob_x_{POST_ID}_[a-f0-9]{{12}}\.mp4$")
         self.assertEqual(result["subtitle_processing"]["status"], "burned")
         self.assertEqual(result["subtitle_processing"]["missing"], 0)
         self.assertEqual(result["subtitle_processing"]["asr_model"], "small")
@@ -666,7 +688,8 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             {"decision": "skip", "reason": "no_speech", "language": None}
         )
         pipeline.assert_not_called()
-        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        self.assertEqual(storage.upload.call_args.args[1], "official")
+        self.assertRegex(Path(storage.upload.call_args.args[0]).name, rf"^mob_x_{POST_ID}_[a-f0-9]{{12}}\.mp4$")
         self.assertEqual(result["subtitle_processing"]["status"], "skipped_by_speech_gate")
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertIn("بدون زیرنویس: ویدیو گفتار ندارد", preview_caption)
@@ -702,7 +725,8 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(result["subtitle_processing"]["status"], "skipped_no_detectable_speech")
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertIn("بدون زیرنویس: گفتار تشخیص داده نشد (no_cues)", preview_caption)
-        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        self.assertEqual(storage.upload.call_args.args[1], "official")
+        self.assertRegex(Path(storage.upload.call_args.args[0]).name, rf"^mob_x_{POST_ID}_[a-f0-9]{{12}}\.mp4$")
         self.assertNotIn("no_cues", cloud.upsert_item.call_args.args[0]["caption"])
 
     def test_audio_decode_failed_stops_and_preserves_detail_for_owner_pv(self):
@@ -730,7 +754,8 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(result["subtitle_processing"],
                          {"status": "failed", "reason": "translation_incomplete"})
         # Original (unsubtitled) video is what gets stored and previewed.
-        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        self.assertEqual(storage.upload.call_args.args[1], "official")
+        self.assertRegex(Path(storage.upload.call_args.args[0]).name, rf"^mob_x_{POST_ID}_[a-f0-9]{{12}}\.mp4$")
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertIn("زیرنویس ناموفق (translation_incomplete)", preview_caption)
         self.assertNotIn("زیرنویس ناموفق", cloud.upsert_item.call_args.args[0]["caption"])
@@ -786,7 +811,8 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         self.assertEqual(diagnostics["asr_passes"][0]["chars"], 9)
         self.assertNotIn("transcript", repr(diagnostics))
         self.assertNotIn("must never be forwarded", repr(diagnostics))
-        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        self.assertEqual(storage.upload.call_args.args[1], "official")
+        self.assertRegex(Path(storage.upload.call_args.args[0]).name, rf"^mob_x_{POST_ID}_[a-f0-9]{{12}}\.mp4$")
 
     def test_unexpected_subtitle_exception_degrades_instead_of_failing_post(self):
         result, events, _pipeline, storage, _cloud, _t = self._run_video_job(
@@ -795,7 +821,8 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         )
         self.assertEqual(result["subtitle_processing"],
                          {"status": "failed", "reason": "processing_error"})
-        self.assertEqual(storage.upload.call_args.args, ("/tmp/source.mp4", "official"))
+        self.assertEqual(storage.upload.call_args.args[1], "official")
+        self.assertRegex(Path(storage.upload.call_args.args[0]).name, rf"^mob_x_{POST_ID}_[a-f0-9]{{12}}\.mp4$")
         preview_caption = next(event[1] for event in events if event[0] == "owner_preview")
         self.assertIn("زیرنویس ناموفق (processing_error)", preview_caption)
 
