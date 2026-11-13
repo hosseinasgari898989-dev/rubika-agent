@@ -60,6 +60,36 @@ const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString(
 const imported = await import(moduleUrl);
 const worker = imported.default;
 const panel = importedPanel;
+const panelSettings = await import(settingsModuleUrl);
+{
+  const queried = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        queried.push(sql);
+        return {
+          async first() {
+            return {
+              version: 9,
+              rules_json: JSON.stringify({
+                daily_success_cap: 4,
+                quiet_hours: { start: "02:15", end: "06:45", enabled: true },
+              }),
+            };
+          },
+        };
+      },
+    },
+  };
+  const screen = await panelSettings.settingsScreen(env);
+  assert.ok(screen.text.includes("تیک‌تاک: بدون سقف"));
+  assert.ok(screen.text.includes("Mob X: معاف از سقف و ساعت سکوت"));
+  assert.ok(screen.text.includes("02:15") && screen.text.includes("06:45"));
+  assert.ok(!screen.text.includes("سقف روزانه از 4") && !screen.text.includes("سقف روزانه از ۴"));
+  assert.ok(!screen.text.includes("سقف ارسال موفق امروز"));
+  assert.ok(!JSON.stringify(screen.rows).includes("p_set_cap_4"));
+  assert.deepEqual(queried, ["SELECT version, rules_json FROM console_rules WHERE id = 1"]);
+}
 
 class FakeStatement {
   constructor(db, sql) {
@@ -3848,7 +3878,9 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(textEdits.length, 6, "each settings button has loading and final text");
     assert.equal(keypadEdits.length, 6, "each settings button replaces loading and final keyboard");
     assert.equal(textEdits[0].payload.text, "⏳ در حال انجام…");
-    assert.equal(textEdits.at(-1).payload.text.includes("سقف ارسال موفق امروز"), true);
+    assert.equal(textEdits.at(-1).payload.text.includes("تیک‌تاک: بدون سقف"), true);
+    assert.equal(textEdits.at(-1).payload.text.includes("Mob X: معاف از سقف و ساعت سکوت"), true);
+    assert.equal(textEdits.at(-1).payload.text.includes("سقف ارسال موفق امروز"), false);
     assert.equal(textEdits.every(call => call.payload.message_id === "settings-panel-initial"), true);
     assert.equal(keypadEdits.every(call => call.payload.message_id === "settings-panel-initial"), true);
     assert.equal(state.DB.state.get("panel_mid"), "settings-panel-initial");

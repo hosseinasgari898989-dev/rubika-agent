@@ -217,7 +217,7 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
                 "mob_posts_per_run": 1, "freshness_hours": 24,
                 "ai_daily_limit_groq": 100, "ai_daily_limit_openrouter": 100,
                 "caption_max_chars": 500, "ai_provider_order": ["groq", "openrouter"],
-                "quiet_hours": {"start": "00:30", "end": "07:00", "enabled": True},
+                "quiet_hours": {"start": "02:15", "end": "06:45", "enabled": True},
                 "digest_window_utc": "07:05", "mob_since_cutoff": "2026-10-20T00:00:00Z",
                 "translate_enabled": True,
             },
@@ -772,7 +772,17 @@ def main() -> int:
             active_page[0] = "rules"
             try:
                 page.locator('#nav button[data-id="rules"]').click()
-                page.locator('#view button[data-a="pSet"]').first.click()
+                page.wait_for_function("() => document.querySelector('#view')?.innerText.includes('تیک‌تاک: بدون سقف')", timeout=5000)
+                rules_text = page.locator("#view").inner_text()
+                if "Mob X: معاف از سقف و ساعت سکوت" not in rules_text:
+                    failures.append("rules: Mob X exemption text is missing")
+                if "02:15" not in rules_text or "06:45" not in rules_text:
+                    failures.append("rules: quiet-hours values did not come from the mocked API response")
+                if "سقف موفق روزانه" in rules_text or "سقف ارسال موفق امروز" in rules_text or "سقف ۴" in rules_text:
+                    failures.append("rules: stale daily-cap display is still visible")
+                if page.locator("#view #r_daily_success_cap").count():
+                    failures.append("rules: stale daily-cap editor is still present")
+                page.locator("#view #r_daily_edit_count").fill("7")
                 click_action(page, '#view button[data-a="rSave"]', "save rules")
             except Exception as exc:
                 failures.append(f"rules: save action failed: {exc}")
