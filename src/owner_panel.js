@@ -526,7 +526,7 @@ const getState = async (env, k, d) => {
 async function nextPanelSeq(env) {
   const cache = env[PANEL_STATE_CACHE];
   cache?.delete("panel_seq");
-  const row = await env.DB.prepare
+  const row = await env.DB.prepare(
     "INSERT INTO panel_state(key,value,updated_at) VALUES('panel_seq','1',datetime('now')) " +
     "ON CONFLICT(key) DO UPDATE SET value = CAST(panel_state.value AS INTEGER) + 1, updated_at = datetime('now') RETURNING value",
   ).first();

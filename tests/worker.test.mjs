@@ -59,7 +59,7 @@ const source = originalSource
 
 // Test-only baseline Worker restores direct getState reads while keeping all other code identical.
 const getStateStart = panelSource.indexOf("const getState = async (env, k, d) => {");
-const getStateEnd = panelSource.indexOf("\\nasync function nextPanelSeq", getStateStart);
+const getStateEnd = panelSource.indexOf("\nasync function nextPanelSeq", getStateStart);
 assert.ok(getStateStart >= 0 && getStateEnd > getStateStart, "memoized getState section must be identifiable");
 const uncachedPanelSource = panelSource.slice(0, getStateStart) +
   'const getState = async (env, k, d) => (await env.DB.prepare("SELECT value FROM panel_state WHERE key=?").bind(k).first())?.value ?? d;' +
