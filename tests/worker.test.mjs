@@ -3515,7 +3515,7 @@ async function withDispatchFetch(responder, fn) {
     const keypadIndex = calls.findIndex(call => call.method === "editMessageKeypad");
     assert.equal(textIndex >= 0, true);
     assert.equal(keypadIndex > textIndex, true);
-    assert.equal(state.DB.state.get("panel_edit_ok"), "2");
+    assert.equal(state.DB.state.get("panel_edit_ok"), "1", "only the completed screen edit is counted; the loading edit is excluded");
     assert.equal(calls.filter(call => call.method === "editMessageText")[0].payload.text, "⏳ در حال انجام…");
   });
 }
