@@ -3878,7 +3878,9 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(textEdits.length, 6, "each settings button has loading and final text");
     assert.equal(keypadEdits.length, 6, "each settings button replaces loading and final keyboard");
     assert.equal(textEdits[0].payload.text, "⏳ در حال انجام…");
-    assert.equal(textEdits.at(-1).payload.text.includes("سقف ارسال موفق امروز"), true);
+    assert.equal(textEdits.at(-1).payload.text.includes("تیک‌تاک: بدون سقف"), true);
+    assert.equal(textEdits.at(-1).payload.text.includes("Mob X: معاف از سقف و ساعت سکوت"), true);
+    assert.equal(textEdits.at(-1).payload.text.includes("سقف ارسال موفق امروز"), false);
     assert.equal(textEdits.every(call => call.payload.message_id === "settings-panel-initial"), true);
     assert.equal(keypadEdits.every(call => call.payload.message_id === "settings-panel-initial"), true);
     assert.equal(state.DB.state.get("panel_mid"), "settings-panel-initial");
