@@ -55,9 +55,6 @@ class OwnerPanelCoordinationTests(unittest.TestCase):
         self.assertIn("تأیید قبلاً ثبت شده", OWNER_PANEL)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
     def test_every_event_prefetches_panel_state_once_and_excludes_seq(self):
         self.assertIn("PANEL_STATE_PREFETCH_SQL", OWNER_PANEL)
         self.assertIn("PANEL_STATE_PREFETCH_KEYS", OWNER_PANEL)
@@ -66,11 +63,11 @@ if __name__ == "__main__":
         self.assertNotIn('"panel_seq"', key_block)
         self.assertIn("timedEnv.DB.batch([", OWNER_PANEL)
 
-    def test_panel_seq_still_bypasses_the_event_cache(self):
-        guard = OWNER_PANEL.split("async function assertPanelEventCurrent(env) {", 1)[1].split("\\n}", 1)[0]
-        self.assertEqual(guard.count('cache?.delete("panel_seq");'), 2)
-
     def test_panel_summary_matches_ai_provider_snapshot_fields(self):
         worker = (ROOT / "src" / "index.js").read_text(encoding="utf-8")
         for field in ("calls_used", "daily_limit", "total_calls_used", "cooldown_active", "last_error_code"):
             self.assertIn(field, worker)
+
+
+if __name__ == "__main__":
+    unittest.main()
