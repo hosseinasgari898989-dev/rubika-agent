@@ -1,4 +1,4 @@
-"""Read-only D1 inventory + conservative MEGA cleanup for terminal Mob X media."""
+"""Read-only Worker inventory + conservative MEGA cleanup for receipt-confirmed Mob X sends."""
 from __future__ import annotations
 
 import argparse
@@ -14,13 +14,13 @@ from agent.storage.mega import MegaStorage
 UNIQUE_OFFICIAL_KEY = re.compile(
     r"^/Rubika-Agent/official/mob_x_[0-9]{15,22}_[a-f0-9]{12}\.(?:jpg|jpeg|png|webp|gif|mp4|m4v|mov|webm|mkv)$"
 )
-TERMINAL_STATUSES = ("sent", "rejected", "failed")
+TERMINAL_STATUSES = ("sent",)
 PAGE_SIZE = 100
 MAX_PAGES_PER_STATUS = 1000
 
 
 def eligible_terminal_media_key(job: object) -> str | None:
-    """Return a unique official key only when Worker records an unambiguous terminal state."""
+    """Return a unique official key only for a receipt-confirmed terminal send."""
     if not isinstance(job, dict) or job.get("type") != "mob_x_link":
         return None
     status = job.get("status")
@@ -31,12 +31,6 @@ def eligible_terminal_media_key(job: object) -> str | None:
         return None
     if status == "sent":
         if result.get("delivery_status") != "sent" or not str(result.get("rubika_message_id") or "").strip():
-            return None
-    else:
-        # Rejection and processing failure are safe only when the channel publisher was never attempted.
-        if result.get("publishing_attempted") is not False:
-            return None
-        if result.get("delivery_status") not in (None, "failed"):
             return None
     key = result.get("storage_key")
     if not isinstance(key, str) or not UNIQUE_OFFICIAL_KEY.fullmatch(key):
@@ -68,7 +62,7 @@ def _terminal_jobs(worker: Any, *, page_size: int = PAGE_SIZE) -> list[dict]:
 
 
 def cleanup_terminal_media(worker: Any, storage: Any, *, page_size: int = PAGE_SIZE) -> dict[str, int | str]:
-    """Delete only unique official media for terminal jobs; never write D1 or touch uncertain jobs."""
+    """Delete only unique official media after a confirmed send; never write D1 or touch recoverable jobs."""
     jobs = _terminal_jobs(worker, page_size=page_size)
     candidate_keys = sorted({key for job in jobs if (key := eligible_terminal_media_key(job))})
     existing_names = set(storage.list_directory("official"))
