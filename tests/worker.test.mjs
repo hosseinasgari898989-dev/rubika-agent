@@ -394,8 +394,10 @@ class FakeStatement {
         const status = this.values[valueIndex++];
         rows = rows.filter(row => row.status === status);
       }
-      const limit = this.values[valueIndex];
-      return { results: rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, limit).map(row => ({ ...row })) };
+      const limit = Number(this.values[valueIndex]);
+      const offset = Number(this.values[valueIndex + 1] || 0);
+      return { results: rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+        .slice(offset, offset + limit).map(row => ({ ...row })) };
     }
     return { results: [] };
   }
@@ -4631,6 +4633,25 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(response.status, 200);
   assert.deepEqual(response.body.items.map(item => item.id), ["job_mob_confirmed_1"]);
   assert.equal(response.body.items.every(item => item.type === "mob_x_link" && item.status === "confirmed"), true);
+  state.DB.consoleJobs.set("job_mob_sent_3", {
+    id: "job_mob_sent_3", type: "mob_x_link", status: "sent", progress: 100,
+    panel_link_id: null, created_at: "2026-03-01T00:00:00.000Z",
+    result_json: JSON.stringify({ delivery_status: "sent", rubika_message_id: "message-3" }),
+  });
+  state.DB.consoleJobs.set("job_mob_sent_4", {
+    id: "job_mob_sent_4", type: "mob_x_link", status: "sent", progress: 100,
+    panel_link_id: null, created_at: "2026-04-01T00:00:00.000Z",
+    result_json: JSON.stringify({ delivery_status: "sent", rubika_message_id: "message-4" }),
+  });
+  response = await read(await worker.fetch(
+    request("/api/console/jobs?type=mob_x_link&status=sent&limit=1&offset=1"), state
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].id, "job_mob_sent_3");
+  response = await read(await worker.fetch(request("/api/console/jobs?offset=-1"), state));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "invalid_job_offset");
   response = await read(await worker.fetch(request("/api/console/jobs?type=not_allowed&limit=5"), state));
   assert.equal(response.status, 400);
   assert.equal(response.body.error, "invalid_job_type");
