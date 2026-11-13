@@ -124,10 +124,10 @@ class MobTranslationTests(unittest.TestCase):
             "canonical_url": "https://mobentertainment.com/news/anniversary",
         }
         result = format_mob_post(item, translation_provider=lambda _: "پنج سال از فرار اولت از هاگی گذشته است.")
-        self.assertIn("🎮 ماب انترتینمنت پستی منتشر کرد و گفت:", result["caption"])
-        self.assertIn("Five years since you first ran from Huggy", result["caption"])
-        self.assertIn("📝 ترجمه فارسی:", result["caption"])
-        self.assertIn("پنج سال از فرار اولت از هاگی گذشته است.", result["caption"])
+        self.assertIn("**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**", result["caption"])
+        self.assertIn("**Five years since you first ran from Huggy", result["caption"])
+        self.assertIn("$**ترجمه متن:**", result["caption"])
+        self.assertIn("**پنج سال از فرار اولت از هاگی گذشته است.**$", result["caption"])
         self.assertNotIn("https://", result["caption"])
         self.assertEqual(result["source_url"], "https://mobentertainment.com/news/anniversary")
         self.assertEqual(result["translation_status"], "translated")
@@ -141,7 +141,7 @@ class MobTranslationTests(unittest.TestCase):
         self.assertEqual(result["translation_status"], "no_caption")
         self.assertNotIn("📝 ترجمه فارسی:", result["caption"])
         self.assertNotIn('""', result["caption"])
-        self.assertEqual(result["caption"], "")
+        self.assertEqual(result["caption"], "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**")
 
     def test_translation_provider_errors_do_not_crash_formatting(self):
         def broken(_):
@@ -172,8 +172,8 @@ class MobTranslationTests(unittest.TestCase):
         self.assertNotIn("www.", result["caption"])
         self.assertNotIn("mobentertainment.com", result["caption"])
         self.assertNotIn("example.com", result["caption"])
-        self.assertIn("🎮 ماب انترتینمنت پستی منتشر کرد و گفت:", result["caption"])
-        self.assertIn("📝 ترجمه فارسی:", result["caption"])
+        self.assertIn("**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**", result["caption"])
+        self.assertIn("$**ترجمه متن:**", result["caption"])
         self.assertEqual(result["source_url"], "https://mobentertainment.com/news/sample")
 
 

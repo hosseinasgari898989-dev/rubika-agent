@@ -185,7 +185,7 @@ def format_mob_post(
     if display_original:
         status = "translated" if display_translation else "unavailable"
     return {
-        "caption": build_mob_x_caption(original, translated),
+        "caption": build_mob_x_caption(display_original, display_translation),
         "original_caption": original or None,
         "persian_translation": translated,
         "translation_status": status,
