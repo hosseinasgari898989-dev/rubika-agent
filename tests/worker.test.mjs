@@ -85,7 +85,7 @@ const panelSettings = await import(settingsModuleUrl);
   assert.ok(screen.text.includes("تیک‌تاک: بدون سقف"));
   assert.ok(screen.text.includes("Mob X: معاف از سقف و ساعت سکوت"));
   assert.ok(screen.text.includes("02:15") && screen.text.includes("06:45"));
-  assert.ok(!screen.text.includes("4") && !screen.text.includes("۴"));
+  assert.ok(!screen.text.includes("سقف روزانه از 4") && !screen.text.includes("سقف روزانه از ۴"));
   assert.ok(!screen.text.includes("سقف ارسال موفق امروز"));
   assert.ok(!JSON.stringify(screen.rows).includes("p_set_cap_4"));
   assert.deepEqual(queried, ["SELECT version, rules_json FROM console_rules WHERE id = 1"]);
