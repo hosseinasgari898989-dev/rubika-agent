@@ -242,7 +242,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         cleanup = (ROOT / "agent" / "brain" / "mob_x_media_cleanup.py").read_text(encoding="utf-8")
         self.assertIn("UNIQUE_OFFICIAL_KEY", cleanup)
         self.assertIn('result.get("delivery_status") != "sent"', cleanup)
-        self.assertIn('result.get("publishing_attempted") is not False', cleanup)
+        self.assertIn('TERMINAL_STATUSES = ("sent",)', cleanup)
         self.assertNotIn('"POST"', cleanup)
         self.assertNotIn("status=uncertain", cleanup)
 
