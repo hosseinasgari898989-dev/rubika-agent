@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
                         "already_missing_count", "delete_failed_count", "d1_writes"):
                 if key in report:
                     stream.write(f"- {key}: {report[key]}\n")
-            stream.write("- uncertain/sending/ready_for_review: retained\n")
+            stream.write("- uncertain/sending/ready_for_review/failed/rejected: retained\n")
             stream.write("- legacy shared media names: retained\n")
     return 0 if report.get("status") == "ok" else 1
 
