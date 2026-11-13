@@ -298,7 +298,7 @@ V.rules=async()=>{
 const r=await api('/api/console/rules');
 RU={version:r.version,rules:r.rules||{}};
 const x=RU.rules,q=x.quiet_hours&&typeof x.quiet_hours==='object'?x.quiet_hours:{};
-const validTime=t=>typeof t==='string'&&/^([01]\\d|2[0-3]):[0-5]\\d$/.test(t);
+const validTime=t=>typeof t==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 const qs=validTime(q.start)?q.start:null,qe=validTime(q.end)?q.end:null;
 const quietStatus=q.enabled===true?'فعال':q.enabled===false?'غیرفعال':'وضعیت در config مشخص نیست';
 const quiet=qs&&qe?(q.enabled===true||q.enabled===false?quietStatus+' · ':'')+qs+' تا '+qe+' UTC':'در config ثبت نشده';
@@ -308,7 +308,6 @@ return card(`قوانین نسخهٔ ${N(r.version)}`,`<div class="s">تیک‌�
 A.rSave=async()=>{const rules={...RU.rules};for(const f of RF)rules[f[0]]=N(val('r_'+f[0]));rules.ai_provider_order=val('r_ord').split(',');rules.mob_since_cutoff=val('r_mob').trim();rules.translate_enabled=document.getElementById('r_tr').checked;
 try{await api('/api/console/rules',{method:'PUT',body:{base_version:RU.version,rules}});toast('ذخیره شد','ok')}catch(e){toast(em(e),'bad')}go('rules')};
 
-/* ---------- کانال‌ها ---------- */
 /* ---------- کانال‌ها ---------- */
 V.chan=async()=>{const r=await api('/api/console/channels');
 return card('افزودن کانال مقصد',`<div class="row"><div><label>شناسهٔ کانال</label><input id="c_i" dir="ltr" placeholder="@channel"></div><div><label>برچسب</label><input id="c_l"></div><div><label>نقش</label><select id="c_r">${opts(['test','production'])}</select></div><button class="btn" data-a="cAdd">افزودن</button></div><div class="s">کانال «تولید» همیشه غیرفعال ثبت می‌شود؛ انتشار فقط به کانال تست است.</div>`)+card('',tbl([['برچسب',x=>E(x.label)],['شناسه',x=>`<code>${E(x.rubika_channel_id)}</code>`],['نقش',x=>badge(x.role)],['فعال',x=>N(x.enabled)?badge('done').replace('انجام‌شد','فعال'):badge('skipped').replace('ردشده','غیرفعال')],['ساخت',x=>fmt(x.created_at)],['',x=>`<button class="btn r sm" data-a="cDel" data-id="${x.id}">حذف</button>`]],r.items||[]))};
@@ -358,7 +357,7 @@ V.rules=async()=>{
 const [r,ch]=await Promise.all([api('/api/console/rules'),safe('/api/console/channels')]);
 RU={version:r.version,rules:r.rules||{}};
 const x=RU.rules,q=x.quiet_hours&&typeof x.quiet_hours==='object'?x.quiet_hours:{};
-const validTime=t=>typeof t==='string'&&/^([01]\\d|2[0-3]):[0-5]\\d$/.test(t);
+const validTime=t=>typeof t==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 const qs=validTime(q.start)?q.start:null,qe=validTime(q.end)?q.end:null;
 const dg=validTime(x.digest_window_utc)?x.digest_window_utc:null;
 const quietStatus=q.enabled===true?'فعال':q.enabled===false?'غیرفعال':'وضعیت در config مشخص نیست';

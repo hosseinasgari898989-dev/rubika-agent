@@ -14,7 +14,7 @@ V.rules=async()=>{
 const [r,ch]=await Promise.all([api('/api/console/rules'),safe('/api/console/channels')]);
 RU={version:r.version,rules:r.rules||{}};
 const x=RU.rules,q=x.quiet_hours&&typeof x.quiet_hours==='object'?x.quiet_hours:{};
-const validTime=t=>typeof t==='string'&&/^([01]\\d|2[0-3]):[0-5]\\d$/.test(t);
+const validTime=t=>typeof t==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 const qs=validTime(q.start)?q.start:null,qe=validTime(q.end)?q.end:null;
 const dg=validTime(x.digest_window_utc)?x.digest_window_utc:null;
 const quietStatus=q.enabled===true?'فعال':q.enabled===false?'غیرفعال':'وضعیت در config مشخص نیست';

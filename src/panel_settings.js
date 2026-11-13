@@ -60,7 +60,7 @@ export async function applySettingsAction(env, id) {
 
 export async function settingsScreen(env, notice = "") {
   const current = await readRules(env);
-  if (!current) return { text: "⚙️ **تنظیمات انتشار**\\n\\nتنظیمات فعلاً در دسترس نیست.", rows: SETTINGS_ROWS };
+  if (!current) return { text: "⚙️ **تنظیمات انتشار**\n\nتنظیمات فعلاً در دسترس نیست.", rows: SETTINGS_ROWS };
   const { rules } = current;
   const q = rules.quiet_hours && typeof rules.quiet_hours === "object" ? rules.quiet_hours : {};
   const validTime = (value) => typeof value === "string" && TIME_RE.test(value);
@@ -78,5 +78,5 @@ export async function settingsScreen(env, notice = "") {
     "• ساعت سکوت ثبت‌شده برای تیک‌تاک: " + quietWindow,
     "• مقصد: **کانال تست** (کانال اصلی قفل است)",
   );
-  return { text: lines.join("\\n"), rows: SETTINGS_ROWS };
+  return { text: lines.join("\n"), rows: SETTINGS_ROWS };
 }
