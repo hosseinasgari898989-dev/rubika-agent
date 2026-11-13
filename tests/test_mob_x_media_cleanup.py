@@ -48,6 +48,8 @@ def job(job_id, status, key, **result):
 class MobXTerminalMediaCleanupTests(unittest.TestCase):
     SENT = "/Rubika-Agent/official/mob_x_2107878755079213476_0123456789ab.mp4"
     REJECTED = "/Rubika-Agent/official/mob_x_2107878755079213477_abcdef012345.jpg"
+    UNCERTAIN = "/Rubika-Agent/official/mob_x_2107878755079213478_222222222222.mp4"
+    FAILED = "/Rubika-Agent/official/mob_x_2107878755079213479_333333333333.mp4"
     LEGACY = "/Rubika-Agent/official/mob_x_media.mp4"
 
     def test_only_receipt_confirmed_sent_jobs_are_eligible(self):
@@ -94,10 +96,10 @@ class MobXTerminalMediaCleanupTests(unittest.TestCase):
                 job("job_rejected_0000001", "rejected", self.REJECTED, publishing_attempted=False),
             ],
             "failed": [
-                job("job_failed_try0001", "failed", self.SENT, publishing_attempted=False),
+                job("job_failed_try0001", "failed", self.FAILED, publishing_attempted=False),
             ],
         })
-        storage = FakeStorage([self.SENT.rsplit("/", 1)[-1], self.REJECTED.rsplit("/", 1)[-1], "mob_x_media.mp4"])
+        storage = FakeStorage([self.SENT.rsplit("/", 1)[-1], self.UNCERTAIN.rsplit("/", 1)[-1], self.REJECTED.rsplit("/", 1)[-1], "mob_x_media.mp4"])
         report = cleanup_terminal_media(worker, storage, page_size=2)
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["deleted_count"], 1)
