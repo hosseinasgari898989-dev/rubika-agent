@@ -60,7 +60,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Check optional agent API credential without exposing it
         id: agent_api_credential
@@ -228,6 +228,8 @@ jobs:
 
       - name: Validate report and push only the metadata report to the main branch
         id: push_report
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -270,7 +272,9 @@ jobs:
           }, sort_keys=True))
           PY
 
-          git fetch origin main
+          # Use the workflow token only on these host-side Git calls; never persist it.
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 --wrap=0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch origin main
           git merge --ff-only origin/main
           mkdir -p artifacts
           cp "$report" artifacts/termux_discovery.json
@@ -283,7 +287,7 @@ jobs:
             exit 2
           fi
           git commit -m "Update online Termux metadata discovery report"
-          git push origin HEAD:refs/heads/main
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin HEAD:refs/heads/main
           echo "report_pushed=true" >> "$GITHUB_OUTPUT"
 
       # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
