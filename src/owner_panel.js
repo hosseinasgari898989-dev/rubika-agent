@@ -1359,6 +1359,8 @@ async function processEvent(env, selfFetch, origin, ev) {
       botAuthored: ev.botAuthored === true,
     };
     timing.last_event_json = JSON.stringify(lastEvent);
+    // Keep the current event visible to same-event readers; persistence stays batched at event end.
+    timedEnv[PANEL_STATE_CACHE].set("last_event", timing.last_event_json);
     if (ev.botAuthored || !isPrivateChat(ev)) return;
     const key = ev.kind === "click"
       ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
