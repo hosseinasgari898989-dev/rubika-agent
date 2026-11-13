@@ -2117,8 +2117,11 @@ class PanelFakeStatement {
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("INSERT INTO panel_state")) {
-      this.db.state.set(this.values[0], String(this.values[1]));
-      return { meta: { changes: 1 } };
+      if (this.values.length % 2 !== 0) throw new Error("mock_panel_state_bindings_invalid");
+      for (let index = 0; index < this.values.length; index += 2) {
+        this.db.state.set(this.values[index], String(this.values[index + 1]));
+      }
+      return { meta: { changes: this.values.length / 2 } };
     }
     if (this.sql.startsWith("INSERT OR IGNORE INTO panel_owner")) {
       if (this.db.ownerChat) return { meta: { changes: 0 } };
