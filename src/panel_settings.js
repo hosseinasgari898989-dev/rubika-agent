@@ -11,8 +11,6 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const ACTION_RE = /^p_set_cap_(dec|inc|\d{1,2})$/;
 
 export const SETTINGS_ROWS = [
-  [["➖ ۱", "p_set_cap_dec"], ["➕ ۱", "p_set_cap_inc"]],
-  [["۴", "p_set_cap_4"], ["۷", "p_set_cap_7"], ["۱۰", "p_set_cap_10"]],
   [["🔄 تازه‌سازی", "p_set"], ["🏠 منوی اصلی", "p_home"]],
 ];
 
@@ -60,36 +58,25 @@ export async function applySettingsAction(env, id) {
   return "سقف روزانه از " + old + " به " + next + " تغییر کرد.";
 }
 
-async function sentToday(env) {
-  const dayStart = new Date();
-  dayStart.setUTCHours(0, 0, 0, 0);
-  try {
-    const row = await env.DB.prepare("SELECT COUNT(*) AS c FROM items WHERE status = 'sent' AND sent_at >= ?").bind(dayStart.toISOString()).first();
-    return Number(row && row.c) || 0;
-  } catch { return null; }
-}
-
 export async function settingsScreen(env, notice = "") {
   const current = await readRules(env);
-  if (!current) return { text: "⚙️ **تنظیمات انتشار**\n\nتنظیمات فعلاً در دسترس نیست.", rows: SETTINGS_ROWS.slice(2) };
+  if (!current) return { text: "⚙️ **تنظیمات انتشار**\\n\\nتنظیمات فعلاً در دسترس نیست.", rows: SETTINGS_ROWS };
   const { rules } = current;
-  const cap = capOf(rules);
-  const sent = await sentToday(env);
-  const q = rules.quiet_hours && typeof rules.quiet_hours === "object" ? rules.quiet_hours : null;
-  const quiet = q && TIME_RE.test(String(q.start || "")) && TIME_RE.test(String(q.end || ""))
-    ? "ساعت سکوت: " + q.start + " تا " + q.end + " UTC (تهران " + utcToTehran(q.start) + " تا " + utcToTehran(q.end) + ")"
-    : "ساعت سکوت: تنظیم نشده";
+  const q = rules.quiet_hours && typeof rules.quiet_hours === "object" ? rules.quiet_hours : {};
+  const validTime = (value) => typeof value === "string" && TIME_RE.test(value);
+  const quietStatus = q.enabled === true ? "فعال" : q.enabled === false ? "غیرفعال" : "وضعیت در config مشخص نیست";
+  const quietWindow = validTime(q.start) && validTime(q.end)
+    ? (q.enabled === true || q.enabled === false ? quietStatus + " · " : "") +
+      q.start + " تا " + q.end + " UTC (تهران " + utcToTehran(q.start) + " تا " + utcToTehran(q.end) + ")"
+    : "در config ثبت نشده";
   const lines = ["⚙️ **تنظیمات انتشار**"];
   if (notice) lines.push("", "✅ " + notice);
   lines.push(
     "",
-    "• سقف ارسال موفق امروز (فقط تیک‌تاک): **" + cap + "**",
-    "• ارسال‌شده امروز: " + (sent === null ? "نامشخص" : sent) + (sent === null ? "" : "، باقی‌مانده: " + Math.max(0, cap - sent)),
-    "• شروع روز بعد: ۰۳:۳۰ به وقت تهران",
-    "• " + quiet,
+    "• تیک‌تاک: بدون سقف",
+    "• Mob X: معاف از سقف و ساعت سکوت",
+    "• ساعت سکوت ثبت‌شده برای تیک‌تاک: " + quietWindow,
     "• مقصد: **کانال تست** (کانال اصلی قفل است)",
-    "",
-    "اگر سقف تیک‌تاک امروز پر شود، ویرایش‌های بعدی فردا ادامه پیدا می‌کنند؛ خبرهای Mob X معاف‌اند.",
   );
-  return { text: lines.join("\n"), rows: SETTINGS_ROWS };
+  return { text: lines.join("\\n"), rows: SETTINGS_ROWS };
 }
