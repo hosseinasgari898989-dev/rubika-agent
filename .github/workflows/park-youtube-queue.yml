@@ -1,0 +1,93 @@
+name: Park owner-approved YouTube queue rows
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Default true: list the exact 30 owner-approved IDs without changing D1."
+        required: true
+        type: boolean
+        default: true
+      confirm:
+        description: "Required true for a real run when dry_run is false."
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  park-youtube:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail closed without explicit apply confirmation
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$DRY_RUN" != "true" && "$CONFIRM" != "true" ]]; then
+            echo "::error::A real run requires both dry_run=false and confirm=true."
+            exit 2
+          fi
+
+      - name: Call the authenticated Worker endpoint
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 ]]; then
+            echo "::error::The existing AGENT_API_TOKEN secret is missing or invalid."
+            exit 2
+          fi
+          body="$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              "dry_run": os.environ.get("DRY_RUN", "true").lower() == "true",
+              "confirm": os.environ.get("CONFIRM", "false").lower() == "true",
+          }))
+          PY
+          )"
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 10 --max-time 60 \
+            --request POST \
+            --header "Authorization: Bearer $AGENT_API_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "$body" \
+            "https://rubika-agent.h98609294.workers.dev/api/brain/automation-queue/park-youtube" \
+            --output "$RUNNER_TEMP/youtube-park-result.json"
+          python - "$RUNNER_TEMP/youtube-park-result.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if result.get("ok") is not True:
+              raise SystemExit("youtube_park_request_not_confirmed")
+          expected = result.get("expected_count")
+          if expected != 30:
+              raise SystemExit("youtube_park_expected_count_mismatch")
+          if result.get("dry_run") is True:
+              print("DRY RUN — no D1 rows changed")
+              print("Matched IDs:", result.get("matched_count"))
+              for item in result.get("matched_ids", []):
+                  print(item)
+              if result.get("matched_count") != 30:
+                  print("Not queued or missing:", result.get("not_queued_or_missing_ids", []))
+          else:
+              if result.get("changed_count") != 30:
+                  raise SystemExit("youtube_park_changed_count_mismatch")
+              print("CONFIRMED — exactly 30 approved YouTube rows set to skipped.")
+              for item in result.get("changed_ids", []):
+                  print(item)
+          summary = __import__("os").environ["GITHUB_STEP_SUMMARY"]
+          with open(summary, "a", encoding="utf-8") as out:
+              out.write("## Owner-approved YouTube queue parking\n\n")
+              out.write(f"- Mode: {'dry-run' if result.get('dry_run') else 'confirmed apply'}\n")
+              out.write(f"- Expected: {expected}\n")
+              out.write(f"- Matched: {result.get('matched_count')}\n")
+              out.write(f"- Changed: {result.get('changed_count', 0)}\n")
+              out.write("- Rows deleted: 0\n")
+          PY
