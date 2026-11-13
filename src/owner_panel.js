@@ -280,10 +280,10 @@ export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, input
 }
 
 // ---------- Rubika Bot API (token never appears in errors/logs)
-async function rubika(env, method, payload) {
+async function rubika(env, method, payload, { skipFreshnessCheck = false } = {}) {
   const methodName = String(method || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "unknown";
   const timing = env && env[PANEL_TIMING];
-  if (method !== "deleteMessage") await assertPanelEventCurrent(env);
+  if (method !== "deleteMessage" && !skipFreshnessCheck) await assertPanelEventCurrent(env);
   if (timing) timing.rubika_calls += 1;
   let res;
   const requestStartedAt = performance.now();
@@ -311,7 +311,7 @@ async function rubika(env, method, payload) {
       : "http_" + res.status;
     throw new PanelError("rubika_" + methodName + "_" + statusCode);
   }
-  if (method !== "deleteMessage") {
+  if (method !== "deleteMessage" && !skipFreshnessCheck) {
     try {
       await assertPanelEventCurrent(env);
     } catch (error) {
@@ -369,7 +369,7 @@ async function bumpCounter(env, key) {
   await setState(env, key, next);
   return next;
 }
-async function edit(env, chat, mid, src, keypad) {
+async function edit(env, chat, mid, src, keypad, { countSuccess = true } = {}) {
   await assertPanelEventCurrent(env);
   const f = md(src);
   const storedMid = await getState(env, "panel_mid", "");
@@ -382,25 +382,27 @@ async function edit(env, chat, mid, src, keypad) {
     const updateKeypad = async () => {
       if (!hasKeypad) return;
       try {
-        await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad });
+        await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad }, { skipFreshnessCheck: true });
       } catch (firstKeypadError) {
         if (firstKeypadError instanceof StalePanelEvent) throw firstKeypadError;
         try {
           await assertPanelEventCurrent(env);
-          await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad });
+          await rubika(env, "editMessageKeypad", { chat_id: chat, message_id: targetMid, inline_keypad: keypad }, { skipFreshnessCheck: true });
         } catch (retryKeypadError) {
           throw retryKeypadError || firstKeypadError;
         }
       }
     };
-    const textPromise = rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base);
+    const textPromise = rubika(env, "editMessageText", f.metadata ? { ...base, metadata: f.metadata } : base, { skipFreshnessCheck: true });
     const results = await Promise.allSettled([textPromise, updateKeypad()]);
     const stale = results.find((result) => result.status === "rejected" && result.reason instanceof StalePanelEvent);
     if (stale) throw stale.reason;
     const failed = results.find((result) => result.status === "rejected");
     if (failed) throw failed.reason;
     await assertPanelEventCurrent(env);
-    try { await bumpCounter(env, "panel_edit_ok"); } catch { /* diagnostics must not block panel rendering */ }
+    if (countSuccess) {
+      try { await bumpCounter(env, "panel_edit_ok"); } catch { /* diagnostics must not block panel rendering */ }
+    }
     return targetMid;
   } catch (e) {
     if (e instanceof StalePanelEvent) throw e;
@@ -654,6 +656,22 @@ function messageAgeSeconds(messageTime, receivedAt) {
   const age = (receivedAt - messageMs) / 1000;
   return Number.isFinite(age) ? Math.round(age * 1000) / 1000 : null;
 }
+async function writePanelStateValues(env, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return;
+  const cache = env[PANEL_STATE_CACHE];
+  for (const [key] of entries) cache?.delete(key);
+  const placeholders = entries.map(() => "(?,?,datetime('now'))").join(", ");
+  const bindings = entries.flatMap(([key, value]) => [key, String(value)]);
+  try {
+    return await env.DB.prepare(
+      "INSERT INTO panel_state(key,value,updated_at) VALUES " + placeholders +
+      " ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at"
+    ).bind(...bindings).run();
+  } finally {
+    for (const [key] of entries) cache?.delete(key);
+  }
+}
+
 async function recordPanelTiming(env, timing, msgAge) {
   try {
     const raw = await getState(env, "last_timings", "[]");
@@ -687,7 +705,9 @@ async function recordPanelTiming(env, timing, msgAge) {
       external_calls: timing.external_calls,
       external_ms: timing.external_ms,
     };
-    await setState(env, "last_timings", JSON.stringify([...history, row].slice(-5)));
+    const writes = [["last_timings", JSON.stringify([...history, row].slice(-5))]];
+    if (typeof timing.last_event_json === "string") writes.unshift(["last_event", timing.last_event_json]);
+    await writePanelStateValues(env, writes);
   } catch { /* diagnostics must never break owner commands */ }
 }
 async function firstSeen(env, key) {
@@ -1338,7 +1358,7 @@ async function processEvent(env, selfFetch, origin, ev) {
       button: clean(ev.button, 60),
       botAuthored: ev.botAuthored === true,
     };
-    try { await setState(timedEnv, "last_event", JSON.stringify(lastEvent)); } catch { /* diagnostics must not block owner commands */ }
+    timing.last_event_json = JSON.stringify(lastEvent);
     if (ev.botAuthored || !isPrivateChat(ev)) return;
     const key = ev.kind === "click"
       ? "c|" + ev.chat + "|" + ev.mid + "|" + ev.button + "|" + Math.floor(Date.now() / 4000)
@@ -1389,13 +1409,13 @@ async function processEvent(env, selfFetch, origin, ev) {
           refreshId = "p_home";
         }
         if (currentPanelMid) {
-          await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB);
+          await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB, { countSuccess: false });
         }
         await render(ui, refreshId, { clickedMid: currentPanelMid });
         return;
       }
       if ((isMainPanelScreenClick(ev.button) || isMobJobAction || isCurrentMobPromptAction) && currentPanelMid) {
-        await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB);
+        await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB, { countSuccess: false });
       }
       await render(ui, ev.button, { clickedMid: ev.mid });
       return;

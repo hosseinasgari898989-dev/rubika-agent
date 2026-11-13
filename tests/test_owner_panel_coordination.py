@@ -69,5 +69,21 @@ class OwnerPanelCoordinationTests(unittest.TestCase):
             self.assertIn(field, worker)
 
 
+
+    def test_rubika_edit_calls_use_outer_freshness_guards_only(self):
+        edit = OWNER_PANEL.split("async function edit(env, chat, mid, src, keypad,", 1)[1].split("\\nconst MOB_TEMP_MID_KEY", 1)[0]
+        self.assertIn("await assertPanelEventCurrent(env);", edit)
+        self.assertIn("await Promise.allSettled([textPromise, updateKeypad()])", edit)
+        self.assertEqual(edit.count("skipFreshnessCheck: true"), 2)
+
+    def test_loading_edits_do_not_increment_success_counter(self):
+        self.assertEqual(OWNER_PANEL.count("{ countSuccess: false }"), 2)
+        self.assertIn("if (countSuccess)", OWNER_PANEL)
+
+    def test_event_diagnostics_are_written_with_one_panel_state_statement(self):
+        self.assertIn("async function writePanelStateValues(env, entries)", OWNER_PANEL)
+        self.assertIn('writes.unshift(["last_event", timing.last_event_json])', OWNER_PANEL)
+        self.assertNotIn('setState(timedEnv, "last_event"', OWNER_PANEL)
+
 if __name__ == "__main__":
     unittest.main()
