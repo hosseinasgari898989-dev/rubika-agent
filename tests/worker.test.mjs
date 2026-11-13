@@ -288,9 +288,10 @@ class FakeStatement {
         .filter(row => ids.has(row.id) && row.platform === "youtube" && row.status === "queued")
         .map(row => ({ id: row.id })).sort((a, b) => a.id.localeCompare(b.id)) };
     }
-    if (this.sql.startsWith("UPDATE automation_queue SET status = 'skipped'") &&
+    if (this.sql.startsWith("WITH candidates(id) AS MATERIALIZED") &&
+        this.sql.includes("UPDATE automation_queue SET status = 'skipped'") &&
         this.sql.includes("RETURNING id")) {
-      const ids = new Set(this.values.slice(0, 30));
+      const ids = new Set(this.values);
       const eligible = [...this.db.automationQueue.values()]
         .filter(row => ids.has(row.id) && row.platform === "youtube" && row.status === "queued");
       if (eligible.length !== 30) return { results: [] };

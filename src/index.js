@@ -1412,13 +1412,16 @@ async function parkOwnerApprovedYoutubeQueue(env, body) {
     // The same 30-ID predicate and count guard live inside this single UPDATE.
     // D1 commits all 30 changes or none; it never deletes rows or touches other platforms.
     const updateSql =
+      "WITH candidates(id) AS MATERIALIZED (" +
+      "SELECT id FROM automation_queue WHERE id IN (" + placeholders +
+      ") AND platform = 'youtube' AND status = 'queued'), " +
+      "eligible(id) AS (SELECT id FROM candidates WHERE (SELECT COUNT(*) FROM candidates) = 30) " +
       "UPDATE automation_queue SET status = 'skipped', " +
       "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
-      "WHERE id IN (" + placeholders + ") AND platform = 'youtube' AND status = 'queued' " +
-      "AND (SELECT COUNT(*) FROM automation_queue WHERE id IN (" + placeholders +
-      ") AND platform = 'youtube' AND status = 'queued') = 30 RETURNING id";
+      "WHERE id IN (SELECT id FROM eligible) AND platform = 'youtube' AND status = 'queued' " +
+      "RETURNING id";
     const changed = await env.DB.prepare(updateSql)
-      .bind(...YOUTUBE_PARKED_QUEUE_IDS, ...YOUTUBE_PARKED_QUEUE_IDS).all();
+      .bind(...YOUTUBE_PARKED_QUEUE_IDS).all();
     const changedIds = (changed.results || []).map(row => String(row.id));
     if (changedIds.length !== YOUTUBE_PARKED_QUEUE_IDS.length) {
       return json({
