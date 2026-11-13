@@ -89,7 +89,7 @@ class MobXTerminalMediaCleanupTests(unittest.TestCase):
             "sent": [
                 job("job_sent_00000001", "sent", self.SENT,
                     delivery_status="sent", rubika_message_id="message-1"),
-                job("job_sent_bad00001", "sent", self.SENT,
+                job("job_sent_bad00001", "sent", self.UNCERTAIN,
                     delivery_status="uncertain", rubika_message_id="message-bad"),
             ],
             "rejected": [
@@ -137,7 +137,7 @@ class MobXTerminalMediaCleanupTests(unittest.TestCase):
             "sent": [job("job_sent_00000001", "sent", self.SENT,
                 delivery_status="sent", rubika_message_id="message-1")],
             "rejected": [job("job_rejected_0000001", "rejected", self.REJECTED, publishing_attempted=False)],
-            "failed": [job("job_failed_try0001", "failed", self.SENT, publishing_attempted=False)],
+            "failed": [job("job_failed_try0001", "failed", self.FAILED, publishing_attempted=False)],
         })
         storage = FakeStorage([])
         report = cleanup_terminal_media(worker, storage)
