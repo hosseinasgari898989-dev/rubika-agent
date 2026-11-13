@@ -1933,6 +1933,15 @@ class PanelFakeStatement {
     if (this.sql.includes("SELECT chat_id FROM panel_owner WHERE id=1")) {
       return this.db.ownerChat ? { chat_id: this.db.ownerChat } : null;
     }
+    if (this.sql.includes("AS agent_json")) {
+      return {
+        agent_json: JSON.stringify({ enabled: 0, started_at: null, updated_at: null }),
+        item_counts_json: JSON.stringify([{ status: "ready", total: 2 }]),
+        recent_runs_json: JSON.stringify([]),
+        queue_counts_json: JSON.stringify({ queued: 2, sent: 1 }),
+        sent_today: 1,
+      };
+    }
     if (this.sql.includes("SELECT value FROM panel_state WHERE key=?")) {
       const value = this.db.state.get(this.values[0]);
       return value === undefined ? null : { value };
@@ -1982,6 +1991,12 @@ class PanelFakeStatement {
   async all() {
     this.db.recordQuery(this.sql);
     if (this.db.failPanelReads) throw new Error("mock_panel_read_failed");
+    if (this.sql.includes("FROM (SELECT 'groq' AS provider UNION ALL SELECT 'openrouter')")) {
+      return { results: ["groq", "openrouter"].map((provider) => ({
+        provider, calls_used: 2, total_calls_used: 3, cooldown_until: null,
+        state_error_code: null, latest_error_code: null,
+      })) };
+    }
     if (this.sql.includes("FROM panel_links WHERE status NOT IN")) {
       const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
       const limit = Number(this.values[0]) || 50;
@@ -2193,6 +2208,31 @@ class PanelFakeDB {
     if (statements.length && statements.every((statement) => /^SELECT\b/i.test(statement.sql.trim()))) {
       for (const statement of statements) this.recordQuery(statement.sql);
       if (this.failReadOnlyBatch) throw new Error("mock_d1_read_failure");
+      if (statements.length === 2 && statements[0].sql.includes("AS primary_owner") &&
+          statements[1].sql.includes("SELECT key, value FROM panel_state WHERE key IN")) {
+        const owner = [...this.consoleOwners.values()].find(row => row.chat_id === statements[0].values[0]);
+        return [
+          { results: [{ primary_owner: this.ownerChat, console_owner_id: owner?.id ?? null,
+            console_owner_role: owner?.role ?? null, console_owner_enabled: owner?.enabled ?? null }] },
+          { results: [...this.state.entries()].map(([key, value]) => ({ key, value }))
+            .filter(row => statements[1].values.includes(row.key)) },
+        ];
+      }
+      if (statements.length === 2 && statements[0].sql.includes("AS agent_json") &&
+          statements[1].sql.includes("FROM (SELECT 'groq' AS provider UNION ALL SELECT 'openrouter')")) {
+        return [
+          { results: [{
+            agent_json: JSON.stringify({ enabled: 0, started_at: null, updated_at: null }),
+            item_counts_json: JSON.stringify([{ status: "ready", total: 2 }]),
+            recent_runs_json: JSON.stringify([]),
+            queue_counts_json: JSON.stringify({ queued: 2, sent: 1 }), sent_today: 1,
+          }] },
+          { results: ["groq", "openrouter"].map(provider => ({
+            provider, calls_used: 2, total_calls_used: 3, cooldown_until: null,
+            state_error_code: null, latest_error_code: null,
+          })) },
+        ];
+      }
       return [
         { results: [{ queued: 2, failed: 1, sent_today: 3 }] },
         { results: [{ status: "success" }] },
@@ -2246,48 +2286,39 @@ async function postPanelUpdate(state, update, secret) {
 }
 
 
-// Query-count regression: dynamically identify the three highest-cost home-screen clicks.
+// Phase-two regression: improve the final #184 counts and cap each slow route at 15 D1 statements.
 {
   await withMockRubikaFetch(async () => {
-    const buttons = [
-      "p_home", "p_status", "p_digest", "p_qs", "p_runs", "p_errors", "p_ailog",
-      "p_queue", "p_ai", "p_report", "p_mob", "p_links", "p_jobs", "p_set", "p_help",
-    ];
-    const measure = async (workerInstance, button) => {
+    const phaseOne = { p_report: 43, p_ai: 37, p_status: 32 };
+    const measure = async button => {
       const state = panelEnv();
       state.DB.ownerChat = "b0actualowner";
       const panelMid = "query-count-panel-" + button;
       state.DB.state.set("panel_mid", panelMid);
       const secret = await panel.hookSecret(state);
       state.DB.resetQueryCount();
-      const response = await postPanelUpdateWithWorker(workerInstance, state, {
+      const response = await postPanelUpdate(state, {
         update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
           message_id: panelMid, chat_id: "b0actualowner", text: "",
           aux_data: { button_id: button },
         } },
       }, secret);
       assert.equal(response.status, 200, button + " click hook should be accepted");
+      assert.equal(state.DB.d1QueryLog.filter(sql =>
+        sql.includes("SELECT key, value FROM panel_state WHERE key IN")).length, 1,
+        button + " must prefetch panel_state once per event");
       return state.DB.d1QueryCount;
     };
-    const before = {};
     const after = {};
-    for (const button of buttons) {
-      before[button] = await measure(uncachedWorker, button);
-      after[button] = await measure(worker, button);
+    for (const button of ["p_report", "p_ai", "p_status"]) {
+      after[button] = await measure(button);
+      assert.ok(after[button] <= 15, button + " must use at most 15 D1 statements: " + after[button]);
+      assert.ok(after[button] < phaseOne[button], button + " must improve on phase one: " +
+        phaseOne[button] + " -> " + after[button]);
     }
-    const slowest = Object.entries(before).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([button]) => button);
-    const beforeTop = Object.fromEntries(slowest.map(button => [button, before[button]]));
-    const afterTop = Object.fromEntries(slowest.map(button => [button, after[button]]));
-    for (const button of slowest) {
-      assert.ok(after[button] < before[button],
-        button + " must issue fewer D1 statements: " + before[button] + " -> " + after[button]);
-    }
-    const saved = slowest.reduce((sum, button) => sum + before[button] - after[button], 0);
-    assert.ok(saved >= 3, "the three slowest click paths must save at least three D1 statements");
-    console.log("OWNER_PANEL_CLICK_D1_QUERY_COUNTS=" + JSON.stringify({ before: beforeTop, after: afterTop }));
+    console.log("OWNER_PANEL_CLICK_D1_QUERY_COUNTS=" + JSON.stringify({ before: phaseOne, after }));
   });
 }
-
 
 async function withDispatchFetch(responder, fn) {
   const originalFetch = globalThis.fetch;

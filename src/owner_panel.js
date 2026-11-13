@@ -13,7 +13,14 @@ const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgame
 const te = new TextEncoder();
 const PANEL_TIMING = Symbol("panel_timing");
 const PANEL_STATE_CACHE = Symbol("panel_state_cache");
+const PANEL_STATE_MISSING = Symbol("panel_state_missing");
 const PANEL_SEQ = Symbol("panel_seq");
+const PANEL_STATE_PREFETCH_KEYS = Object.freeze([
+  "panel_mid", "panel_mob_temp_mid", "mode", "panel_mob_edit_job_id",
+  "panel_mob_pending_link_id", "panel_links_clear_pending", "last_error",
+  "last_timings", "last_event", "panel_edit_ok", "panel_edit_fail",
+  "panel_stale_skip", "atomic_ok", "atomic_fail", "claim_fails",
+]);
 const elapsedMs = (startedAt) => Math.max(0, Math.round(performance.now() - startedAt));
 
 export class PanelError extends Error {
@@ -518,11 +525,31 @@ const sha256Hex = async (value) => {
 };
 const getState = async (env, k, d) => {
   const cache = env[PANEL_STATE_CACHE];
-  if (cache?.has(k)) return cache.get(k);
+  if (cache?.has(k)) {
+    const cached = cache.get(k);
+    return cached === PANEL_STATE_MISSING ? d : cached;
+  }
   const value = (await env.DB.prepare("SELECT value FROM panel_state WHERE key=?").bind(k).first())?.value ?? d;
   if (cache) cache.set(k, value);
   return value;
 };
+function primePanelStateCache(env, rows) {
+  const cache = env[PANEL_STATE_CACHE];
+  if (!cache) return;
+  const values = new Map((Array.isArray(rows) ? rows : [])
+    .filter((row) => row && typeof row.key === "string")
+    .map((row) => [row.key, row.value]));
+  for (const key of PANEL_STATE_PREFETCH_KEYS) {
+    cache.set(key, values.has(key) ? values.get(key) : PANEL_STATE_MISSING);
+  }
+}
+const PANEL_STATE_ACTOR_SQL =
+  "SELECT (SELECT chat_id FROM panel_owner WHERE id = 1) AS primary_owner, " +
+  "co.id AS console_owner_id, co.role AS console_owner_role, co.enabled AS console_owner_enabled " +
+  "FROM (SELECT 1) AS singleton LEFT JOIN console_owners co ON co.chat_id = ?";
+const PANEL_STATE_PREFETCH_SQL =
+  "SELECT key, value FROM panel_state WHERE key IN (" +
+  PANEL_STATE_PREFETCH_KEYS.map(() => "?").join(",") + ")";
 async function nextPanelSeq(env) {
   const cache = env[PANEL_STATE_CACHE];
   cache?.delete("panel_seq");
@@ -864,34 +891,34 @@ async function renderData(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const chat = ui.chat;
   const previousMid = await getState(env, "panel_mid", "");
   const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
-
-  if (id !== "p_report") {
-    let out;
-    if (id === "p_status") out = fmtStatus(await api(ui, "/api/status"));
-    else if (id === "p_queue") out = fmtQueue(await api(ui, "/api/brain/owner-console/queue-summary"));
-    else out = "🤖 **دفتر سهمیهٔ هوش مصنوعی**\n\n" + await aiBlock(ui);
-
-    if (fresh) return sendFreshPanel(ui, out, refreshKb(id), previousMid);
-    if (targetMid) return edit(env, chat, targetMid, out, refreshKb(id));
-    return send(env, chat, out, refreshKb(id));
+  const view = id === "p_report" ? "report" : id === "p_ai" ? "ai" : "status";
+  const payload = await api(ui, "/api/brain/owner-console/panel-summary?view=" + view);
+  const statusPayload = payload && payload.status;
+  const queuePayload = payload && payload.queue;
+  const providers = payload && payload.ai && payload.ai.providers || {};
+  let out;
+  if (id === "p_status") out = fmtStatus(statusPayload);
+  else if (id === "p_queue") out = fmtQueue(queuePayload);
+  else if (id === "p_ai") {
+    out = "🤖 **دفتر سهمیهٔ هوش مصنوعی**\n\n" +
+      ["groq", "openrouter"].map((provider) => fmtAi(provider, providers[provider])).join("\n\n");
+  } else {
+    out = [
+      "🧾 **گزارش Rubika-Agent**",
+      fmtStatus(statusPayload),
+      fmtQueue(queuePayload),
+      ["groq", "openrouter"].map((provider) => fmtAi(provider, providers[provider])).join("\n\n"),
+    ].join("\n\n");
   }
-
-  const [statusPayload, queuePayload, aiText] = await Promise.all([api(ui, "/api/status"), api(ui, "/api/brain/owner-console/queue-summary"), aiBlock(ui)]);
-  const report = [
-    "🧾 **گزارش Rubika-Agent**",
-    fmtStatus(statusPayload),
-    fmtQueue(queuePayload),
-    aiText,
-  ].join("\n\n");
-  if (fresh) return sendFreshPanel(ui, report, refreshKb(id), previousMid);
-  if (targetMid) return edit(env, chat, targetMid, report, refreshKb(id));
-  return send(env, chat, report, refreshKb(id));
+  if (fresh) return sendFreshPanel(ui, out, refreshKb(id), previousMid);
+  if (targetMid) return edit(env, chat, targetMid, out, refreshKb(id));
+  return send(env, chat, out, refreshKb(id));
 }
 
 async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const env = ui.env;
   const chat = ui.chat;
-  if (id !== "p_mob") await setState(env, "mode", "idle");
+  if (id !== "p_mob" && await getState(env, "mode", "idle") !== "idle") await setState(env, "mode", "idle");
 
   const mobAction = /^p_mob_(publish|edit|nocap|reject|manualconfirm)_(job_[A-Fa-f0-9]{8,80})$/.exec(id);
   if (mobAction || id === "p_mob_edit_cancel") {
@@ -1260,16 +1287,42 @@ async function processEvent(env, selfFetch, origin, ev) {
   };
   const receivedAt = Date.now();
   const timedEnv = withPanelTiming(env, timing);
-  const owner = await getOwner(timedEnv);
   if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev) && /^\/claim\s+\S{1,128}\s*$/.test(ev.text)) {
     await tryClaim(timedEnv, ev);
     return;
   }
+  let actor = null;
+  try {
+    const [actorResult, stateResult] = await timedEnv.DB.batch([
+      timedEnv.DB.prepare(PANEL_STATE_ACTOR_SQL).bind(ev.chat),
+      timedEnv.DB.prepare(PANEL_STATE_PREFETCH_SQL).bind(...PANEL_STATE_PREFETCH_KEYS),
+    ]);
+    const actorRow = actorResult && Array.isArray(actorResult.results) ? actorResult.results[0] : null;
+    const primaryOwner = actorRow && actorRow.primary_owner != null ? String(actorRow.primary_owner) : null;
+    const hasConsoleOwner = Boolean(actorRow && actorRow.console_owner_id != null);
+    const enabled = hasConsoleOwner && Number(actorRow.console_owner_enabled) === 1;
+    actor = {
+      primaryOwner,
+      hasAccess: hasConsoleOwner ? enabled : safeEqual(primaryOwner || "", ev.chat),
+      hasOwnerRole: hasConsoleOwner
+        ? enabled && actorRow.console_owner_role === "owner"
+        : safeEqual(primaryOwner || "", ev.chat),
+    };
+    primePanelStateCache(timedEnv, stateResult && stateResult.results);
+  } catch {
+    const primaryOwner = await getOwner(timedEnv);
+    actor = {
+      primaryOwner,
+      hasAccess: await hasOwnerAccess(timedEnv, ev.chat, primaryOwner),
+      hasOwnerRole: null,
+    };
+  }
+  const owner = actor.primaryOwner;
   if (!owner) {
     if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev)) await tryClaim(timedEnv, ev);
     return;
   }
-  if (!(await hasOwnerAccess(timedEnv, ev.chat, owner))) return;
+  if (!actor.hasAccess) return;
   try {
     await timedEnv.DB.prepare("UPDATE console_owners SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE chat_id = ? AND enabled = 1")
       .bind(ev.chat).run();
@@ -1303,7 +1356,10 @@ async function processEvent(env, selfFetch, origin, ev) {
       sensitiveFlowMode === "waiting_link" ||
       sensitiveFlowMode === "waiting_mob_caption_edit"
     );
-    if ((sensitiveCallback || sensitiveText) && !(await hasOwnerRole(timedEnv, ev.chat, owner))) {
+    const isOwner = actor.hasOwnerRole == null
+      ? await hasOwnerRole(timedEnv, ev.chat, owner)
+      : actor.hasOwnerRole;
+    if ((sensitiveCallback || sensitiveText) && !isOwner) {
       try {
         await rubika(timedEnv, "sendMessage", {
           chat_id: ev.chat,
