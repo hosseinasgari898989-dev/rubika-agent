@@ -6,11 +6,11 @@ import re
 
 def clean_caption(value: object, limit: int = 5000) -> str:
     text = str(value or "").replace(chr(0), "").strip()
-    text = re.sub(r"https?://\\S+", "", text)
+    text = re.sub(r"https?://\S+", "", text)
     text = text.replace(chr(96), "")
     text = re.sub(r"[*_~]{1,3}", "", text)
-    text = re.sub(r"[ \\t]+\\n", "\\n", text)
-    return re.sub(r"\\n{3,}", "\\n\\n", text).strip()[:max(0, limit)]
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()[:max(0, limit)]
 
 
 def _safe_markdown_body(value: object, limit: int = 4000) -> str:
@@ -29,5 +29,5 @@ def build_mob_x_caption(original_caption: object, translation: object = None) ->
     heading = "**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**"
     translated = _safe_markdown_body(translation, 4000)
     if not translated:
-        return f"{heading}\\n\\n**{source}**"
-    return f"{heading}\\n\\n**{source}**\\n\\n$**ترجمه متن:**\\n**{translated}**$"
+        return f"{heading}\n\n**{source}**"
+    return f"{heading}\n\n**{source}**\n\n$**ترجمه متن:**\n**{translated}**$"
