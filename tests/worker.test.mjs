@@ -3163,7 +3163,8 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(calls.some(call => call.method === "deleteMessage" && call.payload.message_id === "primary-panel-default-001"), false);
     assert.equal(state.DB.state.get("panel_mid"), "primary-panel-default-001");
     assert.equal(state.DB.state.has("panel_sync_mode"), false);
-    assert.equal(state.DB.state.get("panel_edit_ok"), "2");
+    // Only the final rendered screen increments panel_edit_ok; the loading edit is excluded.
+    assert.equal(state.DB.state.get("panel_edit_ok"), "1");
     assert.equal(state.DB.state.get("atomic_ok") || "0", "0");
     assert.equal(state.DB.state.get("atomic_fail") || "0", "0");
   });
