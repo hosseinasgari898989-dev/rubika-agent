@@ -56,6 +56,20 @@ const source = originalSource
   .replace(workerImport, `const { dispatchMobXWorkflow, handleOwnerPanel } = await import("${panelModuleUrl}");`)
   .replace(cronImport, `const { getLastWorkflowCronResult, runWorkflowCron } = await import("${cronModuleUrlForWorker}");`)
   .replace(consoleApiImport, `const { handleConsoleApi, corsPreflight, withCors } = await import("${consoleApiModuleUrl}");`);
+
+// Test-only baseline Worker restores direct getState reads while keeping all other code identical.
+const getStateStart = panelSource.indexOf("const getState = async (env, k, d) => {");
+const getStateEnd = panelSource.indexOf("\\nasync function nextPanelSeq", getStateStart);
+assert.ok(getStateStart >= 0 && getStateEnd > getStateStart, "memoized getState section must be identifiable");
+const uncachedPanelSource = panelSource.slice(0, getStateStart) +
+  'const getState = async (env, k, d) => (await env.DB.prepare("SELECT value FROM panel_state WHERE key=?").bind(k).first())?.value ?? d;' +
+  panelSource.slice(getStateEnd + 1);
+const uncachedPanelModuleUrl = dataModuleUrl(uncachedPanelSource);
+const uncachedSource = source.replace(panelModuleUrl, uncachedPanelModuleUrl);
+assert.notEqual(uncachedSource, source, "reference Worker must use uncached panel source");
+const uncachedModuleUrl = "data:text/javascript;base64," + Buffer.from(uncachedSource).toString("base64");
+const uncachedWorker = (await import(uncachedModuleUrl)).default;
+
 const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString("base64");
 const imported = await import(moduleUrl);
 const worker = imported.default;
@@ -1910,6 +1924,7 @@ class PanelFakeStatement {
   }
   bind(...values) { this.values = values; return this; }
   async first() {
+    this.db.recordQuery(this.sql);
     if (this.sql.startsWith("INSERT INTO panel_state") && this.sql.includes("RETURNING value")) {
       const next = Number(this.db.state.get("panel_seq") || 0) + 1;
       this.db.state.set("panel_seq", String(next));
@@ -1965,6 +1980,7 @@ class PanelFakeStatement {
     return null;
   }
   async all() {
+    this.db.recordQuery(this.sql);
     if (this.db.failPanelReads) throw new Error("mock_panel_read_failed");
     if (this.sql.includes("FROM panel_links WHERE status NOT IN")) {
       const active = new Set(["confirmed", "queued", "processing", "ready_for_review", "approved", "sending"]);
@@ -1978,6 +1994,7 @@ class PanelFakeStatement {
     return { results: [] };
   }
   async run() {
+    this.db.recordQuery(this.sql);
     if (this.sql.startsWith("UPDATE console_jobs SET params_json = ?")) {
       const [paramsJson, updatedAt, jobId] = this.values;
       const row = this.db.consoleJobs.get(jobId);
@@ -2137,6 +2154,8 @@ class PanelFakeStatement {
 }
 class PanelFakeDB {
   constructor() {
+    this.d1QueryCount = 0;
+    this.d1QueryLog = [];
     this.ownerChat = null;
     this.consoleRules = {
       version: 1,
@@ -2167,9 +2186,12 @@ class PanelFakeDB {
     this.failReadOnlyBatch = false;
     this.failPanelReads = false;
   }
+  recordQuery(sql) { this.d1QueryCount += 1; this.d1QueryLog.push(String(sql)); }
+  resetQueryCount() { this.d1QueryCount = 0; this.d1QueryLog = []; }
   prepare(sql) { return new PanelFakeStatement(this, sql); }
   async batch(statements) {
     if (statements.length && statements.every((statement) => /^SELECT\b/i.test(statement.sql.trim()))) {
+      for (const statement of statements) this.recordQuery(statement.sql);
       if (this.failReadOnlyBatch) throw new Error("mock_d1_read_failure");
       return [
         { results: [{ queued: 2, failed: 1, sent_today: 3 }] },
@@ -2209,15 +2231,61 @@ async function withMockRubikaFetch(fn, responder = null) {
   };
   try { await fn(calls); } finally { globalThis.fetch = originalFetch; }
 }
-async function postPanelUpdate(state, update, secret) {
+async function postPanelUpdateWithWorker(workerInstance, state, update, secret) {
   const pending = [];
   const ctx = { waitUntil(promise) { pending.push(promise); } };
-  const response = await worker.fetch(new Request(
+  const response = await workerInstance.fetch(new Request(
     "https://worker.test/panel/hook/" + secret + "/ReceiveUpdate",
     { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(update) }
   ), state, ctx);
   await Promise.all(pending);
   return response;
+}
+async function postPanelUpdate(state, update, secret) {
+  return postPanelUpdateWithWorker(worker, state, update, secret);
+}
+
+
+// Query-count regression: dynamically identify the three highest-cost home-screen clicks.
+{
+  await withMockRubikaFetch(async () => {
+    const buttons = [
+      "p_home", "p_status", "p_digest", "p_qs", "p_runs", "p_errors", "p_ailog",
+      "p_queue", "p_ai", "p_report", "p_mob", "p_links", "p_jobs", "p_set", "p_help",
+    ];
+    const measure = async (workerInstance, button) => {
+      const state = panelEnv();
+      state.DB.ownerChat = "b0actualowner";
+      const panelMid = "query-count-panel-" + button;
+      state.DB.state.set("panel_mid", panelMid);
+      const secret = await panel.hookSecret(state);
+      state.DB.resetQueryCount();
+      const response = await postPanelUpdateWithWorker(workerInstance, state, {
+        update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+          message_id: panelMid, chat_id: "b0actualowner", text: "",
+          aux_data: { button_id: button },
+        } },
+      }, secret);
+      assert.equal(response.status, 200, button + " click hook should be accepted");
+      return state.DB.d1QueryCount;
+    };
+    const before = {};
+    const after = {};
+    for (const button of buttons) {
+      before[button] = await measure(uncachedWorker, button);
+      after[button] = await measure(worker, button);
+    }
+    const slowest = Object.entries(before).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([button]) => button);
+    const beforeTop = Object.fromEntries(slowest.map(button => [button, before[button]]));
+    const afterTop = Object.fromEntries(slowest.map(button => [button, after[button]]));
+    for (const button of slowest) {
+      assert.ok(after[button] < before[button],
+        button + " must issue fewer D1 statements: " + before[button] + " -> " + after[button]);
+    }
+    const saved = slowest.reduce((sum, button) => sum + before[button] - after[button], 0);
+    assert.ok(saved >= 3, "the three slowest click paths must save at least three D1 statements");
+    console.log("OWNER_PANEL_CLICK_D1_QUERY_COUNTS=" + JSON.stringify({ before: beforeTop, after: afterTop }));
+  });
 }
 
 

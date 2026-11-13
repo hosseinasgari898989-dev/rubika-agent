@@ -12,6 +12,7 @@ const PRIVATE_TYPES = new Set(["private", "privatechat", "user", "userchat", "pe
 const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
 const te = new TextEncoder();
 const PANEL_TIMING = Symbol("panel_timing");
+const PANEL_STATE_CACHE = Symbol("panel_state_cache");
 const PANEL_SEQ = Symbol("panel_seq");
 const elapsedMs = (startedAt) => Math.max(0, Math.round(performance.now() - startedAt));
 
@@ -515,12 +516,21 @@ const sha256Hex = async (value) => {
   const digest = await crypto.subtle.digest("SHA-256", te.encode(value));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 };
-const getState = async (env, k, d) => (await env.DB.prepare("SELECT value FROM panel_state WHERE key=?").bind(k).first())?.value ?? d;
+const getState = async (env, k, d) => {
+  const cache = env[PANEL_STATE_CACHE];
+  if (cache?.has(k)) return cache.get(k);
+  const value = (await env.DB.prepare("SELECT value FROM panel_state WHERE key=?").bind(k).first())?.value ?? d;
+  if (cache) cache.set(k, value);
+  return value;
+};
 async function nextPanelSeq(env) {
-  const row = await env.DB.prepare(
+  const cache = env[PANEL_STATE_CACHE];
+  cache?.delete("panel_seq");
+  const row = await env.DB.prepare
     "INSERT INTO panel_state(key,value,updated_at) VALUES('panel_seq','1',datetime('now')) " +
     "ON CONFLICT(key) DO UPDATE SET value = CAST(panel_state.value AS INTEGER) + 1, updated_at = datetime('now') RETURNING value",
   ).first();
+  cache?.delete("panel_seq");
   const seq = Number(row && row.value);
   if (!Number.isSafeInteger(seq) || seq < 1) throw new PanelError("panel_seq_unavailable");
   return seq;
@@ -532,9 +542,29 @@ async function assertPanelEventCurrent(env) {
   try { await bumpCounter(env, "panel_stale_skip"); } catch { /* stale skip diagnostics are best effort */ }
   throw new StalePanelEvent();
 }
-const setState = (env, k, v) => env.DB.prepare(
-  "INSERT INTO panel_state(key,value,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-).bind(k, String(v)).run();
+const setState = async (env, k, v) => {
+  const cache = env[PANEL_STATE_CACHE];
+  cache?.delete(k);
+  try {
+    return await env.DB.prepare(
+      "INSERT INTO panel_state(key,value,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+    ).bind(k, String(v)).run();
+  } finally {
+    cache?.delete(k);
+  }
+};
+async function setStates(env, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+  const cache = env[PANEL_STATE_CACHE];
+  for (const [key] of entries) cache?.delete(key);
+  try {
+    return await env.DB.batch(entries.map(([key, value]) => env.DB.prepare(
+      "INSERT INTO panel_state(key,value,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+    ).bind(key, String(value))));
+  } finally {
+    for (const [key] of entries) cache?.delete(key);
+  }
+}
 
 function timedStatement(statement, timing) {
   return new Proxy(statement, {
@@ -560,6 +590,7 @@ function timedStatement(statement, timing) {
 function withPanelTiming(env, timing) {
   const scoped = Object.create(env);
   Object.defineProperty(scoped, PANEL_TIMING, { value: timing });
+  Object.defineProperty(scoped, PANEL_STATE_CACHE, { value: new Map() });
   if (env.DB) {
     const db = env.DB;
     Object.defineProperty(scoped, "DB", {
@@ -704,8 +735,7 @@ async function saveMobCaptionAndRefresh(ui, jobId, row, result, caption, {
   }
   delete nextResult.preview_message_id;
   if (clearEditMode) {
-    await setState(env, "mode", "idle");
-    await setState(env, "panel_mob_edit_job_id", "");
+    await setStates(env, [["mode", "idle"], ["panel_mob_edit_job_id", ""]]);
     await deleteMobTemp(env, chat);
   }
   const pendingJson = JSON.stringify(nextResult);
@@ -862,8 +892,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   const mobAction = /^p_mob_(publish|edit|nocap|reject|manualconfirm)_(job_[A-Fa-f0-9]{8,80})$/.exec(id);
   if (mobAction || id === "p_mob_edit_cancel") {
     if (id === "p_mob_edit_cancel") {
-      await setState(env, "mode", "idle");
-      await setState(env, "panel_mob_edit_job_id", "");
+      await setStates(env, [["mode", "idle"], ["panel_mob_edit_job_id", ""]]);
       await deleteMobTemp(env, chat, clickedMid);
       await updateMobMain(ui, "✏️ ویرایش کپشن لغو شد.", HOME_KB);
       return;
@@ -886,8 +915,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         await updateMobMain(ui, "این پیش‌نمایش دیگر قابل ویرایش نیست؛ وضعیت کار: " + esc(row.status), HOME_KB);
         return;
       }
-      await setState(env, "panel_mob_edit_job_id", jobId);
-      await setState(env, "mode", "waiting_mob_caption_edit");
+      await setStates(env, [["panel_mob_edit_job_id", jobId], ["mode", "waiting_mob_caption_edit"]]);
       await sendMobTemp(env, chat, "✏️ کپشن نهایی را به‌صورت متن ساده بفرست. پیش‌نمایش قبلی تا ثبت کپشن جدید معتبر می‌ماند.", kb([[["لغو ویرایش", "p_mob_edit_cancel"]]]));
       await updateMobMain(ui, "✅ درخواست ویرایش آماده است؛ کپشن را در پیام جداگانه بفرست.", HOME_KB);
       return;
@@ -1343,8 +1371,7 @@ async function processEvent(env, selfFetch, origin, ev) {
         "SELECT id, status, result_json FROM console_jobs WHERE id = ? AND type = 'mob_x_link'"
       ).bind(jobId).first();
       if (!row || row.status !== "ready_for_review") {
-        await setState(timedEnv, "mode", "idle");
-        await setState(timedEnv, "panel_mob_edit_job_id", "");
+        await setStates(timedEnv, [["mode", "idle"], ["panel_mob_edit_job_id", ""]]);
         await deleteMobTemp(timedEnv, ev.chat);
         await updateMobMain(ui, "این کار دیگر برای ویرایش باز نیست.", HOME_KB);
         return;
@@ -1352,8 +1379,7 @@ async function processEvent(env, selfFetch, origin, ev) {
       let result = {};
       try { result = row.result_json ? JSON.parse(row.result_json) : {}; } catch {}
       if (!result || typeof result !== "object" || Array.isArray(result) || !result.rubika_file_id) {
-        await setState(timedEnv, "mode", "idle");
-        await setState(timedEnv, "panel_mob_edit_job_id", "");
+        await setStates(timedEnv, [["mode", "idle"], ["panel_mob_edit_job_id", ""]]);
         await deleteMobTemp(timedEnv, ev.chat);
         await updateMobMain(ui, "فایل پیش‌نمایش در دسترس نیست؛ خطا: mob_x_preview_file_id_missing", HOME_KB);
         return;
@@ -1409,8 +1435,7 @@ async function processEvent(env, selfFetch, origin, ev) {
         await updateMobMain(ui, "این پست قبلاً ثبت شده است؛ وضعیت فعلی: " + esc(saved.status) + ".", HOME_KB);
         return;
       }
-      await setState(timedEnv, "panel_mob_pending_link_id", String(saved.id));
-      await setState(timedEnv, "mode", "idle");
+      await setStates(timedEnv, [["panel_mob_pending_link_id", String(saved.id)], ["mode", "idle"]]);
       const confirmKb = kb([[["✅ تأیید", "p_mob_confirm"], ["✖️ لغو", "p_mob_cancel"]]]);
       await sendMobTemp(timedEnv, ev.chat, "این لینک است؟\n" + saved.url, confirmKb);
       await updateMobMain(ui, "لینک دریافت شد؛ تأیید را در پیام جداگانه انجام بده.", HOME_KB);

@@ -29,6 +29,14 @@ class OwnerPanelCoordinationTests(unittest.TestCase):
         self.assertNotIn('parts.push("⏳ ۲ از ۳', OWNER_PANEL)
         self.assertNotIn('parts.push("⏳ ۳ از ۳', OWNER_PANEL)
 
+    def test_panel_state_cache_is_scoped_and_invalidated_on_writes(self):
+        self.assertIn('Symbol("panel_state_cache")', OWNER_PANEL)
+        self.assertIn("if (cache?.has(k)) return cache.get(k);", OWNER_PANEL)
+        self.assertIn("cache?.delete(k);", OWNER_PANEL)
+        self.assertIn("value: new Map()", OWNER_PANEL)
+        self.assertIn("async function setStates", OWNER_PANEL)
+        self.assertIn("env.DB.batch", OWNER_PANEL)
+
     def test_fresh_text_commands_refresh_screen_panels(self):
         self.assertIn('if (fresh && ["p_errors", "p_runs", "p_links", "p_digest"].includes(id)) return sendFreshPanel(ui, s.text, keypad, previousMid);', OWNER_PANEL)
 
