@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from agent.brain.mob_x_caption import build_mob_x_caption
+
 _CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "mob_translation_limits.json"
 try:
     _LIMITS = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
@@ -179,17 +181,11 @@ def format_mob_post(
 
     display_original = _strip_urls(original)
     display_translation = _strip_urls(translated or "")
-    lines: list[str] = []
     status = "no_caption"
     if display_original:
-        lines.extend(["🎮 ماب انترتینمنت پستی منتشر کرد و گفت:", "", display_original])
-        if display_translation:
-            lines.extend(["", "📝 ترجمه فارسی:", display_translation])
-            status = "translated"
-        else:
-            status = "unavailable"
+        status = "translated" if display_translation else "unavailable"
     return {
-        "caption": "\n".join(lines),
+        "caption": build_mob_x_caption(display_original, display_translation),
         "original_caption": original or None,
         "persian_translation": translated,
         "translation_status": status,

@@ -5,10 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent.brain.mob_translation import (
+    MAX_TRANSLATION_CHARS,
     _strip_urls,
     format_mob_post,
     translate_to_persian,
 )
+from agent.brain.mob_x_caption import build_mob_x_caption
 
 
 class MobTranslationTests(unittest.TestCase):
@@ -103,6 +105,35 @@ class MobTranslationTests(unittest.TestCase):
         self.assertNotIn("https://", formatted["caption"])
         self.assertEqual(formatted["source_url"], "https://example.com/news")
         self.assertIn("ماب انترتینمنت", formatted["caption"])
+
+    def test_automatic_and_owner_link_paths_use_identical_formatted_caption(self):
+        original = "🎮 Official Mob update with an emoji 😀. https://example.com/post"
+        translated = "ترجمهٔ فارسی با تأکید."
+        formatted = format_mob_post(
+            {
+                "original_caption": original,
+                "canonical_url": "https://example.com/post",
+                "source_name": "Mob Entertainment",
+            },
+            translation_provider=lambda _: translated,
+        )
+
+        self.assertEqual(formatted["caption"], build_mob_x_caption(original, translated))
+        self.assertIn("**ماب انترتینمنت در پیج خود پستی منتشر کرد و گفت:**", formatted["caption"])
+        self.assertIn("$**ترجمه متن:**", formatted["caption"])
+        self.assertIn("**ترجمهٔ فارسی با تأکید.**$", formatted["caption"])
+        self.assertIn("😀", formatted["caption"])
+        self.assertNotIn("https://", formatted["caption"])
+        self.assertEqual(formatted["translation_status"], "translated")
+
+    def test_automatic_caption_keeps_existing_translation_length_limit(self):
+        long_translation = "م" * (MAX_TRANSLATION_CHARS + 50)
+        formatted = format_mob_post(
+            {"original_caption": "Official caption"},
+            translation_provider=lambda _: long_translation,
+        )
+        self.assertEqual(len(formatted["persian_translation"]), MAX_TRANSLATION_CHARS)
+        self.assertIn("م" * MAX_TRANSLATION_CHARS, formatted["caption"])
 
     def test_url_stripping_does_not_return_empty_or_unrelated_script_as_valid_translation(self):
         self.assertEqual(_strip_urls("خبر رسمی https://example.com/news منتشر شد"), "خبر رسمی منتشر شد")

@@ -13,6 +13,8 @@ from agent.brain.mob_x_rubika import (
     send_uncertain_notice,
     upload_preview_media,
 )
+from agent.brain.mob_translation import format_mob_post
+from agent.brain.mob_x_caption import build_mob_x_caption
 
 
 class RubikaMediaMock:
@@ -81,6 +83,30 @@ class MobXRubikaTests(unittest.TestCase):
         self.assertEqual(payload["file_id"], "rubika-file-001")
         self.assertEqual(payload["text"], "کپشن ساده")
         self.assertIn("inline_keypad", payload)
+
+    def test_automatic_caption_matches_owner_link_and_sends_bold_quote_metadata(self):
+        original = "🎮 Official update 😀"
+        translated = "ترجمهٔ فارسی با تأکید"
+        automatic = format_mob_post(
+            {"original_caption": original},
+            translation_provider=lambda _: translated,
+        )["caption"]
+        owner_link = build_mob_x_caption(original, translated)
+        self.assertEqual(automatic, owner_link)
+
+        holder = {}
+        def factory(**kwargs):
+            holder["bot"] = RubikaMediaMock(**kwargs)
+            return holder["bot"]
+
+        send_test_channel_once(
+            "test-token", TEST_CHANNEL_FOR_TESTS, "rubika-file-001", automatic,
+            bot_factory=factory,
+        )
+        _, payload = holder["bot"]._post.call_args.args
+        self.assertIn("😀", payload["text"])
+        kinds = {part["type"] for part in payload["metadata"]["meta_data_parts"]}
+        self.assertTrue({"Bold", "Quote"}.issubset(kinds))
 
     def test_formatted_mob_x_caption_sends_native_bold_and_quote_metadata(self):
         from agent.brain.mob_x_link_processor import build_mob_x_caption
