@@ -3628,7 +3628,7 @@ async function withDispatchFetch(responder, fn) {
     assert.equal(textEdits.every(call => call.payload.message_id === "existing-live-status-4321"), true);
     assert.equal(keypadEdits.every(call => call.payload.message_id === "existing-live-status-4321"), true);
     assert.equal(state.DB.state.get("panel_mid"), "existing-live-status-4321");
-    assert.equal(state.DB.state.get("panel_edit_ok"), "2");
+    assert.equal(state.DB.state.get("panel_edit_ok"), "1", "loading edit is excluded from successful render count");
   });
 }
 
