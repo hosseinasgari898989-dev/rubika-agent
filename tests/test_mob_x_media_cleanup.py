@@ -14,10 +14,13 @@ class FakeWorker:
         self.calls.append((method, path, payload))
         from urllib.parse import parse_qs, urlparse
         query = parse_qs(urlparse(path).query)
-        status = query["status"][0]
         limit = int(query["limit"][0])
         offset = int(query["offset"][0])
-        rows = self.jobs_by_status.get(status, [])
+        status = query.get("status", [None])[0]
+        if status:
+            rows = self.jobs_by_status.get(status, [])
+        else:
+            rows = [row for group in self.jobs_by_status.values() for row in group]
         return {"ok": True, "items": rows[offset:offset + limit]}
 
 
@@ -103,17 +106,31 @@ class MobXTerminalMediaCleanupTests(unittest.TestCase):
         self.assertEqual(set(storage.deleted), {self.SENT})
         self.assertIn(self.REJECTED.rsplit("/", 1)[-1], storage.names)
         self.assertIn("mob_x_media.mp4", storage.names)
-        requested_statuses = {
-            path.split("status=", 1)[1].split("&", 1)[0]
-            for method, path, _payload in worker.calls
-            if method == "GET"
-        }
-        self.assertEqual(requested_statuses, {"sent"})
+        self.assertTrue(all("type=mob_x_link" in path for _method, path, _payload in worker.calls))
+        self.assertTrue(all("status=" not in path for _method, path, _payload in worker.calls))
         self.assertTrue(worker.calls)
         self.assertTrue(all(method == "GET" and payload is None for method, _path, payload in worker.calls))
         self.assertTrue(any("offset=0" in path for _method, path, _payload in worker.calls))
 
-    def test_missing_file_is_idempotent_and_no_uncertain_status_is_fetched(self):
+
+    def test_any_non_sent_job_reference_blocks_cleanup_for_the_same_unique_path(self):
+        worker = FakeWorker({
+            "sent": [job(
+                "job_sent_00000001", "sent", self.SENT,
+                delivery_status="sent", rubika_message_id="message-1",
+            )],
+            "uncertain": [job(
+                "job_uncertain_0000001", "uncertain", self.SENT,
+                delivery_status="uncertain", rubika_message_id="message-2",
+            )],
+        })
+        storage = FakeStorage([self.SENT.rsplit("/", 1)[-1]])
+        report = cleanup_terminal_media(worker, storage)
+        self.assertEqual(report["deleted_count"], 0)
+        self.assertEqual(storage.deleted, [])
+        self.assertIn(self.SENT.rsplit("/", 1)[-1], storage.names)
+
+    def test_missing_file_is_idempotent_and_nonterminal_rows_are_never_deleted(self):
         worker = FakeWorker({
             "sent": [job("job_sent_00000001", "sent", self.SENT,
                 delivery_status="sent", rubika_message_id="message-1")],
@@ -125,7 +142,7 @@ class MobXTerminalMediaCleanupTests(unittest.TestCase):
         self.assertEqual(report["deleted_count"], 0)
         self.assertEqual(report["already_missing_count"], 1)
         self.assertEqual(storage.deleted, [])
-        self.assertFalse(any("status=uncertain" in path for _m, path, _p in worker.calls))
+        self.assertTrue(all("status=" not in path for _m, path, _p in worker.calls))
 
 
 if __name__ == "__main__":
