@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -25,7 +26,7 @@ class FailedMediaHookTests(unittest.TestCase):
             CloudState=mock.Mock(return_value=cloud),
             fetch_public_post=mock.Mock(return_value={"text": "", "title": "", "published_at": None}),
             select_media=mock.Mock(return_value=("image", "https://pbs.twimg.com/x.jpg")),
-            download_public_media=mock.Mock(return_value=Path("/tmp/mob_x_media.jpg")),
+            download_public_media=mock.Mock(),
             inspect_media=mock.Mock(return_value=mock.Mock(ok=True, errors=[], duration_seconds=0, has_audio=False)),
             evaluate_official_media=mock.Mock(return_value=mock.Mock(decision="eligible")),
             upload_preview_media=mock.Mock(side_effect=preview_side_effect),
@@ -37,11 +38,16 @@ class FailedMediaHookTests(unittest.TestCase):
             env_values["MOB_X_TEST_FORCE_PREVIEW_FAIL"] = force_fail
         env = mock.patch.dict("os.environ", env_values, clear=True)
         err = None
-        with mock.patch.multiple(proc, **mocks), env:
-            try:
-                proc.process_job(JOB, client, storage=storage)
-            except proc.MobXLinkError as exc:
-                err = exc
+        # The post-scoped media key is derived from real downloaded bytes, so use a real temp file.
+        with tempfile.TemporaryDirectory() as media_dir:
+            source = Path(media_dir) / "mob_x_media.jpg"
+            source.write_bytes(b"valid fixture media bytes")
+            mocks["download_public_media"].return_value = source
+            with mock.patch.multiple(proc, **mocks), env:
+                try:
+                    proc.process_job(JOB, client, storage=storage)
+                except proc.MobXLinkError as exc:
+                    err = exc
         return err, mocks, client
 
     def test_preview_upload_failure_preserves_original_then_raises_same_error(self):

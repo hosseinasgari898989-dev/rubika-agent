@@ -14,6 +14,7 @@ import os
 import re
 import socket
 import subprocess
+import shutil
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -32,7 +33,7 @@ from agent.brain.mob_x_caption import build_mob_x_caption, clean_caption
 from scripts import subtitle_pipeline
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import StagedMedia
-from agent.storage.mega import MegaStorage
+from agent.storage.mega import MegaStorage, sha256_file
 from agent.brain.failed_media import preserve_failed_media
 from agent.brain.mob_x_rubika import (
     upload_preview_media, send_owner_preview, send_owner_translation_failure,
@@ -894,6 +895,36 @@ class WorkerClient:
         self.request("POST", f"/api/console/mob-x/jobs/{job_id}/preview", payload)
 
 
+
+MOB_X_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+MOB_X_VIDEO_SUFFIXES = {".mp4", ".m4v", ".mov", ".webm", ".mkv"}
+
+
+def unique_mob_x_media_path(source_path: str | Path, external_id: str, directory: str | Path,
+                            media_type: str) -> Path:
+    """Copy final bytes to a Mega-safe basename unique to the post ID and content hash."""
+    if not re.fullmatch(r"[0-9]{15,22}", str(external_id or "")):
+        raise MobXLinkError("mob_x_media_identity_invalid")
+    source = Path(source_path)
+    suffix = source.suffix.lower()
+    allowed = MOB_X_IMAGE_SUFFIXES if media_type == "image" else MOB_X_VIDEO_SUFFIXES if media_type == "video" else set()
+    if suffix not in allowed or not source.is_file() or source.stat().st_size <= 0:
+        raise MobXLinkError("mob_x_media_file_invalid")
+    try:
+        digest = sha256_file(source)
+    except OSError:
+        raise MobXLinkError("mob_x_media_hash_failed") from None
+    if not re.fullmatch(r"[a-f0-9]{64}", str(digest or "")):
+        raise MobXLinkError("mob_x_media_hash_invalid")
+    target = Path(directory) / f"mob_x_{external_id}_{digest[:12]}{suffix}"
+    try:
+        if source.resolve() != target.resolve():
+            shutil.copy2(source, target)
+    except OSError:
+        raise MobXLinkError("mob_x_media_copy_failed") from None
+    return target
+
+
 def process_job(job: dict, client: WorkerClient, *, session: requests.Session | None = None,
                 storage: MegaStorage | None = None) -> dict:
     job_id = str(job.get("id") or "")
@@ -1052,6 +1083,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         if evaluation.decision != "eligible":
             raise MobXLinkError("mob_x_media_validation_failed")
         selected_storage = storage or MegaStorage()
+        publish_path = str(unique_mob_x_media_path(publish_path, external_id, temp, media_type))
         storage_key = selected_storage.upload(publish_path, "official")
         rubika_token = os.getenv("RUBIKA_TOKEN", "")
         owner_chat_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "")
