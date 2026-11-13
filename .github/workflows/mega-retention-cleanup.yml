@@ -93,13 +93,13 @@ jobs:
               raise SystemExit("retention_report_not_dry_run")
           summary = os.environ["GITHUB_STEP_SUMMARY"]
           with open(summary, "a", encoding="utf-8") as out:
-              out.write("## MEGA retention inspection (dry-run only)\\n\\n")
-              out.write(f"- Status: {report.get('status')}\\n")
-              out.write(f"- Staging videos seen: {report.get('staging_video_files_seen')}\\n")
-              out.write(f"- Eligible files reported: {report.get('planned_delete_count')}\\n")
-              out.write(f"- Untracked files retained: {report.get('untracked_video_files_retained')}\\n")
-              out.write(f"- Protected owner item retained: {report.get('retained_counts_by_reason', {}).get('explicit_owner_protection', 0)}\\n")
-              out.write("- Deletions: 0 (dry-run only)\\n")
+              out.write("## MEGA retention inspection (dry-run only)\n\n")
+              out.write(f"- Status: {report.get('status')}\n")
+              out.write(f"- Staging videos seen: {report.get('staging_video_files_seen')}\n")
+              out.write(f"- Eligible files reported: {report.get('planned_delete_count')}\n")
+              out.write(f"- Untracked files retained: {report.get('untracked_video_files_retained')}\n")
+              out.write(f"- Protected owner item retained: {report.get('retained_counts_by_reason', {}).get('explicit_owner_protection', 0)}\n")
+              out.write("- Deletions: 0 (dry-run only)\n")
           PY
       - name: Upload dry-run report
         uses: actions/upload-artifact@v4
