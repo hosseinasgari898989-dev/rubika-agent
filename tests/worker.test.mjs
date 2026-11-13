@@ -2307,11 +2307,18 @@ async function postPanelUpdate(state, update, secret) {
       assert.equal(state.DB.d1QueryLog.filter(sql =>
         sql.includes("SELECT key, value FROM panel_state WHERE key IN")).length, 1,
         button + " must prefetch panel_state once per event");
+      stateQueryLogByButton[button] = state.DB.d1QueryLog.slice();
       return state.DB.d1QueryCount;
     };
     const after = {};
+    const stateQueryLogByButton = {};
     for (const button of ["p_report", "p_ai", "p_status"]) {
       after[button] = await measure(button);
+      if (after[button] > 15) {
+        console.error("OWNER_PANEL_PHASE2_QUERY_DIAGNOSTIC=" + JSON.stringify({
+          button, count: after[button], queries: stateQueryLogByButton[button],
+        }));
+      }
       assert.ok(after[button] <= 15, button + " must use at most 15 D1 statements: " + after[button]);
       assert.ok(after[button] < phaseOne[button], button + " must improve on phase one: " +
         phaseOne[button] + " -> " + after[button]);

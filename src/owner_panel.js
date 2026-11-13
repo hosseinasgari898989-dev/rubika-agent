@@ -738,7 +738,7 @@ async function api(ui, path) {
   } catch { return { ok: false }; }
   finally { if (timing) timing.worker_api_ms += elapsedMs(startedAt); }
 }
-const aiBlock = async (ui) => (await Promise.all(["groq", "openrouter"].map(async (p) => fmtAi(p, await api(ui, `/api/brain/ai-provider/status?provider=${p}`))))).join("\n\n");
+
 
 function mobPreviewKeypad(jobId) {
   return kb([
