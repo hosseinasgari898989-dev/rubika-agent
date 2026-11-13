@@ -537,7 +537,11 @@ async function nextPanelSeq(env) {
 }
 async function assertPanelEventCurrent(env) {
   if (typeof env[PANEL_SEQ] !== "number") return;
+  // This guard must bypass the event cache so interleaved clicks see the latest sequence.
+  const cache = env[PANEL_STATE_CACHE];
+  cache?.delete("panel_seq");
   const current = Number(await getState(env, "panel_seq", "0"));
+  cache?.delete("panel_seq");
   if (current === env[PANEL_SEQ]) return;
   try { await bumpCounter(env, "panel_stale_skip"); } catch { /* stale skip diagnostics are best effort */ }
   throw new StalePanelEvent();

@@ -37,6 +37,10 @@ class OwnerPanelCoordinationTests(unittest.TestCase):
         self.assertIn("async function setStates", OWNER_PANEL)
         self.assertIn("env.DB.batch", OWNER_PANEL)
 
+    def test_panel_sequence_guard_bypasses_event_cache(self):
+        guard = OWNER_PANEL.split("async function assertPanelEventCurrent(env) {", 1)[1].split("\\n}", 1)[0]
+        self.assertEqual(guard.count('cache?.delete("panel_seq");'), 2)
+
     def test_fresh_text_commands_refresh_screen_panels(self):
         self.assertIn('if (fresh && ["p_errors", "p_runs", "p_links", "p_digest"].includes(id)) return sendFreshPanel(ui, s.text, keypad, previousMid);', OWNER_PANEL)
 
