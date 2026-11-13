@@ -286,7 +286,7 @@ class FakeStatement {
       const ids = new Set(this.values);
       return { results: [...this.db.automationQueue.values()]
         .filter(row => ids.has(row.id) && row.platform === "youtube" && row.status === "queued")
-        .map(row => ({ id: row.id })).sort((a, b) => a.id.localeCompare(b.id)) };
+        .map(row => ({ id: row.id })).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0) };
     }
     if (this.sql.startsWith("WITH candidates(id) AS MATERIALIZED") &&
         this.sql.includes("UPDATE automation_queue SET status = 'skipped'") &&
