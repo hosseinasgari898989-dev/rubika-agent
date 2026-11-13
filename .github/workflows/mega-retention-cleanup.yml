@@ -1,0 +1,114 @@
+name: Mega retention cleanup (dry-run only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Required: inspect eligible staging files without deleting anything."
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mega-retention-cleanup-dry-run
+  cancel-in-progress: false
+
+jobs:
+  require-dry-run:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Reject any non-dry-run request
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ "$DRY_RUN" != "true" ]]; then
+            echo "::error::Only dry_run=true is supported; no files were changed."
+            exit 2
+          fi
+
+  audit:
+    needs: require-dry-run
+    if: ${{ inputs.dry_run == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Check MEGA credentials without printing them
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          if [[ -z "$MEGA_EMAIL" || -z "$MEGA_PASSWORD" ]]; then
+            echo "::error::MEGA credentials are missing; no storage operation was run."
+            exit 2
+          fi
+      - name: Install official MEGAcmd
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/megacmd-xUbuntu_24.04_amd64.deb"
+          curl --fail --silent --show-error --location \
+            "https://mega.nz/linux/repo/xUbuntu_24.04/amd64/megacmd-xUbuntu_24.04_amd64.deb" \
+            --output "$package"
+          sudo apt-get update
+          sudo apt-get install --yes "$package"
+          command -v mega-login
+          command -v mega-ls
+      - name: Log in to MEGA without printing account details
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          mega-whoami >/dev/null
+          echo "MEGA session verified."
+      - name: Run report-only retention inspection
+        run: |
+          set -euo pipefail
+          python -m agent.brain.storage_cleanup \
+            --min-age-hours 24 \
+            --max-delete 25 \
+            --output-report "$RUNNER_TEMP/mega-retention-dry-run.json"
+      - name: Add sanitized summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["RUNNER_TEMP"] + "/mega-retention-dry-run.json").read_text())
+          if report.get("mode") != "dry_run" or report.get("deleted_count") != 0:
+              raise SystemExit("retention_report_not_dry_run")
+          summary = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary, "a", encoding="utf-8") as out:
+              out.write("## MEGA retention inspection (dry-run only)\n\n")
+              out.write(f"- Status: {report.get('status')}\n")
+              out.write(f"- Staging videos seen: {report.get('staging_video_files_seen')}\n")
+              out.write(f"- Eligible files reported: {report.get('planned_delete_count')}\n")
+              out.write(f"- Untracked files retained: {report.get('untracked_video_files_retained')}\n")
+              out.write(f"- Protected owner item retained: {report.get('retained_counts_by_reason', {}).get('explicit_owner_protection', 0)}\n")
+              out.write("- Deletions: 0 (dry-run only)\n")
+          PY
+      - name: Upload dry-run report
+        uses: actions/upload-artifact@v4
+        with:
+          name: mega-retention-dry-run
+          path: ${{ runner.temp }}/mega-retention-dry-run.json
+          if-no-files-found: error
+      - name: Log out and stop MEGAcmd
+        if: always()
+        run: |
+          mega-logout >/dev/null 2>&1 || true
+          mega-quit >/dev/null 2>&1 || true

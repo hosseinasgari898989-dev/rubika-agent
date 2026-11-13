@@ -20,6 +20,7 @@ from agent.storage.mega import MegaStorage
 VIDEO_SUFFIXES = {".mp4", ".m4v", ".mov", ".webm"}
 DEFAULT_MIN_AGE_HOURS = 24
 DEFAULT_MAX_DELETE = 25
+PROTECTED_ITEM_IDS = frozenset({"7694421166508838165"})
 
 
 def _utc(value: datetime | None = None) -> datetime:
@@ -58,6 +59,20 @@ def _staging_media_key(storage: Any, value: Any) -> tuple[str, str] | None:
     return value, path.name
 
 
+def _is_explicitly_protected(item_key: Any, item: Mapping[str, Any]) -> bool:
+    """Recognize the one owner-protected item across ledger ID/path fields."""
+    candidates = [str(item_key or "")]
+    for field in ("id", "item_id", "external_id", "job_id", "storage_key"):
+        value = item.get(field)
+        if value is not None:
+            candidates.append(str(value))
+    return any(
+        protected_id in candidate
+        for protected_id in PROTECTED_ITEM_IDS
+        for candidate in candidates
+    )
+
+
 def cleanup_stale_sent_media(
     storage: Any,
     state: Mapping[str, Any],
@@ -80,8 +95,9 @@ def cleanup_stale_sent_media(
     items = state["items"]
     references: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     all_referenced_names: set[str] = set()
+    explicitly_protected_paths: set[str] = set()
 
-    for item in items.values():
+    for item_key, item in items.items():
         if not isinstance(item, Mapping):
             continue
         parsed_key = _staging_media_key(storage, item.get("storage_key"))
@@ -90,6 +106,8 @@ def cleanup_stale_sent_media(
         remote_path, basename = parsed_key
         references[remote_path].append(item)
         all_referenced_names.add(basename)
+        if _is_explicitly_protected(item_key, item):
+            explicitly_protected_paths.add(remote_path)
 
     # If MEGA's listing fails, the caller raises and no deletion is attempted.
     listed_names = set(storage.list_directory("staging"))
@@ -103,6 +121,9 @@ def cleanup_stale_sent_media(
     eligible_paths: list[str] = []
     for remote_path, records in references.items():
         basename = PurePosixPath(remote_path).name
+        if remote_path in explicitly_protected_paths:
+            reasons["explicit_owner_protection"] += 1
+            continue
         if basename not in existing_video_names:
             reasons["already_missing"] += 1
             continue
@@ -163,6 +184,7 @@ def cleanup_stale_sent_media(
             "protects_failed_and_uncertain_items": True,
             "protects_state_and_all_non_media_files": True,
             "untracked_files_retained": True,
+            "explicitly_protected_item_ids": sorted(PROTECTED_ITEM_IDS),
             "ledger_snapshots_modified": False,
         },
     }
