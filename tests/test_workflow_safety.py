@@ -164,6 +164,21 @@ class WorkflowSafetyTests(unittest.TestCase):
             with self.subTest(retired=retired):
                 self.assertFalse((workflows / retired).exists())
 
+    def test_mega_retention_workflow_is_dry_run_only(self):
+        workflow = (ROOT / ".github" / "workflows" / "mega-retention-cleanup.yml").read_text(encoding="utf-8")
+        trigger = workflow.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", trigger)
+        self.assertIn("default: true", trigger)
+        self.assertNotIn("\\n  push:\\n", trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertIn("inputs.dry_run == true", workflow)
+        self.assertIn("Only dry_run=true is supported", workflow)
+        self.assertIn("python -m agent.brain.storage_cleanup", workflow)
+        self.assertIn("--min-age-hours 24", workflow)
+        self.assertIn("--max-delete 25", workflow)
+        self.assertNotIn("--apply", workflow)
+        self.assertNotIn("mega-rm", workflow)
+
     def test_legacy_phone_termux_entrypoints_are_removed(self):
         self.assertFalse((ROOT / "termux" / "bootstrap.sh").exists())
         self.assertFalse((ROOT / "termux" / "daily.sh").exists())
