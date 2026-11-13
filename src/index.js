@@ -1244,6 +1244,39 @@ async function finishCodeAiProviderCall(env, body) {
   }
 }
 
+const YOUTUBE_PARKED_QUEUE_IDS = Object.freeze([
+  "youtube:agamsFTZh6s",
+  "youtube:0MD7Nk2WyaI",
+  "youtube:WrfEe3QY_YU",
+  "youtube:XttN2HoNXa8",
+  "youtube:jlEAp1HK5o4",
+  "youtube:kRH-RoP5stk",
+  "youtube:DM5MIUwcBGo",
+  "youtube:GvnZKPIjfSk",
+  "youtube:WB0lrwUYVt0",
+  "youtube:flIbd1yobH4",
+  "youtube:vgEXCkjClnw",
+  "youtube:5VcR0MBISiY",
+  "youtube:DmTbveAWV2k",
+  "youtube:IQfGNIBExOY",
+  "youtube:JzbtA0ken-Y",
+  "youtube:clFsKUSEKmQ",
+  "youtube:5Wy0Mftm-js",
+  "youtube:8cR5Z0x4nwg",
+  "youtube:b-t0t5NSxFo",
+  "youtube:g6Ss6MN6eBs",
+  "youtube:yfEPN8jWLDE",
+  "youtube:Xiaeg-BSZe8",
+  "youtube:iSf2GI1Sd-Q",
+  "youtube:sZ6SvR9OxK0",
+  "youtube:zSUIhgve6gY",
+  "youtube:0Ml2dBsP2Xk",
+  "youtube:EmlbH0Rom8U",
+  "youtube:IN0Wb7u43mQ",
+  "youtube:fyzLV_lL2aM",
+  "youtube:SOjI2Tg8yfA"
+]);
+
 const QUEUE_PLATFORMS = new Set(["tiktok"]);
 const QUEUE_STATUSES = new Set(["queued", "processing", "sent", "failed", "uncertain", "skipped"]);
 
@@ -1329,6 +1362,82 @@ async function automationQueueIngest(env, body) {
     });
   } catch {
     return json({ ok: false, error: "queue_ingest_failed" }, 500);
+  }
+}
+
+
+
+async function parkOwnerApprovedYoutubeQueue(env, body) {
+  if (!isObject(body) || Object.keys(body).some(key => !["dry_run", "confirm"].includes(key))) {
+    return json({ ok: false, error: "youtube_park_fields_invalid" }, 400);
+  }
+  const dryRun = body.dry_run === undefined ? true : body.dry_run;
+  const confirm = body.confirm === true;
+  if (typeof dryRun !== "boolean" || (body.confirm !== undefined && typeof body.confirm !== "boolean")) {
+    return json({ ok: false, error: "youtube_park_confirmation_invalid" }, 400);
+  }
+  if (!dryRun && !confirm) {
+    return json({ ok: false, error: "confirm_true_required" }, 400);
+  }
+
+  const placeholders = YOUTUBE_PARKED_QUEUE_IDS.map(() => "?").join(", ");
+  const selectSql =
+    "SELECT id FROM automation_queue WHERE id IN (" + placeholders +
+    ") AND platform = 'youtube' AND status = 'queued' ORDER BY id";
+  try {
+    const selected = await env.DB.prepare(selectSql).bind(...YOUTUBE_PARKED_QUEUE_IDS).all();
+    const matchedIds = (selected.results || []).map(row => String(row.id));
+    const matchedSet = new Set(matchedIds);
+    const notEligibleIds = YOUTUBE_PARKED_QUEUE_IDS.filter(id => !matchedSet.has(id));
+    if (dryRun) {
+      return json({
+        ok: true, dry_run: true,
+        expected_count: YOUTUBE_PARKED_QUEUE_IDS.length,
+        matched_count: matchedIds.length,
+        matched_ids: matchedIds,
+        not_queued_or_missing_ids: notEligibleIds,
+        changed_count: 0,
+      });
+    }
+    if (matchedIds.length !== YOUTUBE_PARKED_QUEUE_IDS.length) {
+      return json({
+        ok: false, error: "youtube_park_expected_30_queued_rows",
+        dry_run: false, expected_count: YOUTUBE_PARKED_QUEUE_IDS.length,
+        matched_count: matchedIds.length, matched_ids: matchedIds,
+        not_queued_or_missing_ids: notEligibleIds, changed_count: 0,
+        no_change: true,
+      }, 409);
+    }
+
+    // The same 30-ID predicate and count guard live inside this single UPDATE.
+    // D1 commits all 30 changes or none; it never deletes rows or touches other platforms.
+    const updateSql =
+      "WITH candidates(id) AS MATERIALIZED (" +
+      "SELECT id FROM automation_queue WHERE id IN (" + placeholders +
+      ") AND platform = 'youtube' AND status = 'queued'), " +
+      "eligible(id) AS (SELECT id FROM candidates WHERE (SELECT COUNT(*) FROM candidates) = 30) " +
+      "UPDATE automation_queue SET status = 'skipped', " +
+      "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
+      "WHERE id IN (SELECT id FROM eligible) AND platform = 'youtube' AND status = 'queued' " +
+      "RETURNING id";
+    const changed = await env.DB.prepare(updateSql)
+      .bind(...YOUTUBE_PARKED_QUEUE_IDS).all();
+    const changedIds = (changed.results || []).map(row => String(row.id));
+    if (changedIds.length !== YOUTUBE_PARKED_QUEUE_IDS.length) {
+      return json({
+        ok: false, error: "youtube_park_atomic_update_did_not_change_30",
+        dry_run: false, expected_count: YOUTUBE_PARKED_QUEUE_IDS.length,
+        changed_count: changedIds.length, changed_ids: changedIds,
+        no_change: changedIds.length === 0,
+      }, 409);
+    }
+    return json({
+      ok: true, dry_run: false, expected_count: YOUTUBE_PARKED_QUEUE_IDS.length,
+      matched_count: matchedIds.length, changed_count: changedIds.length,
+      changed_ids: changedIds,
+    });
+  } catch {
+    return json({ ok: false, error: "youtube_park_queue_update_failed" }, 503);
   }
 }
 
@@ -1486,6 +1595,12 @@ async function route(request, env, ctx) {
       const parsedQueue = await readJson(request);
       if (!parsedQueue.ok) return json({ ok: false, error: parsedQueue.error }, parsedQueue.status);
       return automationQueueIngest(env, parsedQueue.value);
+    }
+    if (path === "/api/brain/automation-queue/park-youtube") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedPark = await readJson(request);
+      if (!parsedPark.ok) return json({ ok: false, error: parsedPark.error }, parsedPark.status);
+      return parkOwnerApprovedYoutubeQueue(env, parsedPark.value);
     }
     const queueStateMatch = /^\/api\/brain\/automation-queue\/([^/]+)\/state$/.exec(path);
     if (queueStateMatch && request.method === "POST") {

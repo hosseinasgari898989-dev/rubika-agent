@@ -280,6 +280,27 @@ class FakeStatement {
     return null;
   }
   async all() {
+    if (this.sql.includes("FROM automation_queue WHERE id IN") &&
+        this.sql.includes("platform = 'youtube'") && this.sql.includes("status = 'queued'") &&
+        this.sql.startsWith("SELECT id")) {
+      const ids = new Set(this.values);
+      return { results: [...this.db.automationQueue.values()]
+        .filter(row => ids.has(row.id) && row.platform === "youtube" && row.status === "queued")
+        .map(row => ({ id: row.id })).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0) };
+    }
+    if (this.sql.startsWith("WITH candidates(id) AS MATERIALIZED") &&
+        this.sql.includes("UPDATE automation_queue SET status = 'skipped'") &&
+        this.sql.includes("RETURNING id")) {
+      const ids = new Set(this.values);
+      const eligible = [...this.db.automationQueue.values()]
+        .filter(row => ids.has(row.id) && row.platform === "youtube" && row.status === "queued");
+      if (eligible.length !== 30) return { results: [] };
+      for (const row of eligible) {
+        row.status = "skipped";
+        row.updated_at = "2026-11-14T00:00:00.000Z";
+      }
+      return { results: eligible.map(row => ({ id: row.id })).sort((a, b) => a.id.localeCompare(b.id)) };
+    }
     if (this.sql.includes("FROM failed_media WHERE source <> 'tiktok'") && this.sql.includes("ORDER BY created_at DESC")) {
       const [limit, offset] = this.values;
       const rows = [...this.db.failedMedia.values()]
@@ -1592,6 +1613,117 @@ for (const [label, canonicalUrl] of [
   }), env()));
   assert.equal(response.status, 200);
 }
+// Owner-approved YouTube park endpoint is dry-run by default and atomically skips exactly the fixed 30 rows.
+{
+  const ids = [
+    "youtube:agamsFTZh6s",
+    "youtube:0MD7Nk2WyaI",
+    "youtube:WrfEe3QY_YU",
+    "youtube:XttN2HoNXa8",
+    "youtube:jlEAp1HK5o4",
+    "youtube:kRH-RoP5stk",
+    "youtube:DM5MIUwcBGo",
+    "youtube:GvnZKPIjfSk",
+    "youtube:WB0lrwUYVt0",
+    "youtube:flIbd1yobH4",
+    "youtube:vgEXCkjClnw",
+    "youtube:5VcR0MBISiY",
+    "youtube:DmTbveAWV2k",
+    "youtube:IQfGNIBExOY",
+    "youtube:JzbtA0ken-Y",
+    "youtube:clFsKUSEKmQ",
+    "youtube:5Wy0Mftm-js",
+    "youtube:8cR5Z0x4nwg",
+    "youtube:b-t0t5NSxFo",
+    "youtube:g6Ss6MN6eBs",
+    "youtube:yfEPN8jWLDE",
+    "youtube:Xiaeg-BSZe8",
+    "youtube:iSf2GI1Sd-Q",
+    "youtube:sZ6SvR9OxK0",
+    "youtube:zSUIhgve6gY",
+    "youtube:0Ml2dBsP2Xk",
+    "youtube:EmlbH0Rom8U",
+    "youtube:IN0Wb7u43mQ",
+    "youtube:fyzLV_lL2aM",
+    "youtube:SOjI2Tg8yfA"
+  ];
+  const seed = (state, overrides = {}) => {
+    for (const id of ids) {
+      const row = { id, platform: "youtube", external_id: id.slice("youtube:".length), status: "queued", updated_at: "old" };
+      Object.assign(row, overrides[id] || {});
+      state.DB.automationQueue.set(id, row);
+    }
+    state.DB.automationQueue.set("youtube:not-approved-extra", {
+      id: "youtube:not-approved-extra", platform: "youtube", external_id: "not-approved-extra",
+      status: "queued", updated_at: "old",
+    });
+    state.DB.automationQueue.set("tiktok:unrelated", {
+      id: "tiktok:unrelated", platform: "tiktok", external_id: "unrelated",
+      status: "queued", updated_at: "old",
+    });
+  };
+
+  const dryState = env();
+  seed(dryState);
+  let response = await read(await worker.fetch(request("/api/brain/automation-queue/park-youtube", {
+    method: "POST", body: {},
+  }), dryState));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.dry_run, true);
+  assert.equal(response.body.expected_count, 30);
+  assert.equal(response.body.matched_count, 30);
+  assert.deepEqual(response.body.matched_ids, ids.slice().sort());
+  assert.equal(response.body.changed_count, 0);
+  assert.equal([...dryState.DB.automationQueue.values()].filter(row => row.status === "skipped").length, 0,
+    "default dry-run must not write");
+
+  response = await read(await worker.fetch(request("/api/brain/automation-queue/park-youtube", {
+    method: "POST", body: { dry_run: false },
+  }), dryState));
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "confirm_true_required");
+  assert.equal([...dryState.DB.automationQueue.values()].filter(row => row.status === "skipped").length, 0);
+
+  const shortState = env();
+  seed(shortState, { [ids[7]]: { status: "failed" } });
+  response = await read(await worker.fetch(request("/api/brain/automation-queue/park-youtube", {
+    method: "POST", body: { dry_run: false, confirm: true },
+  }), shortState));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.changed_count, 0);
+  assert.equal(response.body.no_change, true);
+  assert.equal(shortState.DB.automationQueue.get(ids[7]).status, "failed");
+  assert.equal([...shortState.DB.automationQueue.values()].filter(row => ids.includes(row.id) && row.status === "skipped").length, 0,
+    "one non-queued ID must abort without changing any of the 30");
+
+  const wrongPlatformState = env();
+  seed(wrongPlatformState, { [ids[0]]: { platform: "tiktok" } });
+  response = await read(await worker.fetch(request("/api/brain/automation-queue/park-youtube", {
+    method: "POST", body: { dry_run: false, confirm: true },
+  }), wrongPlatformState));
+  assert.equal(response.status, 409);
+  assert.equal(response.body.changed_count, 0);
+  assert.equal(wrongPlatformState.DB.automationQueue.get(ids[0]).platform, "tiktok");
+  assert.equal([...wrongPlatformState.DB.automationQueue.values()].filter(row => ids.includes(row.id) && row.status === "skipped").length, 0);
+
+  const applyState = env();
+  seed(applyState);
+  response = await read(await worker.fetch(request("/api/brain/automation-queue/park-youtube", {
+    method: "POST", body: { dry_run: false, confirm: true },
+  }), applyState));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.dry_run, false);
+  assert.equal(response.body.expected_count, 30);
+  assert.equal(response.body.matched_count, 30);
+  assert.equal(response.body.changed_count, 30);
+  for (const id of ids) {
+    assert.equal(applyState.DB.automationQueue.get(id).status, "skipped", id);
+  }
+  assert.equal(applyState.DB.automationQueue.get("youtube:not-approved-extra").status, "queued");
+  assert.equal(applyState.DB.automationQueue.get("tiktok:unrelated").status, "queued");
+  assert.equal(applyState.DB.automationQueue.size, 32, "the park path never deletes rows");
+}
+
 {
   const state = env();
   const valid = {

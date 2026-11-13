@@ -230,5 +230,24 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("cloud discovery report", workflow)
 
 
+
+    def test_youtube_park_workflow_is_manual_fail_closed_and_uses_only_existing_token(self):
+        workflow = (ROOT / ".github" / "workflows" / "park-youtube-queue.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("\\n  schedule:", workflow)
+        self.assertNotIn("\\n  push:", workflow)
+        self.assertIn("default: true", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("inputs.dry_run", workflow)
+        self.assertIn("inputs.confirm", workflow)
+        self.assertIn("secrets.AGENT_API_TOKEN", workflow)
+        self.assertNotIn("secrets.MEGA", workflow)
+        self.assertIn("/api/brain/automation-queue/park-youtube", workflow)
+        self.assertIn("dry_run=false", workflow)
+        self.assertIn("confirm=true", workflow)
+        self.assertIn("changed_count", workflow)
+        self.assertNotIn("workflow_dispatch", workflow.split("jobs:", 1)[1])
+
 if __name__ == "__main__":
     unittest.main()
+
