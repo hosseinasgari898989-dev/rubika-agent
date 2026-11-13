@@ -141,7 +141,7 @@ class StorageCleanupTests(unittest.TestCase):
         storage = FakeStorage(["official-preserved.mp4"])
 
         report = cleanup_stale_sent_media(
-            storage, {"legacy-key": protected}, apply=True, now=NOW
+            storage, {"items": {"legacy-key": protected}}, apply=True, now=NOW
         )
 
         self.assertEqual(storage.deleted, [])
