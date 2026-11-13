@@ -23,15 +23,21 @@ class OwnerPanelCoordinationTests(unittest.TestCase):
         self.assertIn('"panel_stale_skip"', OWNER_PANEL)
         self.assertIn("panel_seq", OWNER_PANEL)
 
-    def test_report_fetches_components_in_parallel_without_progress_edits(self):
-        self.assertIn("Promise.all([api(ui, \"/api/status\"), api(ui, \"/api/brain/owner-console/queue-summary\"), aiBlock(ui)])", OWNER_PANEL)
+    def test_report_uses_batched_dashboard_summary_without_progress_edits(self):
+        self.assertIn('panel-summary?view=" + view', OWNER_PANEL)
+        worker = (ROOT / "src" / "index.js").read_text(encoding="utf-8")
+        self.assertIn("env.DB.batch([statusStatement, aiStatement])", worker)
+        self.assertIn("PANEL_STATUS_SUMMARY_SQL", worker)
+        self.assertIn("PANEL_AI_SUMMARY_SQL", worker)
         self.assertNotIn('parts.push("⏳ ۱ از ۳', OWNER_PANEL)
         self.assertNotIn('parts.push("⏳ ۲ از ۳', OWNER_PANEL)
         self.assertNotIn('parts.push("⏳ ۳ از ۳', OWNER_PANEL)
 
     def test_panel_state_cache_is_scoped_and_invalidated_on_writes(self):
         self.assertIn('Symbol("panel_state_cache")', OWNER_PANEL)
-        self.assertIn("if (cache?.has(k)) return cache.get(k);", OWNER_PANEL)
+        self.assertIn("if (cache?.has(k)) {", OWNER_PANEL)
+        self.assertIn("PANEL_STATE_MISSING", OWNER_PANEL)
+        self.assertIn("primePanelStateCache", OWNER_PANEL)
         self.assertIn("cache?.delete(k);", OWNER_PANEL)
         self.assertIn("value: new Map()", OWNER_PANEL)
         self.assertIn("async function setStates", OWNER_PANEL)
@@ -48,6 +54,36 @@ class OwnerPanelCoordinationTests(unittest.TestCase):
         self.assertIn('row.status === "approved"', OWNER_PANEL)
         self.assertIn("تأیید قبلاً ثبت شده", OWNER_PANEL)
 
+
+    def test_every_event_prefetches_panel_state_once_and_excludes_seq(self):
+        self.assertIn("PANEL_STATE_PREFETCH_SQL", OWNER_PANEL)
+        self.assertIn("PANEL_STATE_PREFETCH_KEYS", OWNER_PANEL)
+        self.assertIn("primePanelStateCache(timedEnv, stateResult && stateResult.results)", OWNER_PANEL)
+        key_block = OWNER_PANEL.split("const PANEL_STATE_PREFETCH_KEYS", 1)[1].split("]);", 1)[0]
+        self.assertNotIn('"panel_seq"', key_block)
+        self.assertIn("timedEnv.DB.batch([", OWNER_PANEL)
+
+    def test_panel_summary_matches_ai_provider_snapshot_fields(self):
+        worker = (ROOT / "src" / "index.js").read_text(encoding="utf-8")
+        for field in ("calls_used", "daily_limit", "total_calls_used", "cooldown_active", "last_error_code"):
+            self.assertIn(field, worker)
+
+
+
+    def test_rubika_edit_calls_use_outer_freshness_guards_only(self):
+        edit = OWNER_PANEL.split("async function edit(env, chat, mid, src, keypad,", 1)[1].split("\\nconst MOB_TEMP_MID_KEY", 1)[0]
+        self.assertIn("await assertPanelEventCurrent(env);", edit)
+        self.assertIn("await Promise.allSettled([textPromise, updateKeypad()])", edit)
+        self.assertEqual(edit.count("skipFreshnessCheck: true"), 3)
+
+    def test_loading_edits_do_not_increment_success_counter(self):
+        self.assertEqual(OWNER_PANEL.count("{ countSuccess: false }"), 2)
+        self.assertIn("if (countSuccess)", OWNER_PANEL)
+
+    def test_event_diagnostics_are_written_with_one_panel_state_statement(self):
+        self.assertIn("async function writePanelStateValues(env, entries)", OWNER_PANEL)
+        self.assertIn('writes.unshift(["last_event", timing.last_event_json])', OWNER_PANEL)
+        self.assertNotIn('setState(timedEnv, "last_event"', OWNER_PANEL)
 
 if __name__ == "__main__":
     unittest.main()

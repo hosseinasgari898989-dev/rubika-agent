@@ -1016,6 +1016,105 @@ async function ownerConsoleQueueSummary(env) {
   }
 }
 
+const PANEL_STATUS_SUMMARY_SQL =
+  "SELECT " +
+  "(SELECT json_object('enabled', enabled, 'started_at', started_at, 'updated_at', updated_at) FROM agent_config WHERE id = 1) AS agent_json, " +
+  "(SELECT COALESCE(json_group_array(json_object('status', status, 'total', total)), '[]') FROM (SELECT status, COUNT(*) AS total FROM items GROUP BY status)) AS item_counts_json, " +
+  "(SELECT COALESCE(json_group_array(json_object('id', id, 'status', status, 'started_at', started_at, 'finished_at', finished_at, 'found_count', found_count, 'eligible_count', eligible_count, 'sent_count', sent_count, 'skipped_count', skipped_count, 'failed_count', failed_count)), '[]') FROM (SELECT id, status, started_at, finished_at, found_count, eligible_count, sent_count, skipped_count, failed_count FROM runs ORDER BY started_at DESC LIMIT 5)) AS recent_runs_json, " +
+  "(SELECT COALESCE(json_group_object(status, total), '{}') FROM (SELECT status, COUNT(*) AS total FROM automation_queue GROUP BY status)) AS queue_counts_json, " +
+  "(SELECT COUNT(*) FROM automation_queue WHERE status = 'sent' AND sent_at >= ?) AS sent_today";
+
+const PANEL_AI_SUMMARY_SQL =
+  "SELECT provider, " +
+  "(SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ? AND provider = p.provider) AS calls_used, " +
+  "(SELECT COUNT(*) FROM ai_provider_calls WHERE usage_day = ?) AS total_calls_used, " +
+  "(SELECT cooldown_until FROM ai_provider_state WHERE provider = p.provider) AS cooldown_until, " +
+  "(SELECT last_error_code FROM ai_provider_state WHERE provider = p.provider) AS state_error_code, " +
+  "(SELECT error_code FROM ai_provider_calls WHERE provider = p.provider AND error_code IS NOT NULL ORDER BY started_at DESC LIMIT 1) AS latest_error_code " +
+  "FROM (SELECT 'groq' AS provider UNION ALL SELECT 'openrouter') p";
+
+function parsePanelSummaryJson(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  try { const parsed = JSON.parse(value); return parsed == null ? fallback : parsed; }
+  catch { return fallback; }
+}
+function panelStatusFromRow(row, usageDay) {
+  return {
+    ok: true,
+    agent: parsePanelSummaryJson(row && row.agent_json, { enabled: 0, started_at: null, updated_at: null }),
+    item_counts: parsePanelSummaryJson(row && row.item_counts_json, []),
+    recent_runs: parsePanelSummaryJson(row && row.recent_runs_json, []),
+    capabilities: { database: true, discovery: true, metadata_api: true, download: false, publishing: PUBLISHING_ENABLED },
+    publishing: PUBLISHING_ENABLED, usage_day: usageDay,
+  };
+}
+function panelQueueFromRow(row, usageDay, statusPayload) {
+  return {
+    ok: true, queue_counts: parsePanelSummaryJson(row && row.queue_counts_json, {}),
+    sent_today: Number(row && row.sent_today || 0),
+    item_counts: statusPayload.item_counts, usage_day: usageDay, publishing: PUBLISHING_ENABLED,
+  };
+}
+function panelAiFromRows(rows, usageDay, now) {
+  const providers = {};
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const provider = row && row.provider;
+    if (!["groq", "openrouter"].includes(provider)) continue;
+    const callsUsed = Math.max(0, Number(row.calls_used || 0));
+    const totalCallsUsed = Math.max(0, Number(row.total_calls_used || 0));
+    const dailyLimit = 18;
+    const cooldownUntil = row.cooldown_until || null;
+    const cooldownActive = typeof cooldownUntil === "string" && cooldownUntil > now;
+    const providerBudgetAvailable = callsUsed < dailyLimit;
+    const totalBudgetAvailable = totalCallsUsed < 36;
+    providers[provider] = {
+      provider, usage_day: usageDay, calls_used: callsUsed, daily_limit: dailyLimit,
+      remaining: Math.max(0, Math.min(dailyLimit - callsUsed, 36 - totalCallsUsed)),
+      total_calls_used: totalCallsUsed, total_daily_limit: 36,
+      total_remaining: Math.max(0, 36 - totalCallsUsed),
+      cooldown_until: cooldownUntil, cooldown_active: cooldownActive,
+      last_error_code: row.latest_error_code || row.state_error_code || null,
+      ready: !cooldownActive && providerBudgetAvailable && totalBudgetAvailable,
+      status: cooldownActive ? "cooldown_active"
+        : !totalBudgetAvailable ? "global_daily_budget_exhausted"
+        : !providerBudgetAvailable ? "provider_daily_budget_exhausted" : "ready",
+    };
+  }
+  return { ok: true, providers };
+}
+async function ownerConsolePanelSummary(env, url) {
+  const view = url.searchParams.get("view") || "report";
+  if (!["status", "ai", "report"].includes(view)) return json({ ok: false, error: "panel_summary_view_invalid" }, 400);
+  const usageDay = new Date().toISOString().slice(0, 10);
+  const dayStart = usageDay + "T00:00:00.000Z";
+  const now = new Date().toISOString();
+  try {
+    const statusStatement = env.DB.prepare(PANEL_STATUS_SUMMARY_SQL).bind(dayStart);
+    const aiStatement = env.DB.prepare(PANEL_AI_SUMMARY_SQL).bind(usageDay, usageDay);
+    let statusRow = null;
+    let aiRows = [];
+    if (view === "report") {
+      const [statusResult, aiResult] = await env.DB.batch([statusStatement, aiStatement]);
+      statusRow = statusResult && statusResult.results && statusResult.results[0];
+      aiRows = aiResult && Array.isArray(aiResult.results) ? aiResult.results : [];
+    } else if (view === "status") {
+      statusRow = await statusStatement.first();
+    } else {
+      const result = await aiStatement.all();
+      aiRows = result && Array.isArray(result.results) ? result.results : [];
+    }
+    const response = { ok: true };
+    if (view !== "ai") {
+      response.status = panelStatusFromRow(statusRow, usageDay);
+      response.queue = panelQueueFromRow(statusRow, usageDay, response.status);
+    }
+    if (view !== "status") response.ai = panelAiFromRows(aiRows, usageDay, now);
+    return json(response);
+  } catch {
+    return json({ ok: false, error: "owner_console_panel_summary_unavailable" }, 503);
+  }
+}
+
 const CODE_AI_PROVIDER_LIMITS = Object.freeze({ groq: 18, openrouter: 18 });
 const CODE_AI_TOTAL_DAILY_LIMIT = 36;
 const CODE_AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch", "translate_official"]);
@@ -1567,6 +1666,10 @@ async function route(request, env, ctx) {
       const parsedFinish = await readJson(request);
       if (!parsedFinish.ok) return json({ ok: false, error: parsedFinish.error }, parsedFinish.status);
       return ownerConsoleFinish(env, parsedFinish.value);
+    }
+    if (path === "/api/brain/owner-console/panel-summary") {
+      if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
+      return ownerConsolePanelSummary(env, url);
     }
     if (path === "/api/brain/owner-console/queue-summary") {
       if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
