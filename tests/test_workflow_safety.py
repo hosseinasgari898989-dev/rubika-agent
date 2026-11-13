@@ -169,7 +169,7 @@ class WorkflowSafetyTests(unittest.TestCase):
         trigger = workflow.split("permissions:", 1)[0]
         self.assertIn("workflow_dispatch:", trigger)
         self.assertIn("default: true", trigger)
-        self.assertNotIn("\\n  push:\\n", trigger)
+        self.assertNotIn("\n  push:\n", trigger)
         self.assertNotIn("schedule:", trigger)
         self.assertIn("inputs.dry_run == true", workflow)
         self.assertIn("Only dry_run=true is supported", workflow)
