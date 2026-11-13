@@ -47,16 +47,16 @@ class MobXTerminalMediaCleanupTests(unittest.TestCase):
     REJECTED = "/Rubika-Agent/official/mob_x_2107878755079213477_abcdef012345.jpg"
     LEGACY = "/Rubika-Agent/official/mob_x_media.mp4"
 
-    def test_only_confirmed_sent_rejected_and_pre_publish_failed_jobs_are_eligible(self):
+    def test_only_receipt_confirmed_sent_jobs_are_eligible(self):
         self.assertEqual(eligible_terminal_media_key(job(
             "job_sent_12345678", "sent", self.SENT,
             delivery_status="sent", rubika_message_id="message-1",
         )), self.SENT)
-        self.assertEqual(eligible_terminal_media_key(job(
-            "job_reject_123456", "rejected", self.REJECTED, publishing_attempted=False,
-        )), self.REJECTED)
         self.assertIsNone(eligible_terminal_media_key(job(
-            "job_failed_123456", "failed", self.SENT, publishing_attempted=True,
+            "job_reject_123456", "rejected", self.REJECTED, publishing_attempted=False,
+        )))
+        self.assertIsNone(eligible_terminal_media_key(job(
+            "job_failed_123456", "failed", self.SENT, publishing_attempted=False,
         )))
         self.assertIsNone(eligible_terminal_media_key(job(
             "job_sent_unknown", "sent", self.SENT, delivery_status="uncertain",
@@ -91,17 +91,24 @@ class MobXTerminalMediaCleanupTests(unittest.TestCase):
                 job("job_rejected_0000001", "rejected", self.REJECTED, publishing_attempted=False),
             ],
             "failed": [
-                job("job_failed_try0001", "failed", self.SENT, publishing_attempted=True),
+                job("job_failed_try0001", "failed", self.SENT, publishing_attempted=False),
             ],
         })
         storage = FakeStorage([self.SENT.rsplit("/", 1)[-1], self.REJECTED.rsplit("/", 1)[-1], "mob_x_media.mp4"])
         report = cleanup_terminal_media(worker, storage, page_size=2)
         self.assertEqual(report["status"], "ok")
-        self.assertEqual(report["deleted_count"], 2)
+        self.assertEqual(report["deleted_count"], 1)
         self.assertEqual(report["d1_writes"], 0)
         self.assertEqual(storage.listed_directory, "official")
-        self.assertEqual(set(storage.deleted), {self.SENT, self.REJECTED})
+        self.assertEqual(set(storage.deleted), {self.SENT})
+        self.assertIn(self.REJECTED.rsplit("/", 1)[-1], storage.names)
         self.assertIn("mob_x_media.mp4", storage.names)
+        requested_statuses = {
+            path.split("status=", 1)[1].split("&", 1)[0]
+            for method, path, _payload in worker.calls
+            if method == "GET"
+        }
+        self.assertEqual(requested_statuses, {"sent"})
         self.assertTrue(worker.calls)
         self.assertTrue(all(method == "GET" and payload is None for method, _path, payload in worker.calls))
         self.assertTrue(any("offset=0" in path for _method, path, _payload in worker.calls))
@@ -110,8 +117,8 @@ class MobXTerminalMediaCleanupTests(unittest.TestCase):
         worker = FakeWorker({
             "sent": [job("job_sent_00000001", "sent", self.SENT,
                 delivery_status="sent", rubika_message_id="message-1")],
-            "rejected": [],
-            "failed": [],
+            "rejected": [job("job_rejected_0000001", "rejected", self.REJECTED, publishing_attempted=False)],
+            "failed": [job("job_failed_try0001", "failed", self.SENT, publishing_attempted=False)],
         })
         storage = FakeStorage([])
         report = cleanup_terminal_media(worker, storage)
