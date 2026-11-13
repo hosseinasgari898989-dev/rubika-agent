@@ -74,7 +74,7 @@ class OwnerPanelCoordinationTests(unittest.TestCase):
         edit = OWNER_PANEL.split("async function edit(env, chat, mid, src, keypad,", 1)[1].split("\\nconst MOB_TEMP_MID_KEY", 1)[0]
         self.assertIn("await assertPanelEventCurrent(env);", edit)
         self.assertIn("await Promise.allSettled([textPromise, updateKeypad()])", edit)
-        self.assertEqual(edit.count("skipFreshnessCheck: true"), 2)
+        self.assertEqual(edit.count("skipFreshnessCheck: true"), 3)
 
     def test_loading_edits_do_not_increment_success_counter(self):
         self.assertEqual(OWNER_PANEL.count("{ countSuccess: false }"), 2)
