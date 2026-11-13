@@ -33,8 +33,25 @@ class WorkflowSafetyTests(unittest.TestCase):
     def test_online_discovery_uses_main_as_single_source_of_truth(self):
         workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
         self.assertIn("ref: main", workflow)
-        self.assertIn("git push origin HEAD:refs/heads/main", workflow)
+        self.assertIn("push origin HEAD:refs/heads/main", workflow)
         self.assertNotIn("agent-brain-mega-v1", workflow)
+
+    def test_online_discovery_keeps_git_auth_on_the_host_only(self):
+        workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        checkout = workflow.split("name: Check out the main discovery code", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("persist-credentials: false", checkout)
+        self.assertNotIn("persist-credentials: true", workflow)
+
+        push_step = workflow.split("name: Validate report and push only the metadata report to the main branch", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", push_step)
+        self.assertIn("base64 --wrap=0", push_step)
+        self.assertIn('git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch origin main', push_step)
+        self.assertIn('git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin HEAD:refs/heads/main', push_step)
+        self.assertNotIn("git config --global", push_step)
+
+        docker_step = workflow.split("name: Run real Termux Docker source tests and collect live metadata", 1)[1].split("\n      - name:", 1)[0]
+        self.assertNotIn("GH_TOKEN", docker_step)
+        self.assertIn('-v "$GITHUB_WORKSPACE:/workspace:ro"', docker_step)
 
     def test_owner_console_poller_schedule_is_disabled_and_manual_dispatch_preserved(self):
         workflows = ROOT / ".github" / "workflows"
