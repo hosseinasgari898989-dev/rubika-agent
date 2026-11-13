@@ -38,33 +38,41 @@ def eligible_terminal_media_key(job: object) -> str | None:
     return key
 
 
-def _terminal_jobs(worker: Any, *, page_size: int = PAGE_SIZE) -> list[dict]:
+def _mob_x_jobs(worker: Any, *, page_size: int = PAGE_SIZE) -> list[dict]:
     if type(page_size) is not int or not 1 <= page_size <= PAGE_SIZE:
         raise ValueError("invalid_page_size")
     jobs: list[dict] = []
-    for status in TERMINAL_STATUSES:
-        offset = 0
-        for _ in range(MAX_PAGES_PER_STATUS):
-            response = worker.request(
-                "GET",
-                f"/api/console/jobs?type=mob_x_link&status={status}&limit={page_size}&offset={offset}",
-            )
-            rows = response.get("items") if isinstance(response, dict) else None
-            if not isinstance(rows, list) or len(rows) > page_size:
-                raise RuntimeError("worker_terminal_jobs_response_invalid")
-            jobs.extend(row for row in rows if isinstance(row, dict))
-            offset += len(rows)
-            if len(rows) < page_size:
-                break
-        else:
-            raise RuntimeError("worker_terminal_jobs_page_limit_exceeded")
+    offset = 0
+    for _ in range(MAX_PAGES_PER_STATUS):
+        response = worker.request(
+            "GET",
+            f"/api/console/jobs?type=mob_x_link&limit={page_size}&offset={offset}",
+        )
+        rows = response.get("items") if isinstance(response, dict) else None
+        if not isinstance(rows, list) or len(rows) > page_size:
+            raise RuntimeError("worker_mob_x_jobs_response_invalid")
+        jobs.extend(row for row in rows if isinstance(row, dict))
+        offset += len(rows)
+        if len(rows) < page_size:
+            break
+    else:
+        raise RuntimeError("worker_mob_x_jobs_page_limit_exceeded")
     return jobs
 
 
 def cleanup_terminal_media(worker: Any, storage: Any, *, page_size: int = PAGE_SIZE) -> dict[str, int | str]:
-    """Delete only unique official media after a confirmed send; never write D1 or touch recoverable jobs."""
-    jobs = _terminal_jobs(worker, page_size=page_size)
-    candidate_keys = sorted({key for job in jobs if (key := eligible_terminal_media_key(job))})
+    """Delete only unshared unique media after every referencing job has a confirmed receipt."""
+    jobs = _mob_x_jobs(worker, page_size=page_size)
+    references: dict[str, list[dict]] = {}
+    for job in jobs:
+        result = job.get("result") if isinstance(job, dict) else None
+        key = result.get("storage_key") if isinstance(result, dict) else None
+        if isinstance(key, str) and UNIQUE_OFFICIAL_KEY.fullmatch(key):
+            references.setdefault(key, []).append(job)
+    candidate_keys = sorted(
+        key for key, refs in references.items()
+        if all(eligible_terminal_media_key(job) == key for job in refs)
+    )
     existing_names = set(storage.list_directory("official"))
     deleted = 0
     already_missing = 0
