@@ -211,7 +211,7 @@ jobs:
             sh -lc '
               set -eu
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
-              timeout 180s pkg update -y
+              sh /workspace/termux/pkg_index_retry.sh
               timeout 240s pkg install -y python git
               mkdir -p "$HOME/.venvs"
               VENV_DIR="$HOME/.venvs/termux-docker"
