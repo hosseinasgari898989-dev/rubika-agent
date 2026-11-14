@@ -58,6 +58,30 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertNotIn("GH_TOKEN", docker_step)
         self.assertIn('-v "$GITHUB_WORKSPACE:/workspace:ro"', docker_step)
 
+    def test_groq_openrouter_repair_uses_ephemeral_git_auth(self):
+        workflow = (ROOT / ".github" / "workflows" / "groq-openrouter-code-repair.yml").read_text(encoding="utf-8")
+        checkout = workflow.split("name: Check out the exact failed commit", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("persist-credentials: false", checkout)
+        self.assertIn("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
+
+        auth = 'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}"'
+        self.assertIn(auth + " fetch origin main", workflow)
+        self.assertIn(auth + ' ls-remote --exit-code --heads origin "refs/heads/$branch"', workflow)
+        self.assertIn(auth + ' push origin "HEAD:refs/heads/$branch"', workflow)
+        for persisted_auth in (
+            "git fetch origin main",
+            "git ls-remote --exit-code --heads origin",
+            "git push origin",
+            "gh auth setup-git",
+            "git config --global",
+            "git config --local",
+        ):
+            with self.subTest(persisted_auth=persisted_auth):
+                self.assertNotIn(persisted_auth, workflow)
+
+        self.assertNotIn("container:", workflow)
+        self.assertNotIn("docker run", workflow)
+
     def test_owner_console_poller_schedule_is_disabled_and_manual_dispatch_preserved(self):
         workflows = ROOT / ".github" / "workflows"
         workflow = (workflows / "owner-console-poll.yml").read_text(encoding="utf-8")
