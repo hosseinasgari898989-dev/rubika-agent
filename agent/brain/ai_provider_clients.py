@@ -324,7 +324,7 @@ def invoke_provider(
     content = message.get("content") if isinstance(message, dict) else None
     finish_reason_raw = choices[0].get("finish_reason")
     finish_reason = (
-        re.sub(r"[^A-Za-z0-9_.-]", "", finish_reason_raw)[:60]
+        re.sub(r"[^A-Za-z0-9_.-]", "", finish_reason_raw).lower()[:60]
         if isinstance(finish_reason_raw, str) else None
     )
     if isinstance(content, str):
