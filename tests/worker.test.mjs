@@ -90,7 +90,7 @@ const panel = importedPanel;
   assert.match(groqText, /سهمیهٔ امروز: 4\/18، باقی‌مانده: 14/);
   const openrouterText = panel.fmtAi("openrouter", mapped.providers.openrouter);
   assert.match(openrouterText, /آماده طبق ledger/);
-  assert.match(openrouterText, /سهمیهٔ امروز: 3\/18، باقی‌مانده: 13/);
+  assert.match(openrouterText, /سهمیهٔ امروز: 3\/18، باقی‌مانده: 15/);
   assert.match(panel.fmtAi("groq", undefined), /موقتاً در دسترس نیست \(provider_missing\)/);
 }
 const panelSettings = await import(settingsModuleUrl);
