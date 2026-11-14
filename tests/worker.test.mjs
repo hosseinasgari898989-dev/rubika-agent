@@ -2492,7 +2492,7 @@ async function postPanelUpdate(state, update, secret) {
 
 // Phase-two regression: improve the final #184 counts and cap each slow route at 15 D1 statements.
 {
-  await withMockRubikaFetch(async () => {
+  await withMockRubikaFetch(async calls => {
     const phaseOne = { p_report: 43, p_ai: 37, p_status: 32 };
     const measure = async button => {
       const state = panelEnv();
@@ -2500,6 +2500,7 @@ async function postPanelUpdate(state, update, secret) {
       const panelMid = "query-count-panel-" + button;
       state.DB.state.set("panel_mid", panelMid);
       const secret = await panel.hookSecret(state);
+      const callsBefore = calls.length;
       state.DB.resetQueryCount();
       const response = await postPanelUpdate(state, {
         update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
@@ -2508,6 +2509,12 @@ async function postPanelUpdate(state, update, secret) {
         } },
       }, secret);
       assert.equal(response.status, 200, button + " click hook should be accepted");
+      if (button === "p_ai") {
+        const finalTextEdit = calls.slice(callsBefore).filter(call => call.method === "editMessageText").at(-1);
+        assert.ok(finalTextEdit, "the fake-D1 AI screen must edit the tracked panel message");
+        assert.equal((finalTextEdit.payload.text.match(/آماده طبق ledger/g) || []).length, 2);
+        assert.match(finalTextEdit.payload.text, /سهمیهٔ امروز: 2\\/18، باقی‌مانده: 16/);
+      }
       assert.equal(state.DB.d1QueryLog.filter(sql =>
         sql.includes("SELECT key, value FROM panel_state WHERE key IN")).length, 1,
         button + " must prefetch panel_state once per event");
