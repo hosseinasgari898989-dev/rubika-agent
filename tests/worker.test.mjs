@@ -977,6 +977,7 @@ const read = async response => ({ status: response.status, body: await response.
     "http://x.com/mobgamesstudios/status/" + postId,
     "https://x.com/someoneelse/status/" + postId + "?s=19",
     "https://x.com.evil.example/mobgamesstudios/status/" + postId,
+    "https://x.com/anything/../mobgamesstudios/status/" + postId,
     "https://evil@x.com/mobgamesstudios/status/" + postId,
     "https://x.com:443/mobgamesstudios/status/" + postId,
     "https://x.com/mobgamesstudios/status/" + postId.slice(5),
