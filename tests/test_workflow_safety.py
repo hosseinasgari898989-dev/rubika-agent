@@ -60,7 +60,7 @@ class WorkflowSafetyTests(unittest.TestCase):
 
     def test_groq_openrouter_repair_uses_ephemeral_git_auth(self):
         workflow = (ROOT / ".github" / "workflows" / "groq-openrouter-code-repair.yml").read_text(encoding="utf-8")
-        checkout = workflow.split("name: Check out the exact failed commit", 1)[1].split("\\n      - name:", 1)[0]
+        checkout = workflow.split("name: Check out the exact failed commit", 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("persist-credentials: false", checkout)
         self.assertIn("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", workflow)
 
