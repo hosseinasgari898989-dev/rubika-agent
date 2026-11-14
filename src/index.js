@@ -1055,7 +1055,7 @@ function panelQueueFromRow(row, usageDay, statusPayload) {
     item_counts: statusPayload.item_counts, usage_day: usageDay, publishing: PUBLISHING_ENABLED,
   };
 }
-function panelAiFromRows(rows, usageDay, now) {
+export function panelAiFromRows(rows, usageDay, now) {
   const providers = {};
   for (const row of Array.isArray(rows) ? rows : []) {
     const provider = row && row.provider;
@@ -1068,7 +1068,7 @@ function panelAiFromRows(rows, usageDay, now) {
     const providerBudgetAvailable = callsUsed < dailyLimit;
     const totalBudgetAvailable = totalCallsUsed < 36;
     providers[provider] = {
-      provider, usage_day: usageDay, calls_used: callsUsed, daily_limit: dailyLimit,
+      ok: true, provider, usage_day: usageDay, calls_used: callsUsed, daily_limit: dailyLimit,
       remaining: Math.max(0, Math.min(dailyLimit - callsUsed, 36 - totalCallsUsed)),
       total_calls_used: totalCallsUsed, total_daily_limit: 36,
       total_remaining: Math.max(0, 36 - totalCallsUsed),
