@@ -13,11 +13,13 @@ export function normalizeMobXLink(value) {
   try { parsed = new URL(raw); } catch { return null; }
   const authority = /^https:\/\/([^/?#]*)/i.exec(raw)?.[1] || "";
   const host = String(parsed.hostname || "").toLowerCase();
+  const rawPath = raw.slice("https://".length + authority.length).split(/[?#]/, 1)[0] || "/";
   if (
     parsed.protocol !== "https:" ||
     !MOB_X_HOSTS.has(host) ||
     parsed.username || parsed.password || parsed.port ||
-    authority.toLowerCase() !== host
+    authority.toLowerCase() !== host ||
+    rawPath !== parsed.pathname
   ) return null;
 
   const match = /^\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i.exec(parsed.pathname);
