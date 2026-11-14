@@ -745,7 +745,8 @@ export function fmtQueue(q) {
 }
 export function fmtAi(p, d) {
   const L = p.toUpperCase();
-  if (!d || d.ok !== true) return `🤖 ${L}: در دسترس نیست (${clean(d && d.error, 60) || "unknown"})`;
+  if (!d) return `🤖 ${L}: موقتاً در دسترس نیست (provider_missing)`;
+  if (d.ok !== true) return `🤖 ${L}: در دسترس نیست (${clean(d.error, 60) || "unknown"})`;
   const state = d.cooldown_active === true ? "در دورهٔ توقف" : d.ready === true ? "آماده طبق ledger" : "غیرآماده";
   return `🤖 **${L}**: ${state}\nسهمیهٔ امروز: ${n(d.calls_used)}/${n(d.daily_limit)}، باقی‌مانده: ${n(d.remaining)}\nخطای اخیر: ${clean(d.last_error_code, 60) || "ندارد"}`;
 }
