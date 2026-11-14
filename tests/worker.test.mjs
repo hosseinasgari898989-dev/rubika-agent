@@ -2513,7 +2513,7 @@ async function postPanelUpdate(state, update, secret) {
         const finalTextEdit = calls.slice(callsBefore).filter(call => call.method === "editMessageText").at(-1);
         assert.ok(finalTextEdit, "the fake-D1 AI screen must edit the tracked panel message");
         assert.equal((finalTextEdit.payload.text.match(/آماده طبق ledger/g) || []).length, 2);
-        assert.match(finalTextEdit.payload.text, /سهمیهٔ امروز: 2\\/18، باقی‌مانده: 16/);
+        assert.match(finalTextEdit.payload.text, /سهمیهٔ امروز: 2\/18، باقی‌مانده: 16/);
       }
       assert.equal(state.DB.d1QueryLog.filter(sql =>
         sql.includes("SELECT key, value FROM panel_state WHERE key IN")).length, 1,
