@@ -3381,6 +3381,41 @@ async function withDispatchFetch(responder, fn) {
   });
 }
 
+// Static help renders directly once; stale help clicks must also skip the loading edit.
+{
+  for (const scenario of [
+    { eventMid: "static-help-main-panel", stale: false },
+    { eventMid: "static-help-old-panel", stale: true },
+  ]) {
+    await withMockRubikaFetch(async calls => {
+      const state = panelEnv();
+      state.DB.ownerChat = "b0actualowner";
+      state.DB.state.set("panel_mid", "static-help-main-panel");
+      const secret = await panel.hookSecret(state);
+      const response = await postPanelUpdate(state, {
+        update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+          message_id: scenario.eventMid, chat_id: "b0actualowner", text: "",
+          aux_data: { button_id: "p_help" },
+        } },
+      }, secret);
+      assert.equal(response.status, 200, "p_help click should be accepted");
+      const textEdits = calls.filter(call => call.method === "editMessageText");
+      const keypadEdits = calls.filter(call => call.method === "editMessageKeypad");
+      assert.equal(textEdits.length, 1, "p_help must perform one final text edit without a loading edit");
+      assert.equal(keypadEdits.length, 1, "p_help must perform one matching keypad edit");
+      assert.notEqual(textEdits[0].payload.text, "⏳ در حال انجام…");
+      assert.match(textEdits[0].payload.text, /راهنما/);
+      assert.equal(textEdits[0].payload.message_id, "static-help-main-panel");
+      assert.equal(keypadEdits[0].payload.message_id, "static-help-main-panel");
+      if (scenario.stale) {
+        assert.ok(calls.some(call => call.method === "deleteMessage" &&
+          call.payload.message_id === "static-help-old-panel"),
+        "stale p_help callback should discard its old message before refreshing the main panel");
+      }
+    });
+  }
+}
+
 // The inactive-link selection page has real glass-button rows, and each click replaces both the checkmark text and keypad.
 {
   await withMockRubikaFetch(async calls => {

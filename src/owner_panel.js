@@ -517,6 +517,9 @@ const isOwnerOnlyPanelAction = (id) => {
 
 // Screen callbacks are rendered back into the tracked main message; show a loading state
 // before their D1-backed screen builders or settings actions start.
+// These static screens render immediately, so they must not race a loading edit against the final edit.
+const isStaticMainPanelScreenClick = (id) =>
+  ["p_home", "p_help"].includes(String(id || ""));
 const isMainPanelScreenClick = (id) =>
   ["p_home", "p_help", "p_debug", "p_status", "p_queue", "p_ai", "p_report"].includes(String(id || "")) ||
   isScreenId(String(id || "")) ||
@@ -1411,13 +1414,14 @@ async function processEvent(env, selfFetch, origin, ev) {
           !["p_home", "p_status", "p_queue", "p_qs", "p_ai", "p_report", "p_mob", "p_help", "p_debug"].includes(staleButton)) {
           refreshId = "p_home";
         }
-        if (currentPanelMid) {
+        if (currentPanelMid && !isStaticMainPanelScreenClick(refreshId)) {
           await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB, { countSuccess: false });
         }
         await render(ui, refreshId, { clickedMid: currentPanelMid });
         return;
       }
-      if ((isMainPanelScreenClick(ev.button) || isMobJobAction || isCurrentMobPromptAction) && currentPanelMid) {
+      if (!isStaticMainPanelScreenClick(ev.button) &&
+          (isMainPanelScreenClick(ev.button) || isMobJobAction || isCurrentMobPromptAction) && currentPanelMid) {
         await edit(timedEnv, ev.chat, currentPanelMid, "⏳ در حال انجام…", LOADING_KB, { countSuccess: false });
       }
       await render(ui, ev.button, { clickedMid: ev.mid });
