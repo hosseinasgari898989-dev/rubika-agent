@@ -30,6 +30,15 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("libass", install_block)
         self.assertIn("ffprobe -version", install_block)
 
+    def test_online_termux_retries_only_package_index_fetch(self):
+        workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        self.assertIn("sh /workspace/termux/pkg_index_retry.sh", workflow)
+        self.assertIn("timeout 240s pkg install -y python git", workflow)
+        retry_script = (ROOT / "termux" / "pkg_index_retry.sh").read_text(encoding="utf-8")
+        self.assertIn("TERMUX_PKG_INDEX_FETCH_ATTEMPT=", retry_script)
+        self.assertIn("TERMUX_ERROR_CODE=TERMUX_PKG_INDEX_FETCH_FAILED", retry_script)
+        self.assertNotIn("pkg install", retry_script)
+
     def test_online_discovery_uses_main_as_single_source_of_truth(self):
         workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
         self.assertIn("ref: main", workflow)
