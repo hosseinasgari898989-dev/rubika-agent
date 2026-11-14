@@ -17,6 +17,7 @@ URL_CASES = [
     f"http://x.com/mobgamesstudios/status/{POST_ID}",
     f"https://x.com/someoneelse/status/{POST_ID}?s=19",
     f"https://x.com.evil.example/mobgamesstudios/status/{POST_ID}",
+    f"https://x.com/anything/../mobgamesstudios/status/{POST_ID}",
     f"https://evil@x.com/mobgamesstudios/status/{POST_ID}",
     f"https://x.com:443/mobgamesstudios/status/{POST_ID}",
     f"https://x.com/mobgamesstudios/status/{POST_ID[5:]}",
