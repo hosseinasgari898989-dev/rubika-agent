@@ -11,10 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def extract_js_string_concat(source: str, constant: str) -> str:
-    match = re.search(rf"const {re.escape(constant)}\\s*=\\s*(.*?);", source, re.S)
+    match = re.search(rf"const {re.escape(constant)}\s*=\s*(.*?);", source, re.S)
     if match is None:
         raise AssertionError(f"JavaScript SQL constant not found: {constant}")
-    literals = re.findall(r'"(?:\\\\.|[^"\\\\])*"', match.group(1))
+    literals = re.findall(r'"(?:\\.|[^"\\])*"', match.group(1))
     return "".join(ast.literal_eval(literal) for literal in literals)
 
 
