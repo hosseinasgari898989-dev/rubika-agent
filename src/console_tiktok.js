@@ -18,7 +18,7 @@ export function normalizeTikTokAccount(value) {
     try { parsed = new URL(raw); } catch { return null; }
     const host = String(parsed.hostname || "").toLowerCase().replace(/\.$/, "");
     if (parsed.protocol !== "https:" || !URL_HOSTS.has(host) ||
-        parsed.username || parsed.password || parsed.search || parsed.hash ||
+        parsed.username || parsed.password ||
         (parsed.port && parsed.port !== "443")) return null;
     const match = /^\/@([A-Za-z0-9._]{2,24})\/?$/.exec(parsed.pathname);
     if (!match) return null;
