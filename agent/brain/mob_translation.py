@@ -141,6 +141,8 @@ def translate_to_persian(text: str, *, kind: str = "caption", run_id: str | None
             return None
         except ProviderClientError: continue
         except Exception: continue
+        if getattr(result, "finish_reason", None) == "length":
+            continue
         translated=_valid_persian_translation(result.text,source,max_chars=out_limit)
         if translated and len(translated) >= min_output_chars and (
             kind!="subtitle" or _numbered_subtitles_valid(source,translated)
