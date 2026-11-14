@@ -77,6 +77,14 @@ def _valid_persian_translation(value: Any, source: str, *, max_chars: int = MAX_
     return translated[:max(1,max_chars)]
 
 
+def _minimum_translation_chars(source: str) -> int:
+    """Reject implausibly short output without rejecting short source phrases."""
+    size = len(source.strip())
+    if size < 40:
+        return max(2, (size + 4) // 5)
+    return min(80, max(20, (size + 7) // 8))
+
+
 def _numbered_subtitles_valid(source: str, translation: str) -> bool:
     a=[x for x in source.splitlines() if x.strip()]; b=[x for x in translation.splitlines() if x.strip()]
     if len(a)!=len(b): return False
@@ -98,6 +106,7 @@ def translate_to_persian(text: str, *, kind: str = "caption", run_id: str | None
     if not raw or len(raw)>limit: return None
     source=_strip_urls(raw)
     if not source or len(source)>limit: return None
+    min_output_chars = _minimum_translation_chars(source)
     if kind=="subtitle":
         lines=[x for x in source.splitlines() if x.strip()]
         if not lines or len(lines)>int(SUBTITLE_LIMITS["max_batch_cues"]) or any(not re.fullmatch(r"\s*\d+\s*\|\s*.+",x) for x in lines): return None
@@ -105,7 +114,8 @@ def translate_to_persian(text: str, *, kind: str = "caption", run_id: str | None
         try:
             result=translator_factory(source="auto",target="fa").translate(source)
             valid=_valid_persian_translation(result,source,max_chars=out_limit)
-            return valid if kind!="subtitle" or (valid and _numbered_subtitles_valid(source,valid)) else None
+            if not valid or len(valid) < min_output_chars: return None
+            return valid if kind!="subtitle" or _numbered_subtitles_valid(source,valid) else None
         except Exception: return None
     from uuid import uuid4
     from agent.brain.ai_provider_clients import ProviderClientError,call_provider_with_ledger
@@ -119,7 +129,11 @@ def translate_to_persian(text: str, *, kind: str = "caption", run_id: str | None
     prompt+="\nSOURCE:\n"+source+"\nEND SOURCE"
     for provider in ("groq","openrouter"):
         try:
-            result=call_provider_with_ledger(provider=provider,role="translate_official",prompt=prompt,run_id=active,max_output_tokens=tokens,timeout_seconds=45)
+            result=call_provider_with_ledger(
+                provider=provider, role="translate_official", prompt=prompt, run_id=active,
+                max_output_tokens=tokens, timeout_seconds=45,
+                min_output_chars=min_output_chars,
+            )
         except UsageLedgerError as exc:
             # Budget/cooldown/policy refusals (code_ai_*) fall through to the next provider, then Worker AI.
             # Ledger infrastructure failures (usage_ledger_*) stay fail-closed: usage cannot be accounted.
@@ -128,14 +142,18 @@ def translate_to_persian(text: str, *, kind: str = "caption", run_id: str | None
         except ProviderClientError: continue
         except Exception: continue
         translated=_valid_persian_translation(result.text,source,max_chars=out_limit)
-        if translated and (kind!="subtitle" or _numbered_subtitles_valid(source,translated)): return translated
+        if translated and len(translated) >= min_output_chars and (
+            kind!="subtitle" or _numbered_subtitles_valid(source,translated)
+        ): return translated
     try:
         from agent.brain.cloud_state import CloudState
         cloud=CloudState(os.getenv("AGENT_API_BASE_URL","https://rubika-agent.h98609294.workers.dev"),token=os.getenv("AGENT_API_TOKEN",""),timeout_seconds=20)
         fallback=cloud.translate_official(source,kind=kind,run_id=active)
     except Exception: return None
     translated=_valid_persian_translation(fallback,source,max_chars=out_limit)
-    return translated if translated and (kind!="subtitle" or _numbered_subtitles_valid(source,translated)) else None
+    return translated if translated and len(translated) >= min_output_chars and (
+        kind!="subtitle" or _numbered_subtitles_valid(source,translated)
+    ) else None
 
 
 def translate_subtitle_batches(cues: list, *, run_id: str | None = None) -> tuple[list | None,str | None]:
