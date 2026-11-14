@@ -4,12 +4,12 @@ import { homeSummary } from "./panel_screens.js";
 import { isScreenIdExt as isScreenId, buildScreenExt as buildScreen, HOME_ROWS_EXT as HOME_ROWS } from "./panel_screens_ext.js";
 import { isSettingsId, applySettingsAction, settingsScreen } from "./panel_settings.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
+import { normalizeMobXLink } from "./mob_x_link.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
 const MAX_BODY = 64 * 1024;
 const PRIVATE_TYPES = new Set(["private", "privatechat", "user", "userchat", "personal"]);
-const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
 const te = new TextEncoder();
 const PANEL_TIMING = Symbol("panel_timing");
 const PANEL_STATE_CACHE = Symbol("panel_state_cache");
@@ -137,8 +137,7 @@ export function isPrivateChat(ev) {
   return l.startsWith("b0");
 }
 export function parseXLink(text) {
-  const m = X_LINK.exec(String(text || "").trim());
-  return m ? "https://x.com/mobgamesstudios/status/" + m[1] : null;
+  return normalizeMobXLink(text)?.canonicalUrl || null;
 }
 
 const GITHUB_DISPATCH_WORKFLOWS = new Set([
