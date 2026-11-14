@@ -123,6 +123,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_speech_gate.py' -v
           python -m unittest discover -s tests -p 'test_migrations.py' -v
           python -m unittest discover -s tests -p 'test_workflow_safety.py' -v
+          python -m unittest discover -s tests -p 'test_termux_pkg_index_retry.py' -v
           python -m unittest discover -s tests -p 'test_relay.py' -v
           python -m unittest discover -s tests -p 'test_relay_client.py' -v
           node tests/worker.test.mjs
