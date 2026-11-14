@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import ast
+import re
 import sqlite3
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def extract_js_string_concat(source: str, constant: str) -> str:
+    match = re.search(rf"const {re.escape(constant)}\\s*=\\s*(.*?);", source, re.S)
+    if match is None:
+        raise AssertionError(f"JavaScript SQL constant not found: {constant}")
+    literals = re.findall(r'"(?:\\\\.|[^"\\\\])*"', match.group(1))
+    return "".join(ast.literal_eval(literal) for literal in literals)
 
 
 class D1MigrationTests(unittest.TestCase):
@@ -321,6 +331,29 @@ class D1MigrationTests(unittest.TestCase):
                     "INSERT INTO console_jobs (id, type, status, progress, panel_link_id) VALUES (?, ?, ?, ?, ?)",
                     ("job_mob_link_002", "mob_x_link", "confirmed", 0, 1),
                 )
+        finally:
+            db.close()
+
+
+    def test_panel_summary_sql_executes_after_all_migrations(self):
+        worker_source = (ROOT / "src" / "index.js").read_text(encoding="utf-8")
+        status_sql = extract_js_string_concat(worker_source, "PANEL_STATUS_SUMMARY_SQL")
+        ai_sql = extract_js_string_concat(worker_source, "PANEL_AI_SUMMARY_SQL")
+        db = sqlite3.connect(":memory:")
+        try:
+            migrations = sorted((ROOT / "migrations").glob("*.sql"))
+            self.assertTrue(migrations, "the repository must contain migration files")
+            for migration in migrations:
+                db.executescript(migration.read_text(encoding="utf-8"))
+
+            usage_day = "2026-11-14"
+            status_row = db.execute(
+                status_sql, (usage_day + "T00:00:00.000Z",)
+            ).fetchone()
+            ai_rows = db.execute(ai_sql, (usage_day, usage_day)).fetchall()
+            self.assertIsNotNone(status_row)
+            self.assertEqual([row[0] for row in ai_rows], ["groq", "openrouter"])
+            self.assertEqual(len(ai_rows[0]), 6)
         finally:
             db.close()
 
