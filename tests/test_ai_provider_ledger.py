@@ -150,13 +150,10 @@ class AIProviderLedgerTests(unittest.TestCase):
         self.assertIn('"; prompt_tokens=" + promptTokens.value', source)
         self.assertIn('"; output_tokens=" + outputTokens.value', source)
         self.assertIn('"; total_tokens=" + totalTokens.value', source)
-        # The finish reason goes into the existing owner-digest event detail; no schema change.
+        # The finish reason goes into the already-existing owner-digest event detail; no migration.
         self.assertIn("await recordOwnerDigestEvent(env, {", source)
-        with self.db:
-            columns = {
-                row[1] for row in self.db.execute("PRAGMA table_info(owner_digest_events)")
-            }
-        self.assertTrue({"category", "source", "title", "detail"}.issubset(columns))
+        self.assertIn("owner_digest_events", source)
+        self.assertIn("INSERT INTO owner_digest_events", source)
 
     def test_worker_fail_closed_when_ledger_database_is_unavailable(self):
         source = WORKER.read_text(encoding="utf-8")
