@@ -74,6 +74,25 @@ const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString(
 const imported = await import(moduleUrl);
 const worker = imported.default;
 const panel = importedPanel;
+
+// The real Worker mapper must return provider envelopes accepted by the real panel formatter.
+{
+  const usageDay = "2026-11-14";
+  const mapped = imported.panelAiFromRows([
+    { provider: "groq", calls_used: 4, total_calls_used: 7, cooldown_until: null, state_error_code: null, latest_error_code: null },
+    { provider: "openrouter", calls_used: 3, total_calls_used: 7, cooldown_until: null, state_error_code: null, latest_error_code: null },
+  ], usageDay, usageDay + "T12:00:00.000Z");
+  assert.equal(mapped.ok, true);
+  assert.equal(mapped.providers.groq.ok, true);
+  assert.equal(mapped.providers.openrouter.ok, true);
+  const groqText = panel.fmtAi("groq", mapped.providers.groq);
+  assert.match(groqText, /آماده طبق ledger/);
+  assert.match(groqText, /سهمیهٔ امروز: 4\/18، باقی‌مانده: 14/);
+  const openrouterText = panel.fmtAi("openrouter", mapped.providers.openrouter);
+  assert.match(openrouterText, /آماده طبق ledger/);
+  assert.match(openrouterText, /سهمیهٔ امروز: 3\/18، باقی‌مانده: 13/);
+  assert.match(panel.fmtAi("groq", undefined), /موقتاً در دسترس نیست \(provider_missing\)/);
+}
 const panelSettings = await import(settingsModuleUrl);
 {
   const queried = [];
@@ -116,6 +135,28 @@ class FakeStatement {
     return this;
   }
   async first() {
+    if (this.sql.includes("SELECT COUNT(*) AS request_count FROM ai_provider_calls WHERE usage_day = ? AND provider = ?")) {
+      const [day, provider] = this.values;
+      const request_count = [...this.db.aiProviderCalls.values()]
+        .filter(row => row.usage_day === day && row.provider === provider).length;
+      return { request_count };
+    }
+    if (this.sql.includes("SELECT cooldown_until, last_error_code FROM ai_provider_state WHERE provider = ?")) {
+      const state = this.db.aiProviderStates.get(this.values[0]);
+      return state ? { ...state } : null;
+    }
+    if (this.sql.includes("SELECT COUNT(*) AS request_count FROM ai_provider_calls WHERE usage_day = ?")) {
+      const [day] = this.values;
+      const request_count = [...this.db.aiProviderCalls.values()]
+        .filter(row => row.usage_day === day).length;
+      return { request_count };
+    }
+    if (this.sql.includes("SELECT error_code FROM ai_provider_calls WHERE provider = ? AND error_code IS NOT NULL ORDER BY started_at DESC LIMIT 1")) {
+      const row = [...this.db.aiProviderCalls.values()]
+        .filter(item => item.provider === this.values[0] && item.error_code != null)
+        .sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))[0];
+      return row ? { error_code: row.error_code } : null;
+    }
     if (this.sql.includes("COUNT(*) AS n FROM failed_media WHERE source <> 'tiktok'")) {
       return { n: [...this.db.failedMedia.values()].filter(row => row.source !== "tiktok").length };
     }
@@ -847,6 +888,7 @@ class FakeDB {
     this.seenQuery = null;
     this.aiUsageDaily = new Map();
     this.aiProviderCalls = new Map();
+    this.aiProviderStates = new Map();
     this.ownerDigestState = null;
     this.ownerDigestEvents = [];
     this.sizeAfter = 12 * 1024 * 1024;
@@ -1945,6 +1987,31 @@ function makeOmniAI(probability = 0.97) {
 
 
 
+{
+  const state = env();
+  const today = new Date().toISOString().slice(0, 10);
+  state.DB.aiProviderCalls.set("call_groq_panel_test", {
+    call_id: "call_groq_panel_test", usage_day: today, provider: "groq",
+    role: "diagnose", status: "succeeded", started_at: today + "T08:00:00.000Z", error_code: null,
+  });
+  state.DB.aiProviderCalls.set("call_openrouter_panel_test", {
+    call_id: "call_openrouter_panel_test", usage_day: today, provider: "openrouter",
+    role: "review_patch", status: "succeeded", started_at: today + "T08:01:00.000Z", error_code: null,
+  });
+  state.DB.aiProviderStates.set("groq", { cooldown_until: null, last_error_code: null });
+  const response = await read(await worker.fetch(
+    request("/api/brain/ai-provider/status?provider=groq"), state,
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.provider, "groq");
+  assert.equal(response.body.calls_used, 1);
+  assert.equal(response.body.total_calls_used, 2);
+  assert.equal(response.body.remaining, 17);
+  assert.equal(response.body.total_remaining, 34);
+  assert.equal(response.body.ready, true);
+  assert.equal(response.body.status, "ready");
+}
 {
   const state=env();let args=null;state.AI={run:async(model,options)=>{args={model,options};return {response:"ترجمه فارسی معتبر"};}};
   const r=await read(await worker.fetch(request("/api/brain/translate-official",{method:"POST",body:{text:"A short official update.",kind:"caption",run_id:"mobcap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}),state));
