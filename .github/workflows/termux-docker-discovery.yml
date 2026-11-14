@@ -354,6 +354,8 @@ jobs:
       - name: Record successful five-hour collection cycle
         id: record_cycle
         if: steps.queue_intake.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -410,7 +412,8 @@ jobs:
             exit 0
           fi
           git commit -m "Record successful five-hour metadata intake"
-          git push origin HEAD:main
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 --wrap=0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin HEAD:main
 
       - name: Get safe advisory diagnosis for pipeline failure
         if: failure()
