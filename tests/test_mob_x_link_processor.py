@@ -139,7 +139,7 @@ class MobXLinkParserTests(unittest.TestCase):
             "https://x.com.evil.example/mobgamesstudios/status/" + POST_ID,
             f"https://evil@x.com/mobgamesstudios/status/{POST_ID}",
             f"https://x.com:443/mobgamesstudios/status/{POST_ID}",
-            f"https://x.com/mobgamesstudios/status/{POST_ID[:-1]}",
+            f"https://x.com/mobgamesstudios/status/{POST_ID[5:]}",
             "javascript:" + expected,
             "some text https://x.com/mobgamesstudios/status/" + POST_ID,
         ):
