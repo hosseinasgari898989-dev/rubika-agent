@@ -49,6 +49,11 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn('git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin HEAD:refs/heads/main', push_step)
         self.assertNotIn("git config --global", push_step)
 
+        cycle_step = workflow.split("name: Record successful five-hour collection cycle", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", cycle_step)
+        self.assertIn("base64 --wrap=0", cycle_step)
+        self.assertIn('git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin HEAD:main', cycle_step)
+
         docker_step = workflow.split("name: Run real Termux Docker source tests and collect live metadata", 1)[1].split("\n      - name:", 1)[0]
         self.assertNotIn("GH_TOKEN", docker_step)
         self.assertIn('-v "$GITHUB_WORKSPACE:/workspace:ro"', docker_step)
