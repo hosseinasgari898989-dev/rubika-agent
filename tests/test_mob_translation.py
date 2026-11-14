@@ -50,6 +50,69 @@ class MobTranslationTests(unittest.TestCase):
         self.assertEqual(call.call_args_list[1].kwargs["provider"], "openrouter")
         self.assertEqual(call.call_args_list[0].kwargs["run_id"], call.call_args_list[1].kwargs["run_id"])
 
+    def test_truncated_groq_text_falls_through_to_openrouter(self):
+        from agent.brain.ai_provider_clients import ProviderClientError
+        source = "Official announcement sentence. " * 15
+        short = SimpleNamespace(
+            provider="groq", model="openai/gpt-oss-20b",
+            text="متن فارسی ناقص" * 3, usage={"totalTokenCount": 820},
+            finish_reason="length",
+        )
+        complete = SimpleNamespace(
+            provider="openrouter", model="openrouter/free",
+            text="ترجمهٔ فارسی کامل و کافی برای این اطلاعیه رسمی که جزئیات پیام اصلی را حفظ می‌کند. " * 2,
+            usage={"totalTokenCount": 140}, finish_reason="stop",
+        )
+        with patch(
+            "agent.brain.ai_provider_clients.call_provider_with_ledger",
+            side_effect=[ProviderClientError("provider_output_truncated"), complete],
+        ) as call:
+            result = translate_to_persian(source)
+        self.assertEqual(result, complete.text.strip())
+        self.assertEqual([x.kwargs["provider"] for x in call.call_args_list], ["groq", "openrouter"])
+        self.assertGreaterEqual(call.call_args_list[0].kwargs["min_output_chars"], 40)
+
+    def test_empty_groq_response_falls_through_to_complete_openrouter_text(self):
+        empty = SimpleNamespace(
+            provider="groq", model="openai/gpt-oss-20b", text="", usage={}, finish_reason="stop",
+        )
+        complete = SimpleNamespace(
+            provider="openrouter", model="openrouter/free",
+            text="ترجمهٔ فارسی معتبر برای متن کوتاه منبع.",
+            usage={"totalTokenCount": 40}, finish_reason="stop",
+        )
+        with patch(
+            "agent.brain.ai_provider_clients.call_provider_with_ledger",
+            side_effect=[empty, complete],
+        ) as call:
+            result = translate_to_persian("An official source sentence.")
+        self.assertEqual(result, complete.text)
+        self.assertEqual(call.call_count, 2)
+
+    def test_caption_output_limit_is_raised_without_changing_daily_budgets(self):
+        import json
+        from pathlib import Path
+        config = json.loads(
+            (Path(__file__).resolve().parents[1] / "config" / "mob_translation_limits.json").read_text()
+        )
+        self.assertEqual(config["caption"]["max_output_tokens"], 2048)
+        self.assertEqual(config["daily"]["translation_total_tokens"], 200000)
+        self.assertEqual(config["daily"]["groq_total_tokens"], 200000)
+        result = SimpleNamespace(
+            provider="groq", model="openai/gpt-oss-20b",
+            text="ماب انترتینمنت خبر رسمی تازه‌ای منتشر کرد.",
+            usage={"totalTokenCount": 21}, finish_reason="stop",
+        )
+        with patch(
+            "agent.brain.ai_provider_clients.call_provider_with_ledger",
+            return_value=result,
+        ) as call:
+            self.assertEqual(
+                translate_to_persian("Mob Entertainment published an official update."),
+                result.text,
+            )
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"], 2048)
+
     def test_cloudflare_worker_ai_is_last_fallback_after_groq_and_openrouter(self):
         from agent.brain.ai_provider_clients import ProviderClientError
         with patch("agent.brain.ai_provider_clients.call_provider_with_ledger",side_effect=[ProviderClientError("http_503"),ProviderClientError("http_429")]) as call, \
