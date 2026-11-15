@@ -996,6 +996,11 @@ def run_trial(
                 known_item_ids.update(mob_x_identity_aliases(external_id))
                 newly_persisted.append(item)
         backlog_candidates.extend(newly_persisted)
+        backlog_ids.update(
+            post_id
+            for item in newly_persisted
+            if (post_id := normalize_mob_x_external_id(str(item.get("external_id") or ""))) is not None
+        )
         pending = backlog_candidates if (publish or test_channel_publish) else candidates
         candidates = sort_candidates_oldest_first(pending)
         source_attempts.append({
