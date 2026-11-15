@@ -4601,6 +4601,43 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.consoleJobs.size, 1, "cancellation must not enqueue work");
 }
 
+// PV manual confirmation cannot create a job when either historical identity already exists.
+{
+  const postId = "2111111111111111111";
+  for (const status of ["sent", "uncertain", "ready"]) {
+    for (const storedId of [postId, "x-" + postId]) {
+      await withMockRubikaFetch(async calls => {
+        const state = panelEnv();
+        state.DB.ownerChat = "b0actualowner";
+        state.DB.state.set("panel_mid", "duplicate-manual-main");
+        state.DB.state.set("panel_mob_pending_link_id", "1");
+        state.DB.state.set("panel_mob_temp_mid", "duplicate-manual-prompt");
+        state.DB.links.push({
+          id: 1, url: "https://x.com/mobgamesstudios/status/" + postId,
+          external_id: postId, status: "pending",
+        });
+        const duplicateItemId = "mob_official:" + storedId;
+        state.DB.items.set(duplicateItemId, {
+          id: duplicateItemId, platform: "mob_official", external_id: storedId,
+          status, review_state: status === "ready" ? "pending" : null,
+        });
+        const secret = await panel.hookSecret(state);
+        await postPanelUpdate(state, {
+          update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+            message_id: "duplicate-manual-prompt", chat_id: "b0actualowner", text: "",
+            aux_data: { button_id: "p_mob_confirm" },
+          } },
+        }, secret);
+        assert.equal(state.DB.links[0].status, "pending", status + " / " + storedId);
+        assert.equal(state.DB.consoleJobs.size, 0, "duplicate confirmation must not create a job");
+        assert.equal(state.DB.state.get("panel_mob_pending_link_id"), "");
+        const finalEdit = calls.filter(call => call.method === "editMessageText").at(-1);
+        assert.ok(finalEdit?.payload.text.includes("این پست قبلاً ارسال شده"));
+      });
+    }
+  }
+}
+
 // Owner-web Mob X caption actions are per-job, guarded, audited and have no publish/preview path.
 {
   const state = env();
