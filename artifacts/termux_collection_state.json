@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 34,
   "candidate_pool_size": 34,
-  "completed_at": "2026-11-15T21:46:41+00:00",
+  "completed_at": "2026-11-15T22:04:11+00:00",
   "discovered_candidate_count": 41,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -29,24 +29,24 @@
     "failed": 16,
     "processing": 0,
     "queued": 1,
-    "sent": 86,
-    "sent_today": 1,
+    "sent": 87,
+    "sent_today": 2,
     "skipped": 37,
     "uncertain": 0,
     "usage_day": "2026-11-15"
   },
   "queue_status": "enqueued",
   "received_count": 1,
-  "report_generated_at": "2026-11-15T21:46:31.650405+00:00",
+  "report_generated_at": "2026-11-15T22:04:00.702252+00:00",
   "schema_version": 1,
   "selected_external_ids": [
-    "7708370358994324758"
+    "7708520385087556870"
   ],
   "selected_source_distribution": {
-    "bendus.editz": 1
+    "meloaep_": 1
   },
   "selected_urls": [
-    "https://www.tiktok.com/@bendus.editz/video/7708370358994324758"
+    "https://www.tiktok.com/@meloaep_/video/7708520385087556870"
   ],
   "skipped_existing_count": 33
 }
