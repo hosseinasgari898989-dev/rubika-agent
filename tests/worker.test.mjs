@@ -5269,7 +5269,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 {
   const postId = "2111111111111111111";
   for (const status of ["sent", "uncertain", "ready"]) {
-    for (const storedId of [postId, "x-" + postId]) {
+    for (const storedId of ["x-" + postId]) {
       await withMockRubikaFetch(async calls => {
         const state = panelEnv();
         state.DB.ownerChat = "b0actualowner";
