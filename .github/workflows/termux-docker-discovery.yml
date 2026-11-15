@@ -210,7 +210,7 @@ jobs:
           timeout 25m docker run --rm -i \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -v "$output_dir:/out" \
-            --mount "type=bind,src=$token_file,dst=/tmp/agent-api-token,readonly" \
+            --mount "type=bind,src=$token_file,dst=/data/data/com.termux/files/usr/tmp/agent-api-token,readonly" \
             -w /workspace \
             --env PYTHONPATH=/workspace \
             --env AGENT_API_BASE_URL \
@@ -231,7 +231,7 @@ jobs:
                       timeout 90s python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
               timeout 90s python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
               # termux-docker entrypoint uses su -i; export only after the privilege transition and test suite.
-              export AGENT_API_TOKEN_FILE=/tmp/agent-api-token
+              export AGENT_API_TOKEN_FILE=/data/data/com.termux/files/usr/tmp/agent-api-token
               timeout 12m python -
             ' < "$RUNNER_TEMP/termux_docker_discovery.py"
 
