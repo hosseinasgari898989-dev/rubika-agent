@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import "./tiktok_console.test.mjs";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -85,15 +86,18 @@ const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
 const workerImport = 'import { dispatchMobXWorkflow, handleOwnerPanel } from "./owner_panel.js";';
 const cronImport = 'import { getLastWorkflowCronResult, runWorkflowCron } from "./workflow_cron.js";';
 const consoleApiImport = 'import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";';
+const consoleOwnerReviewImport = 'import { handleTikTokOwnerReviewApi } from "./console_tiktok.js";';
 assert.ok(originalSource.includes(workerImport), "Worker must import owner panel handler and shared dispatcher");
 assert.ok(originalSource.includes(cronImport), "Worker must import cron dispatcher");
 assert.ok(originalSource.includes(consoleApiImport), "Worker must import console API handler");
+assert.ok(originalSource.includes(consoleOwnerReviewImport), "Worker must import shared TikTok owner review API");
 const cronSourceForWorker = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
 const cronModuleUrlForWorker = dataModuleUrl(cronSourceForWorker);
 const source = originalSource
   .replace(workerImport, `const { dispatchMobXWorkflow, handleOwnerPanel } = await import("${panelModuleUrl}");`)
   .replace(cronImport, `const { getLastWorkflowCronResult, runWorkflowCron } = await import("${cronModuleUrlForWorker}");`)
-  .replace(consoleApiImport, `const { handleConsoleApi, corsPreflight, withCors } = await import("${consoleApiModuleUrl}");`);
+  .replace(consoleApiImport, `const { handleConsoleApi, corsPreflight, withCors } = await import("${consoleApiModuleUrl}");`)
+  .replace(consoleOwnerReviewImport, `const { handleTikTokOwnerReviewApi } = await import("${consoleTikTokModuleUrl}");`);
 
 // Test-only baseline Worker restores direct getState reads while keeping all other code identical.
 const getStateStart = panelSource.indexOf("const getState = async (env, k, d) => {");
@@ -1024,8 +1028,10 @@ const OWNER_EXEMPT_POSTS = new Set([
   "/failed-media/record", "/failed-media/list", "/failed-media/pending-delete", "/failed-media/delete-result", "/d1/query",
 ]);
 const needsOwnerToken = (url, method) => {
-  if (!url.startsWith("/api/console/") || ["GET", "HEAD", "OPTIONS"].includes(method)) return false;
+  if (!url.startsWith("/api/console/")) return false;
   const sub = String(url).split("?")[0].replace(/\/+$/, "").slice("/api/console".length);
+  if (sub === "/tiktok-owner-review" || sub.startsWith("/tiktok-owner-review/")) return true;
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return false;
   if (OWNER_EXEMPT_POSTS.has(sub)) return false;
   if (/^\/mob-x\/jobs\/[A-Za-z0-9_-]{1,100}\/(?:transition|preview|delivery)$/.test(sub)) return false;
   return true;
@@ -5858,3 +5864,312 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 }
 
 console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
+
+
+// TikTok owner review exercises the real Worker handlers against all real D1 migrations.
+{
+  const createRealD1 = () => {
+    const sqlite = new DatabaseSync(":memory:");
+    const migrationsDir = path.join(root, "migrations");
+    const migrationFiles = fs.readdirSync(migrationsDir).filter(name => name.endsWith(".sql")).sort();
+    assert.equal(migrationFiles.length, 12, "apply every current migration, without a hand-made schema");
+    for (const filename of migrationFiles) sqlite.exec(fs.readFileSync(path.join(migrationsDir, filename), "utf8"));
+    const DB = {
+      prepare(sql) {
+        let values = [];
+        const statement = {
+          sql,
+          get values() { return values; },
+          bind(...args) { values = args; return this; },
+          async first() { return sqlite.prepare(sql).get(...values) ?? null; },
+          async all() { return { results: sqlite.prepare(sql).all(...values) }; },
+          async run() {
+            const result = sqlite.prepare(sql).run(...values);
+            return { meta: { changes: Number(result.changes), last_row_id: Number(result.lastInsertRowid || 0) } };
+          },
+        };
+        return statement;
+      },
+      async batch(statements) {
+        sqlite.exec("BEGIN");
+        try {
+          const out = statements.map(statement => {
+            const result = sqlite.prepare(statement.sql).run(...statement.values);
+            return { meta: { changes: Number(result.changes), last_row_id: Number(result.lastInsertRowid || 0) } };
+          });
+          sqlite.exec("COMMIT");
+          return out;
+        } catch (error) {
+          sqlite.exec("ROLLBACK");
+          throw error;
+        }
+      },
+    };
+    sqlite.prepare("INSERT INTO panel_owner (id, chat_id) VALUES (1, 'owner-review-chat')").run();
+    sqlite.prepare("INSERT INTO sources (id, platform, source_key, enabled) VALUES ('tiktok:tracked_a', 'tiktok', 'tracked_a', 1)").run();
+    return {
+      sqlite,
+      state: {
+        DB,
+        AGENT_API_TOKEN: TOKEN,
+        OWNER_WEB_TOKEN: OWNER_TOKEN,
+      },
+    };
+  };
+  const queueReview = (sqlite, externalId, {
+    handle = "tracked_a",
+    reason = "edit_signal_not_found_by_brain",
+    state = "pending",
+    createdAt = null,
+    notifiedAt = null,
+  } = {}) => {
+    const metadata = {
+      owner_review: {
+        state,
+        reason,
+        original_reason: reason,
+        music_probability: reason === "music_probability_ambiguous" ? 0.61 : null,
+        created_at: createdAt || new Date().toISOString(),
+        notified_at: notifiedAt,
+      },
+    };
+    const url = "https://www.tiktok.com/@" + handle + "/video/" + externalId;
+    sqlite.prepare(
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, title, caption, " +
+      "status, last_error_code, metadata_json) VALUES (?, 'tiktok', ?, ?, ?, 'Poppy Playtime edit', " +
+      "'poppy playtime fan edit', 'failed', 'needs_owner_review', ?)"
+    ).run("tiktok:" + externalId, externalId, url, handle, JSON.stringify(metadata));
+    return { id: "tiktok:" + externalId, external_id: externalId, url, handle };
+  };
+  const addItemState = (sqlite, externalId, status, { receipt = null, sentAt = null, attemptStatus = null, attemptReceipt = null } = {}) => {
+    const itemId = "tiktok:" + externalId;
+    sqlite.prepare(
+      "INSERT INTO items (id, platform, source_key, external_id, canonical_url, status, rubika_message_id, sent_at) " +
+      "VALUES (?, 'tiktok', 'tracked_a', ?, ?, ?, ?, ?)"
+    ).run(itemId, externalId, "https://www.tiktok.com/@tracked_a/video/" + externalId, status, receipt, sentAt);
+    if (attemptStatus) sqlite.prepare(
+      "INSERT INTO delivery_attempts (item_id, attempt_number, status, rubika_message_id) VALUES (?, 1, ?, ?)"
+    ).run(itemId, attemptStatus, attemptReceipt);
+  };
+  const postPreview = async (state, lines, chatId = "owner-review-chat") => read(await worker.fetch(request(
+    "/api/brain/owner-console/tiktok-review/preview",
+    { method: "POST", body: { lines, chat_id: chatId } },
+  ), state));
+  const postConfirm = async (state, challengeId, confirm = true, chatId = "owner-review-chat") => read(await worker.fetch(request(
+    "/api/brain/owner-console/tiktok-review/confirm",
+    { method: "POST", body: { challenge_id: challengeId, confirm, chat_id: chatId } },
+  ), state));
+  const reviewId = n => "78" + String(n).padStart(16, "0");
+
+  // Initial music ambiguity can only enter review with audio and probability 0.15–0.70.
+  {
+    const { sqlite, state } = createRealD1();
+    const id = "tiktok:" + reviewId(1);
+    sqlite.prepare(
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
+      "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'processing')"
+    ).run(id, reviewId(1), "https://www.tiktok.com/@tracked_a/video/" + reviewId(1));
+    const accepted = await read(await worker.fetch(request("/api/brain/automation-queue/" +
+      encodeURIComponent(id) + "/owner-review", {
+        method: "POST",
+        body: { reason: "music_probability_ambiguous", music_probability: 0.61, has_audio: true },
+      }), state));
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.body.last_error_code, "needs_owner_review");
+    const row = sqlite.prepare("SELECT status, last_error_code, metadata_json FROM automation_queue WHERE id = ?").get(id);
+    assert.equal(row.status, "failed");
+    assert.equal(row.last_error_code, "needs_owner_review");
+    const metadata = JSON.parse(row.metadata_json);
+    assert.equal(metadata.owner_review.original_reason, "music_probability_ambiguous");
+    assert.equal(metadata.owner_review.music_probability, 0.61);
+    assert.equal(metadata.owner_review.has_audio, true);
+
+    for (const invalid of [
+      { reason: "off_topic", music_probability: 0.61, has_audio: true },
+      { reason: "music_probability_ambiguous", music_probability: 0.14, has_audio: true },
+      { reason: "music_probability_ambiguous", music_probability: 0.71, has_audio: true },
+      { reason: "music_probability_ambiguous", music_probability: 0.61, has_audio: false },
+    ]) {
+      const badId = "tiktok:" + reviewId(10 + Math.floor(Math.random() * 1000));
+      sqlite.prepare(
+        "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
+        "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'processing')"
+      ).run(badId, badId.slice(7), "https://www.tiktok.com/@tracked_a/video/" + badId.slice(7));
+      const bad = await read(await worker.fetch(request("/api/brain/automation-queue/" +
+        encodeURIComponent(badId) + "/owner-review", { method: "POST", body: invalid }), state));
+      assert.equal(bad.status, 400);
+      assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(badId).status, "processing");
+    }
+    sqlite.close();
+  }
+
+  // Valid multi-line parsing, canonical URL/query handling, duplicate, invalid host and other account.
+  {
+    const { sqlite, state } = createRealD1();
+    const a = queueReview(sqlite, reviewId(2));
+    const b = queueReview(sqlite, reviewId(3));
+    const untracked = queueReview(sqlite, reviewId(4), { handle: "untracked_account" });
+    const lines = [
+      a.url + "?is_from_webapp=1 قبول",
+      a.url + "?share_item_id=1 رد",
+      "https://tiktok.com.evil.example/@tracked_a/video/" + reviewId(5) + " قبول",
+      "https://www.tiktok.com/@other_account/video/" + reviewId(3) + " قبول",
+      untracked.url + " رد",
+      b.url + " رد",
+    ].join("\n");
+    const preview = await postPreview(state, lines);
+    assert.equal(preview.status, 200);
+    assert.equal(preview.body.expected_count, 2);
+    assert.equal(preview.body.approved_count, 1);
+    assert.equal(preview.body.rejected_count, 1);
+    assert.equal(preview.body.invalid_count, 4);
+    assert.match(preview.body.summary_fa, /قبول، .*رد، .*نامعتبر/);
+    assert.equal(sqlite.prepare("SELECT canonical_url FROM automation_queue WHERE id = ?").get(a.id).canonical_url, a.url);
+    sqlite.close();
+  }
+
+  // More than 20 lines is bounded; only the first 20 valid decisions can be challenged.
+  {
+    const { sqlite, state } = createRealD1();
+    const items = Array.from({ length: 21 }, (_, i) => queueReview(sqlite, reviewId(100 + i)));
+    const preview = await postPreview(state, items.map(item => item.url + " قبول").join("\n"));
+    assert.equal(preview.status, 200);
+    assert.equal(preview.body.expected_count, 20);
+    assert.equal(preview.body.invalid_count, 1);
+    sqlite.close();
+  }
+
+  // Wrong item state, sent/uncertain items, and receipts are excluded from owner review.
+  {
+    const { sqlite, state } = createRealD1();
+    const wrong = queueReview(sqlite, reviewId(201));
+    sqlite.prepare("UPDATE automation_queue SET status = 'queued' WHERE id = ?").run(wrong.id);
+    const sent = queueReview(sqlite, reviewId(202));
+    addItemState(sqlite, sent.external_id, "sent", { receipt: "receipt-sent", sentAt: new Date().toISOString(), attemptStatus: "sent", attemptReceipt: "receipt-sent" });
+    const uncertain = queueReview(sqlite, reviewId(203));
+    addItemState(sqlite, uncertain.external_id, "uncertain", { attemptStatus: "uncertain" });
+    const started = queueReview(sqlite, reviewId(204));
+    addItemState(sqlite, started.external_id, "queued", { attemptStatus: "started" });
+    const preview = await postPreview(state, [wrong, sent, uncertain, started].map(item => item.url + " قبول").join("\n"));
+    assert.equal(preview.body.expected_count, 0);
+    assert.equal(preview.body.invalid_count, 4);
+    sqlite.close();
+  }
+
+  // Confirmation is mandatory; approval goes back to the existing queue only once.
+  {
+    const { sqlite, state } = createRealD1();
+    const item = queueReview(sqlite, reviewId(301));
+    const preview = await postPreview(state, item.url + " قبول");
+    const challenge = preview.body.challenge_id;
+    assert.equal((await postConfirm(state, challenge, false)).status, 400);
+    assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(item.id).status, "failed");
+    const confirmed = await postConfirm(state, challenge, true);
+    assert.equal(confirmed.status, 200);
+    assert.equal(confirmed.body.changed_count, 1);
+    assert.equal(confirmed.body.approved_count, 1);
+    const row = sqlite.prepare("SELECT status, last_error_code, metadata_json FROM automation_queue WHERE id = ?").get(item.id);
+    assert.equal(row.status, "queued");
+    assert.equal(row.last_error_code, null);
+    const metadata = JSON.parse(row.metadata_json);
+    assert.equal(metadata.owner_review.state, "approved");
+    assert.equal(metadata.owner_review.owner_override, true);
+    assert.equal(metadata.owner_review.owner_override_reason, "edit_signal_not_found_by_brain");
+    assert.equal((await postConfirm(state, challenge, true)).status, 409);
+    assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(item.id).status, "queued");
+    sqlite.close();
+  }
+
+  // Rejection is permanent and uses only the CHECK-supported skipped state.
+  {
+    const { sqlite, state } = createRealD1();
+    const item = queueReview(sqlite, reviewId(302));
+    const preview = await postPreview(state, item.url + " رد");
+    const result = await postConfirm(state, preview.body.challenge_id);
+    assert.equal(result.status, 200);
+    const row = sqlite.prepare("SELECT status, last_error_code, metadata_json FROM automation_queue WHERE id = ?").get(item.id);
+    assert.equal(row.status, "skipped");
+    assert.equal(row.last_error_code, "owner_rejected");
+    assert.equal(JSON.parse(row.metadata_json).owner_review.state, "rejected");
+    sqlite.prepare(
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
+      "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'queued') ON CONFLICT(platform, external_id) DO NOTHING"
+    ).run(item.id, item.external_id, item.url);
+    assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(item.id).status, "skipped");
+    sqlite.close();
+  }
+
+  // Old pending reviews expire to skipped/owner_review_expired when listed or confirmed.
+  {
+    const { sqlite, state } = createRealD1();
+    const item = queueReview(sqlite, reviewId(303), { createdAt: "2026-11-10T00:00:00.000Z" });
+    const listed = await read(await worker.fetch(request(
+      "/api/brain/owner-console/tiktok-review?chat_id=owner-review-chat"
+    ), state));
+    assert.equal(listed.status, 200);
+    assert.equal(listed.body.items.length, 0);
+    const row = sqlite.prepare("SELECT status, last_error_code FROM automation_queue WHERE id = ?").get(item.id);
+    assert.equal(row.status, "skipped");
+    assert.equal(row.last_error_code, "owner_review_expired");
+    sqlite.close();
+  }
+
+  // Notification claiming is oldest-first and enforces the five-per-UTC-day cap.
+  {
+    const { sqlite, state } = createRealD1();
+    for (let i = 0; i < 2; i++) {
+      queueReview(sqlite, reviewId(400 + i), { notifiedAt: new Date().toISOString() });
+    }
+    const newItems = Array.from({ length: 6 }, (_, i) => queueReview(sqlite, reviewId(410 + i)));
+    const claimed = await read(await worker.fetch(request(
+      "/api/brain/automation-queue/owner-review/notifications/claim", { method: "POST", body: {} }
+    ), state));
+    assert.equal(claimed.status, 200);
+    assert.equal(claimed.body.items.length, 3);
+    assert.deepEqual(
+      claimed.body.items.map(row => row.external_id),
+      newItems.slice(0, 3).map(row => row.external_id),
+    );
+    const count = sqlite.prepare(
+      "SELECT COUNT(*) AS total FROM automation_queue WHERE platform = 'tiktok' " +
+      "AND date(json_extract(metadata_json, '$.owner_review.notified_at')) = date('now')"
+    ).get().total;
+    assert.equal(count, 5);
+    sqlite.close();
+  }
+
+  // A newer preview replaces the challenge; the old confirmation is stale and cannot act.
+  {
+    const { sqlite, state } = createRealD1();
+    const item = queueReview(sqlite, reviewId(501));
+    const first = await postPreview(state, item.url + " قبول");
+    const second = await postPreview(state, item.url + " رد");
+    assert.notEqual(first.body.challenge_id, second.body.challenge_id);
+    const stale = await postConfirm(state, first.body.challenge_id);
+    assert.equal(stale.status, 409);
+    assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(item.id).status, "failed");
+    const current = await postConfirm(state, second.body.challenge_id);
+    assert.equal(current.status, 200);
+    assert.equal(sqlite.prepare("SELECT status, last_error_code FROM automation_queue WHERE id = ?").get(item.id).status, "skipped");
+    sqlite.close();
+  }
+
+  // Web API is the same Worker handler and requires the distinct owner-web token on GET and POST.
+  {
+    const { sqlite, state } = createRealD1();
+    const item = queueReview(sqlite, reviewId(601));
+    const deniedViewer = await read(await worker.fetch(request("/api/console/tiktok-owner-review", { token: TOKEN }), state));
+    assert.equal(deniedViewer.status, 403);
+    const deniedAnonymous = await read(await worker.fetch(request("/api/console/tiktok-owner-review", { token: null }), state));
+    assert.equal(deniedAnonymous.status, 403);
+    const allowed = await read(await worker.fetch(request("/api/console/tiktok-owner-review", { token: OWNER_TOKEN }), state));
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.body.items[0].id, item.id);
+    const preview = await read(await worker.fetch(request("/api/console/tiktok-owner-review/preview", {
+      method: "POST", token: OWNER_TOKEN, body: { lines: item.url + " قبول" },
+    }), state));
+    assert.equal(preview.status, 200);
+    assert.equal(preview.body.expected_count, 1);
+    sqlite.close();
+  }
+}
