@@ -1202,6 +1202,8 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   if (id !== "p_links_clear" && id !== "p_links_clear_yes") {
     await setState(env, "panel_links_clear_pending", "no");
   }
+  const previousMid = await getState(env, "panel_mid", "");
+  const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
   if (id === "p_tiktok_review_input") {
     await setStates(env, [["mode", "waiting_tiktok_review"], ["tiktok_review_challenge", ""]]);
     const prompt = "📝 تصمیم گروهی تیک‌تاک\n\nهر تصمیم را در یک خط بفرست:\n" +
@@ -1239,8 +1241,6 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     p_mob: ["📰 **خبر رسمی Mob از لینک X**\n\nلینک https://x.com/mobgamesstudios/status/شناسه را بفرست.", CANCEL_KB],
   };
   if (id === "p_mob") await setState(env, "mode", "waiting_link");
-  const previousMid = await getState(env, "panel_mid", "");
-  const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
   if (isSettingsId(id)) {
     if (!(await hasOwnerRole(env, chat, await getOwner(env)))) {
       try { await rubika(env, "sendMessage", { chat_id: chat, text: "فقط نقش مالک اجازهٔ مشاهده و تغییر این تنظیمات را دارد." }); } catch {}
