@@ -76,9 +76,11 @@ def _music_report_fields(moderation: Any, validation: Any) -> dict[str, Any]:
     checks = moderation if isinstance(moderation, Mapping) else {}
     media = validation if isinstance(validation, Mapping) else {}
     raw_audio = media.get("has_audio")
+    raw_reason = checks.get("music_decision_reason")
     return {
         "music_probability": _safe_music_probability(checks.get("music_probability")),
         "has_audio_stream": raw_audio if type(raw_audio) is bool else None,
+        "music_decision_reason": raw_reason if raw_reason == "music_probability_ambiguous" else None,
     }
 
 
