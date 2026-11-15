@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import urllib.error
 import unittest
 from unittest.mock import patch
 
@@ -370,6 +371,37 @@ class CloudStateTests(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer " + TOKEN)
 
 
+
+    def test_console_tiktok_source_get_uses_agent_token_and_timeout_is_specific(self):
+        state = CloudState("https://worker.example", TOKEN)
+        captured = {}
+
+        def fake_open(request, timeout):
+            captured["url"] = request.full_url
+            captured["method"] = request.method
+            captured["authorization"] = request.get_header("Authorization")
+            captured["timeout"] = timeout
+            return io.BytesIO(b'{"ok":true,"items":[]}')
+
+        with patch("urllib.request.urlopen", side_effect=fake_open):
+            self.assertEqual(state.get_console_tiktok_sources(), [])
+        self.assertTrue(captured["url"].endswith("/api/console/sources?platform=tiktok"))
+        self.assertEqual(captured["method"], "GET")
+        self.assertEqual(captured["authorization"], "Bearer " + TOKEN)
+        self.assertEqual(captured["timeout"], 15)
+
+        timeout_errors = (
+            TimeoutError("timed out"),
+            urllib.error.URLError(TimeoutError("timed out")),
+        )
+        for timeout_error in timeout_errors:
+            with self.subTest(error=type(timeout_error).__name__), patch(
+                "urllib.request.urlopen", side_effect=timeout_error
+            ):
+                with self.assertRaises(CloudStateError) as raised:
+                    state.get_console_tiktok_sources()
+                self.assertEqual(raised.exception.code, "control_api_timeout")
+                self.assertEqual(raised.exception.endpoint_path, "/api/console/sources")
 
 if __name__ == "__main__":
     unittest.main()

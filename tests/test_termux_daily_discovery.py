@@ -154,22 +154,29 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
         mob_discover.assert_called_once_with(max_results=12)
         self.assertEqual(report["summary"]["tiktok_source_overlay_status"],
                          "console_sources_unavailable_using_legacy_six")
+        self.assertEqual(report["summary"]["tiktok_source_overlay_reason"], "token_missing")
         self.assertIs(report["summary"]["tiktok_account_removals_applied"], False)
-        self.assertTrue(any(row.get("reason") == "console_sources_unavailable_using_legacy_six"
+        self.assertTrue(any(row.get("reason") == "token_missing"
                             for row in report["attempts"]))
         self.assertNotIn("AGENT_API_TOKEN", json.dumps(report))
 
-    def test_console_source_http_401_timeout_and_invalid_json_fall_back_without_stopping_mob(self):
+    def test_console_source_failures_record_specific_reasons_and_keep_legacy_fallback(self):
         failures = (
-            CloudStateError("control_api_http_401", status_code=401,
-                            endpoint_path="/api/console/sources"),
-            CloudStateError("control_api_unreachable",
-                            endpoint_path="/api/console/sources"),
-            CloudStateError("control_api_invalid_json",
-                            endpoint_path="/api/console/sources"),
+            (CloudStateError("control_api_http_401", status_code=401,
+                             endpoint_path="/api/console/sources"), "http_401"),
+            (CloudStateError("control_api_http_403", status_code=403,
+                             endpoint_path="/api/console/sources"), "http_403"),
+            (CloudStateError("control_api_http_404", status_code=404,
+                             endpoint_path="/api/console/sources"), "http_404"),
+            (CloudStateError("control_api_http_503", status_code=503,
+                             endpoint_path="/api/console/sources"), "http_5xx"),
+            (CloudStateError("control_api_timeout",
+                             endpoint_path="/api/console/sources"), "timeout"),
+            (CloudStateError("control_api_invalid_json",
+                             endpoint_path="/api/console/sources"), "invalid_json"),
         )
-        for error in failures:
-            with self.subTest(error=error.code), tempfile.TemporaryDirectory() as folder, patch.dict(
+        for error, expected_reason in failures:
+            with self.subTest(reason=expected_reason), tempfile.TemporaryDirectory() as folder, patch.dict(
                 os.environ, {"AGENT_API_TOKEN": "test-token-that-is-never-real-123456"}
             ), patch.object(daily_discovery, "CloudState") as cloud_type, patch.object(
                 daily_discovery, "discover_tiktok_profiles", return_value=([], [])
@@ -190,7 +197,11 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 mob_discover.assert_called_once_with(max_results=12)
                 self.assertEqual(report["summary"]["tiktok_source_overlay_status"],
                                  "console_sources_unavailable_using_legacy_six")
+                self.assertEqual(report["summary"]["tiktok_source_overlay_reason"], expected_reason)
                 self.assertIs(report["summary"]["tiktok_account_removals_applied"], False)
+                attempt = next(row for row in report["attempts"]
+                               if row.get("source") == "tiktok_console_sources")
+                self.assertEqual(attempt["reason"], expected_reason)
                 serialized = json.dumps(report)
                 output_json = output_path.read_text(encoding="utf-8")
                 token = "test-token-that-is-never-real-123456"
@@ -198,7 +209,23 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
                 self.assertNotIn(token, output_json)
                 self.assertNotIn(token, log_capture.getvalue())
                 self.assertNotIn("Authorization", serialized)
+                self.assertNotIn(error.code, serialized)
         set_dynamic_tiktok_sources([])
+
+    def test_console_source_failure_reason_mapping_is_bounded(self):
+        cases = (
+            (RuntimeError("token_missing"), "token_missing"),
+            (CloudStateError("control_api_http_401", status_code=401), "http_401"),
+            (CloudStateError("control_api_http_403", status_code=403), "http_403"),
+            (CloudStateError("control_api_http_404", status_code=404), "http_404"),
+            (CloudStateError("control_api_http_502", status_code=502), "http_5xx"),
+            (CloudStateError("control_api_timeout"), "timeout"),
+            (CloudStateError("control_api_invalid_json"), "invalid_json"),
+            (CloudStateError("control_api_unreachable"), "unavailable"),
+        )
+        for error, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(daily_discovery._console_source_failure_reason(error), expected)
 
 
     def test_manual_cli_cannot_push_a_report_to_github(self):
