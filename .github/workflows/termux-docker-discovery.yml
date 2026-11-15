@@ -62,21 +62,6 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: Check optional agent API credential without exposing it
-        id: agent_api_credential
-        env:
-          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 ]]; then
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::AGENT_API_TOKEN is missing or invalid; discovery will use the legacy six, and D1 intake will be skipped."
-          else
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          fi
-          docker version
-
       - name: Install host test dependencies and run the complete unit test suite
         uses: actions/setup-python@v5
         with:
@@ -135,6 +120,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          docker version
           timeout 240s docker pull termux/termux-docker:x86_64
 
           output_dir="$RUNNER_TEMP/termux-discovery-output"
@@ -145,12 +131,20 @@ jobs:
           from __future__ import annotations
 
           import json
+          import os
           from pathlib import Path
 
           from termux.daily_discovery import collect_daily_report
 
           report_path = Path("/out/termux_discovery.json")
           report = collect_daily_report(output_path=report_path, load_remote_sources=True)
+          token = os.environ.get("AGENT_API_TOKEN", "").strip()
+          if token and token.encode("utf-8") in report_path.read_bytes():
+              report_path.unlink(missing_ok=True)
+              raise SystemExit("credential_leak_in_discovery_report")
+          (Path("/out") / "agent_api_available").write_text(
+              "true\\n" if len(token) >= 32 else "false\\n", encoding="utf-8"
+          )
           # The Termux container writes as its own UID; grant the host runner read access.
           report_path.chmod(0o644)
           summary = report.get("summary", {})
@@ -205,9 +199,9 @@ jobs:
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -v "$output_dir:/out" \
             -w /workspace \
-            -e PYTHONPATH=/workspace \
-            -e AGENT_API_TOKEN \
-            -e AGENT_API_BASE_URL \
+            --env PYTHONPATH=/workspace \
+            --env AGENT_API_TOKEN \
+            --env AGENT_API_BASE_URL \
             termux/termux-docker:x86_64 \
             sh -lc '
               set -eu
@@ -226,6 +220,16 @@ jobs:
               timeout 90s python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
               timeout 12m python -
             ' < "$RUNNER_TEMP/termux_docker_discovery.py"
+
+          agent_api_available="$(cat "$output_dir/agent_api_available")"
+          if [[ "$agent_api_available" != "true" && "$agent_api_available" != "false" ]]; then
+            echo "::error::Discovery returned an invalid credential availability marker."
+            exit 2
+          fi
+          echo "agent_api_available=$agent_api_available" >> "$GITHUB_OUTPUT"
+          if [[ "$agent_api_available" == "false" ]]; then
+            echo "::warning::AGENT_API_TOKEN is missing or shorter than 32 characters; remote TikTok sources and D1 intake are unavailable."
+          fi
 
       - name: Validate report and push only the metadata report to the main branch
         id: push_report
@@ -294,7 +298,7 @@ jobs:
       # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
       - name: Add TikTok metadata to the persistent D1 edit queue
         id: queue_intake
-        if: steps.push_report.outcome == 'success' && steps.agent_api_credential.outputs.available == 'true'
+        if: steps.push_report.outcome == 'success' && steps.termux_discovery.outputs.agent_api_available == 'true'
         env:
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
@@ -420,7 +424,6 @@ jobs:
         if: failure()
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
-          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
         run: |
           set +e
@@ -486,7 +489,7 @@ jobs:
             echo "- Schedule: twice-hourly UTC gate; full collection after five hours from successful D1 intake"
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
-            echo "- Agent API credential available: ${{ steps.agent_api_credential.outputs.available || 'unknown' }}"
+            echo "- Agent API credential available: ${{ steps.termux_discovery.outputs.agent_api_available || 'unknown' }}"
             echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
             echo "- Live candidates evaluated by intake filter: ${{ steps.queue_intake.outputs.discovered_candidate_count || 'n/a' }}"
             echo "- Eligible candidates after content/edit/freshness checks: ${{ steps.queue_intake.outputs.filter_eligible_count || 'n/a' }}"
