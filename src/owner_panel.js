@@ -4,6 +4,7 @@ import { homeSummary } from "./panel_screens.js";
 import { isScreenIdExt as isScreenId, buildScreenExt as buildScreen, HOME_ROWS_EXT as HOME_ROWS } from "./panel_screens_ext.js";
 import { isSettingsId, applySettingsAction, settingsScreen } from "./panel_settings.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
+import { findMobXDeliveryDuplicate } from "./mob_x_identity.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
@@ -1038,6 +1039,13 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         await updateMobMain(ui, "پیش‌نمایش هنوز آمادهٔ تأیید نهایی نیست؛ لطفاً کمی بعد وضعیت را بررسی کن.", HOME_KB);
         return;
       }
+      const duplicate = await findMobXDeliveryDuplicate(env, result.external_id, {
+        allowItemId: result.item_id, allowJobId: jobId,
+      });
+      if (duplicate) {
+        await updateMobMain(ui, "این پست قبلاً ارسال شده؛ تأیید دستی برای این مورد مجاز نیست.", HOME_KB);
+        return;
+      }
       // This Worker does not receive GitHub Actions secrets. This button only records
       // owner approval; the GitHub publisher independently verifies the SHA-256 pin
       // for secrets.RUBIKA_CHANNEL_GUID immediately before any channel send.
@@ -1132,6 +1140,12 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     }
     const existing = await env.DB.prepare("SELECT id FROM console_jobs WHERE panel_link_id = ?").bind(linkId).first();
     if (!existing) {
+      const duplicate = await findMobXDeliveryDuplicate(env, link.external_id);
+      if (duplicate) {
+        await setState(env, "panel_mob_pending_link_id", "");
+        await updateMobMain(ui, "این پست قبلاً ارسال شده؛ کار دستی جدید ساخته نشد.", HOME_KB);
+        return;
+      }
       if (!["pending", "confirmed"].includes(link.status)) {
         await updateMobMain(ui, "این لینک دیگر در وضعیت قابل تأیید نیست.", HOME_KB);
         return;
@@ -1500,6 +1514,12 @@ async function processEvent(env, selfFetch, origin, ev) {
       mobTextMode = "mob_input_processing";
       await deleteMobTemp(timedEnv, ev.chat);
       const externalId = link.split("/").pop();
+      const duplicate = await findMobXDeliveryDuplicate(timedEnv, externalId);
+      if (duplicate) {
+        await setState(timedEnv, "mode", "idle");
+        await updateMobMain(ui, "این پست قبلاً ارسال شده.", HOME_KB);
+        return;
+      }
       await timedEnv.DB.prepare("INSERT OR IGNORE INTO panel_links (url, external_id, status) VALUES (?, ?, 'pending')").bind(link, externalId).run();
       const saved = await timedEnv.DB.prepare("SELECT id, url, external_id, status FROM panel_links WHERE external_id = ?").bind(externalId).first();
       if (!saved) throw new PanelError("mob_x_link_save_failed");
