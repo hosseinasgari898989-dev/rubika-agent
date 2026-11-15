@@ -1,6 +1,6 @@
 export function normalizeMobXExternalId(value) {
-  if (typeof value !== "string" && typeof value !== "number") return null;
-  let normalized = String(value).trim();
+  if (typeof value !== "string") return null;
+  let normalized = value.trim();
   if (normalized.startsWith("mob_official:")) normalized = normalized.slice("mob_official:".length);
   if (normalized.startsWith("x-")) normalized = normalized.slice(2);
   return /^[0-9]{15,22}$/.test(normalized) ? normalized : null;
