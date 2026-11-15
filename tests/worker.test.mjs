@@ -78,7 +78,7 @@ const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), 
   .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";')
   .replace('from "./console_tiktok.js";', 'from "' + consoleTikTokModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
-  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";');
+  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
   .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
 const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
