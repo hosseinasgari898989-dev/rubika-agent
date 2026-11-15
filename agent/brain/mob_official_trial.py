@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 import requests
 
 from agent.brain.cloud_state import CloudState, CloudStateError
+from agent.brain.mob_x_identity import mob_x_identity_aliases, normalize_mob_x_external_id
 from agent.brain.inspector import inspect_media
 from agent.brain.mob_translation import format_mob_post
 from agent.brain.rubika_publisher import RubikaPublisher
@@ -937,16 +938,29 @@ def run_trial(
                 continue
             stored_external_id = str(stored_item.get("external_id") or "")
             if stored_external_id:
-                known_item_ids.add("mob_official:" + stored_external_id)
-                known_item_ids.add(stored_external_id)
+                known_item_ids.update(mob_x_identity_aliases(stored_external_id))
             restored = _mob_x_backlog_candidate(stored_item)
             if restored is not None:
                 backlog_candidates.append(restored)
-        known_item_ids.update(seen["ids"])
+        # Keep the existing cross-platform exact seen checks below, but only expand
+        # Mob X aliases for identities explicitly scoped to the official platform.
+        for seen_identity in seen["ids"]:
+            if isinstance(seen_identity, str) and seen_identity.startswith("mob_official:"):
+                known_item_ids.update(mob_x_identity_aliases(seen_identity))
         candidates, since_rejections = filter_candidates_by_since(candidates, since_utc)
         backlog_candidates, backlog_rejections = filter_candidates_by_since(backlog_candidates, since_utc)
         since_rejections.extend(backlog_rejections)
-        candidates = sort_candidates_oldest_first([*backlog_candidates, *candidates])
+        # Prefer the durable D1 backlog row when source discovery returns the same
+        # post with the alternate historical external_id form.
+        unique_by_post_id: dict[str, dict[str, Any]] = {}
+        unkeyed_candidates: list[dict[str, Any]] = []
+        for item in [*backlog_candidates, *candidates]:
+            post_id = normalize_mob_x_external_id(str(item.get("external_id") or ""))
+            if post_id is None:
+                unkeyed_candidates.append(item)
+            else:
+                unique_by_post_id.setdefault(post_id, item)
+        candidates = sort_candidates_oldest_first([*unique_by_post_id.values(), *unkeyed_candidates])
         report["since_filter"] = {
             "source_platform": "x",
             "since_utc": since_utc,
@@ -956,17 +970,21 @@ def run_trial(
         }
 
         backlog_ids = {
-            str(item.get("external_id") or "") for item in backlog_candidates
-            if str(item.get("external_id") or "")
+            post_id
+            for item in backlog_candidates
+            if (post_id := normalize_mob_x_external_id(str(item.get("external_id") or ""))) is not None
         }
         newly_persisted: list[dict[str, Any]] = []
         if publish or test_channel_publish:
             for item in candidates:
                 external_id = str(item.get("external_id") or "")
                 identity = "mob_official:" + external_id
-                if not external_id or external_id in backlog_ids:
+                post_id = normalize_mob_x_external_id(external_id)
+                if not external_id or post_id is None or post_id in backlog_ids:
                     continue
-                if identity in known_item_ids or external_id in known_item_ids:
+                if identity in seen["ids"] or external_id in seen["ids"]:
+                    continue
+                if mob_x_identity_aliases(external_id) & known_item_ids:
                     continue
                 try:
                     cloud.upsert_item(_mob_x_discovery_payload(item))
@@ -975,8 +993,7 @@ def run_trial(
                     report["publishing"] = False
                     _report(output_report, report)
                     return report
-                known_item_ids.add(identity)
-                known_item_ids.add(external_id)
+                known_item_ids.update(mob_x_identity_aliases(external_id))
                 newly_persisted.append(item)
         backlog_candidates.extend(newly_persisted)
         pending = backlog_candidates if (publish or test_channel_publish) else candidates
@@ -1065,10 +1082,11 @@ def run_trial(
         identity = "mob_official:" + external_id
         if identity in seen["ids"] or external_id in seen["ids"]:
             continue
-        # Every existing D1 row is a dedupe barrier; only records restored above
-        # from status=discovered are allowed through this candidate loop.
-        if identity in known_item_ids or external_id in known_item_ids:
-            if not any(str(backlog.get("external_id") or "") == external_id for backlog in backlog_candidates):
+        # Every existing D1 row is a dedupe barrier across both historical X ID
+        # formats; only restored discovered rows may resume through this loop.
+        post_id = normalize_mob_x_external_id(external_id)
+        if mob_x_identity_aliases(external_id) & known_item_ids:
+            if post_id not in backlog_ids:
                 continue
         unseen_candidate_count += 1
 
