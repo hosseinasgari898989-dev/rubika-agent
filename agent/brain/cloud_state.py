@@ -533,6 +533,32 @@ class CloudState:
             raise CloudStateError("control_api_invalid_automation_queue")
         return response
 
+    def mark_tiktok_owner_review(
+        self, item_id: str, *, reason: str, music_probability: float, has_audio: bool
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"tiktok:[A-Za-z0-9._-]{1,120}", item_id):
+            raise ValueError("invalid_tiktok_owner_review_id")
+        if (
+            reason != "music_probability_ambiguous"
+            or has_audio is not True
+            or type(music_probability) not in {int, float}
+            or not 0.15 <= float(music_probability) <= 0.70
+        ):
+            raise ValueError("invalid_tiktok_owner_review_candidate")
+        escaped = urllib.parse.quote(item_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/brain/automation-queue/{escaped}/owner-review",
+            {"reason": reason, "music_probability": float(music_probability), "has_audio": True},
+        )
+
+    def claim_tiktok_owner_review_notifications(self) -> list[dict[str, Any]]:
+        response = self._request("POST", "/api/brain/automation-queue/owner-review/notifications/claim", {})
+        rows = response.get("items")
+        if not isinstance(rows, list):
+            raise CloudStateError("control_api_invalid_tiktok_owner_review_notifications")
+        return [row for row in rows if isinstance(row, dict)]
+
     def get_automation_queue_summary(self) -> dict[str, int]:
         response = self._request("GET", "/api/brain/automation-queue?summary=1")
         counts = response.get("counts")
