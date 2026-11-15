@@ -543,6 +543,27 @@ class MobXSubtitleWiringTests(unittest.TestCase):
             "external_id": POST_ID,
         }
 
+    def test_process_job_blocks_both_canonical_and_legacy_seen_ids_before_fetch(self):
+        for duplicate_id in (
+            "mob_official:" + POST_ID,
+            "mob_official:x-" + POST_ID,
+        ):
+            with self.subTest(duplicate_id=duplicate_id):
+                cloud = Mock()
+                cloud.get_seen_index.return_value = {"ids": {duplicate_id}}
+                client = Mock()
+                with (
+                    patch("agent.brain.mob_x_link_processor.CloudState", return_value=cloud),
+                    patch("agent.brain.mob_x_link_processor.fetch_public_post") as fetch,
+                ):
+                    with self.assertRaisesRegex(
+                        MobXLinkError, "mob_x_post_already_delivery_blocked"
+                    ):
+                        process_job(self._job(), client)
+                cloud.get_seen_index.assert_called_once_with()
+                fetch.assert_not_called()
+                client.rules.assert_not_called()
+
     def _run_video_job(self, gate, *, pipeline_error=None, original_text="Official video update"):
         from contextlib import ExitStack
 
