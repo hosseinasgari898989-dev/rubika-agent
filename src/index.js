@@ -1427,12 +1427,22 @@ async function automationQueueIngest(env, body) {
       invalid.push({ index, error: "invalid_media_type" });
       continue;
     }
+    const reviewReason = raw.owner_review_reason === "edit_signal_not_found_by_brain"
+      ? "edit_signal_not_found_by_brain" : "";
+    const ownerReview = reviewReason ? {
+      state: "pending",
+      reason: reviewReason,
+      original_reason: reviewReason,
+      created_at: new Date().toISOString(),
+      notified_at: null,
+    } : null;
     const metadata = {
       author: text(raw.author, 100),
       query: text(raw.query, 200),
       freshness_source: text(raw.freshness_source, 100),
       freshness_verified: raw.freshness_verified === true,
-      source_method: text(raw.method, 100)
+      source_method: text(raw.method, 100),
+      ...(ownerReview ? { owner_review: ownerReview } : {}),
     };
     rows.push({
       id: identity,
@@ -1446,6 +1456,8 @@ async function automationQueueIngest(env, body) {
       mediaType,
       freshnessVerified: raw.freshness_verified === true ? 1 : 0,
       method: text(raw.method, 100),
+      status: ownerReview ? "failed" : "queued",
+      lastErrorCode: ownerReview ? "needs_owner_review" : null,
       metadataJson: JSON.stringify(metadata)
     });
   }
@@ -1454,11 +1466,12 @@ async function automationQueueIngest(env, body) {
   }
   try {
     const statements = rows.map(row => env.DB.prepare(
-      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, title, caption, published_at, media_type, freshness_verified, method, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(platform, external_id) DO NOTHING"
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, title, caption, published_at, media_type, freshness_verified, method, status, last_error_code, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(platform, external_id) DO NOTHING"
     ).bind(
       row.id, row.platform, row.externalId, row.canonicalUrl, row.sourceKey,
       row.title || null, row.caption || null, row.publishedAt || null,
-      row.mediaType, row.freshnessVerified, row.method || null, row.metadataJson
+      row.mediaType, row.freshnessVerified, row.method || null, row.status,
+      row.lastErrorCode, row.metadataJson
     ));
     const results = await env.DB.batch(statements);
     const inserted = results.reduce((total, result) => total + Number(result.meta?.changes || 0), 0);
