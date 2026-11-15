@@ -5248,6 +5248,53 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 
 
 
+// Duplicate Mob X items in any delivery state veto the final owner approval callback.
+{
+  const postId = "2111111111111111111";
+  for (const status of ["sent", "uncertain", "ready"]) {
+    for (const storedId of [postId, "x-" + postId]) {
+      await withMockRubikaFetch(async calls => {
+        const state = panelEnv();
+        state.DB.ownerChat = "b0actualowner";
+        state.DB.state.set("panel_mid", "duplicate-approval-main");
+        const jobId = "job_abcdef1234567890";
+        const itemId = "mob_official:" + postId;
+        state.DB.links.push({
+          id: 1, url: "https://x.com/mobgamesstudios/status/" + postId,
+          external_id: postId, status: "ready_for_review",
+        });
+        state.DB.consoleJobs.set(jobId, {
+          id: jobId, type: "mob_x_link", status: "ready_for_review", panel_link_id: 1,
+          params_json: "{}", result_json: JSON.stringify({
+            item_id: itemId, external_id: postId, rubika_file_id: "mock-preview-file", preview_sent: true,
+          }),
+        });
+        state.DB.items.set(itemId, {
+          id: itemId, platform: "mob_official", external_id: postId,
+          status: "ready", review_state: "pending",
+        });
+        const duplicateItemId = "mob_official:" + storedId;
+        state.DB.items.set(duplicateItemId, {
+          id: duplicateItemId, platform: "mob_official", external_id: storedId,
+          status, review_state: status === "ready" ? "pending" : null,
+        });
+        const secret = await panel.hookSecret(state);
+        await postPanelUpdate(state, {
+          update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+            message_id: "duplicate-approval-preview", chat_id: "b0actualowner", text: "",
+            aux_data: { button_id: "p_mob_publish_" + jobId },
+          } },
+        }, secret);
+        assert.equal(state.DB.consoleJobs.get(jobId).status, "ready_for_review");
+        assert.equal(state.DB.items.get(itemId).review_state, "pending");
+        assert.equal(calls.some(call => call.url && call.url.includes("api.github.com")), false);
+        const finalEdit = calls.filter(call => call.method === "editMessageText").at(-1);
+        assert.ok(finalEdit?.payload.text.includes("این پست قبلاً ارسال شده"));
+      });
+    }
+  }
+}
+
 // PV publish approval updates the tracked main panel rather than sending a new main message.
 {
   await withMockRubikaFetch(async calls => {
