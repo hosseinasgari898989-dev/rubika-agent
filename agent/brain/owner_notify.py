@@ -702,17 +702,16 @@ def refresh_daily_digest() -> dict[str, Any]:
 
 def send_tiktok_owner_review_notifications(cloud: Any) -> dict[str, Any]:
     """Claim at most five daily review rows and send a links-only private message."""
+    token = os.getenv("RUBIKA_TOKEN", "").strip()
+    owner_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "").strip()
+    if not token or not owner_id:
+        return {"sent": False, "reason": "owner_review_notification_not_configured"}
     try:
         items = cloud.claim_tiktok_owner_review_notifications()
     except Exception as exc:
         return {"sent": False, "reason": "owner_review_claim_" + type(exc).__name__}
     if not items:
         return {"sent": True, "sent_count": 0}
-
-    token = os.getenv("RUBIKA_TOKEN", "").strip()
-    owner_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "").strip()
-    if not token or not owner_id:
-        return {"sent": False, "reason": "owner_review_notification_not_configured", "claimed_count": len(items)}
 
     rendered: list[str] = []
     for item in items[:5]:
