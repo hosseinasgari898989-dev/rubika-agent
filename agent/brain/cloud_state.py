@@ -9,8 +9,34 @@ import urllib.parse
 import urllib.request
 import uuid
 import time
+from pathlib import Path
 from typing import Any, Mapping
 from .deduplication import status_blocks_delivery
+
+
+def resolve_agent_api_token() -> tuple[str, str]:
+    """Return a valid API token and a safe length bucket, preferring the process env.
+
+    The file fallback is intended for container entrypoints that rebuild the
+    environment while dropping privileges. Never log or serialize the token.
+    """
+    env_token = os.getenv("AGENT_API_TOKEN", "").strip()
+    if len(env_token) >= 32:
+        return env_token, "ok"
+
+    file_token = ""
+    file_path = os.getenv("AGENT_API_TOKEN_FILE", "").strip()
+    if file_path:
+        try:
+            file_token = Path(file_path).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            file_token = ""
+
+    if len(file_token) >= 32:
+        return file_token, "ok"
+    if env_token or file_token:
+        return "", "short"
+    return "", "zero"
 
 
 def _safe_endpoint_path(value: Any) -> str | None:
@@ -60,7 +86,9 @@ class CloudState:
         if not base_url.startswith("https://"):
             raise ValueError("control_api_must_use_https")
         self.base_url = base_url.rstrip("/")
-        self.token = (token if token is not None else os.getenv("AGENT_API_TOKEN", "")).strip()
+        self.token = (
+            token.strip() if token is not None else resolve_agent_api_token()[0]
+        )
         self.timeout_seconds = timeout_seconds
         self.timings = {"worker_api_calls": 0, "worker_api_ms": 0.0}
         if len(self.token) < 32:
