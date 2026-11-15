@@ -3,11 +3,14 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
+import tempfile
 import urllib.error
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from agent.brain.cloud_state import CloudState, CloudStateError
+from agent.brain.cloud_state import CloudState, CloudStateError, resolve_agent_api_token
 from agent.brain.recovery import call_with_bounded_retry, is_retryable_error
 from agent.brain.models import Candidate, Evaluation, InspectionResult
 from types import SimpleNamespace
@@ -59,6 +62,36 @@ class CloudStateTests(unittest.TestCase):
             CloudState("http://worker.example", TOKEN)
         with self.assertRaises(ValueError):
             CloudState("https://worker.example", "short")
+
+
+    def test_reads_agent_api_token_from_file_when_environment_value_is_empty(self):
+        with tempfile.TemporaryDirectory() as folder:
+            token_file = Path(folder) / "agent-api-token"
+            token_file.write_text(TOKEN, encoding="utf-8")
+            with patch.dict(os.environ, {
+                "AGENT_API_TOKEN": "",
+                "AGENT_API_TOKEN_FILE": str(token_file),
+            }):
+                token, bucket = resolve_agent_api_token()
+                state = CloudState("https://worker.example")
+
+        self.assertEqual(token, TOKEN)
+        self.assertEqual(bucket, "ok")
+        self.assertEqual(state.token, TOKEN)
+
+    def test_rejects_short_token_read_from_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            token_file = Path(folder) / "agent-api-token"
+            token_file.write_text("too-short", encoding="utf-8")
+            with patch.dict(os.environ, {
+                "AGENT_API_TOKEN": "",
+                "AGENT_API_TOKEN_FILE": str(token_file),
+            }):
+                token, bucket = resolve_agent_api_token()
+                self.assertEqual(token, "")
+                self.assertEqual(bucket, "short")
+                with self.assertRaisesRegex(ValueError, "missing_or_short_AGENT_API_TOKEN"):
+                    CloudState("https://worker.example")
 
     def test_create_run_uses_auth_without_printing_it(self):
         state = CloudState("https://worker.example", TOKEN)
