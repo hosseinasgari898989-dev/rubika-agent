@@ -1136,7 +1136,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       return render(ui, "p_links", { clickedMid });
     }
 
-    if (!/^\d{15,22}$/.test(String(link.external_id || ""))) {
+    if (!normalizeMobXExternalId(link.external_id)) {
       await updateMobMain(ui, "شناسهٔ پست معتبر نیست؛ لینک دوباره بررسی شود.", HOME_KB);
       return;
     }
