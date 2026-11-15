@@ -30,6 +30,7 @@ from agent.brain.inspector import inspect_media
 from agent.brain.models import Candidate
 from agent.brain.mob_translation import translate_to_persian
 from agent.brain.mob_x_caption import build_mob_x_caption, clean_caption
+from agent.brain.mob_x_ids import canonical_mob_x_external_id, canonical_mob_x_item_id, mob_x_item_id_aliases
 from scripts import subtitle_pipeline
 from agent.brain.official import evaluate_official_media
 from agent.brain.pipeline import StagedMedia
@@ -936,13 +937,17 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
     if not parsed or parsed[1] != external_id:
         raise MobXLinkError("mob_x_link_identity_mismatch")
     canonical_url, _ = parsed
+    canonical_external_id = canonical_mob_x_external_id(external_id)
+    canonical_item_id = canonical_mob_x_item_id(external_id)
+    legacy_item_id = mob_x_item_id_aliases(external_id)[1]
 
     cloud = CloudState(
         os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
         token=os.getenv("AGENT_API_TOKEN", ""), timeout_seconds=20,
     )
     seen = cloud.get_seen_index()
-    if "mob_official:" + external_id in seen.get("ids", set()):
+    seen_ids = {str(value) for value in seen.get("ids", set())}
+    if canonical_item_id in seen_ids or legacy_item_id in seen_ids:
         raise MobXLinkError("mob_x_post_already_delivery_blocked")
 
     post = fetch_public_post(external_id, session=session)
@@ -1073,7 +1078,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
                     raise MobXLinkError("mob_x_translation_failed")
         caption = build_mob_x_caption(translation_source, translation)
         candidate = Candidate(
-            platform="mob_official", canonical_url=canonical_url, external_id=external_id,
+            platform="mob_official", canonical_url=canonical_url, external_id=canonical_external_id,
             title=clean_caption(post.get("title"), 500) or original[:500],
             caption=caption, source_key=HANDLE, media_type=media_type,
             source_tier="official", published_at=normalize_published_at(post.get("published_at")),
@@ -1102,7 +1107,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         except Exception:
             preserve_failed_media(
                 client, selected_storage, "mob_x", media_type, publish_path, caption,
-                "mob_x_preview_upload_failed", job_id=job_id, item_id="mob_official:" + external_id,
+                "mob_x_preview_upload_failed", job_id=job_id, item_id=canonical_item_id,
             )
             raise MobXLinkError("mob_x_preview_upload_failed") from None
         staged = StagedMedia(
@@ -1117,7 +1122,7 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         })
         cloud_result = cloud.upsert_item(payload)
         result = {
-            "item_id": cloud_result.get("item_id") or "mob_official:" + external_id,
+            "item_id": cloud_result.get("item_id") or canonical_item_id,
             "external_id": external_id, "url": canonical_url,
             "title": candidate.title, "published_at": candidate.published_at,
             "media_type": media_type, "caption": caption,
