@@ -282,6 +282,35 @@ class FakeStatement {
     if (this.sql.includes("FROM runs WHERE id = ?")) {
       return this.db.runs.get(this.values[0]) || null;
     }
+    if (this.sql.includes("FROM items WHERE platform = 'mob_official'") && this.sql.includes("external_id IN")) {
+      const [id, prefixed, canonicalId, prefixedCanonicalId, excludedItemId] = this.values;
+      const row = [...this.db.items.values()].find(item =>
+        item.platform === "mob_official" &&
+        (item.external_id === id || item.external_id === prefixed ||
+          item.id === canonicalId || item.id === prefixedCanonicalId) &&
+        (!excludedItemId || item.id !== excludedItemId));
+      return row ? { id: row.id, status: row.status, external_id: row.external_id } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE type = 'mob_x_link'")) {
+      const [id, prefixed, canonicalItemId, prefixedItemId, canonicalUrl, twitterUrl, excludedJobId] = this.values;
+      const parse = value => { try { return JSON.parse(value || "{}"); } catch { return {}; } };
+      const row = [...this.db.consoleJobs.values()].find(job => {
+        if (job.type !== "mob_x_link" || (excludedJobId && job.id === excludedJobId)) return false;
+        const result = parse(job.result_json);
+        const params = parse(job.params_json);
+        return [id, prefixed].includes(result.external_id) ||
+          [canonicalItemId, prefixedItemId].includes(result.item_id) ||
+          [canonicalUrl, twitterUrl].includes(params.url);
+      });
+      return row ? { id: row.id, status: row.status } : null;
+    }
+    if (this.sql.includes("FROM panel_links WHERE external_id IN")) {
+      const [id, prefixed, excludedLinkId] = this.values;
+      const row = [...this.db.panelLinks.values()].find(link =>
+        (link.external_id === id || link.external_id === prefixed) &&
+        (excludedLinkId == null || Number(link.id) !== Number(excludedLinkId)));
+      return row ? { id: row.id, status: row.status } : null;
+    }
     if (this.sql.includes("FROM items WHERE id = ?")) {
       return this.db.items.get(this.values[0]) || null;
     }
@@ -2217,6 +2246,35 @@ class PanelFakeStatement {
     if (this.sql.includes("FROM console_jobs WHERE id = ?")) {
       const row = this.db.consoleJobs.get(this.values[0]);
       return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM items WHERE platform = 'mob_official'") && this.sql.includes("external_id IN")) {
+      const [id, prefixed, canonicalId, prefixedCanonicalId, excludedItemId] = this.values;
+      const row = [...this.db.items.values()].find(item =>
+        item.platform === "mob_official" &&
+        (item.external_id === id || item.external_id === prefixed ||
+          item.id === canonicalId || item.id === prefixedCanonicalId) &&
+        (!excludedItemId || item.id !== excludedItemId));
+      return row ? { id: row.id, status: row.status, external_id: row.external_id } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE type = 'mob_x_link'")) {
+      const [id, prefixed, canonicalItemId, prefixedItemId, canonicalUrl, twitterUrl, excludedJobId] = this.values;
+      const parse = value => { try { return JSON.parse(value || "{}"); } catch { return {}; } };
+      const row = [...this.db.consoleJobs.values()].find(job => {
+        if (job.type !== "mob_x_link" || (excludedJobId && job.id === excludedJobId)) return false;
+        const result = parse(job.result_json);
+        const params = parse(job.params_json);
+        return [id, prefixed].includes(result.external_id) ||
+          [canonicalItemId, prefixedItemId].includes(result.item_id) ||
+          [canonicalUrl, twitterUrl].includes(params.url);
+      });
+      return row ? { id: row.id, status: row.status } : null;
+    }
+    if (this.sql.includes("FROM panel_links WHERE external_id IN")) {
+      const [id, prefixed, excludedLinkId] = this.values;
+      const row = this.db.links.find(link =>
+        (link.external_id === id || link.external_id === prefixed) &&
+        (excludedLinkId == null || Number(link.id) !== Number(excludedLinkId)));
+      return row ? { id: row.id, status: row.status } : null;
     }
     if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
       const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
