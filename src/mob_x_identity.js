@@ -34,12 +34,15 @@ export async function findMobXDuplicate(db, value, {
   const item = await db.prepare(itemSql).bind(...itemArgs).first();
 
   let jobSql =
-    "SELECT j.id, j.status FROM console_jobs j " +
-    "JOIN panel_links p ON p.id = j.panel_link_id " +
-    "WHERE j.type = 'mob_x_link' AND p.external_id IN (?, ?)";
-  const jobArgs = [id, prefixed];
+    "SELECT id, status FROM console_jobs WHERE type = 'mob_x_link' AND (" +
+    "(CASE WHEN json_valid(result_json) THEN json_extract(result_json, '$.external_id') END IN (?, ?)) OR " +
+    "(CASE WHEN json_valid(result_json) THEN json_extract(result_json, '$.item_id') END IN (?, ?)) OR " +
+    "(CASE WHEN json_valid(params_json) THEN json_extract(params_json, '$.url') END IN (?, ?)))";
+  const canonicalUrl = "https://x.com/mobgamesstudios/status/" + id;
+  const twitterUrl = "https://twitter.com/mobgamesstudios/status/" + id;
+  const jobArgs = [id, prefixed, ...itemIds, canonicalUrl, twitterUrl];
   if (excludeJobId) {
-    jobSql += " AND j.id <> ?";
+    jobSql += " AND id <> ?";
     jobArgs.push(excludeJobId);
   }
   jobSql += " LIMIT 1";
