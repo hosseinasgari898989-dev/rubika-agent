@@ -33,7 +33,7 @@ class MobXIdentityTests(unittest.TestCase):
         for value in (
             "",
             "x-not-a-number",
-            "x-" + POST_ID[:-1],
+            "x-12345678901234",
             "mob_official:legacy-id",
             "mob_official:tiktok:1234567890123456",
             "https://x.com/mobgamesstudios/status/" + POST_ID,
