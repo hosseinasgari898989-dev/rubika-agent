@@ -68,7 +68,7 @@ const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8
   .replace('from "./panel_screens_ext.js";', 'from "' + screensExtModuleUrl + '";')
   .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
-  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";');
+  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
   .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
 const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
