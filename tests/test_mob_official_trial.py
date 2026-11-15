@@ -87,6 +87,17 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             self.assertEqual(status, "ok")
             self.assertEqual(len(candidates), 1)
 
+    def test_mob_x_discovery_payload_stores_canonical_numeric_id(self):
+        legacy = self.row(external_id="x-2111111111111111111")
+        payload = mob_official_trial._mob_x_discovery_payload(legacy)
+        self.assertEqual(payload["external_id"], "2111111111111111111")
+        self.assertEqual(payload["platform"], "mob_official")
+
+        with self.assertRaisesRegex(ValueError, "mob_x_external_id_invalid"):
+            mob_official_trial._mob_x_discovery_payload(
+                self.row(external_id="x-not-a-post-id")
+            )
+
     def test_auto_discovery_dedupes_against_manual_numeric_d1_identity(self):
         post_id = "2111111111111111111"
         candidate = self.row(
