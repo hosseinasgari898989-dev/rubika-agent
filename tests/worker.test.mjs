@@ -4510,6 +4510,28 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.events.some(event => event.code === "console_channel_create" && String(event.details_json).includes("production") && String(event.details_json).includes("enabled")) === true, true);
 }
 
+// Manual Mob X intake refuses both historical ID forms for every persisted delivery state.
+{
+  const postId = "2111111111111111111";
+  for (const status of ["sent", "uncertain", "ready"]) {
+    for (const storedId of [postId, "x-" + postId]) {
+      const state = env();
+      const itemId = "mob_official:" + storedId;
+      state.DB.items.set(itemId, {
+        id: itemId, platform: "mob_official", external_id: storedId,
+        status, review_state: status === "ready" ? "pending" : null,
+      });
+      const response = await read(await worker.fetch(request("/api/console/links", {
+        method: "POST", body: { url: "https://x.com/mobgamesstudios/status/" + postId },
+      }), state));
+      assert.equal(response.status, 409, status + " / " + storedId);
+      assert.equal(response.body.error, "این پست قبلاً ارسال شده");
+      assert.equal(state.DB.panelLinks.size, 0, "a duplicate must not create a manual link");
+      assert.equal(state.DB.consoleJobs.size, 0, "a duplicate must not create a manual job");
+    }
+  }
+}
+
 // Mob X links require confirmation; external_id prevents duplicates and confirmation creates one idempotent job.
 {
   const state = env();
