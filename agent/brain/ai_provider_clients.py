@@ -76,6 +76,14 @@ class ProviderClientError(RuntimeError):
                 item for item in reasons
                 if isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", item)
             ][:4]
+        raw_usage = (diagnostics or {}).get("usage")
+        self.usage: dict[str, int] = {}
+        if isinstance(raw_usage, Mapping):
+            for key in ("promptTokenCount", "candidatesTokenCount", "totalTokenCount"):
+                value = raw_usage.get(key)
+                if type(value) is int and 0 <= value <= 10_000_000:
+                    self.usage[key] = value
+        self.finish_reason = safe.get("finish_reason")
         self.diagnostics = safe
         super().__init__(self.code)
 
@@ -217,6 +225,7 @@ def invoke_provider(
     timeout_seconds: int = 45,
     role: str | None = None,
     call_id: str | None = None,
+    min_output_chars: int = 0,
 ) -> ProviderResult:
     """Make exactly one provider request; no retries and no tool execution."""
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
@@ -225,6 +234,8 @@ def invoke_provider(
         raise ProviderClientError("provider_output_limit_invalid")
     if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 90:
         raise ProviderClientError("provider_timeout_invalid")
+    if type(min_output_chars) is not int or not 0 <= min_output_chars <= 200:
+        raise ProviderClientError("provider_minimum_output_invalid")
 
     if config.provider in {"groq", "openrouter"}:
         if role == "translate_official":
@@ -248,6 +259,12 @@ def invoke_provider(
             "max_tokens": max_output_tokens,
             "stream": False,
         }
+        if (
+            role == "translate_official"
+            and config.model.lower() in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}
+        ):
+            # Verified provider support: Groq and OpenRouter document low effort for GPT-OSS.
+            body["reasoning_effort"] = "low"
         headers = {
             "Content-Type": "application/json",
             "Authorization": "Bearer " + config.api_key,
@@ -307,7 +324,7 @@ def invoke_provider(
     content = message.get("content") if isinstance(message, dict) else None
     finish_reason_raw = choices[0].get("finish_reason")
     finish_reason = (
-        re.sub(r"[^A-Za-z0-9_.-]", "", finish_reason_raw)[:60]
+        re.sub(r"[^A-Za-z0-9_.-]", "", finish_reason_raw).lower()[:60]
         if isinstance(finish_reason_raw, str) else None
     )
     if isinstance(content, str):
@@ -325,12 +342,20 @@ def invoke_provider(
             total=counts.get("total_tokens"),
         )
 
-    if not answer:
-        diagnostics: dict[str, Any] = {"http_status": 200}
-        if finish_reason:
-            diagnostics["finish_reason"] = finish_reason
+    diagnostics: dict[str, Any] = {"http_status": 200, "usage": usage}
+    if finish_reason:
+        diagnostics["finish_reason"] = finish_reason
+    if finish_reason == "length":
         raise ProviderClientError(
-            "provider_text_missing", outcome="unknown", diagnostics=diagnostics
+            "provider_output_truncated", outcome="failed", diagnostics=diagnostics
+        )
+    if not answer:
+        raise ProviderClientError(
+            "provider_text_missing", outcome="failed", diagnostics=diagnostics
+        )
+    if min_output_chars and len(answer) < min_output_chars:
+        raise ProviderClientError(
+            "provider_text_too_short", outcome="failed", diagnostics=diagnostics
         )
     return ProviderResult(
         provider=config.provider,
@@ -352,6 +377,7 @@ def call_provider_with_ledger(
     timeout_seconds: int = 45,
     usage_client: CodeAIUsageLedger | None = None,
     on_reserved: Callable[[], None] | None = None,
+    min_output_chars: int = 0,
 ) -> ProviderResult:
     """Fail closed: validate config, reserve budget, call once, record outcome."""
     if role not in ROLES:
@@ -367,14 +393,15 @@ def call_provider_with_ledger(
     if on_reserved is not None:
         on_reserved()
     try:
-        result = invoke_provider(
-            config,
-            prompt,
-            max_output_tokens=max_output_tokens,
-            timeout_seconds=timeout_seconds,
-            role=role,
-            call_id=call_id,
-        )
+        invoke_kwargs = {
+            "max_output_tokens": max_output_tokens,
+            "timeout_seconds": timeout_seconds,
+            "role": role,
+            "call_id": call_id,
+        }
+        if min_output_chars:
+            invoke_kwargs["min_output_chars"] = min_output_chars
+        result = invoke_provider(config, prompt, **invoke_kwargs)
     except ProviderClientError as exc:
         outcome = exc.outcome
         # Keep the safe provider error even when the outcome is ambiguous.
@@ -386,6 +413,8 @@ def call_provider_with_ledger(
                 call_id=call_id,
                 outcome=outcome,
                 error_code=error_code,
+                usage=exc.usage,
+                finish_reason=exc.finish_reason,
             )
         except UsageLedgerError:
             raise ProviderClientError("usage_ledger_finish_failed", outcome="unknown") from None
@@ -408,6 +437,7 @@ def call_provider_with_ledger(
             call_id=call_id,
             outcome="succeeded",
             usage=result.usage,
+            finish_reason=result.finish_reason,
         )
     except UsageLedgerError:
         raise ProviderClientError("usage_ledger_finish_failed", outcome="unknown") from None

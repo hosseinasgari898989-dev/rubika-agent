@@ -2,7 +2,7 @@
   "version": 1,
   "caption": {
     "max_source_chars": 2100,
-    "max_output_tokens": 700,
+    "max_output_tokens": 2048,
     "max_output_chars": 6000,
     "daily_bucket": "caption"
   },

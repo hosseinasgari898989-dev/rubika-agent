@@ -143,6 +143,18 @@ class AIProviderLedgerTests(unittest.TestCase):
         self.assertIn("await env.DB.batch([updateCall, updateCooldown])", source)
         self.assertIn("code_ai_call_already_finished", source)
 
+    def test_worker_records_provider_finish_reason_and_usage_in_existing_metadata(self):
+        source = WORKER.read_text(encoding="utf-8")
+        self.assertIn('"finish_reason"', source)
+        self.assertIn('"; finish_reason=" + finishReason', source)
+        self.assertIn('"; prompt_tokens=" + promptTokens.value', source)
+        self.assertIn('"; output_tokens=" + outputTokens.value', source)
+        self.assertIn('"; total_tokens=" + totalTokens.value', source)
+        # The finish reason goes into the already-existing owner-digest event detail; no migration.
+        self.assertIn("await recordOwnerDigestEvent(env, {", source)
+        self.assertIn("owner_digest_events", source)
+        self.assertIn("INSERT INTO owner_digest_events", source)
+
     def test_worker_fail_closed_when_ledger_database_is_unavailable(self):
         source = WORKER.read_text(encoding="utf-8")
         self.assertIn('"code_ai_ledger_unavailable"', source)

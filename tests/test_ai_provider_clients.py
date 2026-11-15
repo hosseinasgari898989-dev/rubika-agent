@@ -53,8 +53,8 @@ class FakeLedger:
             raise UsageLedgerError("code_ai_ledger_unavailable")
         return {"reserved": True, "call_id": "test-provider-call-0001"}
 
-    def finish(self, *, provider, call_id, outcome, error_code=None, usage=None):
-        self.events.append(("finish", provider, outcome, error_code, dict(usage or {})))
+    def finish(self, *, provider, call_id, outcome, error_code=None, usage=None, finish_reason=None):
+        self.events.append(("finish", provider, outcome, error_code, dict(usage or {}), finish_reason))
         if self.fail_finish:
             raise UsageLedgerError("usage_ledger_unreachable")
         return {"ok": True, "call_id": call_id, "outcome": outcome}
@@ -170,14 +170,77 @@ class ProviderClientTests(unittest.TestCase):
         )
         opener = FakeOpener(FakeResponse({
             "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 21, "completion_tokens": 10, "total_tokens": 31},
         }))
         with patch.object(clients.urllib.request, "build_opener", return_value=opener):
             with self.assertRaises(clients.ProviderClientError) as caught:
                 clients.invoke_provider(config, "safe prompt", max_output_tokens=10)
-        self.assertEqual(caught.exception.code, "provider_text_missing")
+        self.assertEqual(caught.exception.code, "provider_output_truncated")
+        self.assertEqual(caught.exception.outcome, "failed")
         self.assertEqual(caught.exception.diagnostics["http_status"], 200)
         self.assertEqual(caught.exception.diagnostics["finish_reason"], "length")
+        self.assertEqual(caught.exception.usage, {
+            "promptTokenCount": 21, "candidatesTokenCount": 10, "totalTokenCount": 31,
+        })
         self.assertNotIn("response text", json.dumps(caught.exception.diagnostics))
+
+    def test_empty_text_is_rejected_even_when_finish_reason_is_stop(self):
+        config = clients.ProviderConfig(
+            "groq", "g" * 32, "model",
+            "https://api.groq.com/openai/v1/chat/completions",
+        )
+        opener = FakeOpener(FakeResponse({
+            "choices": [{"message": {"content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 0, "total_tokens": 9},
+        }))
+        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.invoke_provider(config, "safe prompt")
+        self.assertEqual(caught.exception.code, "provider_text_missing")
+        self.assertEqual(caught.exception.outcome, "failed")
+        self.assertEqual(caught.exception.usage["totalTokenCount"], 9)
+
+    def test_truncated_translation_records_usage_and_finish_reason_in_ledger(self):
+        ledger = FakeLedger()
+        config = clients.ProviderConfig(
+            "groq", "g" * 32, "openai/gpt-oss-20b",
+            "https://api.groq.com/openai/v1/chat/completions",
+        )
+        opener = FakeOpener(FakeResponse({
+            "choices": [{"message": {"content": "متن فارسی ناقص"}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 120, "completion_tokens": 700, "total_tokens": 820},
+        }))
+        with (
+            patch.object(clients, "provider_config", return_value=config),
+            patch.object(clients.urllib.request, "build_opener", return_value=opener),
+        ):
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.call_provider_with_ledger(
+                    provider="groq", role="translate_official", prompt="translation prompt",
+                    max_output_tokens=2048, usage_client=ledger, min_output_chars=40,
+                )
+        self.assertEqual(caught.exception.code, "provider_output_truncated")
+        self.assertEqual(ledger.events[1][0:4], ("finish", "groq", "failed", "provider_output_truncated"))
+        self.assertEqual(ledger.events[1][4]["totalTokenCount"], 820)
+        self.assertEqual(ledger.events[1][5], "length")
+        body = json.loads(opener.request.data.decode("utf-8"))
+        self.assertEqual(body["reasoning_effort"], "low")
+        self.assertEqual(body["max_tokens"], 2048)
+
+    def test_too_short_translation_is_rejected_with_usage(self):
+        config = clients.ProviderConfig(
+            "groq", "g" * 32, "model",
+            "https://api.groq.com/openai/v1/chat/completions",
+        )
+        opener = FakeOpener(FakeResponse({
+            "choices": [{"message": {"content": "متن کوتاه"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 4, "total_tokens": 24},
+        }))
+        with patch.object(clients.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(clients.ProviderClientError) as caught:
+                clients.invoke_provider(config, "safe prompt", min_output_chars=40)
+        self.assertEqual(caught.exception.code, "provider_text_too_short")
+        self.assertEqual(caught.exception.usage["totalTokenCount"], 24)
 
     def test_http_statuses_and_model_not_found_have_specific_safe_codes(self):
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -244,7 +307,11 @@ class ProviderClientTests(unittest.TestCase):
 
     def test_ledger_reservation_happens_before_provider_request_and_result_is_finished(self):
         ledger = FakeLedger()
-        result = clients.ProviderResult("groq", "model", "answer", {"totalTokenCount": 4})
+        result = clients.ProviderResult(
+            "groq", "model", "answer",
+            {"promptTokenCount": 3, "candidatesTokenCount": 4, "totalTokenCount": 7},
+            finish_reason="stop",
+        )
         sequence = []
         timeouts = []
 
@@ -268,6 +335,8 @@ class ProviderClientTests(unittest.TestCase):
         self.assertEqual(timeouts, [45])
         self.assertEqual(ledger.events[0][0], "reserve")
         self.assertEqual(ledger.events[1][0:3], ("finish", "groq", "succeeded"))
+        self.assertEqual(ledger.events[1][4]["totalTokenCount"], 7)
+        self.assertEqual(ledger.events[1][5], "stop")
 
     def test_no_provider_request_occurs_when_reservation_fails(self):
         ledger = FakeLedger(fail_reserve=True)

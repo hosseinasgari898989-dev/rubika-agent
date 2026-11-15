@@ -1232,7 +1232,7 @@ async function reserveCodeAiProviderCall(env,body){
 async function finishCodeAiProviderCall(env, body) {
   const allowedKeys = new Set([
     "provider", "call_id", "outcome", "error_code",
-    "prompt_tokens", "output_tokens", "total_tokens", "retry_after_seconds"
+    "prompt_tokens", "output_tokens", "total_tokens", "retry_after_seconds", "finish_reason"
   ]);
   if (Object.keys(body).some(key => !allowedKeys.has(key))) {
     return json({ ok: false, error: "code_ai_finish_fields_invalid" }, 400);
@@ -1270,6 +1270,14 @@ async function finishCodeAiProviderCall(env, body) {
   const totalTokens = optionalCodeAiTokenCount(body, "total_tokens");
   if (!promptTokens.ok || !outputTokens.ok || !totalTokens.ok) {
     return json({ ok: false, error: "code_ai_token_count_invalid" }, 400);
+  }
+  const finishReason = body.finish_reason == null ? "" : body.finish_reason;
+  if (finishReason && (
+    typeof finishReason !== "string" || finishReason.length > 60 ||
+    finishReason !== finishReason.trim() || finishReason !== finishReason.toLowerCase() ||
+    !/^[a-z0-9_.-]{1,60}$/.test(finishReason)
+  )) {
+    return json({ ok: false, error: "code_ai_finish_reason_invalid" }, 400);
   }
 
   const now = new Date().toISOString();
@@ -1327,6 +1335,10 @@ async function finishCodeAiProviderCall(env, body) {
         detail: "outcome=" + outcome
           + (callMeta && callMeta.role ? "; role=" + callMeta.role : "")
           + (errorCode ? "; error_code=" + errorCode : "")
+          + (finishReason ? "; finish_reason=" + finishReason : "")
+          + (promptTokens.value != null ? "; prompt_tokens=" + promptTokens.value : "")
+          + (outputTokens.value != null ? "; output_tokens=" + outputTokens.value : "")
+          + (totalTokens.value != null ? "; total_tokens=" + totalTokens.value : "")
       });
     } catch {
       // Reporting must never change the result of the code-repair provider call.

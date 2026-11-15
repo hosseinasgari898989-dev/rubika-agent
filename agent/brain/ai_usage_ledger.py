@@ -143,6 +143,7 @@ class CodeAIUsageLedger:
         outcome: str,
         error_code: str | None = None,
         usage: Mapping[str, int] | None = None,
+        finish_reason: str | None = None,
     ) -> dict[str, Any]:
         if provider not in ALLOWED_PROVIDERS:
             raise UsageLedgerError("code_ai_provider_not_enabled")
@@ -169,6 +170,12 @@ class CodeAIUsageLedger:
         }
         if clean_error:
             payload["error_code"] = clean_error
+        clean_finish_reason = None
+        if finish_reason is not None:
+            clean_finish_reason = str(finish_reason).lower()
+            if not re.fullmatch(r"[a-z0-9_.-]{1,60}", clean_finish_reason):
+                raise UsageLedgerError("code_ai_finish_reason_invalid")
+            payload["finish_reason"] = clean_finish_reason
         for field, source in token_map.items():
             value = (usage or {}).get(source)
             if type(value) is int and 0 <= value <= 10_000_000:
