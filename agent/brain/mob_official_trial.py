@@ -741,10 +741,13 @@ def _mob_x_backlog_candidate(row: dict[str, Any]) -> dict[str, Any] | None:
 
 def _mob_x_discovery_payload(item: dict[str, Any]) -> dict[str, Any]:
     """Store only the verified fields required to resume one Mob X candidate."""
+    external_id = normalize_mob_x_external_id(item.get("external_id"))
+    if external_id is None:
+        raise ValueError("mob_x_external_id_invalid")
     return {
         "platform": "mob_official",
         "source_key": str(item.get("source_key") or "x.com/mobgamesstudios"),
-        "external_id": str(item["external_id"]),
+        "external_id": external_id,
         "canonical_url": str(item["canonical_url"]),
         "title": str(item.get("title") or ""),
         "caption": str(item.get("original_caption") or item.get("caption") or ""),
