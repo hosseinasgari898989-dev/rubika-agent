@@ -21,6 +21,7 @@ URL_CASES = [
     f"https://evil@x.com/mobgamesstudios/status/{POST_ID}",
     f"https://x.com:443/mobgamesstudios/status/{POST_ID}",
     f"https://x.com/mobgamesstudios/status/{POST_ID[5:]}",
+    "https://x.com/mobgamesstudios/status/not-a-number",
     f"javascript:https://x.com/mobgamesstudios/status/{POST_ID}",
     f"https://x.com/mobgamesstudios/status/{POST_ID}/extra",
 ]
