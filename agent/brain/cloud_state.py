@@ -18,6 +18,8 @@ def _safe_endpoint_path(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     endpoint = urllib.parse.urlsplit(value).path
+    if endpoint == "/api/console/sources":
+        return endpoint
     parts = endpoint.split("/")
     if len(parts) == 6 and parts[1:4] == ["api", "brain", "items"] and parts[5] == "attempts":
         parts[4] = "{item_id}"
@@ -117,7 +119,12 @@ class CloudState:
                 status_code=exc.code,
                 endpoint_path=path,
             ) from None
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except urllib.error.URLError as exc:
+            code = "control_api_timeout" if isinstance(exc.reason, TimeoutError) else "control_api_unreachable"
+            raise CloudStateError(code, endpoint_path=path) from None
+        except TimeoutError:
+            raise CloudStateError("control_api_timeout", endpoint_path=path) from None
+        except OSError:
             raise CloudStateError("control_api_unreachable", endpoint_path=path) from None
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise CloudStateError("control_api_invalid_json", endpoint_path=path) from None

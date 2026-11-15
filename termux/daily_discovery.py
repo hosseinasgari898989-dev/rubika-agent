@@ -17,12 +17,45 @@ from typing import Any
 from agent.discovery.mob_official_complete import discover_official_x_posts
 from agent.discovery.termux_sources import TIKTOK_PROFILES, discover_tiktok_profiles
 from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
-from agent.brain.cloud_state import CloudState
-from agent.source_policy import refresh_dynamic_tiktok_sources, set_dynamic_tiktok_sources
+from agent.brain.cloud_state import CloudState, CloudStateError
+from agent.source_policy import set_dynamic_tiktok_sources
 
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_PATH = ROOT / "artifacts" / "termux_discovery.json"
+
+
+def _console_source_failure_reason(error: Exception) -> str:
+    """Map remote-source failures to bounded reason codes; never retain exception text."""
+    if isinstance(error, CloudStateError):
+        status = error.status_code
+        if status == 401:
+            return "http_401"
+        if status == 403:
+            return "http_403"
+        if status == 404:
+            return "http_404"
+        if status is not None and 500 <= status <= 599:
+            return "http_5xx"
+        if error.code == "control_api_timeout":
+            return "timeout"
+        if error.code in {
+            "control_api_invalid_json",
+            "control_api_invalid_response",
+            "control_api_invalid_tiktok_sources",
+        }:
+            return "invalid_json"
+        if status is not None:
+            return "http_other"
+        return "unavailable"
+    if isinstance(error, (RuntimeError, ValueError)) and str(error) in {
+        "token_missing",
+        "console_sources_auth_unavailable",
+        "missing_or_short_AGENT_API_TOKEN",
+    }:
+        return "token_missing"
+    return "unavailable"
+
 
 def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,19 +82,26 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
     source_diagnostics: list[dict[str, str]] = []
     source_rows_available = False
     source_status = "legacy_six_local"
+    source_overlay_reason: str | None = None
 
     if load_remote_sources:
         try:
             token = os.getenv("AGENT_API_TOKEN", "").strip()
             if len(token) < 32:
-                raise RuntimeError("console_sources_auth_unavailable")
+                raise RuntimeError("token_missing")
             cloud = CloudState(
                 os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
                 token=token, timeout_seconds=25,
             )
-            source_rows, source_rows_available = refresh_dynamic_tiktok_sources(cloud)
-            if not source_rows_available:
-                raise RuntimeError("console_sources_unavailable")
+            # Keep CloudStateError intact so API/timeout/JSON diagnostics survive.
+            source_rows = cloud.get_console_tiktok_sources()
+            if not isinstance(source_rows, list):
+                raise CloudStateError(
+                    "control_api_invalid_tiktok_sources",
+                    endpoint_path="/api/console/sources",
+                )
+            set_dynamic_tiktok_sources(source_rows)
+            source_rows_available = True
             selected_profiles: list[str] = []
             for row in source_rows:
                 if not isinstance(row, dict) or not (row.get("enabled") is True or row.get("enabled") == 1):
@@ -90,9 +130,9 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
                 selected_profiles.append(handle)
             profiles = tuple(selected_profiles)
             source_status = "console_sources_loaded"
-        except Exception:
-            # The optional overlay must never block either public discovery lane.
-            # Do not log exception text: it can include request or transport details.
+        except Exception as exc:
+            # Keep fallback behavior, but persist only a bounded code, never exception text.
+            source_overlay_reason = _console_source_failure_reason(exc)
             set_dynamic_tiktok_sources([])
             dynamic_cutoffs = {}
             profiles = TIKTOK_PROFILES
@@ -100,7 +140,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             source_status = "console_sources_unavailable_using_legacy_six"
             source_diagnostics.append({
                 "source": "tiktok_console_sources",
-                "reason": "console_sources_unavailable_using_legacy_six",
+                "reason": source_overlay_reason,
             })
     else:
         set_dynamic_tiktok_sources([])
@@ -178,6 +218,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             "tiktok_selected_source_candidates": len(normalized["tiktok"]),
             "tiktok_method": "yt_dlp_selected_creator_profiles_only",
             "tiktok_source_overlay_status": source_status,
+            "tiktok_source_overlay_reason": source_overlay_reason,
             "tiktok_account_removals_applied": source_rows_available if load_remote_sources else None,
             "tiktok_missing_created_at_cutoff_count": len(missing_cutoff_attempts),
             "agent_lifecycle_mode": lifecycle_policy["mode"],

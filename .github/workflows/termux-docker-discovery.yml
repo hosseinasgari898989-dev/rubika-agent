@@ -166,6 +166,7 @@ jobs:
               "media_downloads": report.get("limits", {}).get("media_downloads", 0),
               "rubika_posts": report.get("limits", {}).get("rubika_posts", 0),
               "tiktok_source_overlay_status": summary.get("tiktok_source_overlay_status"),
+              "tiktok_source_overlay_reason": summary.get("tiktok_source_overlay_reason"),
               "tiktok_account_removals_applied": summary.get("tiktok_account_removals_applied"),
               "tiktok_missing_created_at_cutoff_count": summary.get("tiktok_missing_created_at_cutoff_count", 0),
           }

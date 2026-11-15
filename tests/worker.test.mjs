@@ -397,6 +397,20 @@ class FakeStatement {
     return null;
   }
   async all() {
+    if (this.sql.includes("FROM sources WHERE platform IN ('tiktok','mob_official')")) {
+      const rows = [...this.db.sources.values()]
+        .filter(row => ["tiktok", "mob_official"].includes(row.platform))
+        .sort((a, b) => String(a.platform).localeCompare(String(b.platform)) ||
+          String(a.source_key).localeCompare(String(b.source_key)))
+        .slice(0, 500)
+        .map(row => ({
+          id: row.id, platform: row.platform, source_key: row.source_key,
+          display_name: row.display_name ?? null, enabled: row.enabled,
+          created_at: row.created_at ?? null, last_checked_at: row.last_checked_at ?? null,
+          last_seen_published_at: row.last_seen_published_at ?? null,
+        }));
+      return { results: rows };
+    }
     if (this.sql.includes("FROM automation_queue WHERE id IN") &&
         this.sql.includes("platform = 'youtube'") && this.sql.includes("status = 'queued'") &&
         this.sql.startsWith("SELECT id")) {
@@ -1092,6 +1106,27 @@ const read = async response => ({ status: response.status, body: await response.
   assert.equal(response.status, 200);
   assert.equal(response.body.service, "rubika-agent");
   assert.equal(response.body.publishing, false);
+}
+
+// The real src/index.js console-sources GET route accepts AGENT_API_TOKEN, not OWNER_WEB_TOKEN.
+{
+  const state = env();
+  state.DB.sources.set("tiktok:bendus.editz", {
+    id: "tiktok:bendus.editz", platform: "tiktok", source_key: "bendus.editz",
+    display_name: null, enabled: 1, created_at: "2026-11-14T21:46:48.399Z",
+    last_checked_at: null, last_seen_published_at: null,
+  });
+  delete state.OWNER_WEB_TOKEN;
+  const valid = await read(await worker.fetch(request("/api/console/sources?platform=tiktok"), state));
+  assert.equal(valid.status, 200);
+  assert.equal(valid.body.ok, true);
+  assert.deepEqual(valid.body.items.map(row => row.source_key), ["bendus.editz"]);
+
+  const invalid = await read(await worker.fetch(request("/api/console/sources?platform=tiktok", {
+    token: "not-the-configured-agent-api-token",
+  }), state));
+  assert.equal(invalid.status, 401);
+  assert.equal(invalid.body.error, "unauthorized");
 }
 
 // Console API is auth-gated, CORS-enabled, and leaves existing status/brain routes intact.
