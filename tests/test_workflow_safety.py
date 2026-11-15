@@ -310,7 +310,9 @@ class WorkflowSafetyTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
         discovery = workflow.split("name: Run real Termux Docker source tests and collect live metadata", 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", discovery)
-        self.assertIn("--env AGENT_API_TOKEN", discovery)
+        self.assertIn('--mount "type=bind,src=$token_file,dst=/tmp/agent-api-token,readonly"', discovery)
+        self.assertIn("export AGENT_API_TOKEN_FILE=/tmp/agent-api-token", discovery)
+        self.assertNotIn("--env AGENT_API_TOKEN", discovery)
         self.assertIn('report_path = Path("/out/termux_discovery.json")', discovery)
         self.assertIn("credential_leak_in_discovery_report", discovery)
         self.assertIn('agent_api_available', discovery)
@@ -356,7 +358,7 @@ class WorkflowSafetyTests(unittest.TestCase):
 
     def test_termux_discovery_uses_read_only_token_file_and_always_cleans_it(self):
         workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
-        discovery = workflow.split("name: Run real Termux Docker source tests and collect live metadata", 1)[1].split("\\n      - name:", 1)[0]
+        discovery = workflow.split("name: Run real Termux Docker source tests and collect live metadata", 1)[1].split("\n      - name:", 1)[0]
         self.assertIn('token_file="$RUNNER_TEMP/agent-api-token"', discovery)
         self.assertIn('printf \'%s\' "${AGENT_API_TOKEN:-}" > "$token_file"', discovery)
         self.assertIn('chmod 0444 "$token_file"', discovery)
@@ -370,11 +372,11 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn('"token_length_bucket": token_length_bucket', discovery)
         self.assertIn('print(f"token_length_bucket={token_length_bucket}")', discovery)
 
-        cleanup = workflow.split("name: Remove temporary Termux API token file", 1)[1].split("\\n      - name:", 1)[0]
+        cleanup = workflow.split("name: Remove temporary Termux API token file", 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("if: always()", cleanup)
         self.assertIn('rm -f -- "$RUNNER_TEMP/agent-api-token"', cleanup)
 
-        artifact = workflow.split("name: Upload collection report and queue result", 1)[1].split("\\n      - name:", 1)[0]
+        artifact = workflow.split("name: Upload collection report and queue result", 1)[1].split("\n      - name:", 1)[0]
         self.assertNotIn("agent-api-token", artifact)
         summary = workflow.split("name: Write a concise execution summary", 1)[1]
         self.assertIn("token_length_bucket", summary)
