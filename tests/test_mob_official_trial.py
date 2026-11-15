@@ -821,8 +821,8 @@ class OfficialSinceRuleTests(unittest.TestCase):
                 self.assertEqual(first_result["status"], "published")
                 self.assertEqual(first_result["selected"]["external_id"], first["external_id"])
                 self.assertEqual(first_result["backlog_count"], 1)
-                self.assertEqual(FakeCloud.items[first["external_id"]]["status"], "sent")
-                self.assertEqual(FakeCloud.items[second["external_id"]]["status"], "discovered")
+                self.assertEqual(FakeCloud.items[normalize_mob_x_external_id(first["external_id"])]["status"], "sent")
+                self.assertEqual(FakeCloud.items[normalize_mob_x_external_id(second["external_id"])]["status"], "discovered")
 
                 second_result = run_trial(
                     publish=True,
@@ -836,7 +836,7 @@ class OfficialSinceRuleTests(unittest.TestCase):
         self.assertEqual(second_result["status"], "published")
         self.assertEqual(second_result["selected"]["external_id"], second["external_id"])
         self.assertEqual(second_result["backlog_count"], 0)
-        self.assertEqual(FakeCloud.items[second["external_id"]]["status"], "sent")
+        self.assertEqual(FakeCloud.items[normalize_mob_x_external_id(second["external_id"])]["status"], "sent")
         self.assertEqual(len(publisher.sent), 2)
 
 
