@@ -6,6 +6,7 @@ import { handleConsoleRetry } from "./console_retry.js";
 import { handleFailedMedia } from "./console_failed_media.js";
 import { handleTikTokConsoleApi } from "./console_tiktok.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
+import { normalizeMobXLink } from "./mob_x_link.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -35,7 +36,6 @@ const AI_ROLES = new Set(["diagnose", "propose_patch", "review_patch", "translat
 const EDITABLE_REVIEW = new Set(["pending", "rejected", "needs_review"]); // "approved" is never set from the console
 const LOCKED_ITEM_STATUSES = new Set(["sending", "sent"]);
 const SOURCE_PLATFORMS = new Set(["tiktok", "x"]);
-const X_LINK = /^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/mobgamesstudios\/status\/([0-9]{15,22})\/?$/i;
 
 export async function handleConsoleApi(request, env, h) {
   const { json, readJson, text, validIdentifier } = h;
@@ -948,10 +948,9 @@ export async function handleConsoleApi(request, env, h) {
     if (sub === "/links" && m === "POST") {
       const parsed = await readJson(request);
       if (!parsed.ok) return fail(parsed.error, parsed.status);
-      const mm = X_LINK.exec(text(parsed.value.url, 300));
-      if (!mm) return fail("only_official_mob_x_status_links_allowed", 400);
-      const externalId = mm[1];
-      const canonical = "https://x.com/mobgamesstudios/status/" + externalId;
+      const normalized = normalizeMobXLink(parsed.value.url);
+      if (!normalized) return fail("only_official_mob_x_status_links_allowed", 400);
+      const { externalId, canonicalUrl: canonical } = normalized;
       if (await first("SELECT id FROM panel_links WHERE external_id = ?", externalId)) return fail("link_already_saved", 409);
       await env.DB.prepare("INSERT INTO panel_links (url, external_id, status) VALUES (?, ?, 'pending')").bind(canonical, externalId).run();
       const created = await first("SELECT id, url, external_id, status, created_at FROM panel_links WHERE external_id = ?", externalId);
