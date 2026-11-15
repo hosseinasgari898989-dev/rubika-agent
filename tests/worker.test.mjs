@@ -15,6 +15,9 @@ const settingsModuleUrl = dataModuleUrl(settingsSource);
 const mobXCaptionSource = fs.readFileSync(path.join(root, "src/mob_x_caption.js"), "utf8");
 const mobXCaptionModuleUrl = dataModuleUrl(mobXCaptionSource);
 const mobXCaption = await import(mobXCaptionModuleUrl);
+const mobXIdentitySource = fs.readFileSync(path.join(root, "src/mob_x_identity.js"), "utf8");
+const mobXIdentityModuleUrl = dataModuleUrl(mobXIdentitySource);
+const mobXIdentity = await import(mobXIdentityModuleUrl);
 const consoleRetrySource = fs.readFileSync(path.join(root, "src/console_retry.js"), "utf8");
 const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
 const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
@@ -33,7 +36,8 @@ const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8
   .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
   .replace('from "./panel_screens_ext.js";', 'from "' + screensExtModuleUrl + '";')
   .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";')
-  .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";');
+  .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
+  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
 const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
 const screens = await import(screensModuleUrl);
@@ -41,7 +45,8 @@ const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), 
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";')
   .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";')
   .replace('from "./console_tiktok.js";', 'from "' + consoleTikTokModuleUrl + '";')
-  .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";');
+  .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
+  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
 const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
 const workerImport = 'import { dispatchMobXWorkflow, handleOwnerPanel } from "./owner_panel.js";';
