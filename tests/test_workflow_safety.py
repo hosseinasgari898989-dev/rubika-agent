@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -301,6 +304,54 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn('TERMINAL_STATUSES = ("sent",)', cleanup)
         self.assertNotIn('"POST"', cleanup)
         self.assertNotIn("status=uncertain", cleanup)
+
+
+    def test_termux_discovery_token_is_scoped_and_report_push_is_token_free(self):
+        workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        discovery = workflow.split("name: Run real Termux Docker source tests and collect live metadata", 1)[1].split("\\n      - name:", 1)[0]
+        self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", discovery)
+        self.assertIn("--env AGENT_API_TOKEN", discovery)
+        self.assertIn('report_path = Path("/out/termux_discovery.json")', discovery)
+        self.assertIn("credential_leak_in_discovery_report", discovery)
+        self.assertIn('agent_api_available', discovery)
+        self.assertNotIn("--env-file", discovery)
+        self.assertNotIn('echo "$AGENT_API_TOKEN"', discovery)
+        self.assertNotIn("set -x", discovery)
+
+        push_report = workflow.split("name: Validate report and push only the metadata report to the main branch", 1)[1].split("\\n      - name:", 1)[0]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", push_report)
+        self.assertNotIn("AGENT_API_TOKEN", push_report)
+        self.assertNotIn("secrets.AGENT_API_TOKEN", push_report)
+        self.assertNotIn("git config --local", push_report)
+        self.assertNotIn("git config --global", push_report)
+        self.assertIn('git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin HEAD:refs/heads/main', push_report)
+
+        advisory = workflow.split("name: Get safe advisory diagnosis for pipeline failure", 1)[1].split("\\n      - name:", 1)[0]
+        self.assertNotIn("AGENT_API_TOKEN", advisory)
+        artifact = workflow.split("name: Upload collection report and queue result", 1)[1].split("\\n      - name:", 1)[0]
+        self.assertNotIn("AGENT_API_TOKEN", artifact)
+        self.assertIn("termux-discovery-output/termux_discovery.json", artifact)
+
+        # Queue intake is a separate authenticated Worker API call, not part of report push.
+        queue_intake = workflow.split("name: Add TikTok metadata to the persistent D1 edit queue", 1)[1].split("\\n      - name:", 1)[0]
+        self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", queue_intake)
+
+    def test_termux_discovery_report_never_serializes_agent_api_token(self):
+        from termux.daily_discovery import collect_daily_report
+
+        sentinel = "sentinel-agent-api-token-" + ("x" * 48)
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "termux_discovery.json"
+            with (
+                patch.dict(os.environ, {"AGENT_API_TOKEN": sentinel}),
+                patch("termux.daily_discovery.CloudState.get_console_tiktok_sources", return_value=[]),
+                patch("termux.daily_discovery.discover_official_x_posts", return_value=([], [])),
+            ):
+                report = collect_daily_report(output_path=report_path, load_remote_sources=True)
+
+            serialized = report_path.read_text(encoding="utf-8")
+            self.assertNotIn(sentinel, serialized)
+            self.assertNotIn(sentinel, json.dumps(report, ensure_ascii=False))
 
 if __name__ == "__main__":
     unittest.main()
