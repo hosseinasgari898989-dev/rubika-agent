@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import unittest
 from unittest.mock import Mock, patch
 
@@ -8,6 +9,7 @@ IMAGE_URL = "https://pbs.twimg.com/media/example.jpg"
 from urllib.parse import urlparse
 
 from agent.discovery.termux_mob_x import (
+    _fallback_post_by_id,
     _media_url,
     _parse_post,
     _post_id_from_mirror_url,
@@ -130,6 +132,39 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         self.assertTrue(item["freshness_verified"])
         self.assertIn("public_syndication", str(attempts))
         self.assertTrue(all("AGENT_API_TOKEN" not in str(call) for call in session.calls))
+
+    def test_syndication_and_public_mirror_builders_share_canonical_external_id(self):
+        post_id = "2121390526633001062"
+        syndication = _parse_post(syndication_post(post_id), post_id)
+        self.assertIsNotNone(syndication)
+
+        fallback_payload = {
+            "tweet": {
+                "id": post_id,
+                "author": {"username": "mobgamesstudios"},
+                "text": "Official Mob post from public metadata fallback",
+                "created_at": "2026-11-05T12:00:00Z",
+                "media": {"all": [{
+                    "type": "photo", "url": IMAGE_URL,
+                }]},
+            }
+        }
+        endpoint = f"https://api.fxtwitter.com/mobgamesstudios/status/{post_id}"
+        session = FakeSession(
+            "<rss><channel></channel></rss>", {},
+            fx_status_responses={endpoint: FakeResponse(payload=fallback_payload)},
+        )
+        fallback, provider = _fallback_post_by_id(
+            session, post_id, pin_evidence=None,
+            cutoff=datetime.fromisoformat("2026-11-05T00:00:00+00:00"),
+        )
+        self.assertIsNotNone(fallback)
+        self.assertEqual(provider, "fxtwitter")
+        self.assertEqual(syndication["external_id"], "x-" + post_id)
+        self.assertEqual(syndication["id"], "x-" + post_id)
+        self.assertEqual(fallback["external_id"], syndication["external_id"])
+        self.assertEqual(fallback["id"], syndication["id"])
+
 
     def test_unordered_public_index_results_are_sorted_oldest_first_by_verified_time(self):
         older_id = "1734258130186559716"
