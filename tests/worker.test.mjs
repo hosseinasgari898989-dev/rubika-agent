@@ -18,6 +18,34 @@ const mobXCaption = await import(mobXCaptionModuleUrl);
 const mobXIdentitySource = fs.readFileSync(path.join(root, "src/mob_x_identity.js"), "utf8");
 const mobXIdentityModuleUrl = dataModuleUrl(mobXIdentitySource);
 const mobXIdentity = await import(mobXIdentityModuleUrl);
+
+// Shared duplicate identity checks both exact historical forms in item and job records.
+{
+  const postId = "2111111111111111111";
+  for (const storedId of [postId, "x-" + postId]) {
+    const queries = [];
+    const db = {
+      prepare(sql) {
+        return {
+          bind(...values) { this.values = values; queries.push({ sql, values }); return this; },
+          async first() {
+            if (sql.includes("FROM items WHERE platform = 'mob_official'")) return null;
+            if (sql.includes("FROM console_jobs j")) {
+              assert.ok(this.values.includes(postId) && this.values.includes("x-" + postId));
+              return { id: "job_duplicate", status: "ready_for_review", external_id: storedId };
+            }
+            if (sql.includes("FROM panel_links WHERE external_id IN")) return null;
+            throw new Error("unexpected_duplicate_lookup");
+          },
+        };
+      },
+    };
+    const result = await mobXIdentity.findMobXDuplicate(db, postId);
+    assert.equal(result.duplicate, true);
+    assert.equal(result.job.id, "job_duplicate");
+    assert.ok(queries.some(query => query.sql.includes("FROM console_jobs j")));
+  }
+}
 const consoleRetrySource = fs.readFileSync(path.join(root, "src/console_retry.js"), "utf8");
 const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
 const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
