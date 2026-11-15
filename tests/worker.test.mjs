@@ -4528,6 +4528,23 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
       assert.equal(response.body.error, "این پست قبلاً ارسال شده");
       assert.equal(state.DB.panelLinks.size, 0, "a duplicate must not create a manual link");
       assert.equal(state.DB.consoleJobs.size, 0, "a duplicate must not create a manual job");
+
+      const confirmState = env();
+      confirmState.DB.items.set(itemId, {
+        id: itemId, platform: "mob_official", external_id: storedId,
+        status, review_state: status === "ready" ? "pending" : null,
+      });
+      confirmState.DB.panelLinks.set(1, {
+        id: 1, url: "https://x.com/mobgamesstudios/status/" + postId,
+        external_id: postId, status: "pending",
+      });
+      const confirm = await read(await worker.fetch(request("/api/console/links/1/confirm", {
+        method: "POST", body: {},
+      }), confirmState));
+      assert.equal(confirm.status, 409, "confirm must recheck duplicates: " + status + " / " + storedId);
+      assert.equal(confirm.body.error, "این پست قبلاً ارسال شده");
+      assert.equal(confirmState.DB.panelLinks.get(1).status, "pending");
+      assert.equal(confirmState.DB.consoleJobs.size, 0, "duplicate confirmation must not create a job");
     }
   }
 }
