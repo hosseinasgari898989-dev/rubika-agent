@@ -383,7 +383,7 @@ class MobXLinkParserTests(unittest.TestCase):
         job = {
             "id": "job_abcdef1234567890",
             "params": {"url": f"https://x.com/mobgamesstudios/status/{POST_ID}"},
-            "external_id": POST_ID,
+            "external_id": "x-" + POST_ID,
         }
         for status in ("sent", "uncertain", "ready"):
             for stored_id in (POST_ID, "x-" + POST_ID):
