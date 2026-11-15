@@ -771,21 +771,23 @@ class OfficialSinceRuleTests(unittest.TestCase):
         discovered = [first, second]
         publisher = FakePublisher()
         media_hash = {
-            first["external_id"]: "a" * 64,
-            second["external_id"]: "b" * 64,
+            normalize_mob_x_external_id(first["external_id"]): "a" * 64,
+            normalize_mob_x_external_id(second["external_id"]): "b" * 64,
         }
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             media_files = {}
             for item in discovered:
-                path = root / (item["external_id"] + ".jpg")
+                post_id = normalize_mob_x_external_id(item["external_id"])
+                path = root / (post_id + ".jpg")
                 path.write_bytes(b"validated media")
-                media_files[item["external_id"]] = path
+                media_files[post_id] = path
 
             def fake_download(item, _output_dir):
-                return media_files[item["external_id"]], {
-                    "sha256": media_hash[item["external_id"]],
+                post_id = normalize_mob_x_external_id(item["external_id"])
+                return media_files[post_id], {
+                    "sha256": media_hash[post_id],
                     "media_type": "image",
                     "size_bytes": 15,
                     "mime_type": "image/jpeg",
@@ -835,7 +837,7 @@ class OfficialSinceRuleTests(unittest.TestCase):
 
         self.assertEqual(discover.call_count, 2)
         self.assertEqual(second_result["status"], "published")
-        self.assertEqual(second_result["selected"]["external_id"], second["external_id"])
+        self.assertEqual(second_result["selected"]["external_id"], normalize_mob_x_external_id(second["external_id"]))
         self.assertEqual(second_result["backlog_count"], 0)
         self.assertEqual(FakeCloud.items[normalize_mob_x_external_id(second["external_id"])]["status"], "sent")
         self.assertEqual(len(publisher.sent), 2)
@@ -878,7 +880,7 @@ class MobXBacklogSafetyTests(unittest.TestCase):
         }
         restored = mob_official_trial._mob_x_backlog_candidate(stored)
         self.assertIsNotNone(restored)
-        self.assertEqual(restored["external_id"], stored["external_id"])
+        self.assertEqual(restored["external_id"], "2111111111111111250")
         self.assertEqual(restored["id_source"], "x-cli")
         self.assertEqual(restored["pinned"], False)
         self.assertEqual(restored["pin_state"], "inferred_not_pinned")
