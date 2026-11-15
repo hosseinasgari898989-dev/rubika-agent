@@ -933,8 +933,8 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         raise MobXLinkError("mob_x_job_id_invalid")
     params = job.get("params") if isinstance(job.get("params"), dict) else {}
     parsed = parse_official_link(str(params.get("url") or job.get("url") or ""))
-    external_id = str(job.get("external_id") or "")
-    if not parsed or parsed[1] != external_id:
+    external_id = normalize_mob_x_external_id(job.get("external_id"))
+    if not parsed or external_id is None or parsed[1] != external_id:
         raise MobXLinkError("mob_x_link_identity_mismatch")
     canonical_url, _ = parsed
 
