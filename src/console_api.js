@@ -7,6 +7,7 @@ import { handleFailedMedia } from "./console_failed_media.js";
 import { handleTikTokConsoleApi } from "./console_tiktok.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
 import { normalizeMobXLink } from "./mob_x_link.js";
+import { findMobXDuplicate, normalizeMobXExternalId } from "./mob_x_identity.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -951,7 +952,8 @@ export async function handleConsoleApi(request, env, h) {
       const normalized = normalizeMobXLink(parsed.value.url);
       if (!normalized) return fail("only_official_mob_x_status_links_allowed", 400);
       const { externalId, canonicalUrl: canonical } = normalized;
-      if (await first("SELECT id FROM panel_links WHERE external_id = ?", externalId)) return fail("link_already_saved", 409);
+      const duplicate = await findMobXDuplicate(env.DB, externalId);
+      if (duplicate.invalid || duplicate.duplicate) return fail("این پست قبلاً ارسال شده", 409);
       await env.DB.prepare("INSERT INTO panel_links (url, external_id, status) VALUES (?, ?, 'pending')").bind(canonical, externalId).run();
       const created = await first("SELECT id, url, external_id, status, created_at FROM panel_links WHERE external_id = ?", externalId);
       if (!created) return fail("link_save_failed", 500);
@@ -964,7 +966,7 @@ export async function handleConsoleApi(request, env, h) {
       if (!Number.isSafeInteger(linkId) || linkId < 1) return fail("invalid_panel_link_id", 400);
       const link = await first("SELECT id, url, external_id, status FROM panel_links WHERE id = ?", linkId);
       if (!link) return fail("panel_link_not_found", 404);
-      if (!/^\d{15,22}$/.test(String(link.external_id || ""))) return fail("panel_link_external_id_missing", 409);
+      if (!normalizeMobXExternalId(link.external_id)) return fail("panel_link_external_id_missing", 409);
 
       if (linkAction[2] === "cancel") {
         const result = await env.DB.prepare(
@@ -978,6 +980,8 @@ export async function handleConsoleApi(request, env, h) {
       const existingJob = await first("SELECT id FROM console_jobs WHERE panel_link_id = ?", linkId);
       if (existingJob) return json({ ok: true, id: linkId, status: link.status, job_id: existingJob.id, already_confirmed: true });
       if (!["pending", "confirmed"].includes(link.status)) return fail("link_state_not_confirmable", 409);
+      const duplicate = await findMobXDuplicate(env.DB, link.external_id, { excludePanelLinkId: linkId });
+      if (duplicate.invalid || duplicate.duplicate) return fail("این پست قبلاً ارسال شده", 409);
 
       const jobId = "job_" + randomHex(12);
       await env.DB.batch([

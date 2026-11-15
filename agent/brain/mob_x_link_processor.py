@@ -26,6 +26,7 @@ import requests
 
 from agent.brain import speech_gate
 from agent.brain.cloud_state import CloudState
+from agent.brain.mob_x_identity import mob_x_identity_aliases, normalize_mob_x_external_id
 from agent.brain.inspector import inspect_media
 from agent.brain.models import Candidate
 from agent.brain.mob_translation import translate_to_persian
@@ -951,8 +952,8 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         raise MobXLinkError("mob_x_job_id_invalid")
     params = job.get("params") if isinstance(job.get("params"), dict) else {}
     parsed = parse_official_link(str(params.get("url") or job.get("url") or ""))
-    external_id = str(job.get("external_id") or "")
-    if not parsed or parsed[1] != external_id:
+    external_id = normalize_mob_x_external_id(job.get("external_id"))
+    if not parsed or external_id is None or parsed[1] != external_id:
         raise MobXLinkError("mob_x_link_identity_mismatch")
     canonical_url, _ = parsed
 
@@ -960,9 +961,32 @@ def process_job(job: dict, client: WorkerClient, *, session: requests.Session | 
         os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
         token=os.getenv("AGENT_API_TOKEN", ""), timeout_seconds=20,
     )
-    seen = cloud.get_seen_index()
-    if "mob_official:" + external_id in seen.get("ids", set()):
+    try:
+        seen = cloud.get_seen_index()
+        known_official_items = cloud.get_official_items()
+        seen_ids = seen.get("ids")
+        if not isinstance(seen_ids, set) or not isinstance(known_official_items, list):
+            raise ValueError("official_duplicate_index_shape_invalid")
+    except Exception as exc:
+        raise MobXLinkError(
+            "mob_x_duplicate_index_unavailable",
+            error_class=type(exc).__name__,
+        ) from None
+
+    candidate_aliases = mob_x_identity_aliases(external_id)
+    delivery_ids = {
+        value for value in seen_ids
+        if isinstance(value, str) and value.startswith("mob_official:")
+    }
+    if candidate_aliases & delivery_ids:
         raise MobXLinkError("mob_x_post_already_delivery_blocked")
+
+    for stored_item in known_official_items:
+        if not isinstance(stored_item, dict):
+            continue
+        stored_external_id = stored_item.get("external_id") or stored_item.get("id")
+        if normalize_mob_x_external_id(stored_external_id) == external_id:
+            raise MobXLinkError("mob_x_post_already_known")
 
     post = fetch_public_post(external_id, session=session)
     original = str(post.get("text") or "").strip()[:5000]

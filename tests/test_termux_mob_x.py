@@ -147,7 +147,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         candidates, _ = discover_mob_x_posts(session=session, sleep_seconds=0)
         self.assertEqual(
             [row["external_id"] for row in candidates],
-            ["x-" + older_id, "x-" + newer_id],
+            [older_id, newer_id],
         )
 
 
@@ -186,7 +186,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
 
         candidates, attempts = discover_mob_x_posts(session=session, sleep_seconds=0)
 
-        self.assertEqual([row["external_id"] for row in candidates], ["x-" + post_id])
+        self.assertEqual([row["external_id"] for row in candidates], [post_id])
         self.assertEqual(candidates[0]["author"], "@mobgamesstudios")
         self.assertEqual(candidates[0]["original_caption"], "Caption verified by X syndication")
         self.assertEqual(candidates[0]["published_at"], "2026-11-05T00:01:09+00:00")
@@ -211,7 +211,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         candidates, attempts = discover_mob_x_posts(session=session, sleep_seconds=0)
 
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["external_id"], post_id)
         self.assertEqual(candidates[0]["author"], "@mobgamesstudios")
         mirror_attempt = next(item for item in attempts if item.get("engine") == "public_profile_mirror")
         self.assertEqual(mirror_attempt["result"], "post_ids_found")
@@ -238,7 +238,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         )
 
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["external_id"], post_id)
         self.assertEqual(candidates[0]["author"], "@mobgamesstudios")
         seed_attempt = next(item for item in attempts if item.get("engine") == "owner_seed_urls")
         self.assertEqual(seed_attempt["post_urls_found"], 1)
@@ -265,7 +265,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         candidates, attempts = discover_mob_x_posts(session=session, sleep_seconds=0)
 
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["external_id"], post_id)
         mirror_attempt = next(item for item in attempts if item.get("engine") == "public_profile_mirror")
         self.assertEqual(mirror_attempt["host_used"], "www6.twstalker.com")
         self.assertIn("mobile.twstalker.com", mirror_attempt["hosts_tried"])
@@ -364,7 +364,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             fx_timeline_response=FakeResponse(payload={"results": pin_rows}),
         )
         candidates, attempts, _run = self.run_x_cli(x_rows, session)
-        self.assertEqual([row["external_id"] for row in candidates], ["x-" + older, "x-" + newer])
+        self.assertEqual([row["external_id"] for row in candidates], [older, newer])
         self.assertEqual({row["id_source"] for row in candidates}, {"x-cli"})
         self.assertEqual(next(row for row in attempts if row["engine"] == "x_cli_guest_timeline")["candidate_count"], 3)
         fx_call = next(call for call in session.calls if call[0].endswith("/2/profile/mobgamesstudios/statuses"))
@@ -392,7 +392,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             fx_timeline_response=FakeResponse(payload={"results": fx_rows}),
         )
         candidates, attempts, _run = self.run_x_cli(rows, session)
-        self.assertEqual([row["external_id"] for row in candidates], ["x-" + ids[6]])
+        self.assertEqual([row["external_id"] for row in candidates], [ids[6]])
         final_attempt = next(row for row in attempts if row.get("source") == "mob_x_final_filter")
         self.assertGreaterEqual(final_attempt["skipped"].get("reply", 0), 1)
         self.assertGreaterEqual(final_attempt["skipped"].get("retweet", 0), 1)
@@ -426,7 +426,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         )
         candidates, _attempts, run = self.run_x_cli([], session, exit_code=5, stderr="rate limit")
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["external_id"], post_id)
         self.assertEqual(candidates[0]["id_source"], "fxtwitter")
         self.assertEqual(candidates[0]["method"], "vxtwitter_status_fallback")
         command = run.call_args.args[0]
@@ -449,7 +449,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
             fx_timeline_response=FakeResponse(payload={"results": [timeline]}),
         )
         candidates, _attempts, _run = self.run_x_cli([], session, exit_code=5, stderr="HTTP 429 rate limit")
-        self.assertEqual([row["external_id"] for row in candidates], ["x-" + post_id])
+        self.assertEqual([row["external_id"] for row in candidates], [post_id])
         self.assertEqual(candidates[0]["id_source"], "fxtwitter")
 
     def test_empty_result_is_safe_and_has_no_candidates(self):
@@ -468,7 +468,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         candidates, attempts, _run = self.run_x_cli([row], session)
 
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["external_id"], post_id)
         self.assertFalse(candidates[0]["pinned"])
         self.assertEqual(candidates[0]["pin_state"], "inferred_not_pinned")
         self.assertEqual(
@@ -510,7 +510,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         )
         candidates, attempts, _run = self.run_x_cli(rows, session)
 
-        self.assertEqual([row["external_id"] for row in candidates], ["x-" + other_id])
+        self.assertEqual([row["external_id"] for row in candidates], [other_id])
         self.assertEqual(candidates[0]["pin_state"], "known_not_pinned")
         self.assertTrue(candidates[0]["pin_state_source"].startswith("profile_pin_lookup:"))
         final = next(row for row in attempts if row.get("source") == "mob_x_final_filter")
@@ -540,7 +540,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(
             [row["external_id"] for row in candidates],
-            ["x-" + fx_id, "x-" + xcli_id],
+            [fx_id, xcli_id],
         )
         self.assertEqual(
             [row["id_source"] for row in candidates],
@@ -573,7 +573,7 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         candidates, attempts, _run = self.run_x_cli([xcli_row], session)
 
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["external_id"], "x-" + post_id)
+        self.assertEqual(candidates[0]["external_id"], post_id)
         self.assertEqual(candidates[0]["id_source"], "x-cli")
         union = next(row for row in attempts if row.get("source") == "mob_x_id_union")
         self.assertEqual(union["candidate_count"], 1)

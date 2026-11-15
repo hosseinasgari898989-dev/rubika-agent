@@ -386,9 +386,62 @@ class MobXLinkParserTests(unittest.TestCase):
         item.iter_content.assert_not_called()
         item.close.assert_called()
 
+    def test_manual_link_is_blocked_for_sent_uncertain_and_ready_aliases(self):
+        client = Mock()
+        job = {
+            "id": "job_abcdef1234567890",
+            "params": {"url": f"https://x.com/mobgamesstudios/status/{POST_ID}"},
+            "external_id": "x-" + POST_ID,
+        }
+        for status in ("sent", "uncertain", "ready"):
+            for stored_id in (POST_ID, "x-" + POST_ID):
+                with self.subTest(status=status, stored_id=stored_id):
+                    cloud = Mock()
+                    blocking_ids = (
+                        {"mob_official:" + stored_id}
+                        if status in {"sent", "uncertain"} else set()
+                    )
+                    cloud.get_seen_index.return_value = {"ids": blocking_ids}
+                    cloud.get_official_items.return_value = [{
+                        "platform": "mob_official",
+                        "external_id": stored_id,
+                        "status": status,
+                    }]
+                    with (
+                        patch("agent.brain.mob_x_link_processor.CloudState", return_value=cloud),
+                        patch("agent.brain.mob_x_link_processor.fetch_public_post") as fetch,
+                    ):
+                        with self.assertRaisesRegex(
+                            MobXLinkError,
+                            "mob_x_post_already_(?:delivery_blocked|known)",
+                        ):
+                            process_job(job, client)
+                    fetch.assert_not_called()
+                    client.rules.assert_not_called()
+
+    def test_manual_link_fails_closed_when_official_duplicate_index_is_unavailable(self):
+        cloud = Mock()
+        cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.get_official_items.side_effect = RuntimeError("private transport detail")
+        client = Mock()
+        job = {
+            "id": "job_abcdef1234567890",
+            "params": {"url": f"https://x.com/mobgamesstudios/status/{POST_ID}"},
+            "external_id": POST_ID,
+        }
+        with (
+            patch("agent.brain.mob_x_link_processor.CloudState", return_value=cloud),
+            patch("agent.brain.mob_x_link_processor.fetch_public_post") as fetch,
+        ):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_duplicate_index_unavailable"):
+                process_job(job, client)
+        fetch.assert_not_called()
+        client.rules.assert_not_called()
+
     def test_text_only_post_is_rejected_before_translation_or_any_send(self):
         cloud = Mock()
         cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.get_official_items.return_value = []
         client = Mock()
         job = {
             "id": "job_abcdef1234567890",
@@ -557,6 +610,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         events = []
         cloud = Mock()
         cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.get_official_items.return_value = []
         cloud.upsert_item.return_value = {"item_id": "mob_official:" + POST_ID}
         client = Mock()
         client.transition.side_effect = lambda *args, **kwargs: events.append(("transition", kwargs["result"]))

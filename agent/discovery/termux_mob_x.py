@@ -453,8 +453,8 @@ def _parse_post(
     title = caption.split("\n", 1)[0].strip()[:1200] or "Mob Entertainment official X post"
     return {
         "platform": "mob_official",
-        "id": "x-" + post_id,
-        "external_id": "x-" + post_id,
+        "id": post_id,
+        "external_id": post_id,
         "url": canonical,
         "canonical_url": canonical,
         "title": title,
@@ -1250,8 +1250,8 @@ def _fallback_post_by_id(
         canonical = f"https://x.com/{OFFICIAL_HANDLE}/status/{post_id}"
         return {
             "platform": "mob_official",
-            "id": "x-" + post_id,
-            "external_id": "x-" + post_id,
+            "id": post_id,
+            "external_id": post_id,
             "url": canonical,
             "canonical_url": canonical,
             "title": str(post.get("title") or text_value[:1200])[:1200],
@@ -1364,7 +1364,7 @@ def discover_mob_x_posts(
         "candidate_count": len(union_ids),
         "selected_count": len(selected_ids),
         "selected_ids": [
-            {"external_id": "x-" + post_id, "id_source": id_source_by_id[post_id]}
+            {"external_id": post_id, "id_source": id_source_by_id[post_id]}
             for post_id in selected_ids
         ],
         "ordering": "created_at_oldest_first",

@@ -17,6 +17,7 @@ class FailedMediaHookTests(unittest.TestCase):
     def run_job(self, preview_side_effect, *, force_fail=None):
         cloud = mock.Mock()
         cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.get_official_items.return_value = []
         client = mock.Mock()
         client.rules.return_value = {"translate_enabled": False}
         storage = mock.Mock()

@@ -5,6 +5,7 @@ import { isScreenIdExt as isScreenId, buildScreenExt as buildScreen, HOME_ROWS_E
 import { isSettingsId, applySettingsAction, settingsScreen } from "./panel_settings.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
 import { normalizeMobXLink } from "./mob_x_link.js";
+import { findMobXDuplicate, normalizeMobXExternalId } from "./mob_x_identity.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
@@ -1017,6 +1018,15 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     }
 
     if (action === "publish") {
+      const duplicate = await findMobXDuplicate(env.DB, result.external_id || result.item_id, {
+        excludeItemId: result.item_id,
+        excludeJobId: jobId,
+        excludePanelLinkId: row.panel_link_id,
+      });
+      if (duplicate.invalid || duplicate.duplicate) {
+        await updateMobMain(ui, "این پست قبلاً ارسال شده", HOME_KB);
+        return;
+      }
       if (row.status === "approved") {
         const dispatchResult = await dispatchMobXJobOnce(
           env, jobId, "publish_dispatch_state", "mob-x-news-production.yml",
@@ -1125,12 +1135,18 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
       return render(ui, "p_links", { clickedMid });
     }
 
-    if (!/^\d{15,22}$/.test(String(link.external_id || ""))) {
+    if (!normalizeMobXExternalId(link.external_id)) {
       await updateMobMain(ui, "شناسهٔ پست معتبر نیست؛ لینک دوباره بررسی شود.", HOME_KB);
       return;
     }
     const existing = await env.DB.prepare("SELECT id FROM console_jobs WHERE panel_link_id = ?").bind(linkId).first();
     if (!existing) {
+      const duplicate = await findMobXDuplicate(env.DB, link.external_id, { excludePanelLinkId: linkId });
+      if (duplicate.invalid || duplicate.duplicate) {
+        await setState(env, "panel_mob_pending_link_id", "");
+        await updateMobMain(ui, "این پست قبلاً ارسال شده", HOME_KB);
+        return;
+      }
       if (!["pending", "confirmed"].includes(link.status)) {
         await updateMobMain(ui, "این لینک دیگر در وضعیت قابل تأیید نیست.", HOME_KB);
         return;

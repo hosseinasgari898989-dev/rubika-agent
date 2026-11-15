@@ -18,6 +18,37 @@ const mobXCaption = await import(mobXCaptionModuleUrl);
 const mobXLinkSource = fs.readFileSync(path.join(root, "src/mob_x_link.js"), "utf8");
 const mobXLinkModuleUrl = dataModuleUrl(mobXLinkSource);
 const mobXLink = await import(mobXLinkModuleUrl);
+const mobXIdentitySource = fs.readFileSync(path.join(root, "src/mob_x_identity.js"), "utf8");
+const mobXIdentityModuleUrl = dataModuleUrl(mobXIdentitySource);
+const mobXIdentity = await import(mobXIdentityModuleUrl);
+
+// Shared duplicate identity checks both exact historical forms in item and job records.
+{
+  const postId = "2111111111111111111";
+  for (const storedId of [postId, "x-" + postId]) {
+    const queries = [];
+    const db = {
+      prepare(sql) {
+        return {
+          bind(...values) { this.values = values; queries.push({ sql, values }); return this; },
+          async first() {
+            if (sql.includes("FROM items WHERE platform = 'mob_official'")) return null;
+            if (sql.includes("FROM console_jobs WHERE type = 'mob_x_link'")) {
+              assert.ok(this.values.includes(storedId));
+              return { id: "job_duplicate", status: "ready_for_review", external_id: storedId };
+            }
+            if (sql.includes("FROM panel_links WHERE external_id IN")) return null;
+            throw new Error("unexpected_duplicate_lookup");
+          },
+        };
+      },
+    };
+    const result = await mobXIdentity.findMobXDuplicate(db, postId);
+    assert.equal(result.duplicate, true);
+    assert.equal(result.job.id, "job_duplicate");
+    assert.ok(queries.some(query => query.sql.includes("FROM console_jobs WHERE type = 'mob_x_link'")));
+  }
+}
 const consoleRetrySource = fs.readFileSync(path.join(root, "src/console_retry.js"), "utf8");
 const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
 const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
@@ -37,7 +68,8 @@ const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8
   .replace('from "./panel_screens_ext.js";', 'from "' + screensExtModuleUrl + '";')
   .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
-  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";');
+  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
+  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
 const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
 const screens = await import(screensModuleUrl);
@@ -46,7 +78,8 @@ const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), 
   .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";')
   .replace('from "./console_tiktok.js";', 'from "' + consoleTikTokModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
-  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";');
+  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
+  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
 const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
 const workerImport = 'import { dispatchMobXWorkflow, handleOwnerPanel } from "./owner_panel.js";';
@@ -254,6 +287,35 @@ class FakeStatement {
     if (this.sql.includes("FROM runs WHERE id = ?")) {
       return this.db.runs.get(this.values[0]) || null;
     }
+    if (this.sql.includes("FROM items WHERE platform = 'mob_official'") && this.sql.includes("external_id IN")) {
+      const [id, prefixed, canonicalId, prefixedCanonicalId, excludedItemId] = this.values;
+      const row = [...this.db.items.values()].find(item =>
+        item.platform === "mob_official" &&
+        (item.external_id === id || item.external_id === prefixed ||
+          item.id === canonicalId || item.id === prefixedCanonicalId) &&
+        (!excludedItemId || item.id !== excludedItemId));
+      return row ? { id: row.id, status: row.status, external_id: row.external_id } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE type = 'mob_x_link'")) {
+      const [id, prefixed, canonicalItemId, prefixedItemId, canonicalUrl, twitterUrl, excludedJobId] = this.values;
+      const parse = value => { try { return JSON.parse(value || "{}"); } catch { return {}; } };
+      const row = [...this.db.consoleJobs.values()].find(job => {
+        if (job.type !== "mob_x_link" || (excludedJobId && job.id === excludedJobId)) return false;
+        const result = parse(job.result_json);
+        const params = parse(job.params_json);
+        return [id, prefixed].includes(result.external_id) ||
+          [canonicalItemId, prefixedItemId].includes(result.item_id) ||
+          [canonicalUrl, twitterUrl].includes(params.url);
+      });
+      return row ? { id: row.id, status: row.status } : null;
+    }
+    if (this.sql.includes("FROM panel_links WHERE external_id IN")) {
+      const [id, prefixed, excludedLinkId] = this.values;
+      const row = [...this.db.panelLinks.values()].find(link =>
+        (link.external_id === id || link.external_id === prefixed) &&
+        (excludedLinkId == null || Number(link.id) !== Number(excludedLinkId)));
+      return row ? { id: row.id, status: row.status } : null;
+    }
     if (this.sql.includes("FROM items WHERE id = ?")) {
       return this.db.items.get(this.values[0]) || null;
     }
@@ -293,6 +355,15 @@ class FakeStatement {
       return row ? { ...row } : null;
     }
     if (this.sql.includes("JOIN panel_links p ON p.id = j.panel_link_id")) {
+      if (this.sql.includes("p.external_id IN")) {
+        const [id, prefixed, excludedJobId] = this.values;
+        const row = [...this.db.consoleJobs.values()].find(job => {
+          if (job.type !== "mob_x_link" || (excludedJobId && job.id === excludedJobId)) return false;
+          const link = this.db.panelLinks.get(Number(job.panel_link_id));
+          return link && (link.external_id === id || link.external_id === prefixed);
+        });
+        return row ? { id: row.id, status: row.status } : null;
+      }
       const requestedLinkId = this.sql.includes("AND j.panel_link_id = ?") ? Number(this.values[0]) : null;
       const pair = [...this.db.consoleJobs.values()]
         .filter(job => job.type === "mob_x_link" && ["confirmed", "queued"].includes(job.status) &&
@@ -2237,6 +2308,35 @@ class PanelFakeStatement {
     if (this.sql.includes("FROM console_jobs WHERE id = ?")) {
       const row = this.db.consoleJobs.get(this.values[0]);
       return row ? { ...row } : null;
+    }
+    if (this.sql.includes("FROM items WHERE platform = 'mob_official'") && this.sql.includes("external_id IN")) {
+      const [id, prefixed, canonicalId, prefixedCanonicalId, excludedItemId] = this.values;
+      const row = [...this.db.items.values()].find(item =>
+        item.platform === "mob_official" &&
+        (item.external_id === id || item.external_id === prefixed ||
+          item.id === canonicalId || item.id === prefixedCanonicalId) &&
+        (!excludedItemId || item.id !== excludedItemId));
+      return row ? { id: row.id, status: row.status, external_id: row.external_id } : null;
+    }
+    if (this.sql.includes("FROM console_jobs WHERE type = 'mob_x_link'")) {
+      const [id, prefixed, canonicalItemId, prefixedItemId, canonicalUrl, twitterUrl, excludedJobId] = this.values;
+      const parse = value => { try { return JSON.parse(value || "{}"); } catch { return {}; } };
+      const row = [...this.db.consoleJobs.values()].find(job => {
+        if (job.type !== "mob_x_link" || (excludedJobId && job.id === excludedJobId)) return false;
+        const result = parse(job.result_json);
+        const params = parse(job.params_json);
+        return [id, prefixed].includes(result.external_id) ||
+          [canonicalItemId, prefixedItemId].includes(result.item_id) ||
+          [canonicalUrl, twitterUrl].includes(params.url);
+      });
+      return row ? { id: row.id, status: row.status } : null;
+    }
+    if (this.sql.includes("FROM panel_links WHERE external_id IN")) {
+      const [id, prefixed, excludedLinkId] = this.values;
+      const row = this.db.links.find(link =>
+        (link.external_id === id || link.external_id === prefixed) &&
+        (excludedLinkId == null || Number(link.id) !== Number(excludedLinkId)));
+      return row ? { id: row.id, status: row.status } : null;
     }
     if (this.sql.includes("FROM console_owners WHERE chat_id = ?")) {
       const row = [...this.db.consoleOwners.values()].find(item => item.chat_id === this.values[0]);
@@ -4558,6 +4658,45 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(state.DB.events.some(event => event.code === "console_channel_create" && String(event.details_json).includes("production") && String(event.details_json).includes("enabled")) === true, true);
 }
 
+// Manual Mob X intake refuses both historical ID forms for every persisted delivery state.
+{
+  const postId = "2111111111111111111";
+  for (const status of ["sent", "uncertain", "ready"]) {
+    for (const storedId of [postId, "x-" + postId]) {
+      const state = env();
+      const itemId = "mob_official:" + storedId;
+      state.DB.items.set(itemId, {
+        id: itemId, platform: "mob_official", external_id: storedId,
+        status, review_state: status === "ready" ? "pending" : null,
+      });
+      const response = await read(await worker.fetch(request("/api/console/links", {
+        method: "POST", body: { url: "https://x.com/mobgamesstudios/status/" + postId },
+      }), state));
+      assert.equal(response.status, 409, status + " / " + storedId);
+      assert.equal(response.body.error, "این پست قبلاً ارسال شده");
+      assert.equal(state.DB.panelLinks.size, 0, "a duplicate must not create a manual link");
+      assert.equal(state.DB.consoleJobs.size, 0, "a duplicate must not create a manual job");
+
+      const confirmState = env();
+      confirmState.DB.items.set(itemId, {
+        id: itemId, platform: "mob_official", external_id: storedId,
+        status, review_state: status === "ready" ? "pending" : null,
+      });
+      confirmState.DB.panelLinks.set(1, {
+        id: 1, url: "https://x.com/mobgamesstudios/status/" + postId,
+        external_id: postId, status: "pending",
+      });
+      const confirm = await read(await worker.fetch(request("/api/console/links/1/confirm", {
+        method: "POST", body: {},
+      }), confirmState));
+      assert.equal(confirm.status, 409, "confirm must recheck duplicates: " + status + " / " + storedId);
+      assert.equal(confirm.body.error, "این پست قبلاً ارسال شده");
+      assert.equal(confirmState.DB.panelLinks.get(1).status, "pending");
+      assert.equal(confirmState.DB.consoleJobs.size, 0, "duplicate confirmation must not create a job");
+    }
+  }
+}
+
 // Mob X links require confirmation; external_id prevents duplicates and confirmation creates one idempotent job.
 {
   const state = env();
@@ -4625,6 +4764,43 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(response.body.status, "rejected");
   assert.equal(state.DB.panelLinks.get(cancelId).status, "rejected");
   assert.equal(state.DB.consoleJobs.size, 1, "cancellation must not enqueue work");
+}
+
+// PV manual confirmation cannot create a job when either historical identity already exists.
+{
+  const postId = "2111111111111111111";
+  for (const status of ["sent", "uncertain", "ready"]) {
+    for (const storedId of [postId, "x-" + postId]) {
+      await withMockRubikaFetch(async calls => {
+        const state = panelEnv();
+        state.DB.ownerChat = "b0actualowner";
+        state.DB.state.set("panel_mid", "duplicate-manual-main");
+        state.DB.state.set("panel_mob_pending_link_id", "1");
+        state.DB.state.set("panel_mob_temp_mid", "duplicate-manual-prompt");
+        state.DB.links.push({
+          id: 1, url: "https://x.com/mobgamesstudios/status/" + postId,
+          external_id: postId, status: "pending",
+        });
+        const duplicateItemId = "mob_official:" + storedId;
+        state.DB.items.set(duplicateItemId, {
+          id: duplicateItemId, platform: "mob_official", external_id: storedId,
+          status, review_state: status === "ready" ? "pending" : null,
+        });
+        const secret = await panel.hookSecret(state);
+        await postPanelUpdate(state, {
+          update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+            message_id: "duplicate-manual-prompt", chat_id: "b0actualowner", text: "",
+            aux_data: { button_id: "p_mob_confirm" },
+          } },
+        }, secret);
+        assert.equal(state.DB.links[0].status, "pending", status + " / " + storedId);
+        assert.equal(state.DB.consoleJobs.size, 0, "duplicate confirmation must not create a job");
+        assert.equal(state.DB.state.get("panel_mob_pending_link_id"), "");
+        const finalEdit = calls.filter(call => call.method === "editMessageText").at(-1);
+        assert.ok(finalEdit?.payload.text.includes("این پست قبلاً ارسال شده"));
+      });
+    }
+  }
 }
 
 // Owner-web Mob X caption actions are per-job, guarded, audited and have no publish/preview path.
@@ -5236,6 +5412,53 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 
 
 
+
+// Duplicate Mob X items in any delivery state veto the final owner approval callback.
+{
+  const postId = "2111111111111111111";
+  for (const status of ["sent", "uncertain", "ready"]) {
+    for (const storedId of ["x-" + postId]) {
+      await withMockRubikaFetch(async calls => {
+        const state = panelEnv();
+        state.DB.ownerChat = "b0actualowner";
+        state.DB.state.set("panel_mid", "duplicate-approval-main");
+        const jobId = "job_abcdef1234567890";
+        const itemId = "mob_official:" + postId;
+        state.DB.links.push({
+          id: 1, url: "https://x.com/mobgamesstudios/status/" + postId,
+          external_id: postId, status: "ready_for_review",
+        });
+        state.DB.consoleJobs.set(jobId, {
+          id: jobId, type: "mob_x_link", status: "ready_for_review", panel_link_id: 1,
+          params_json: "{}", result_json: JSON.stringify({
+            item_id: itemId, external_id: postId, rubika_file_id: "mock-preview-file", preview_sent: true,
+          }),
+        });
+        state.DB.items.set(itemId, {
+          id: itemId, platform: "mob_official", external_id: postId,
+          status: "ready", review_state: "pending",
+        });
+        const duplicateItemId = "mob_official:" + storedId;
+        state.DB.items.set(duplicateItemId, {
+          id: duplicateItemId, platform: "mob_official", external_id: storedId,
+          status, review_state: status === "ready" ? "pending" : null,
+        });
+        const secret = await panel.hookSecret(state);
+        await postPanelUpdate(state, {
+          update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+            message_id: "duplicate-approval-preview", chat_id: "b0actualowner", text: "",
+            aux_data: { button_id: "p_mob_publish_" + jobId },
+          } },
+        }, secret);
+        assert.equal(state.DB.consoleJobs.get(jobId).status, "ready_for_review");
+        assert.equal(state.DB.items.get(itemId).review_state, "pending");
+        assert.equal(calls.some(call => call.url && call.url.includes("api.github.com")), false);
+        const finalEdit = calls.filter(call => call.method === "editMessageText").at(-1);
+        assert.ok(finalEdit?.payload.text.includes("این پست قبلاً ارسال شده"));
+      });
+    }
+  }
+}
 
 // PV publish approval updates the tracked main panel rather than sending a new main message.
 {
