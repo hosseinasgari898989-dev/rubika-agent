@@ -217,9 +217,6 @@ jobs:
             termux/termux-docker:x86_64 \
             sh -lc '
               set -eu
-              # termux-docker entrypoint uses su -i and drops non-allowlisted env vars.
-              # Export the mounted-file path only after that privilege transition.
-              export AGENT_API_TOKEN_FILE=/tmp/agent-api-token
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
               sh /workspace/termux/pkg_index_retry.sh
               timeout 240s pkg install -y python git
@@ -233,6 +230,8 @@ jobs:
               timeout 90s python -m unittest discover -s tests -p "test_termux_sources.py" -v
                       timeout 90s python -m unittest discover -s tests -p "test_termux_daily_discovery.py" -v
               timeout 90s python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
+              # termux-docker entrypoint uses su -i; export only after the privilege transition and test suite.
+              export AGENT_API_TOKEN_FILE=/tmp/agent-api-token
               timeout 12m python -
             ' < "$RUNNER_TEMP/termux_docker_discovery.py"
 
