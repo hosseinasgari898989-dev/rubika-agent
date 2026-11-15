@@ -132,7 +132,14 @@ const call = (db, path, method = "GET", body = undefined) => {
 
 assert.equal(normalizeTikTokAccount("@New_Creator.1"), "new_creator.1");
 assert.equal(normalizeTikTokAccount("https://www.tiktok.com/@New_Creator.1/"), "new_creator.1");
+assert.equal(
+  normalizeTikTokAccount("https://www.tiktok.com/@New_Creator.1/?_r=1&_t=ZS-8xyz#share"),
+  "new_creator.1",
+);
 assert.equal(normalizeTikTokAccount("https://youtube.com/@new_creator"), null);
+assert.equal(normalizeTikTokAccount("https://tiktok.com.evil.example/@new_creator?_r=1"), null);
+assert.equal(normalizeTikTokAccount("https://evil@www.tiktok.com/@new_creator?_r=1"), null);
+assert.equal(normalizeTikTokAccount("http://www.tiktok.com/@new_creator?_r=1"), null);
 assert.equal(normalizeTikTokAccount("https://www.tiktok.com/@new_creator/video/1234567890123456"), null);
 assert.equal(normalizeTikTokAccount("new..creator"), null);
 

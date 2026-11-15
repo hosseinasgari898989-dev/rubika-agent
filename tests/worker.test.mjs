@@ -15,6 +15,9 @@ const settingsModuleUrl = dataModuleUrl(settingsSource);
 const mobXCaptionSource = fs.readFileSync(path.join(root, "src/mob_x_caption.js"), "utf8");
 const mobXCaptionModuleUrl = dataModuleUrl(mobXCaptionSource);
 const mobXCaption = await import(mobXCaptionModuleUrl);
+const mobXLinkSource = fs.readFileSync(path.join(root, "src/mob_x_link.js"), "utf8");
+const mobXLinkModuleUrl = dataModuleUrl(mobXLinkSource);
+const mobXLink = await import(mobXLinkModuleUrl);
 const mobXIdentitySource = fs.readFileSync(path.join(root, "src/mob_x_identity.js"), "utf8");
 const mobXIdentityModuleUrl = dataModuleUrl(mobXIdentitySource);
 const mobXIdentity = await import(mobXIdentityModuleUrl);
@@ -65,6 +68,7 @@ const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8
   .replace('from "./panel_screens_ext.js";', 'from "' + screensExtModuleUrl + '";')
   .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
+  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";');
   .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
 const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
@@ -74,6 +78,7 @@ const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), 
   .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";')
   .replace('from "./console_tiktok.js";', 'from "' + consoleTikTokModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
+  .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";');
   .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
 const consoleApiModuleUrl = dataModuleUrl(consoleApiSource);
 const originalSource = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
@@ -1024,6 +1029,63 @@ const request = (url, { method = "GET", body, token, headers = {} } = {}) => {
   });
 };
 const read = async response => ({ status: response.status, body: await response.json() });
+
+// Shared Mob X normalization removes only tracking query/fragment; all host and ID guards remain.
+{
+  const postId = "2107878755079213476";
+  const canonical = "https://x.com/mobgamesstudios/status/" + postId;
+  const accepted = [
+    canonical,
+    "https://twitter.com/mobgamesstudios/status/" + postId + "?s=19",
+    "https://www.x.com/mobgamesstudios/status/" + postId + "/?a=1&s=19#copy",
+    "https://mobile.twitter.com/mobgamesstudios/status/" + postId + "#post",
+  ];
+  for (const url of accepted) {
+    assert.deepEqual(mobXLink.normalizeMobXLink(url), { canonicalUrl: canonical, externalId: postId });
+    assert.equal(importedPanel.parseXLink(url), canonical);
+  }
+  for (const url of [
+    "http://x.com/mobgamesstudios/status/" + postId,
+    "https://x.com/someoneelse/status/" + postId + "?s=19",
+    "https://x.com.evil.example/mobgamesstudios/status/" + postId,
+    "https://x.com/anything/../mobgamesstudios/status/" + postId,
+    "https://evil@x.com/mobgamesstudios/status/" + postId,
+    "https://x.com:443/mobgamesstudios/status/" + postId,
+    "https://x.com/mobgamesstudios/status/" + postId.slice(5),
+    "https://x.com/mobgamesstudios/status/not-a-number",
+    "javascript:" + canonical,
+  ]) {
+    assert.equal(mobXLink.normalizeMobXLink(url), null, url);
+    assert.equal(importedPanel.parseXLink(url), null, url);
+  }
+}
+
+// The real Worker console route stores only the canonical URL, never share parameters.
+{
+  const state = env();
+  const postId = "2107878755079213477";
+  const tracked = "https://twitter.com/mobgamesstudios/status/" + postId + "?a=share&s=19#copy";
+  const response = await read(await worker.fetch(request("/api/console/links", {
+    method: "POST", body: { url: tracked },
+  }), state));
+  assert.equal(response.status, 201);
+  assert.equal(response.body.link.url, "https://x.com/mobgamesstudios/status/" + postId);
+  assert.equal(response.body.link.external_id, postId);
+  assert.equal([...state.DB.panelLinks.values()][0].url, response.body.link.url);
+
+  for (const url of [
+    "http://x.com/mobgamesstudios/status/" + postId,
+    "https://x.com.evil.example/mobgamesstudios/status/" + postId,
+    "https://attacker@x.com/mobgamesstudios/status/" + postId,
+    "javascript:" + response.body.link.url,
+  ]) {
+    const rejected = await read(await worker.fetch(request("/api/console/links", {
+      method: "POST", body: { url },
+    }), state));
+    assert.equal(rejected.status, 400, url);
+  }
+  assert.equal(state.DB.panelLinks.size, 1);
+}
 
 {
   const response = await read(await worker.fetch(request("/health"), env()));

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.brain import mob_official_trial, test_channel
+from agent.brain.mob_x_identity import normalize_mob_x_external_id
 from agent.brain.mob_official_trial import (
     filter_candidates_by_since,
     filter_official_candidates_by_source,

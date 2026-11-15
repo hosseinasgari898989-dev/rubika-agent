@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit
 
 import requests
 
@@ -47,7 +47,6 @@ TIMEOUT = 20
 WORKER_REQUEST_ATTEMPTS = 3
 WORKER_RETRY_BACKOFF_SECONDS = (2, 5)
 HANDLE = "mobgamesstudios"
-LINK_RE = re.compile(r"^https://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/mobgamesstudios/status/([0-9]{15,22})/?$", re.I)
 MEDIA_HOSTS = {"pbs.twimg.com", "video.twimg.com"}
 
 
@@ -281,7 +280,27 @@ class MobXLinkError(RuntimeError):
 
 
 def parse_official_link(value: str) -> tuple[str, str] | None:
-    match = LINK_RE.fullmatch(str(value or "").strip())
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 300 or any(ord(char) <= 32 or ord(char) == 127 for char in raw):
+        return None
+    try:
+        parsed = urlsplit(raw)
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        return None
+    allowed_hosts = {
+        "x.com", "www.x.com", "mobile.x.com",
+        "twitter.com", "www.twitter.com", "mobile.twitter.com",
+    }
+    # Exact netloc equality rejects userinfo, every explicit port (including :443),
+    # suffix hosts such as x.com.evil.test, and trailing-dot host aliases.
+    if (
+        parsed.scheme.lower() != "https"
+        or host not in allowed_hosts
+        or parsed.netloc.lower() != host
+    ):
+        return None
+    match = re.fullmatch(r"/mobgamesstudios/status/([0-9]{15,22})/?", parsed.path, re.I)
     if not match:
         return None
     external_id = match.group(1)
