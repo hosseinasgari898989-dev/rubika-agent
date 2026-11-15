@@ -968,7 +968,7 @@ export async function handleConsoleApi(request, env, h) {
       if (!Number.isSafeInteger(linkId) || linkId < 1) return fail("invalid_panel_link_id", 400);
       const link = await first("SELECT id, url, external_id, status FROM panel_links WHERE id = ?", linkId);
       if (!link) return fail("panel_link_not_found", 404);
-      if (!/^\d{15,22}$/.test(String(link.external_id || ""))) return fail("panel_link_external_id_missing", 409);
+      if (!normalizeMobXExternalId(link.external_id)) return fail("panel_link_external_id_missing", 409);
 
       if (linkAction[2] === "cancel") {
         const result = await env.DB.prepare(
