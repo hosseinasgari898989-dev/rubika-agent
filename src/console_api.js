@@ -6,6 +6,7 @@ import { handleConsoleRetry } from "./console_retry.js";
 import { handleFailedMedia } from "./console_failed_media.js";
 import { handleTikTokConsoleApi } from "./console_tiktok.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
+import { findMobXDeliveryDuplicate } from "./mob_x_identity.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -952,6 +953,10 @@ export async function handleConsoleApi(request, env, h) {
       if (!mm) return fail("only_official_mob_x_status_links_allowed", 400);
       const externalId = mm[1];
       const canonical = "https://x.com/mobgamesstudios/status/" + externalId;
+      const duplicate = await findMobXDeliveryDuplicate(env, externalId);
+      if (duplicate) return json({
+        ok: false, error: "mob_x_post_already_sent", message: "این پست قبلاً ارسال شده",
+      }, 409);
       if (await first("SELECT id FROM panel_links WHERE external_id = ?", externalId)) return fail("link_already_saved", 409);
       await env.DB.prepare("INSERT INTO panel_links (url, external_id, status) VALUES (?, ?, 'pending')").bind(canonical, externalId).run();
       const created = await first("SELECT id, url, external_id, status, created_at FROM panel_links WHERE external_id = ?", externalId);
@@ -979,6 +984,10 @@ export async function handleConsoleApi(request, env, h) {
       const existingJob = await first("SELECT id FROM console_jobs WHERE panel_link_id = ?", linkId);
       if (existingJob) return json({ ok: true, id: linkId, status: link.status, job_id: existingJob.id, already_confirmed: true });
       if (!["pending", "confirmed"].includes(link.status)) return fail("link_state_not_confirmable", 409);
+      const duplicate = await findMobXDeliveryDuplicate(env, link.external_id);
+      if (duplicate) return json({
+        ok: false, error: "mob_x_post_already_sent", message: "این پست قبلاً ارسال شده",
+      }, 409);
 
       const jobId = "job_" + randomHex(12);
       await env.DB.batch([
