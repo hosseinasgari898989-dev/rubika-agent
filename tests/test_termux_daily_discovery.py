@@ -136,7 +136,10 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
         set_dynamic_tiktok_sources([])
 
     def test_live_collection_without_worker_token_falls_back_and_keeps_mob_discovery(self):
-        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"AGENT_API_TOKEN": ""}), patch.object(
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {
+            "AGENT_API_TOKEN": "",
+            "AGENT_API_TOKEN_FILE": "",
+        }), patch.object(
             daily_discovery, "CloudState"
         ) as cloud_type, patch.object(
             daily_discovery, "discover_tiktok_profiles", return_value=([], [])
@@ -154,11 +157,59 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
         mob_discover.assert_called_once_with(max_results=12)
         self.assertEqual(report["summary"]["tiktok_source_overlay_status"],
                          "console_sources_unavailable_using_legacy_six")
-        self.assertEqual(report["summary"]["tiktok_source_overlay_reason"], "token_missing")
+        self.assertEqual(report["summary"]["tiktok_source_overlay_reason"], "token_missing_zero")
+        self.assertEqual(report["summary"]["tiktok_token_length_bucket"], "zero")
         self.assertIs(report["summary"]["tiktok_account_removals_applied"], False)
-        self.assertTrue(any(row.get("reason") == "token_missing"
+        self.assertTrue(any(row.get("reason") == "token_missing_zero"
                             for row in report["attempts"]))
         self.assertNotIn("AGENT_API_TOKEN", json.dumps(report))
+
+
+    def test_live_collection_reads_console_token_from_file_mount_when_env_is_empty(self):
+        token = "test-token-read-from-file-with-at-least-32-characters"
+        source_rows = [{
+            "id": "tiktok:filecreator", "platform": "tiktok",
+            "source_key": "filecreator", "enabled": True, "managed": False,
+        }]
+        candidate = {
+            "platform": "tiktok", "id": "7610592632179297558",
+            "url": "https://www.tiktok.com/@filecreator/video/7610592632179297558",
+            "author": "filecreator", "hashtags": ["#PoppyPlaytime"],
+            "title": "Poppy Playtime edit", "caption": "Public edit",
+            "published_at": "2026-11-05T11:00:00+00:00", "media_type": "video",
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            token_file = Path(folder) / "agent-api-token"
+            token_file.write_text(token, encoding="utf-8")
+            with patch.dict(os.environ, {
+                "AGENT_API_TOKEN": "",
+                "AGENT_API_TOKEN_FILE": str(token_file),
+                "AGENT_API_BASE_URL": "https://rubika-agent.h98609294.workers.dev",
+            }), patch.object(daily_discovery, "CloudState") as cloud_type, patch.object(
+                daily_discovery, "discover_tiktok_profiles"
+            ) as discover, patch.object(
+                daily_discovery, "discover_official_x_posts", return_value=([], [])
+            ):
+                cloud_type.return_value.get_console_tiktok_sources.return_value = source_rows
+                discover.return_value = ([{
+                    **candidate,
+                    "source_policy": resolve_source_policy("tiktok", "filecreator"),
+                }], [])
+                output_path = Path(folder) / "report.json"
+                report = daily_discovery.collect_daily_report(
+                    output_path=output_path, load_remote_sources=True
+                )
+
+            cloud_type.assert_called_once_with(
+                "https://rubika-agent.h98609294.workers.dev",
+                token=token,
+                timeout_seconds=25,
+            )
+            self.assertEqual(report["summary"]["tiktok_source_overlay_status"], "console_sources_loaded")
+            self.assertEqual(report["summary"]["tiktok_token_length_bucket"], "ok")
+            self.assertIsNone(report["summary"]["tiktok_source_overlay_reason"])
+            self.assertNotIn(token, output_path.read_text(encoding="utf-8"))
+        set_dynamic_tiktok_sources([])
 
     def test_console_source_failures_record_specific_reasons_and_keep_legacy_fallback(self):
         failures = (
