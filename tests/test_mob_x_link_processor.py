@@ -126,15 +126,23 @@ class MobXLinkParserTests(unittest.TestCase):
             f"https://twitter.com/mobgamesstudios/status/{POST_ID}",
             f"https://www.x.com/mobgamesstudios/status/{POST_ID}/",
             f"https://mobile.twitter.com/mobgamesstudios/status/{POST_ID}",
+            f"https://x.com/mobgamesstudios/status/{POST_ID}?s=19",
+            f"https://twitter.com/mobgamesstudios/status/{POST_ID}?a=share&s=19#copy",
+            f"https://mobile.x.com/mobgamesstudios/status/{POST_ID}/#post",
         ):
             with self.subTest(url=url):
                 self.assertEqual(parse_official_link(url), (expected, POST_ID))
         for url in (
             f"http://x.com/mobgamesstudios/status/{POST_ID}",
             f"https://x.com/someoneelse/status/{POST_ID}",
-            f"https://x.com/mobgamesstudios/status/{POST_ID}?s=20",
             "https://example.com/mobgamesstudios/status/" + POST_ID,
+            "https://x.com.evil.example/mobgamesstudios/status/" + POST_ID,
+            f"https://x.com/anything/../mobgamesstudios/status/{POST_ID}",
+            f"https://evil@x.com/mobgamesstudios/status/{POST_ID}",
+            f"https://x.com:443/mobgamesstudios/status/{POST_ID}",
+            f"https://x.com/mobgamesstudios/status/{POST_ID[5:]}",
             "https://x.com/mobgamesstudios/status/not-a-number",
+            "javascript:" + expected,
             "some text https://x.com/mobgamesstudios/status/" + POST_ID,
         ):
             with self.subTest(url=url):
