@@ -87,6 +87,66 @@ class MobOfficialTrialReportTests(unittest.TestCase):
             self.assertEqual(status, "ok")
             self.assertEqual(len(candidates), 1)
 
+    def test_auto_discovery_dedupes_against_manual_numeric_d1_identity(self):
+        post_id = "2111111111111111111"
+        candidate = self.row(
+            id="x-" + post_id,
+            external_id="x-" + post_id,
+            url="https://x.com/mobgamesstudios/status/" + post_id,
+            canonical_url="https://x.com/mobgamesstudios/status/" + post_id,
+        )
+
+        class FakeCloud:
+            def __init__(self, *args, **kwargs):
+                self.upserts = []
+
+            def get_seen_index(self):
+                # A ready/manual item is intentionally not delivery-blocking.
+                return {"ids": set(), "hashes": set()}
+
+            def get_official_items(self):
+                return [{
+                    "platform": "mob_official",
+                    "id": "mob_official:" + post_id,
+                    "external_id": post_id,
+                    "status": "ready",
+                    "review_state": "pending",
+                }]
+
+            def upsert_item(self, payload):
+                self.upserts.append(payload)
+                return {"ok": True, "item_id": "mob_official:" + payload["external_id"]}
+
+        cloud = FakeCloud()
+        with tempfile.TemporaryDirectory() as folder:
+            with (
+                patch.object(mob_official_trial, "CloudState", return_value=cloud),
+                patch.object(
+                    mob_official_trial, "load_lifecycle_policy",
+                    return_value={"mode": "test", "born_at": None, "birth_datetime": None},
+                ),
+                patch.object(
+                    mob_official_trial, "discover_official_x_posts",
+                    return_value=([candidate], []),
+                ),
+                patch.object(mob_official_trial, "format_mob_post") as format_post,
+                patch.object(mob_official_trial, "download_and_validate") as download,
+            ):
+                result = run_trial(
+                    publish=False,
+                    limit=1,
+                    output_report=Path(folder) / "report.json",
+                    output_dir=Path(folder) / "media",
+                    source_platform="x",
+                )
+
+        self.assertEqual(result["status"], "nothing_new")
+        self.assertEqual(result["error"], "all_complete_official_posts_already_known")
+        self.assertEqual(result["backlog_count"], 0)
+        self.assertEqual(cloud.upserts, [])
+        format_post.assert_not_called()
+        download.assert_not_called()
+
     def test_rejects_invalid_report_schema_and_missing_file(self):
         with tempfile.TemporaryDirectory() as folder:
             missing = Path(folder) / "missing.json"
