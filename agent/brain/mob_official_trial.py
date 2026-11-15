@@ -1265,11 +1265,17 @@ def run_trial(
             "validation": validation,
         }
         caption = str(formatted["caption"])
+        selected_external_id = normalize_mob_x_external_id(selected.get("external_id"))
+        if selected_external_id is None:
+            report["status"] = "failed"
+            report["error"] = "mob_x_external_id_invalid"
+            _report(output_report, report)
+            return report
 
         payload = {
             "platform": "mob_official",
             "source_key": str(selected.get("source_key") or "mobentertainment.com"),
-            "external_id": str(selected["external_id"]),
+            "external_id": selected_external_id,
             "canonical_url": str(selected["canonical_url"]),
             "title": str(selected.get("title") or ""),
             "caption": caption,
@@ -1312,7 +1318,7 @@ def run_trial(
             return report
 
         publisher = RubikaPublisher(rubika_token, channel_guid)
-        item_id = "mob_official:" + str(selected["external_id"])
+        item_id = "mob_official:" + selected_external_id
         try:
             cloud.record_attempt(item_id, 1, "started")
         except Exception as exc:
