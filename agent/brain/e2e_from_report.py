@@ -82,6 +82,24 @@ def _music_report_fields(moderation: Any, validation: Any) -> dict[str, Any]:
     }
 
 
+def _owner_music_ambiguity_override(
+    candidate: Candidate, validation: Any, moderation: Any,
+) -> bool:
+    policy = candidate.source_policy if isinstance(candidate.source_policy, Mapping) else {}
+    return (
+        candidate.platform == "tiktok"
+        and policy.get("owner_override") is True
+        and policy.get("owner_override_reason") == "music_probability_ambiguous"
+        and isinstance(validation, Mapping)
+        and validation.get("has_audio") is True
+        and isinstance(moderation, Mapping)
+        and moderation.get("music_decision_reason") == "music_probability_ambiguous"
+        and type(moderation.get("music_probability")) in {int, float}
+        and 0.15 <= float(moderation.get("music_probability")) <= 0.70
+        and type(moderation.get("has_music")) is not bool
+    )
+
+
 def _tiktok_publish_checks_pass(
     candidate: Candidate, validation: Any, moderation: Any,
 ) -> bool:
@@ -92,7 +110,13 @@ def _tiktok_publish_checks_pass(
         return False
     if not isinstance(validation, Mapping) or validation.get("has_audio") is not True:
         return False
-    return isinstance(moderation, Mapping) and moderation.get("has_music") is True
+    return (
+        isinstance(moderation, Mapping)
+        and (
+            moderation.get("has_music") is True
+            or _owner_music_ambiguity_override(candidate, validation, moderation)
+        )
+    )
 
 
 def _stage_failure_summary(
@@ -562,6 +586,12 @@ def _run_one(
         )
         policy = staged_candidate.source_policy or {}
         required_checks = {"has_music": True}
+        if platform == "tiktok" and _owner_music_ambiguity_override(
+            staged_candidate, payload.get("validation"), moderation,
+        ):
+            # Bypass only the ambiguous music boolean; audio is still required above,
+            # and every other download, quality, dedupe and destination check remains.
+            required_checks = {}
         if platform != "tiktok" and policy.get("require_edit_signal_check") is True:
             required_checks["is_edit"] = True
         if policy.get("require_brain_quality_check") is True:
