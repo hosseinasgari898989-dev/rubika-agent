@@ -631,11 +631,11 @@ def _mob_x_candidate_rejection(candidate: dict[str, Any], since_utc: str | None)
         return "official_x_source_required"
     if candidate.get("official_source") is not True:
         return "official_source_unverified"
-    external_id = str(candidate.get("external_id") or "")
-    if not re.fullmatch(r"x-[0-9]{15,22}", external_id):
+    external_id = normalize_mob_x_external_id(candidate.get("external_id"))
+    if external_id is None:
         return "invalid_external_id"
     canonical = str(candidate.get("canonical_url") or "")
-    if canonical != "https://x.com/mobgamesstudios/status/" + external_id[2:]:
+    if canonical != "https://x.com/mobgamesstudios/status/" + external_id:
         return "official_post_url_unverified"
     author = str(candidate.get("author") or "").strip().lstrip("@").casefold()
     if author != "mobgamesstudios":
