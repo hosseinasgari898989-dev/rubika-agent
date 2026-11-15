@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -17,7 +16,7 @@ from typing import Any
 from agent.discovery.mob_official_complete import discover_official_x_posts
 from agent.discovery.termux_sources import TIKTOK_PROFILES, discover_tiktok_profiles
 from agent.lifecycle import filter_candidates_by_birth, load_lifecycle_policy
-from agent.brain.cloud_state import CloudState, CloudStateError
+from agent.brain.cloud_state import CloudState, CloudStateError, resolve_agent_api_token
 from agent.source_policy import set_dynamic_tiktok_sources
 
 
@@ -50,10 +49,12 @@ def _console_source_failure_reason(error: Exception) -> str:
         return "unavailable"
     if isinstance(error, (RuntimeError, ValueError)) and str(error) in {
         "token_missing",
+        "token_missing_zero",
+        "token_missing_short",
         "console_sources_auth_unavailable",
         "missing_or_short_AGENT_API_TOKEN",
     }:
-        return "token_missing"
+        return str(error) if str(error).startswith("token_missing_") else "token_missing"
     return "unavailable"
 
 
@@ -83,12 +84,12 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
     source_rows_available = False
     source_status = "legacy_six_local"
     source_overlay_reason: str | None = None
+    token, token_length_bucket = resolve_agent_api_token()
 
     if load_remote_sources:
         try:
-            token = os.getenv("AGENT_API_TOKEN", "").strip()
-            if len(token) < 32:
-                raise RuntimeError("token_missing")
+            if not token:
+                raise RuntimeError("token_missing_" + token_length_bucket)
             cloud = CloudState(
                 os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev"),
                 token=token, timeout_seconds=25,
@@ -219,6 +220,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             "tiktok_method": "yt_dlp_selected_creator_profiles_only",
             "tiktok_source_overlay_status": source_status,
             "tiktok_source_overlay_reason": source_overlay_reason,
+            "tiktok_token_length_bucket": token_length_bucket,
             "tiktok_account_removals_applied": source_rows_available if load_remote_sources else None,
             "tiktok_missing_created_at_cutoff_count": len(missing_cutoff_attempts),
             "agent_lifecycle_mode": lifecycle_policy["mode"],
