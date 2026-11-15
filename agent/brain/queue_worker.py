@@ -536,7 +536,7 @@ def run_daily(
 
             elif (
                 platform == "tiktok"
-                and str(result.get("reason") or "") == "music_probability_ambiguous"
+                and result.get("music_decision_reason") == "music_probability_ambiguous"
                 and result.get("has_audio_stream") is True
                 and type(result.get("music_probability")) in {int, float}
                 and 0.15 <= float(result.get("music_probability")) <= 0.70
