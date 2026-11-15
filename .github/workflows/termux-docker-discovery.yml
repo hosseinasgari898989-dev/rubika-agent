@@ -127,24 +127,35 @@ jobs:
           mkdir -p "$output_dir"
           chmod 0777 "$output_dir"
 
+          token_file="$RUNNER_TEMP/agent-api-token"
+          printf '%s' "${AGENT_API_TOKEN:-}" > "$token_file"
+          chmod 0444 "$token_file"
+
           cat > "$RUNNER_TEMP/termux_docker_discovery.py" <<'PY'
           from __future__ import annotations
 
           import json
-          import os
           from pathlib import Path
 
+          from agent.brain.cloud_state import resolve_agent_api_token
           from termux.daily_discovery import collect_daily_report
 
           report_path = Path("/out/termux_discovery.json")
           report = collect_daily_report(output_path=report_path, load_remote_sources=True)
-          token = os.environ.get("AGENT_API_TOKEN", "").strip()
+          token, token_length_bucket = resolve_agent_api_token()
           if token and token.encode("utf-8") in report_path.read_bytes():
               report_path.unlink(missing_ok=True)
               raise SystemExit("credential_leak_in_discovery_report")
+          if token_length_bucket not in {"zero", "short", "ok"}:
+              report_path.unlink(missing_ok=True)
+              raise SystemExit("invalid_token_length_bucket")
           (Path("/out") / "agent_api_available").write_text(
-              "true\n" if len(token) >= 32 else "false\n", encoding="utf-8"
+              "true\n" if token_length_bucket == "ok" else "false\n", encoding="utf-8"
           )
+          (Path("/out") / "agent_api_token_length_bucket").write_text(
+              token_length_bucket + "\n", encoding="utf-8"
+          )
+          print(f"token_length_bucket={token_length_bucket}")
           # The Termux container writes as its own UID; grant the host runner read access.
           report_path.chmod(0o644)
           summary = report.get("summary", {})
@@ -154,6 +165,7 @@ jobs:
 
           safe_summary = {
               "generated_at": report.get("generated_at"),
+              "token_length_bucket": token_length_bucket,
               "tiktok_candidates": len(tiktok) if isinstance(tiktok, list) else 0,
               "mob_official_candidates": len(mob) if isinstance(mob, list) else 0,
               "paid_providers_used": summary.get("paid_providers_used", []),
@@ -198,13 +210,16 @@ jobs:
           timeout 25m docker run --rm -i \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -v "$output_dir:/out" \
+            --mount "type=bind,src=$token_file,dst=/tmp/agent-api-token,readonly" \
             -w /workspace \
             --env PYTHONPATH=/workspace \
-            --env AGENT_API_TOKEN \
             --env AGENT_API_BASE_URL \
             termux/termux-docker:x86_64 \
             sh -lc '
               set -eu
+              # termux-docker entrypoint uses su -i and drops non-allowlisted env vars.
+              # Export the mounted-file path only after that privilege transition.
+              export AGENT_API_TOKEN_FILE=/tmp/agent-api-token
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
               sh /workspace/termux/pkg_index_retry.sh
               timeout 240s pkg install -y python git
@@ -222,14 +237,25 @@ jobs:
             ' < "$RUNNER_TEMP/termux_docker_discovery.py"
 
           agent_api_available="$(cat "$output_dir/agent_api_available")"
+          token_length_bucket="$(cat "$output_dir/agent_api_token_length_bucket")"
           if [[ "$agent_api_available" != "true" && "$agent_api_available" != "false" ]]; then
             echo "::error::Discovery returned an invalid credential availability marker."
             exit 2
           fi
-          echo "agent_api_available=$agent_api_available" >> "$GITHUB_OUTPUT"
-          if [[ "$agent_api_available" == "false" ]]; then
-            echo "::warning::AGENT_API_TOKEN is missing or shorter than 32 characters; remote TikTok sources and D1 intake are unavailable."
+          if [[ "$token_length_bucket" != "zero" && "$token_length_bucket" != "short" && "$token_length_bucket" != "ok" ]]; then
+            echo "::error::Discovery returned an invalid token length bucket."
+            exit 2
           fi
+          echo "agent_api_available=$agent_api_available" >> "$GITHUB_OUTPUT"
+          echo "token_length_bucket=$token_length_bucket" >> "$GITHUB_OUTPUT"
+          if [[ "$agent_api_available" == "false" ]]; then
+            echo "::warning::Agent API token unavailable inside Termux container (token_length_bucket=$token_length_bucket); remote TikTok sources and D1 intake are unavailable."
+          fi
+
+      - name: Remove temporary Termux API token file
+        if: always()
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/agent-api-token"
 
       - name: Validate report and push only the metadata report to the main branch
         id: push_report
@@ -490,6 +516,7 @@ jobs:
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
             echo "- Agent API credential available: ${{ steps.termux_discovery.outputs.agent_api_available || 'unknown' }}"
+            echo "- token_length_bucket: ${{ steps.termux_discovery.outputs.token_length_bucket || 'unknown' }}"
             echo "- Persistent D1 intake: ${{ steps.queue_intake.outcome }}"
             echo "- Live candidates evaluated by intake filter: ${{ steps.queue_intake.outputs.discovered_candidate_count || 'n/a' }}"
             echo "- Eligible candidates after content/edit/freshness checks: ${{ steps.queue_intake.outputs.filter_eligible_count || 'n/a' }}"
