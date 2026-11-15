@@ -5,7 +5,7 @@ import { isScreenIdExt as isScreenId, buildScreenExt as buildScreen, HOME_ROWS_E
 import { isSettingsId, applySettingsAction, settingsScreen } from "./panel_settings.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
 import { normalizeMobXLink } from "./mob_x_link.js";
-import { findMobXDuplicate } from "./mob_x_identity.js";
+import { findMobXDuplicate, normalizeMobXExternalId } from "./mob_x_identity.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];

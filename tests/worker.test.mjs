@@ -2945,14 +2945,7 @@ async function withDispatchFetch(responder, fn) {
       "the temporary link confirmation prompt must be deleted after its action");
     assert.equal(state.DB.state.get("panel_mob_temp_mid"), "");
     assert.equal(state.DB.state.get("panel_mid"), "mob-link-confirm-panel");
-    assert.equal(state.DB.links[0].status, "confirmed", "PV_CONFIRM_DIAGNOSTIC=" + JSON.stringify({
-      panel_state: [...state.DB.state.entries()],
-      edits: calls.filter(call => call.method === "editMessageText").map(call => call.payload.text),
-      duplicate_queries: state.DB.d1QueryLog.filter(sql =>
-        sql.includes("FROM items WHERE platform = 'mob_official'") ||
-        sql.includes("FROM console_jobs WHERE type = 'mob_x_link'") ||
-        sql.includes("FROM panel_links WHERE external_id IN")),
-    }));
+    assert.equal(state.DB.links[0].status, "confirmed");
     assert.equal(state.DB.consoleJobs.size, 1);
     const job = [...state.DB.consoleJobs.values()][0];
     assert.equal(job.type, "mob_x_link");
