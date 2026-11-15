@@ -378,9 +378,52 @@ class MobXLinkParserTests(unittest.TestCase):
         item.iter_content.assert_not_called()
         item.close.assert_called()
 
+    def test_manual_link_is_blocked_when_auto_discovery_has_same_x_prefixed_post(self):
+        cloud = Mock()
+        cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.get_official_items.return_value = [{
+            "platform": "mob_official",
+            "external_id": "x-" + POST_ID,
+            "status": "discovered",
+        }]
+        client = Mock()
+        job = {
+            "id": "job_abcdef1234567890",
+            "params": {"url": f"https://x.com/mobgamesstudios/status/{POST_ID}"},
+            "external_id": POST_ID,
+        }
+        with (
+            patch("agent.brain.mob_x_link_processor.CloudState", return_value=cloud),
+            patch("agent.brain.mob_x_link_processor.fetch_public_post") as fetch,
+        ):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_post_already_known"):
+                process_job(job, client)
+        fetch.assert_not_called()
+        client.rules.assert_not_called()
+
+    def test_manual_link_fails_closed_when_official_duplicate_index_is_unavailable(self):
+        cloud = Mock()
+        cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.get_official_items.side_effect = RuntimeError("private transport detail")
+        client = Mock()
+        job = {
+            "id": "job_abcdef1234567890",
+            "params": {"url": f"https://x.com/mobgamesstudios/status/{POST_ID}"},
+            "external_id": POST_ID,
+        }
+        with (
+            patch("agent.brain.mob_x_link_processor.CloudState", return_value=cloud),
+            patch("agent.brain.mob_x_link_processor.fetch_public_post") as fetch,
+        ):
+            with self.assertRaisesRegex(MobXLinkError, "mob_x_duplicate_index_unavailable"):
+                process_job(job, client)
+        fetch.assert_not_called()
+        client.rules.assert_not_called()
+
     def test_text_only_post_is_rejected_before_translation_or_any_send(self):
         cloud = Mock()
         cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.get_official_items.return_value = []
         client = Mock()
         job = {
             "id": "job_abcdef1234567890",
