@@ -689,14 +689,14 @@ def _mob_x_backlog_candidate(row: dict[str, Any]) -> dict[str, Any] | None:
     stored = validation.get("mob_x_discovery")
     if not isinstance(stored, dict) or stored.get("version") != 1:
         return None
-    external_id = str(row.get("external_id") or "")
+    external_id = normalize_mob_x_external_id(row.get("external_id"))
     canonical = str(row.get("canonical_url") or "")
     media_url = str(stored.get("media_url") or "")
     author = str(stored.get("author") or "").strip().lstrip("@").casefold()
     published_at = str(row.get("published_at") or stored.get("published_at") or "")
     if (
-        not re.fullmatch(r"x-[0-9]{15,22}", external_id)
-        or canonical != "https://x.com/mobgamesstudios/status/" + external_id[2:]
+        external_id is None
+        or canonical != "https://x.com/mobgamesstudios/status/" + external_id
         or author != "mobgamesstudios"
         or not media_url.startswith("https://")
         or stored.get("pinned") is not False
