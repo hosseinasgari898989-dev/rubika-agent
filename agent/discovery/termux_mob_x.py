@@ -25,6 +25,8 @@ from xml.etree import ElementTree as ET
 
 import requests
 
+from agent.brain.mob_x_ids import canonical_mob_x_external_id
+
 
 OFFICIAL_HANDLE = "mobgamesstudios"
 MAX_RESULTS = 40
@@ -450,11 +452,12 @@ def _parse_post(
     media_type, media_url = media_result
     created = _timestamp(str(payload.get("created_at") or legacy.get("created_at") or ""))
     canonical = f"https://x.com/{OFFICIAL_HANDLE}/status/{post_id}"
+    canonical_external_id = canonical_mob_x_external_id(post_id)
     title = caption.split("\n", 1)[0].strip()[:1200] or "Mob Entertainment official X post"
     return {
         "platform": "mob_official",
-        "id": "x-" + post_id,
-        "external_id": "x-" + post_id,
+        "id": canonical_external_id,
+        "external_id": canonical_external_id,
         "url": canonical,
         "canonical_url": canonical,
         "title": title,
@@ -1248,10 +1251,11 @@ def _fallback_post_by_id(
             continue
         media_type, media_url = selected
         canonical = f"https://x.com/{OFFICIAL_HANDLE}/status/{post_id}"
+        canonical_external_id = canonical_mob_x_external_id(post_id)
         return {
             "platform": "mob_official",
-            "id": "x-" + post_id,
-            "external_id": "x-" + post_id,
+            "id": canonical_external_id,
+            "external_id": canonical_external_id,
             "url": canonical,
             "canonical_url": canonical,
             "title": str(post.get("title") or text_value[:1200])[:1200],
