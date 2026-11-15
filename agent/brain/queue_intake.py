@@ -347,9 +347,10 @@ def run_intake(
 
     queue_counts = cloud.get_automation_queue_summary()
     inserted_sources = Counter(item["source_key"] for item in inserted_items + review_inserted_items)
+    total_inserted_count = len(inserted_items) + len(review_inserted_items)
     result: dict[str, Any] = {
         "ok": True,
-        "status": "enqueued" if inserted_items else "no_new_candidates",
+        "status": "enqueued" if total_inserted_count else "no_new_candidates",
         "tiktok_source_overlay_status": "console_sources_loaded" if source_rows_available else "console_sources_unavailable_using_legacy_six",
         "tiktok_account_removals_applied": source_rows_available,
         "report_generated_at": str(payload.get("generated_at") or "")[:80],
@@ -366,7 +367,7 @@ def run_intake(
         "duplicate_within_report_count": filter_diagnostics.get("duplicate_within_report_count", 0),
         "ordered_candidate_count": len(ordered),
         "received_count": api_received_count,
-        "inserted_count": len(inserted_items),
+        "inserted_count": total_inserted_count,
         "normal_inserted_count": len(inserted_items),
         "owner_review_inserted_count": len(review_inserted_items),
         "duplicate_count": duplicate_count,
