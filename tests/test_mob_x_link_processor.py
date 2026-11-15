@@ -592,6 +592,7 @@ class MobXSubtitleWiringTests(unittest.TestCase):
         events = []
         cloud = Mock()
         cloud.get_seen_index.return_value = {"ids": set()}
+        cloud.get_official_items.return_value = []
         cloud.upsert_item.return_value = {"item_id": "mob_official:" + POST_ID}
         client = Mock()
         client.transition.side_effect = lambda *args, **kwargs: events.append(("transition", kwargs["result"]))
