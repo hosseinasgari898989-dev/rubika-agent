@@ -16,7 +16,7 @@ from typing import Any, Callable
 from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.delivery import _is_rate_limit_error
 from agent.brain.e2e_from_report import run_one
-from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
+from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification, send_tiktok_owner_review_notifications
 from agent.source_policy import refresh_dynamic_tiktok_sources
 # The global lifecycle birth gate is reserved for official Mob news, not TikTok edits.
 
@@ -306,6 +306,8 @@ def run_daily(
         "attempted_count": 0,
         "sent_count": 0,
         "failed_count": 0,
+        "owner_review_count": 0,
+        "owner_review_notification": {"sent": False, "sent_count": 0},
         "skipped_count": 0,
         "rate_limited_count": 0,
         "queue_pages_read": 0,
@@ -354,6 +356,7 @@ def run_daily(
         report["daily_sent_today"] = int(report["queue_counts"].get("sent_today", 0) or 0)
         report["inventory"] = _mega_inventory()
         report["inventory_text"] = _inventory_text(report["queue_counts"], report["inventory"])
+        report["owner_review_notification"] = send_tiktok_owner_review_notifications(cloud)
         _record_run_timings(report, cloud, run_started, queue_read_ms)
         return report
 
@@ -523,6 +526,31 @@ def run_daily(
                 report["results"].append(result_entry)
                 break
 
+            elif (
+                platform == "tiktok"
+                and str(result.get("reason") or "") == "music_probability_ambiguous"
+                and result.get("has_audio_stream") is True
+                and type(result.get("music_probability")) in {int, float}
+                and 0.15 <= float(result.get("music_probability")) <= 0.70
+            ):
+                try:
+                    cloud.mark_tiktok_owner_review(
+                        queue_id,
+                        reason="music_probability_ambiguous",
+                        music_probability=float(result["music_probability"]),
+                        has_audio=True,
+                    )
+                    report["owner_review_count"] += 1
+                    result_entry["queue_state"] = "failed_needs_owner_review"
+                    result_entry["owner_review_reason"] = "music_probability_ambiguous"
+                except Exception as exc:
+                    reason = "owner_review_persist_" + _safe_code(type(exc).__name__)
+                    cloud.update_automation_queue_item(queue_id, "failed", error_code=reason)
+                    report["failed_count"] += 1
+                    report["errors"].append({
+                        "platform": platform, "external_id": external_id, "error": reason,
+                    })
+
             elif status == "no_candidate":
                 cloud.update_automation_queue_item(
                     queue_id, "skipped", error_code="already_seen_or_unavailable"
@@ -541,6 +569,7 @@ def run_daily(
     report["finished_at"] = _utc_now()
     report["queue_counts"] = cloud.get_automation_queue_summary()
     report["daily_sent_today"] = int(report["queue_counts"].get("sent_today", 0) or 0)
+    report["owner_review_notification"] = send_tiktok_owner_review_notifications(cloud)
     has_queue_claim_error = any(
         error.get("error", "").startswith("queue_claim_") for error in report["errors"]
     )
