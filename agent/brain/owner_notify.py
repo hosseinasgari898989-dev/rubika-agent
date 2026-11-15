@@ -700,6 +700,66 @@ def refresh_daily_digest() -> dict[str, Any]:
     return {"sent": False, "reason": "digest_update_busy"}
 
 
+def send_tiktok_owner_review_notifications(cloud: Any) -> dict[str, Any]:
+    """Claim at most five daily review rows and send a links-only private message."""
+    try:
+        items = cloud.claim_tiktok_owner_review_notifications()
+    except Exception as exc:
+        return {"sent": False, "reason": "owner_review_claim_" + type(exc).__name__}
+    if not items:
+        return {"sent": True, "sent_count": 0}
+
+    token = os.getenv("RUBIKA_TOKEN", "").strip()
+    owner_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "").strip()
+    if not token or not owner_id:
+        return {"sent": False, "reason": "owner_review_notification_not_configured", "claimed_count": len(items)}
+
+    rendered: list[str] = []
+    for item in items[:5]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname not in {"www.tiktok.com", "tiktok.com"}
+            or not re.fullmatch(r"/@[A-Za-z0-9._]{2,24}/video/[0-9]{10,25}", parsed.path)
+        ):
+            continue
+        handle = re.search(r"/@([A-Za-z0-9._]{2,24})/video/", parsed.path)
+        if not handle:
+            continue
+        caption = re.sub(r"[\r\n\t]+", " ", str(item.get("caption") or ""))[:110]
+        caption = re.sub(r"[*_\[\]]", "", caption).strip()
+        reason = str(item.get("reason") or "")
+        probability = item.get("music_probability")
+        if reason == "music_probability_ambiguous" and type(probability) in {int, float}:
+            reason_fa = "موسیقی نامشخص (" + format(float(probability), ".2f").replace(".", "٫") + ")"
+        elif reason == "edit_signal_not_found_by_brain":
+            reason_fa = "نشانهٔ ادیت پیدا نشد"
+        else:
+            continue
+        rendered.append(
+            "@" + handle.group(1) + "\n" +
+            (caption if caption else "بدون کپشن") + "\n" +
+            reason_fa + "\n" + url
+        )
+    if not rendered:
+        return {"sent": False, "reason": "owner_review_notification_items_invalid", "claimed_count": len(items)}
+
+    message = "بازبینی مالک — فقط لینک‌ها\n\n" + "\n\n".join(rendered)
+    try:
+        bot = _make_rubika_bot(token)
+        raw = bot.send_message(chat_id=owner_id, text=message)
+    except Exception as exc:
+        # The claim is already persisted; do not automatically send a duplicate after
+        # an ambiguous transport outcome. The owner can still inspect the review list.
+        return {"sent": False, "reason": "owner_review_rubika_" + type(exc).__name__}
+    if not _rubika_ok(raw):
+        return {"sent": False, "reason": "owner_review_rubika_rejected"}
+    return {"sent": True, "sent_count": len(rendered), "claimed_count": len(items)}
+
+
 def send_owner_notification(
     message: str,
     *,
