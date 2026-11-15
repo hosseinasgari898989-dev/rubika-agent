@@ -150,8 +150,10 @@ const ACTIONS_RUNNER_POSTS = new Set([
   "/d1/query", // SELECT-only explorer endpoint
 ]);
 function requiresOwnerConsoleToken(path, method) {
-  if (!path.startsWith("/api/console/") || ["GET", "HEAD", "OPTIONS"].includes(method)) return false;
+  if (!path.startsWith("/api/console/")) return false;
   const sub = path.replace(/\/+$/, "").slice("/api/console".length);
+  if (sub === "/tiktok-owner-review" || sub.startsWith("/tiktok-owner-review/")) return true;
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return false;
   if (ACTIONS_RUNNER_POSTS.has(sub)) return false;
   if (/^\/mob-x\/jobs\/[A-Za-z0-9_-]{1,100}\/(?:transition|preview|delivery)$/.test(sub)) return false;
   return true;
@@ -1835,6 +1837,7 @@ async function route(request, env, ctx) {
     if (path.startsWith("/api/brain/owner-console/tiktok-review")) {
       const action = path.slice("/api/brain/owner-console/tiktok-review".length);
       let actorBody = {};
+      const reviewRequest = request.clone();
       if (request.method === "POST") {
         const parsedActor = await readJson(request);
         if (!parsedActor.ok) return json({ ok: false, error: parsedActor.error }, parsedActor.status);
@@ -1850,7 +1853,7 @@ async function route(request, env, ctx) {
         ? ownerRow.role === "owner" && Number(ownerRow.enabled) === 1
         : String(primary?.chat_id || "") === chatId;
       if (!owner) return json({ ok: false, error: "owner_required" }, 403);
-      return handleTikTokOwnerReviewApi(request, env, { json, readJson, text, validIdentifier },
+      return handleTikTokOwnerReviewApi(reviewRequest, env, { json, readJson, text, validIdentifier },
         action, request.method, { kind: "rubika", chat_id: chatId });
     }
     const queueStateMatch = /^\/api\/brain\/automation-queue\/([^/]+)\/state$/.exec(path);
