@@ -30,8 +30,8 @@ const mobXIdentity = await import(mobXIdentityModuleUrl);
           bind(...values) { this.values = values; queries.push({ sql, values }); return this; },
           async first() {
             if (sql.includes("FROM items WHERE platform = 'mob_official'")) return null;
-            if (sql.includes("FROM console_jobs j")) {
-              assert.ok(this.values.includes(postId) && this.values.includes("x-" + postId));
+            if (sql.includes("FROM console_jobs WHERE type = 'mob_x_link'")) {
+              assert.ok(this.values.includes(storedId));
               return { id: "job_duplicate", status: "ready_for_review", external_id: storedId };
             }
             if (sql.includes("FROM panel_links WHERE external_id IN")) return null;
@@ -43,7 +43,7 @@ const mobXIdentity = await import(mobXIdentityModuleUrl);
     const result = await mobXIdentity.findMobXDuplicate(db, postId);
     assert.equal(result.duplicate, true);
     assert.equal(result.job.id, "job_duplicate");
-    assert.ok(queries.some(query => query.sql.includes("FROM console_jobs j")));
+    assert.ok(queries.some(query => query.sql.includes("FROM console_jobs WHERE type = 'mob_x_link'")));
   }
 }
 const consoleRetrySource = fs.readFileSync(path.join(root, "src/console_retry.js"), "utf8");
