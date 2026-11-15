@@ -293,6 +293,15 @@ class FakeStatement {
       return row ? { ...row } : null;
     }
     if (this.sql.includes("JOIN panel_links p ON p.id = j.panel_link_id")) {
+      if (this.sql.includes("p.external_id IN")) {
+        const [id, prefixed, excludedJobId] = this.values;
+        const row = [...this.db.consoleJobs.values()].find(job => {
+          if (job.type !== "mob_x_link" || (excludedJobId && job.id === excludedJobId)) return false;
+          const link = this.db.panelLinks.get(Number(job.panel_link_id));
+          return link && (link.external_id === id || link.external_id === prefixed);
+        });
+        return row ? { id: row.id, status: row.status } : null;
+      }
       const requestedLinkId = this.sql.includes("AND j.panel_link_id = ?") ? Number(this.values[0]) : null;
       const pair = [...this.db.consoleJobs.values()]
         .filter(job => job.type === "mob_x_link" && ["confirmed", "queued"].includes(job.status) &&
