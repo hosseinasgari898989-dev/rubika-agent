@@ -213,9 +213,17 @@ def _single_candidate_report(item: dict[str, Any], destination: Path) -> Path:
         "freshness_source": metadata.get("freshness_source"),
         "method": item.get("method") or metadata.get("source_method") or "persistent_queue",
     }
+    owner_review = metadata.get("owner_review") if isinstance(metadata.get("owner_review"), dict) else {}
+    queue_context = {
+        "id": str(item.get("id") or ""),
+        "owner_review_state": owner_review.get("state"),
+        "owner_override": owner_review.get("owner_override") is True,
+        "owner_override_reason": owner_review.get("owner_override_reason"),
+    }
     payload = {
         "schema_version": 1,
         "source": "persistent_d1_queue",
+        "queue_context": queue_context,
         "generated_at": _utc_now(),
         "mode": "metadata_only_no_download_no_publish",
         "summary": {"tiktok_candidates": 0, "youtube_candidates": 0, "instagram_candidates": 0},
