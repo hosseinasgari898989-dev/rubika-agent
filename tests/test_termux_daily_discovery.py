@@ -136,7 +136,10 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
         set_dynamic_tiktok_sources([])
 
     def test_live_collection_without_worker_token_falls_back_and_keeps_mob_discovery(self):
-        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"AGENT_API_TOKEN": ""}), patch.object(
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {
+            "AGENT_API_TOKEN": "",
+            "AGENT_API_TOKEN_FILE": "",
+        }), patch.object(
             daily_discovery, "CloudState"
         ) as cloud_type, patch.object(
             daily_discovery, "discover_tiktok_profiles", return_value=([], [])
@@ -181,6 +184,7 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
             with patch.dict(os.environ, {
                 "AGENT_API_TOKEN": "",
                 "AGENT_API_TOKEN_FILE": str(token_file),
+                "AGENT_API_BASE_URL": "https://rubika-agent.h98609294.workers.dev",
             }), patch.object(daily_discovery, "CloudState") as cloud_type, patch.object(
                 daily_discovery, "discover_tiktok_profiles"
             ) as discover, patch.object(
