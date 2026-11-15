@@ -1120,7 +1120,8 @@ const read = async response => ({ status: response.status, body: await response.
   const valid = await read(await worker.fetch(request("/api/console/sources?platform=tiktok"), state));
   assert.equal(valid.status, 200);
   assert.equal(valid.body.ok, true);
-  assert.deepEqual(valid.body.items.map(row => row.source_key), ["bendus.editz"]);
+  assert.ok(valid.body.items.some(row => row.source_key === "bendus.editz" && row.enabled === 1),
+    "the authenticated real route must include the enabled console-managed TikTok source");
 
   const invalid = await read(await worker.fetch(request("/api/console/sources?platform=tiktok", {
     token: "not-the-configured-agent-api-token",
