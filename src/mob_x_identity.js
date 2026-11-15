@@ -35,10 +35,9 @@ export async function findMobXDuplicate(db, value, {
 
   let jobSql =
     "SELECT j.id, j.status FROM console_jobs j " +
-    "LEFT JOIN panel_links p ON p.id = j.panel_link_id " +
-    "WHERE j.type = 'mob_x_link' " +
-    "AND (p.external_id IN (?, ?) OR j.params_json LIKE ? OR j.result_json LIKE ?)";
-  const jobArgs = [id, prefixed, "%" + id + "%", "%" + prefixed + "%"];
+    "JOIN panel_links p ON p.id = j.panel_link_id " +
+    "WHERE j.type = 'mob_x_link' AND p.external_id IN (?, ?)";
+  const jobArgs = [id, prefixed];
   if (excludeJobId) {
     jobSql += " AND j.id <> ?";
     jobArgs.push(excludeJobId);
