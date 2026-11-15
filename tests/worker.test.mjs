@@ -981,6 +981,7 @@ const read = async response => ({ status: response.status, body: await response.
     "https://evil@x.com/mobgamesstudios/status/" + postId,
     "https://x.com:443/mobgamesstudios/status/" + postId,
     "https://x.com/mobgamesstudios/status/" + postId.slice(5),
+    "https://x.com/mobgamesstudios/status/not-a-number",
     "javascript:" + canonical,
   ]) {
     assert.equal(mobXLink.normalizeMobXLink(url), null, url);
