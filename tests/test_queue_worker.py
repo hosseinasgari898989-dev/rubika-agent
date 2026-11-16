@@ -41,6 +41,9 @@ class FakeCloud:
             make_item("tiktok", "7616247520657771801", "Remain queued"),
         ]
 
+    def get_publishing_control(self):
+        return {"paused": False, "reason_fa": "توقف اضطراری فعال نیست."}
+
     def get_console_tiktok_sources(self):
         return []
 
@@ -88,6 +91,24 @@ class FakeCloud:
 
 
 class QueueWorkerTests(unittest.TestCase):
+    def test_emergency_pause_blocks_queue_before_any_claim_or_publish(self):
+        cloud = FakeCloud()
+        cloud.get_publishing_control = lambda: (_ for _ in ()).throw(CloudStateError("publishing_paused"))
+        original_states = [item["status"] for item in cloud.items]
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one") as run_one,
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0)
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["stop_reason"], "publishing_paused")
+        self.assertEqual(report["attempted_count"], 0)
+        self.assertEqual(report["sent_count"], 0)
+        self.assertEqual([item["status"] for item in cloud.items], original_states)
+        run_one.assert_not_called()
+
     def test_failure_sanitizer_keeps_only_allowlisted_music_verdict_fields(self):
         result = queue_worker._safe_failure_diagnostics({
             "music_probability": 0.61,
