@@ -5,6 +5,9 @@ if(!R||!R.V||!R.A)return;
 const {V,A,api,card,tbl,E,N,fmt,toast,NAV,val}=R;
 const inFlight=new Set();
 let unsentRows=[];
+let ownerReviewRows=[];
+let ownerReviewLines='';
+let ownerReviewPreview=null;
 
 const sourceStatus=row=>Number(row.enabled)===1
   ? '<span class="bd ok">فعال</span>'
@@ -189,8 +192,101 @@ A.tkDelete=async el=>{
 };
 
 
+const ownerReviewUrl=raw=>{
+  try{
+    const u=new URL(String(raw||''));
+    if(u.protocol!=='https:'||!['www.tiktok.com','tiktok.com'].includes(u.hostname.toLowerCase()))return null;
+    if(!/^\/@[a-z0-9._]{2,24}\/video\/[0-9]{10,25}$/.test(u.pathname))return null;
+    return u.href;
+  }catch{return null}
+};
+const ownerReviewReason=row=>{
+  if(row.reason==='music_probability_ambiguous'&&typeof row.music_probability==='number')
+    return 'موسیقی نامشخص ('+Number(row.music_probability).toLocaleString('fa-IR',{maximumFractionDigits:2})+')';
+  if(row.reason==='edit_signal_not_found_by_brain')return 'نشانهٔ ادیت پیدا نشد';
+  return 'نیازمند بازبینی مالک';
+};
+
+V['tiktok-owner-review']=async()=>{
+  const r=await api('/api/console/tiktok-owner-review');
+  ownerReviewRows=Array.isArray(r.items)?r.items:[];
+  const rows=ownerReviewRows.map(row=>({...row,safe_url:ownerReviewUrl(row.url)}));
+  const editor=card('ثبت تصمیم گروهی', 
+    '<div class="s">هر لینک را در یک خط همراه با «قبول» یا «رد» وارد کن. حداکثر ۲۰ تصمیم. ابتدا پیش‌نمایش گرفته می‌شود؛ هیچ تصمیمی پیش از زدن دکمهٔ تأیید اعمال نمی‌شود.</div>'+
+    '<label for="tk_review_lines">لینک‌های TikTok و تصمیم‌ها</label>'+
+    '<textarea id="tk_review_lines" rows="7" maxlength="16000" dir="auto" placeholder="https://www.tiktok.com/@account/video/1234567890123456789 قبول&#10;https://www.tiktok.com/@account/video/1234567890123456790 رد">'+E(ownerReviewLines)+'</textarea>'+
+    '<div class="row" style="margin-top:12px"><button class="btn" data-a="tkReviewPreview">پیش‌نمایش تصمیم‌ها</button><button class="btn g" data-a="tkReviewCancel">پاک‌کردن</button></div>');
+  let preview='';
+  if(ownerReviewPreview){
+    const hasChallenge=typeof ownerReviewPreview.challenge_id==='string'&&/^[a-f0-9]{48}$/.test(ownerReviewPreview.challenge_id);
+    preview=card('پیش‌نمایش؛ هنوز اعمال نشده',
+      '<div class="chips">'+
+      '<span class="chip">مجموع <b>'+N(ownerReviewPreview.expected_count).toLocaleString('fa-IR')+'</b></span>'+
+      '<span class="chip">قبول <b>'+N(ownerReviewPreview.approved_count).toLocaleString('fa-IR')+'</b></span>'+
+      '<span class="chip">رد <b>'+N(ownerReviewPreview.rejected_count).toLocaleString('fa-IR')+'</b></span>'+
+      '<span class="chip">نامعتبر <b>'+N(ownerReviewPreview.invalid_count).toLocaleString('fa-IR')+'</b></span>'+
+      '</div><div style="margin-top:10px">'+E(ownerReviewPreview.summary_fa||'پیش‌نمایش آماده شد.')+'</div>'+
+      (ownerReviewPreview.expires_at?'<div class="s" style="margin-top:6px">اعتبار تا '+E(fmt(ownerReviewPreview.expires_at))+'</div>':'')+
+      '<div class="row" style="margin-top:14px">'+
+      (hasChallenge?'<button class="btn" data-a="tkReviewConfirm">تأیید و اعمال همین تصمیم‌ها</button>':'')+
+      '<button class="btn g" data-a="tkReviewCancel">لغو پیش‌نمایش</button></div>');
+  }
+  const list=card('موارد در انتظار بازبینی',
+    tbl([
+      ['حساب',x=>'<code dir="ltr">@'+E(String(x.account||'').replace(/^@/,''))+'</code>'],
+      ['دلیل',x=>E(ownerReviewReason(x))],
+      ['توضیح',x=>E(x.caption_excerpt||'—')],
+      ['زمان',x=>E(fmt(x.created_at))],
+      ['لینک',x=>x.safe_url?'<a href="'+E(x.safe_url)+'" target="_blank" rel="noopener noreferrer">باز کردن در TikTok</a>':'<span class="s">لینک نامعتبر</span>']
+    ],rows,'موردی برای بازبینی مالک باقی نمانده است.'));
+  return editor+preview+list;
+};
+
+A.tkReviewPreview=async()=>{
+  const lines=val('tk_review_lines');
+  if(!lines.trim())return toast('ابتدا لینک‌ها و تصمیم‌ها را وارد کن','bad');
+  ownerReviewLines=lines;
+  try{
+    ownerReviewPreview=await api('/api/console/tiktok-owner-review/preview',{
+      method:'POST',body:{lines}
+    });
+    toast(ownerReviewPreview.challenge_id?'پیش‌نمایش آماده شد؛ هنوز چیزی اعمال نشده است':'مورد قابل اجرایی پیدا نشد','ok');
+    R.go('tiktok-owner-review');
+  }catch(e){toast('پیش‌نمایش ناموفق بود: '+e.message,'bad')}
+};
+
+A.tkReviewConfirm=async()=>{
+  const challenge=ownerReviewPreview&&ownerReviewPreview.challenge_id;
+  if(typeof challenge!=='string'||!/^[a-f0-9]{48}$/.test(challenge))
+    return toast('پیش‌نمایش معتبر برای تأیید وجود ندارد','bad');
+  try{
+    const result=await api('/api/console/tiktok-owner-review/confirm',{
+      method:'POST',body:{challenge_id:challenge,confirm:true}
+    });
+    ownerReviewPreview=null;
+    ownerReviewLines='';
+    toast('تصمیم‌ها ثبت شد؛ قبول: '+N(result.approved_count).toLocaleString('fa-IR')+'، رد: '+N(result.rejected_count).toLocaleString('fa-IR'),'ok');
+    R.go('tiktok-owner-review');
+  }catch(e){
+    ownerReviewPreview=null;
+    if(e.message==='tiktok_owner_review_challenge_stale'||e.message==='tiktok_owner_review_signature_invalid')
+      toast('پیش‌نمایش منقضی یا نامعتبر است؛ دوباره پیش‌نمایش بگیر','bad');
+    else toast('ثبت تصمیم‌ها ناموفق بود: '+e.message,'bad');
+    R.go('tiktok-owner-review');
+  }
+};
+
+A.tkReviewCancel=()=>{
+  ownerReviewPreview=null;
+  ownerReviewLines='';
+  toast('ورودی و پیش‌نمایش پاک شد؛ هیچ موردی تغییر نکرد','ok');
+  R.go('tiktok-owner-review');
+};
+
+
 if(!NAV.some(x=>x[0]==='tkaccounts'))NAV.splice(Math.max(0,NAV.findIndex(x=>x[0]==='src')+1),0,['tkaccounts','حساب‌های TikTok','♧']);
 if(!NAV.some(x=>x[0]==='tiktok-unsent'))NAV.splice(Math.max(0,NAV.findIndex(x=>x[0]==='unsent')+1),0,['tiktok-unsent','تیک‌تاک - ارسال‌نشده','↻']);
+if(!NAV.some(x=>x[0]==='tiktok-owner-review'))NAV.splice(Math.max(0,NAV.findIndex(x=>x[0]==='tiktok-unsent')+1),0,['tiktok-owner-review','بازبینی مالک تیک‌تاک','✓']);
 document.getElementById('nav').innerHTML=NAV.map(n=>'<button class="nv" data-id="'+E(n[0])+'" data-a="go"><span>'+n[2]+'</span>'+n[1]+'</button>').join('');
 R.go(R.cur);
 })();
