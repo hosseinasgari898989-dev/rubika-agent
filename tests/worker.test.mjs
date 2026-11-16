@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import "./tiktok_console.test.mjs";
 import { createHash } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -5866,6 +5866,172 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
 console.log("Worker tests passed: live panel tracking, stage-two D1 screens, safe confirmation, bounded timings, and owner isolation.");
 
 
+// Guarded one-item reconciliation runs the actual Worker route against an in-memory
+// SQLite database built by applying every real migration in order.
+{
+  const targetId = "mob_official:x-2121327753236729907";
+  const targetExternalId = "x-2121327753236729907";
+  const targetUrl = "https://x.com/mobgamesstudios/status/2121327753236729907";
+  const createSqliteEnv = () => {
+    const sqlite = new DatabaseSync(":memory:");
+    const migrationDir = path.join(root, "migrations");
+    const migrationFiles = fs.readdirSync(migrationDir)
+      .filter(name => name.endsWith(".sql")).sort();
+    assert.ok(migrationFiles.length > 0, "real D1 migrations must be present");
+    for (const name of migrationFiles) {
+      sqlite.exec(fs.readFileSync(path.join(migrationDir, name), "utf8"));
+    }
+    const DB = {
+      prepare(sql) {
+        let values = [];
+        return {
+          bind(...args) { values = args; return this; },
+          async first() { return sqlite.prepare(sql).get(...values) ?? null; },
+          async all() { return { results: sqlite.prepare(sql).all(...values) }; },
+          async run() {
+            const result = sqlite.prepare(sql).run(...values);
+            return { meta: { changes: Number(result.changes) } };
+          },
+        };
+      },
+    };
+    return {
+      sqlite,
+      env: { DB, AGENT_API_TOKEN: TOKEN, OWNER_WEB_TOKEN: OWNER_TOKEN },
+    };
+  };
+  const seedUncertain = (sqlite, overrides = {}) => {
+    const row = {
+      status: "uncertain",
+      last_error_code: "publisher_apirequesterror",
+      rubika_message_id: null,
+      sent_at: null,
+      attempt_status: "uncertain",
+      attempt_message_id: null,
+      ...overrides,
+    };
+    sqlite.prepare(
+      "INSERT INTO items (id, platform, source_key, external_id, canonical_url, status, " +
+      "last_error_code, rubika_message_id, sent_at) VALUES (?, 'mob_official', ?, ?, ?, ?, ?, ?, ?)"
+    ).run(
+      targetId, "@mobgamesstudios", targetExternalId, targetUrl,
+      row.status, row.last_error_code, row.rubika_message_id, row.sent_at,
+    );
+    if (row.attempt_status !== null) {
+      sqlite.prepare(
+        "INSERT INTO delivery_attempts (item_id, attempt_number, status, rubika_message_id, error_code) " +
+        "VALUES (?, 1, ?, ?, 'publisher_apirequesterror')"
+      ).run(targetId, row.attempt_status, row.attempt_message_id);
+    }
+    return row;
+  };
+  const endpoint = "/api/brain/items/reconcile-owner-confirmed-mob-test-delivery";
+
+  // Dry-run is the default and reports the exact one eligible row without writing.
+  {
+    const { sqlite, env: state } = createSqliteEnv();
+    seedUncertain(sqlite);
+    let response = await read(await worker.fetch(request(endpoint, {
+      method: "POST", body: {},
+    }), state));
+    assert.equal(response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.dry_run, true);
+    assert.equal(response.body.expected_count, 1);
+    assert.equal(response.body.matched_count, 1);
+    assert.deepEqual(response.body.matched_ids, [targetId]);
+    assert.equal(response.body.changed_count, 0);
+    assert.deepEqual(response.body.changed_ids, []);
+    let row = sqlite.prepare("SELECT status, last_error_code, sent_at, rubika_message_id FROM items WHERE id = ?")
+      .get(targetId);
+    assert.equal(row.status, "uncertain");
+    assert.equal(row.last_error_code, "publisher_apirequesterror");
+    assert.equal(row.sent_at, null);
+    assert.equal(row.rubika_message_id, null);
+
+    response = await read(await worker.fetch(request(endpoint, {
+      method: "POST", body: { dry_run: false },
+    }), state));
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, "confirm_true_required");
+    assert.equal(sqlite.prepare("SELECT status FROM items WHERE id = ?").get(targetId).status, "uncertain");
+
+    response = await read(await worker.fetch(request(endpoint, {
+      method: "POST", body: { dry_run: false, confirm: true },
+    }), state));
+    assert.equal(response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.dry_run, false);
+    assert.equal(response.body.expected_count, 1);
+    assert.equal(response.body.matched_count, 1);
+    assert.equal(response.body.changed_count, 1);
+    assert.deepEqual(response.body.changed_ids, [targetId]);
+    assert.equal(response.body.note, "owner_confirmed_in_test_channel");
+    assert.equal(response.body.resent, false);
+    assert.equal(response.body.deleted, false);
+    row = sqlite.prepare("SELECT status, last_error_code, sent_at, rubika_message_id FROM items WHERE id = ?")
+      .get(targetId);
+    assert.equal(row.status, "sent");
+    assert.equal(row.last_error_code, "owner_confirmed_in_test_channel");
+    assert.ok(row.sent_at, "the reconciliation timestamp is recorded");
+    assert.equal(row.rubika_message_id, null, "no receipt is fabricated");
+
+    // Repeating the confirmed request is stale-protected and changes nothing.
+    response = await read(await worker.fetch(request(endpoint, {
+      method: "POST", body: { dry_run: false, confirm: true },
+    }), state));
+    assert.equal(response.status, 409);
+    assert.equal(response.body.changed_count, 0);
+    assert.equal(response.body.no_change, true);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM items WHERE status = 'sent' AND id = ?")
+      .get(targetId).n, 1);
+    sqlite.close();
+  }
+
+  // Every receipt/state/error mismatch fails closed with zero changes.
+  for (const [label, overrides] of [
+    ["wrong status", { status: "failed" }],
+    ["wrong original error", { last_error_code: "another_error" }],
+    ["item receipt", { rubika_message_id: "message-123" }],
+    ["item sent timestamp", { sent_at: "2026-11-15T12:00:00Z" }],
+    ["sent delivery attempt", { attempt_status: "sent" }],
+    ["attempt receipt", { attempt_message_id: "message-456" }],
+  ]) {
+    const { sqlite, env: state } = createSqliteEnv();
+    seedUncertain(sqlite, overrides);
+    const before = sqlite.prepare(
+      "SELECT status, last_error_code, rubika_message_id, sent_at FROM items WHERE id = ?"
+    ).get(targetId);
+    const response = await read(await worker.fetch(request(endpoint, {
+      method: "POST", body: { dry_run: false, confirm: true },
+    }), state));
+    assert.equal(response.status, 409, label);
+    assert.equal(response.body.changed_count, 0, label);
+    assert.equal(response.body.no_change, true, label);
+    const after = sqlite.prepare(
+      "SELECT status, last_error_code, rubika_message_id, sent_at FROM items WHERE id = ?"
+    ).get(targetId);
+    assert.deepEqual(after, before, label);
+    sqlite.close();
+  }
+
+  // The only permitted ID is compiled into the Worker; callers cannot widen scope.
+  {
+    const { sqlite, env: state } = createSqliteEnv();
+    seedUncertain(sqlite);
+    const badBody = await read(await worker.fetch(request(endpoint, {
+      method: "POST", body: { id: "mob_official:another-id", dry_run: false, confirm: true },
+    }), state));
+    assert.equal(badBody.status, 400);
+    assert.equal(sqlite.prepare("SELECT status FROM items WHERE id = ?").get(targetId).status, "uncertain");
+    const unauthorized = await read(await worker.fetch(request(endpoint, {
+      method: "POST", token: null, body: {},
+    }), state));
+    assert.equal(unauthorized.status, 401);
+    sqlite.close();
+  }
+}
+
 // TikTok owner review exercises the real Worker handlers against all real D1 migrations.
 {
   const createRealD1 = () => {
@@ -5972,7 +6138,7 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     const accepted = await read(await worker.fetch(request("/api/brain/automation-queue/" +
       encodeURIComponent(id) + "/owner-review", {
         method: "POST",
-        body: { reason: "music_probability_ambiguous", music_probability: 0.61, has_audio: true },
+        body: { reason: "music_probability_ambiguous", music_probability: 0.61, has_audio: true, has_music: null },
       }), state));
     assert.equal(accepted.status, 200);
     assert.equal(accepted.body.last_error_code, "needs_owner_review");
