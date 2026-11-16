@@ -106,7 +106,12 @@ class QueueIntakeTests(unittest.TestCase):
         hashtag_match = _row("7616247520657771798", PROFILES[2], title="clip")
         hashtag_match["caption"] = "new clip"; hashtag_match["hashtags"] = ["#POPPYfan"]
         rows = candidates_for_queue({"candidates": {"tiktok": [caption, edit_only, hashtag_match]}})
-        self.assertEqual([row["external_id"] for row in rows], ["7616247520657771796", "7616247520657771798"])
+        self.assertEqual(
+            [row["external_id"] for row in rows],
+            ["7616247520657771796", "7616247520657771798"],
+        )
+        # Metadata intake never creates owner-review rows before real media checks.
+        self.assertTrue(all("owner_review_reason" not in row for row in rows))
 
     def test_missing_timestamp_is_deferred_to_phase_six_but_non_numeric_ids_reject(self):
         undated = _row("7616247520657771796", PROFILES[0]); undated["published_at"] = None
