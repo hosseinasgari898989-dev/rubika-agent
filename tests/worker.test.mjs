@@ -55,7 +55,10 @@ const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
 const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
 const consoleFailedMediaModuleUrl = dataModuleUrl(consoleFailedMediaSource);
 const failedMedia = await import(consoleFailedMediaModuleUrl);
-const consoleTikTokSource = fs.readFileSync(path.join(root, "src/console_tiktok.js"), "utf8");
+const publishingControlSource = fs.readFileSync(path.join(root, "src/publishing_control.js"), "utf8");
+const publishingControlModuleUrl = dataModuleUrl(publishingControlSource);
+const consoleTikTokSource = fs.readFileSync(path.join(root, "src/console_tiktok.js"), "utf8")
+  .replace('from "./publishing_control.js";', 'from "' + publishingControlModuleUrl + '";');
 const consoleTikTokModuleUrl = dataModuleUrl(consoleTikTokSource);
 const retryScreensSource = fs.readFileSync(path.join(root, "src/panel_retry_screens.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
@@ -78,6 +81,7 @@ const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), 
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";')
   .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";')
   .replace('from "./console_tiktok.js";', 'from "' + consoleTikTokModuleUrl + '";')
+  .replace('from "./publishing_control.js";', 'from "' + publishingControlModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
   .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
   .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
@@ -87,17 +91,20 @@ const workerImport = 'import { dispatchMobXWorkflow, handleOwnerPanel } from "./
 const cronImport = 'import { getLastWorkflowCronResult, runWorkflowCron } from "./workflow_cron.js";';
 const consoleApiImport = 'import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";';
 const consoleOwnerReviewImport = 'import { handleTikTokOwnerReviewApi } from "./console_tiktok.js";';
+const publishingControlImport = 'import { getPublishingControl, publishingControlReasonFa, startPublishingControlChallenge, confirmPublishingControl } from "./publishing_control.js";';
 assert.ok(originalSource.includes(workerImport), "Worker must import owner panel handler and shared dispatcher");
 assert.ok(originalSource.includes(cronImport), "Worker must import cron dispatcher");
 assert.ok(originalSource.includes(consoleApiImport), "Worker must import console API handler");
 assert.ok(originalSource.includes(consoleOwnerReviewImport), "Worker must import shared TikTok owner review API");
+assert.ok(originalSource.includes(publishingControlImport), "Worker must import shared publishing-control API");
 const cronSourceForWorker = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
 const cronModuleUrlForWorker = dataModuleUrl(cronSourceForWorker);
 const source = originalSource
   .replace(workerImport, `const { dispatchMobXWorkflow, handleOwnerPanel } = await import("${panelModuleUrl}");`)
   .replace(cronImport, `const { getLastWorkflowCronResult, runWorkflowCron } = await import("${cronModuleUrlForWorker}");`)
   .replace(consoleApiImport, `const { handleConsoleApi, corsPreflight, withCors } = await import("${consoleApiModuleUrl}");`)
-  .replace(consoleOwnerReviewImport, `const { handleTikTokOwnerReviewApi } = await import("${consoleTikTokModuleUrl}");`);
+  .replace(consoleOwnerReviewImport, `const { handleTikTokOwnerReviewApi } = await import("${consoleTikTokModuleUrl}");`)
+  .replace(publishingControlImport, `const { getPublishingControl, publishingControlReasonFa, startPublishingControlChallenge, confirmPublishingControl } = await import("${publishingControlModuleUrl}");`);
 
 // Test-only baseline Worker restores direct getState reads while keeping all other code identical.
 const getStateStart = panelSource.indexOf("const getState = async (env, k, d) => {");
@@ -6577,6 +6584,80 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(confirmed.body.changed_count, 1);
     assert.equal(confirmed.body.approved_count, 1);
     assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(item.id).status, "queued");
+    sqlite.close();
+  }
+
+  // Emergency publishing control is exercised through the real Worker against all real D1 migrations.
+  {
+    const { sqlite, state } = createRealD1();
+    const getControl = async () => read(await worker.fetch(request("/api/brain/publishing-control"), state));
+    const initial = await getControl();
+    assert.equal(initial.status, 200);
+    assert.equal(initial.body.paused, false);
+
+    const nonOwnerPreview = await read(await worker.fetch(request(
+      "/api/brain/owner-console/publishing-control/preview",
+      { method: "POST", body: { chat_id: "not-the-owner", action: "pause" } },
+    ), state));
+    assert.equal(nonOwnerPreview.status, 403);
+
+    const pausePreview = await read(await worker.fetch(request(
+      "/api/brain/owner-console/publishing-control/preview",
+      { method: "POST", body: { chat_id: "owner-review-chat", action: "pause" } },
+    ), state));
+    assert.equal(pausePreview.status, 201);
+    assert.match(pausePreview.body.challenge_id, /^[a-f0-9]{32}$/);
+    assert.equal((await getControl()).body.paused, false, "preview alone must not change state");
+
+    const pauseConfirm = await read(await worker.fetch(request(
+      "/api/brain/owner-console/publishing-control/confirm",
+      { method: "POST", body: { chat_id: "owner-review-chat", challenge_id: pausePreview.body.challenge_id, confirm: true } },
+    ), state));
+    assert.equal(pauseConfirm.status, 200);
+    assert.equal(pauseConfirm.body.paused, true);
+    assert.equal((await getControl()).body.paused, true);
+
+    const replay = await read(await worker.fetch(request(
+      "/api/brain/owner-console/publishing-control/confirm",
+      { method: "POST", body: { chat_id: "owner-review-chat", challenge_id: pausePreview.body.challenge_id, confirm: true } },
+    ), state));
+    assert.equal(replay.status, 409, "a challenge can be consumed only once");
+
+    const blockedMobClaim = await read(await worker.fetch(request(
+      "/api/console/mob-x/publish-claim", { method: "POST", body: {} },
+    ), state));
+    assert.equal(blockedMobClaim.status, 409);
+    assert.equal(blockedMobClaim.body.error, "publishing_paused");
+
+    const viewerRead = await read(await worker.fetch(request("/api/console/publishing-control", { token: TOKEN }), state));
+    assert.equal(viewerRead.status, 200);
+    assert.equal(viewerRead.body.paused, true);
+    const viewerPreview = await read(await worker.fetch(request(
+      "/api/console/publishing-control/preview",
+      { method: "POST", token: TOKEN, body: { action: "resume" } },
+    ), state));
+    assert.equal(viewerPreview.status, 403, "viewer credentials cannot change pause state");
+
+    const webPreview = await read(await worker.fetch(request(
+      "/api/console/publishing-control/preview",
+      { method: "POST", token: OWNER_TOKEN, body: { action: "resume" } },
+    ), state));
+    assert.equal(webPreview.status, 201);
+    assert.equal((await getControl()).body.paused, true, "web preview alone must not change state");
+    const webConfirm = await read(await worker.fetch(request(
+      "/api/console/publishing-control/confirm",
+      { method: "POST", token: OWNER_TOKEN,
+      body: { challenge_id: webPreview.body.challenge_id, confirm: true } },
+    ), state));
+    assert.equal(webConfirm.status, 200);
+    assert.equal(webConfirm.body.paused, false);
+    assert.equal((await getControl()).body.paused, false);
+
+    sqlite.prepare("INSERT INTO panel_state (key, value, updated_at) VALUES ('publishing_paused', 'invalid', datetime('now'))").run();
+    const invalid = await getControl();
+    assert.equal(invalid.status, 503);
+    const status = await read(await worker.fetch(request("/api/status"), state));
+    assert.equal(status.status, 503, "invalid pause state must fail closed");
     sqlite.close();
   }
 }
