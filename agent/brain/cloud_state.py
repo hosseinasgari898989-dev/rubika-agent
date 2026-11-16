@@ -103,7 +103,8 @@ class CloudState:
         max_body_bytes: int = 32 * 1024,
     ) -> dict[str, Any]:
         allowed_console_source_read = method == "GET" and path.split("?", 1)[0] == "/api/console/sources"
-        if not path.startswith("/api/brain/") and not allowed_console_source_read:
+        allowed_status_read = method == "GET" and path.split("?", 1)[0] == "/api/status"
+        if not path.startswith("/api/brain/") and not allowed_console_source_read and not allowed_status_read:
             raise ValueError("path_outside_control_api")
         if method not in {"GET", "POST"}:
             raise ValueError("unsupported_method")
@@ -603,3 +604,15 @@ class CloudState:
             f"/api/brain/automation-queue/{escaped}/state",
             {"status": status, "error_code": error_code},
         )
+
+    def get_publishing_control(self) -> dict[str, Any]:
+        """Fail closed when Worker status reports publishing paused or unreadable."""
+        response = self._request("GET", "/api/status")
+        if response.get("ok") is not True or response.get("publishing_control_available") is not True:
+            raise CloudStateError("publishing_control_unavailable", endpoint_path="/api/status")
+        if response.get("publishing_paused") is True:
+            raise CloudStateError("publishing_paused", endpoint_path="/api/status")
+        return {
+            "paused": False,
+            "reason_fa": str(response.get("publishing_pause_reason_fa") or "")[:240],
+        }
