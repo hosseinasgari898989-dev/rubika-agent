@@ -573,6 +573,10 @@ const isOwnerOnlyPanelAction = (id) => {
     value === "p_scan" ||
     value === "p_scan_confirm" ||
     value === "p_scan_cancel" ||
+    value === "p_pub_control" ||
+    value === "p_pub_pause" ||
+    value === "p_pub_resume" ||
+    /^p_pub_confirm_(?:pause|resume)_[a-f0-9]{32}$/.test(value) ||
     value === "p_links_clear" ||
     value === "p_links_clear_yes" ||
     value === "p_failall" ||
@@ -588,7 +592,8 @@ const isStaticMainPanelScreenClick = (id) =>
 const isMainPanelScreenClick = (id) =>
   ["p_home", "p_help", "p_debug", "p_status", "p_queue", "p_ai", "p_report",
     "p_tiktok_review", "p_tiktok_review_input",
-    "p_scan", "p_scan_confirm", "p_scan_cancel"].includes(String(id || "")) ||
+    "p_scan", "p_scan_confirm", "p_scan_cancel", "p_pub_control", "p_pub_pause", "p_pub_resume"].includes(String(id || "")) ||
+  /^p_pub_confirm_(?:pause|resume)_[a-f0-9]{32}$/.test(String(id || "")) ||
   isScreenId(String(id || "")) ||
   isSettingsId(String(id || ""));
 const sha256Hex = async (value) => {
@@ -800,6 +805,7 @@ export function fmtStatus(s) {
     "📊 **وضعیت Rubika-Agent**",
     `• عامل: ${agent.enabled === 1 ? "روشن" : "خاموش"}`,
     `• انتشار از این API: ${pub ? "فعال" : "غیرفعال"}`,
+    `• توقف اضطراری: ${s.publishing_control_available === true ? (s.publishing_paused === true ? "فعال — ارسال مسدود" : "غیرفعال") : "نامعلوم — fail-closed"}`,
     `• آیتم‌ها: ${counts.length ? counts.join(" | ") : "داده‌ای ثبت نشده"}`,
     `• آخرین اجرا: ${run ? clean(run.status) || "unknown" : "ندارد"}`,
   ].join("\n");
@@ -849,6 +855,64 @@ async function apiPost(ui, path, body) {
   finally { if (timing) timing.worker_api_ms += elapsedMs(startedAt); }
 }
 
+async function renderPublishingControl(ui, actionId) {
+  const match = /^p_pub_confirm_(pause|resume)_([a-f0-9]{32})$/.exec(actionId);
+  if (actionId === "p_pub_control") {
+    const control = await api(ui, "/api/brain/publishing-control");
+    const available = control && control.ok === true && typeof control.paused === "boolean";
+    const paused = available && control.paused === true;
+    const body = available
+      ? [
+          "🛑 **کنترل اضطراری انتشار**",
+          "",
+          paused ? "⛔ وضعیت: **متوقف**" : "✅ وضعیت: **فعال**",
+          paused ? "همهٔ مسیرهای انتشار باید ارسال جدید را رد کنند." : "در حال حاضر توقف اضطراری فعال نیست.",
+          String(control.reason_fa || ""),
+          "",
+          "هر تغییر به دو تأیید جداگانه نیاز دارد و درخواست حداکثر دو دقیقه معتبر است.",
+        ].filter(Boolean).join("\n")
+      : "⚠️ **وضعیت توقف قابل‌بررسی نیست.** برای ایمنی انتشار باید متوقف بماند. پس از رفع خطا دوباره تازه‌سازی کن.";
+    const rows = available
+      ? kb([
+          [[paused ? "▶️ درخواست ازسرگیری" : "⏸ درخواست توقف", paused ? "p_pub_resume" : "p_pub_pause"]],
+          [["🔄 تازه‌سازی", "p_pub_control"], ["🏠 منوی اصلی", "p_home"]],
+        ])
+      : kb([[["🔄 تازه‌سازی", "p_pub_control"], ["🏠 منوی اصلی", "p_home"]]]);
+    await updateMobMain(ui, body, rows);
+    return;
+  }
+  if (actionId === "p_pub_pause" || actionId === "p_pub_resume") {
+    const action = actionId === "p_pub_pause" ? "pause" : "resume";
+    const preview = await apiPost(ui, "/api/brain/owner-console/publishing-control/preview", { action });
+    if (!preview || preview.ok !== true || !/^[a-f0-9]{32}$/.test(String(preview.challenge_id || ""))) {
+      await updateMobMain(ui, "⚠️ پیش‌درخواست تأیید ساخته نشد؛ هیچ تغییری اعمال نشد. خطا: " +
+        esc(preview && preview.error || "publishing_control_challenge_unavailable"),
+        kb([[["🔄 بازگشت", "p_pub_control"], ["🏠 منوی اصلی", "p_home"]]]));
+      return;
+    }
+    const question = action === "pause"
+      ? "توقف اضطراری انتشار فعال شود؟ همهٔ مسیرهای ارسال باید متوقف شوند."
+      : "توقف اضطراری لغو شود؟ مسیرهای انتشار دوباره اجازهٔ بررسی ارسال خواهند داشت.";
+    await updateMobMain(ui, "⚠️ **تأیید دوم لازم است**\n\n" + question +
+      "\nدرخواست فقط دو دقیقه اعتبار دارد؛ تا تأیید دوم هیچ وضعیتی تغییر نمی‌کند.",
+      kb([
+        [[action === "pause" ? "⛔ تأیید توقف" : "▶️ تأیید ازسرگیری", "p_pub_confirm_" + action + "_" + preview.challenge_id]],
+        [["لغو", "p_pub_control"], ["🏠 منوی اصلی", "p_home"]],
+      ]));
+    return;
+  }
+  if (match) {
+    const result = await apiPost(ui, "/api/brain/owner-console/publishing-control/confirm", {
+      challenge_id: match[2], confirm: true,
+    });
+    const message = result && result.ok === true
+      ? (result.paused === true ? "⛔ **توقف اضطراری فعال شد.** ارسال جدید باید مسدود باشد." : "✅ **توقف اضطراری لغو شد.**")
+      : "⚠️ تأیید نامعتبر یا منقضی است؛ هیچ تغییری اعمال نشد. خطا: " +
+        esc(result && result.error || "publishing_control_confirmation_failed");
+    await updateMobMain(ui, message,
+      kb([[["🔄 بررسی وضعیت", "p_pub_control"], ["🏠 منوی اصلی", "p_home"]]]));
+  }
+}
 
 function mobPreviewKeypad(jobId) {
   return kb([
@@ -1104,6 +1168,11 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     }
 
     if (action === "publish") {
+      const publishingControl = await api(ui, "/api/brain/publishing-control");
+      if (publishingControl.ok !== true || publishingControl.publishing_paused === true || publishingControl.paused === true) {
+        await updateMobMain(ui, String(publishingControl.reason_fa || "انتشار متوقف است یا وضعیت توقف قابل‌بررسی نیست؛ هیچ تأییدی ثبت نشد."), HOME_KB);
+        return;
+      }
       const duplicate = await findMobXDuplicate(env.DB, result.external_id || result.item_id, {
         excludeItemId: result.item_id,
         excludeJobId: jobId,
@@ -1341,6 +1410,10 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     if (fresh) return sendFreshPanel(ui, text, keypad, previousMid);
     if (targetMid) return edit(env, chat, targetMid, text, keypad);
     return send(env, chat, text, keypad);
+  }
+  if (id === "p_pub_control" || id === "p_pub_pause" || id === "p_pub_resume" || /^p_pub_confirm_(?:pause|resume)_[a-f0-9]{32}$/.test(id)) {
+    await renderPublishingControl(ui, id);
+    return;
   }
   const statics = {
     p_help: [HELP_TEXT, BACK_KB],
@@ -1589,7 +1662,8 @@ async function processEvent(env, selfFetch, origin, ev) {
         else if (staleButton === "p_mob_edit_cancel") refreshId = "p_mob";
         else if (!isScreenId(staleButton) &&
           !["p_home", "p_status", "p_queue", "p_qs", "p_ai", "p_report", "p_mob", "p_help", "p_debug",
-            "p_tiktok_review", "p_tiktok_review_input"].includes(staleButton)) {
+            "p_tiktok_review", "p_tiktok_review_input", "p_pub_control", "p_pub_pause", "p_pub_resume"].includes(staleButton) &&
+          !/^p_pub_confirm_(?:pause|resume)_[a-f0-9]{32}$/.test(staleButton)) {
           refreshId = "p_home";
         }
         if (currentPanelMid && !isStaticMainPanelScreenClick(refreshId)) {

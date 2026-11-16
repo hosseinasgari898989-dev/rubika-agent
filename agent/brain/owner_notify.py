@@ -449,6 +449,20 @@ def refresh_daily_digest() -> dict[str, Any]:
             "reason": "rubika_client_" + type(exc).__name__,
         }
 
+    workflow_failures = collect_workflow_failures()
+    for source in ("termux", "daily_queue", "mob_x"):
+        consecutive = workflow_failures.get(source) if isinstance(workflow_failures, dict) else None
+        if type(consecutive) is int and 0 <= consecutive <= 100:
+            try:
+                _worker_post(
+                    "/api/brain/owner-digest/failure-alert",
+                    {"source": source, "consecutive_failures": consecutive},
+                )
+            except Exception:
+                # Keep the existing digest refresh alive; the next scheduled refresh retries
+                # this source without creating an additional Rubika message.
+                pass
+
     for attempt in range(DIGEST_CLAIM_ATTEMPTS):
         try:
             claim = _worker_post("/api/brain/owner-digest/claim", {})
@@ -468,7 +482,7 @@ def refresh_daily_digest() -> dict[str, Any]:
         old_message_id = str(old_message_id) if old_message_id else None
         old_body = str(state.get("message_body") or "")
         uncertain = state.get("message_creation_uncertain") is True
-        state["workflow_failures"] = collect_workflow_failures()
+        state["workflow_failures"] = workflow_failures
         new_body = render_daily_digest(state)
 
         if not window_id or not lock_token:

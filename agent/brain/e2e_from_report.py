@@ -674,6 +674,14 @@ def _run_one(
             nonlocal last_response
             if publisher is None:
                 raise RuntimeError(publisher_error or "rubika_publisher_unavailable")
+            control_reader = getattr(cloud, "get_publishing_control", None)
+            if not callable(control_reader):
+                raise RuntimeError("publishing_control_unavailable")
+            try:
+                control_reader()
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                raise RuntimeError(code if code in {"publishing_paused", "publishing_control_unavailable"} else "publishing_control_unavailable") from None
             raw = publisher.send_media(
                 media_path, "video", caption=EDIT_CAPTION
             )

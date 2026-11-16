@@ -446,6 +446,19 @@ def run_daily(
                 continue
 
             try:
+                cloud.get_publishing_control()
+            except CloudStateError as exc:
+                if exc.code in {"publishing_paused", "publishing_control_unavailable"}:
+                    report.update(
+                        ok=False, status="blocked", stop_reason=exc.code,
+                        reason_fa=("انتشار با فرمان مالک متوقف شده است؛ آیتم‌های باقی‌مانده در صف ماندند."
+                                   if exc.code == "publishing_paused"
+                                   else "وضعیت توقف انتشار قابل‌بررسی نیست؛ آیتم‌های باقی‌مانده در صف ماندند."),
+                    )
+                    break
+                raise
+
+            try:
                 cloud.update_automation_queue_item(queue_id, "processing")
             except Exception as exc:
                 report["ok"] = False

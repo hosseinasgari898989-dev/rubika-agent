@@ -213,7 +213,7 @@ document.addEventListener('click',e=>{const el=e.target.closest('[data-a]');if(e
 document.addEventListener('change',e=>{const el=e.target;if((el.tagName==='SELECT'||el.matches('input[type="checkbox"]'))&&el.dataset.a&&A[el.dataset.a])Promise.resolve(A[el.dataset.a](el,e)).catch(x=>toast(em(x),'bad'))});
 A.theme=()=>{const t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;LS('rc_theme',t)};
 
-const NAV=[['dash','داشبورد','◈'],['items','آیتم‌ها','▤'],['queue','صف انتشار','☰'],['hist','تاریخچه و لاگ','◷'],['ai','تماس‌های AI','✦'],['src','منابع و لینک‌ها','⎈'],['owners','مالک‌ها','♛'],['rules','قوانین','⚙'],['chan','کانال‌ها','⌁'],['jobs','کارها','⚡'],['d1','دیتابیس','⛁'],['soon','به‌زودی','◌'],['set','اتصال','⚿']];
+const NAV=[['dash','داشبورد','◈'],['items','آیتم‌ها','▤'],['queue','صف انتشار','☰'],['publishing','توقف اضطراری','⛔'],['hist','تاریخچه و لاگ','◷'],['ai','تماس‌های AI','✦'],['src','منابع و لینک‌ها','⎈'],['owners','مالک‌ها','♛'],['rules','قوانین','⚙'],['chan','کانال‌ها','⌁'],['jobs','کارها','⚡'],['d1','دیتابیس','⛁'],['soon','به‌زودی','◌'],['set','اتصال','⚿']];
 $('#nav').innerHTML=NAV.map(n=>`<button class="nv" data-id="${n[0]}" data-a="go"><span>${n[2]}</span>${n[1]}</button>`).join('');
 let cur='dash';
 A.go=el=>{location.hash='#/'+el.dataset.id};
@@ -238,6 +238,40 @@ return `<div class="grid g4">${stat('وضعیت عامل',st.ok?(st.agent&&st.ag
 <div class="grid g2">${ring('Groq',g)}${ring('OpenRouter',o)}</div>
 ${card('آخرین اجراها',tbl([['زمان',r=>fmt(r.started_at)],['وضعیت',r=>badge(r.status)],['نوع',r=>E(r.trigger_type)]],runs,'اجرایی ثبت نشده'))}`};
 function setDot(ok){const d=$('#dot');d.className='dot '+(ok?'ok':'bad');$('#cs').textContent=ok?'متصل':'قطع'}
+
+/* ---------- کنترل توقف اضطراری ---------- */
+V.publishing=async()=>{
+  const r=await api('/api/console/publishing-control');
+  if(r.ok!==true||typeof r.paused!=='boolean'){
+    return card('توقف اضطراری','<div class="s">⚠️ وضعیت کنترل انتشار قابل‌بررسی نیست؛ برای ایمنی، ارسال باید fail-closed بماند.</div><button class="btn" data-a="go" data-id="publishing">تلاش دوباره</button>');
+  }
+  const paused=r.paused===true;
+  const state=paused
+    ? '<span class="bd warn">⛔ توقف اضطراری فعال است</span>'
+    : '<span class="bd ok">✅ توقف اضطراری فعال نیست</span>';
+  const action=paused?'resume':'pause';
+  const label=paused?'درخواست ازسرگیری انتشار':'درخواست توقف اضطراری';
+  const help=paused
+    ? 'ازسرگیری فقط پس از تأیید دوم و معتبر انجام می‌شود.'
+    : 'با تأیید دوم، ارسال‌های جدید در همهٔ مسیرهای محافظت‌شده مسدود می‌شوند.';
+  return card('کنترل اضطراری انتشار',`<div class="row">${state}</div><p class="s">${E(r.reason_fa||'')}</p><p>${help}</p><div class="row"><button class="btn ${paused?'g':'r'}" data-a="pubPreview" data-action="${action}">${label}</button><button class="btn" data-a="go" data-id="publishing">↻ تازه‌سازی</button></div><p class="s">هر درخواست دو دقیقه اعتبار دارد و به دو اقدام مستقل نیاز دارد. وضعیت نامعلوم به معنی اجازهٔ انتشار نیست.</p>`);
+};
+A.pubPreview=async el=>{
+  const action=el.dataset.action;
+  if(!['pause','resume'].includes(action))throw new Error('publishing_control_action_invalid');
+  const r=await api('/api/console/publishing-control/preview',{method:'POST',body:{action}});
+  if(r.ok!==true||!/^[a-f0-9]{32}$/.test(String(r.challenge_id||'')))throw new Error(r.error||'publishing_control_challenge_unavailable');
+  const label=action==='pause'?'توقف اضطراری انتشار فعال شود؟':'توقف اضطراری لغو شود؟';
+  modal(`<h3>تأیید دوم لازم است</h3><p>${label}</p><p class="s">این درخواست حداکثر دو دقیقه اعتبار دارد. تا فشردن دکمهٔ تأیید، وضعیتی تغییر نمی‌کند.</p><div class="row"><button class="btn ${action==='pause'?'r':'g'}" data-a="pubConfirm" data-action="${action}" data-id="${E(r.challenge_id)}">${action==='pause'?'تأیید توقف':'تأیید ازسرگیری'}</button><button class="btn" data-a="closeModal">لغو</button></div>`);
+};
+A.pubConfirm=async el=>{
+  const action=el.dataset.action,id=el.dataset.id;
+  if(!['pause','resume'].includes(action)||!/^[a-f0-9]{32}$/.test(String(id||'')))throw new Error('publishing_control_confirmation_invalid');
+  const r=await api('/api/console/publishing-control/confirm',{method:'POST',body:{challenge_id:id,confirm:true}});
+  closeModal();
+  toast(r.paused===true?'توقف اضطراری فعال شد':'تأیید انجام شد','ok');
+  go('publishing');
+};
 
 /* ---------- آیتم‌ها ---------- */
 const IT={status:'',platform:'',q:'',offset:0,rows:[]};
