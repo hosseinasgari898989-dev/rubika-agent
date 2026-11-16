@@ -139,7 +139,7 @@ class BrainModelPolicyTests(unittest.TestCase):
         )
         self.assertIn("negative_or_insulting_text_signal", result.reasons)
 
-    def test_python_does_not_require_edit_detection_or_edit_quality_questions(self):
+    def test_missing_edit_marker_is_routed_to_owner_review_without_ai_edit_questions(self):
         candidate = self.candidate(
             title="Poppy Playtime character montage",
             caption="Huggy Wuggy and Catnap #playtime",
@@ -147,11 +147,12 @@ class BrainModelPolicyTests(unittest.TestCase):
         result = evaluate_edit_candidate(
             candidate, self.inspection(), moderation=self.moderation()
         )
-        self.assertEqual(result.decision, "eligible")
+        self.assertEqual(result.decision, "rejected")
+        self.assertIn("edit_signal_not_found_by_brain", result.reasons)
         self.assertNotIn("is_edit", result.checks)
         self.assertNotIn("high_effort", result.checks)
 
-    def test_compound_poppy_edit_hashtag_passes_without_edit_signal_gate(self):
+    def test_compound_poppy_edit_hashtag_is_detected_in_caption(self):
         candidate = self.candidate(
             title="Yesterday was the anniversary of Poppy Playtime",
             caption="#poppyplaytime #poppyplaytimeedit #smyxae",

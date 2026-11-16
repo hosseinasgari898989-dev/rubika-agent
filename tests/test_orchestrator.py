@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ from agent.brain.authorization import SourceRegistry
 from agent.brain.cloud_state import CloudStateError
 from agent.brain.ledger import new_state
 from agent.brain.models import Candidate, Evaluation, InspectionResult
-from agent.brain.orchestrator import StagingOrchestrator
+from agent.brain.orchestrator import StagingOrchestrator, candidates_from_report
 from agent.brain.pipeline import BatchResult, StagedMedia
 
 
@@ -135,6 +136,67 @@ def allowed_registry():
 
 
 class StagingOrchestratorTests(unittest.TestCase):
+    def test_persistent_queue_owner_override_is_bound_to_exact_item_and_allowlisted_reason(self):
+        for reason in ("music_probability_ambiguous", "edit_signal_not_found_by_brain"):
+            payload = {
+                "schema_version": 1,
+                "source": "persistent_d1_queue",
+                "queue_context": {
+                    "id": "tiktok:7616247520657771796",
+                    "owner_review_state": "approved",
+                    "owner_override": True,
+                    "owner_override_reason": reason,
+                },
+                "candidates": {
+                    "tiktok": [{
+                        "id": "7616247520657771796",
+                        "url": "https://www.tiktok.com/@meloaep_/video/7616247520657771796",
+                        "author": "meloaep_",
+                        "caption": "Poppy Playtime clip",
+                        "title": "Poppy Playtime clip",
+                        "media_type": "video",
+                    }]
+                },
+            }
+            with tempfile.TemporaryDirectory() as folder:
+                report = Path(folder) / "queue.json"
+                report.write_text(json.dumps(payload), encoding="utf-8")
+                candidate = candidates_from_report(report)[0]
+            self.assertTrue(candidate.source_policy["owner_override"])
+            self.assertEqual(candidate.source_policy["owner_override_reason"], reason)
+
+        for changed in (
+            {"id": "tiktok:another-video"},
+            {"owner_review_state": "pending"},
+            {"owner_override": False},
+            {"owner_override_reason": "source_not_selected"},
+        ):
+            payload = {
+                "schema_version": 1,
+                "source": "persistent_d1_queue",
+                "queue_context": {
+                    "id": "tiktok:7616247520657771796",
+                    "owner_review_state": "approved",
+                    "owner_override": True,
+                    "owner_override_reason": "edit_signal_not_found_by_brain",
+                    **changed,
+                },
+                "candidates": {
+                    "tiktok": [{
+                        "id": "7616247520657771796",
+                        "url": "https://www.tiktok.com/@meloaep_/video/7616247520657771796",
+                        "author": "meloaep_",
+                        "caption": "Poppy Playtime clip",
+                        "media_type": "video",
+                    }]
+                },
+            }
+            with tempfile.TemporaryDirectory() as folder:
+                report = Path(folder) / "queue.json"
+                report.write_text(json.dumps(payload), encoding="utf-8")
+                candidate = candidates_from_report(report)[0]
+            self.assertNotIn("owner_override", candidate.source_policy)
+
     def test_missing_moderation_adapter_stops_before_download(self):
         cloud = FakeCloud()
         ledger = FakeLedger()

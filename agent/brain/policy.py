@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from agent.source_policy import has_required_any_keyword, required_any_keywords, resolve_source_policy
+from agent.source_policy import has_edit_signal, has_required_any_keyword, required_any_keywords, resolve_source_policy
 
 from .models import Candidate, Evaluation, InspectionResult
 
@@ -43,10 +43,21 @@ def _candidate_content_text(candidate: Candidate) -> str:
 
 
 def _policy_for(candidate: Candidate) -> dict[str, Any]:
-    if candidate.platform == "tiktok":
-        return resolve_source_policy("tiktok", candidate.source_key)
     supplied = candidate.source_policy or {}
-    return dict(supplied) if supplied else resolve_source_policy(candidate.platform, candidate.source_key)
+    policy = resolve_source_policy(candidate.platform, candidate.source_key)
+    if candidate.platform != "tiktok" and supplied:
+        policy.update(supplied)
+    # Only queue metadata set by the signed Worker owner-review flow may carry this.
+    if (
+        candidate.platform == "tiktok"
+        and supplied.get("owner_override") is True
+        and supplied.get("owner_override_reason") in {
+            "music_probability_ambiguous", "edit_signal_not_found_by_brain",
+        }
+    ):
+        policy["owner_override"] = True
+        policy["owner_override_reason"] = supplied["owner_override_reason"]
+    return policy
 
 
 def _has_poppy_relevance(candidate: Candidate) -> bool:
@@ -96,6 +107,16 @@ def evaluate_edit_candidate(
     moderation = moderation or {}
     required_fields = required_moderation_fields(candidate)
     policy = _policy_for(candidate)
+    owner_music_override = (
+        candidate.platform == "tiktok"
+        and policy.get("owner_override") is True
+        and policy.get("owner_override_reason") == "music_probability_ambiguous"
+        and inspection.has_audio is True
+        and moderation.get("music_decision_reason") == "music_probability_ambiguous"
+        and type(moderation.get("music_probability")) in {int, float}
+        and 0.15 <= float(moderation.get("music_probability")) <= 0.70
+        and type(moderation.get("has_music")) is not bool
+    )
     reasons: list[str] = []
     warnings: list[str] = []
     checks: dict[str, Any] = {}
@@ -121,6 +142,8 @@ def evaluate_edit_candidate(
         checks["required_keyword_match"] = keyword_match
         checks["required_any_keywords"] = list(required_any_keywords())
         checks["policy_track"] = "selected_tiktok_channel" if selected else "unselected_tiktok_channel"
+        edit_signal = has_edit_signal(candidate.caption, candidate.hashtags)
+        checks["edit_signal_found"] = edit_signal
         if not selected:
             reasons.append("source_not_selected")
         elif not keyword_match:
@@ -169,7 +192,7 @@ def evaluate_edit_candidate(
             checks["has_audio"] = True
 
     for name in required_fields:
-        value = moderation.get(name)
+        value = True if name == "has_music" and owner_music_override else moderation.get(name)
         if name == "has_music" and inspection.has_audio is False:
             continue
         if type(value) is bool:
@@ -177,8 +200,12 @@ def evaluate_edit_candidate(
     missing = [
         name for name in required_fields
         if type(moderation.get(name)) is not bool
-        and not (name == "has_music" and (checks.get("has_music") is False or inspection.has_audio is False))
+        and not (name == "has_music" and (
+            owner_music_override or checks.get("has_music") is False or inspection.has_audio is False
+        ))
     ]
+    if owner_music_override:
+        checks["owner_override_music_ambiguity"] = True
     checks["moderation_fields_missing"] = missing
     if "has_music" in missing:
         warnings.append("music_detection_review_required")
@@ -206,6 +233,30 @@ def evaluate_edit_candidate(
                 "error_codes": [re.sub(r"[^A-Za-z0-9_-]", "", str(code))[:80] for code in value.get("error_codes", [])[:3]]
                 if isinstance(value.get("error_codes"), list) else [],
             }
+
+    # A missing edit marker is reviewable only after all hard media, dedupe,
+    # relevance, audio and positive-music checks pass. It must never turn a low-res,
+    # silent, duplicate, off-topic or failed download into an owner-review item.
+    owner_edit_override = (
+        policy.get("owner_override") is True
+        and policy.get("owner_override_reason") == "edit_signal_not_found_by_brain"
+    )
+    music_accepted = moderation.get("has_music") is True or owner_music_override
+    if (
+        candidate.platform == "tiktok"
+        and checks.get("selected_tiktok_source") is True
+        and checks.get("required_keyword_match") is True
+        and checks.get("edit_signal_found") is False
+        and not owner_edit_override
+        and not reasons
+        and not missing
+        and inspection.ok
+        and inspection.media_type == "video"
+        and inspection.has_audio is True
+        and min(inspection.width or 0, inspection.height or 0) >= 480
+        and music_accepted
+    ):
+        reasons.append("edit_signal_not_found_by_brain")
 
     requires_review = bool(missing)
     decision = "rejected" if reasons else "needs_review" if requires_review else "eligible"

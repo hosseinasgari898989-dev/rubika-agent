@@ -3,7 +3,9 @@
 import { isScreenId, buildScreen, HOME_ROWS } from "./panel_screens.js";
 import { isRetryScreenId, buildRetryScreen, RETRY_HOME_ROW } from "./panel_retry_screens.js";
 
-export const isScreenIdExt = (id) => isScreenId(id) || isRetryScreenId(id);
+export const isScreenIdExt = (id) => id === "p_tiktok_review" || isScreenId(id) || isRetryScreenId(id);
 export const buildScreenExt = (env, id) => (isRetryScreenId(id) ? buildRetryScreen(env, id) : buildScreen(env, id));
+// Review-only actions are rendered in owner_panel.js through the shared Worker API.
+const TIKTOK_REVIEW_HOME_ROW = [["🎵 تیک‌تاک — در انتظار تأیید شما", "p_tiktok_review"]];
 // retry/select row goes just above the last two rows (help, main menu)
-export const HOME_ROWS_EXT = [...HOME_ROWS.slice(0, -2), RETRY_HOME_ROW, ...HOME_ROWS.slice(-2)];
+export const HOME_ROWS_EXT = [...HOME_ROWS.slice(0, -2), RETRY_HOME_ROW, TIKTOK_REVIEW_HOME_ROW, ...HOME_ROWS.slice(-2)];

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -110,6 +111,35 @@ def has_required_any_keyword(caption: str, hashtags: Any = None) -> bool:
         parts.extend(value for value in hashtags if isinstance(value, str))
     text = " ".join(parts).casefold()
     return any(keyword in text for keyword in required_any_keywords())
+
+
+_EDIT_SIGNAL_TERMS = (
+    "edit", "edits", "editz", "editing", "editor", "aep", "amv",
+    "capcut", "after effects", "velocity", "transition", "transitions",
+)
+
+
+def has_edit_signal(caption: str, hashtags: Any = None) -> bool:
+    """Recognize explicit, non-AI edit markers in a creator's caption/hashtags."""
+    parts = [caption] if isinstance(caption, str) else []
+    if isinstance(hashtags, str):
+        parts.append(hashtags)
+    elif isinstance(hashtags, (list, tuple)):
+        parts.extend(value for value in hashtags if isinstance(value, str))
+    text = " ".join(parts).casefold()
+    # Word boundaries prevent incidental matches such as "credit"; the hashtag
+    # suffix form intentionally recognizes community tags such as #poppyedit.
+    if any(re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", text) for term in _EDIT_SIGNAL_TERMS):
+        return True
+    tag_values = list(hashtags) if isinstance(hashtags, (list, tuple)) else ([hashtags] if isinstance(hashtags, str) else [])
+    if isinstance(caption, str):
+        # Hashtags may be embedded in the caption instead of supplied separately.
+        tag_values.extend(re.findall(r"(?<![a-z0-9])#([a-z0-9._]+)", caption.casefold()))
+    for raw in tag_values:
+        tag = str(raw).strip().lstrip("#").casefold()
+        if tag.endswith(("edit", "editz", "edits")) and len(tag) > 5:
+            return True
+    return False
 
 
 def download_quality_max() -> int:

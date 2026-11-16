@@ -58,6 +58,9 @@ def candidates_from_report(path: str | Path) -> list[Candidate]:
     if not isinstance(payload, dict) or not isinstance(payload.get("candidates"), dict):
         raise ValueError("invalid_discovery_report")
     candidates: list[Candidate] = []
+    queue_context = payload.get("queue_context") if payload.get("source") == "persistent_d1_queue" else {}
+    if not isinstance(queue_context, dict):
+        queue_context = {}
     platform_map = payload["candidates"]
     for platform in ("tiktok", "youtube", "instagram"):
         rows = platform_map.get(platform, [])
@@ -80,6 +83,20 @@ def candidates_from_report(path: str | Path) -> list[Candidate]:
                 "video", "image", "audio", "carousel", "unknown"
             } else ("video" if platform in {"tiktok", "youtube"} else "unknown")
             try:
+                source_policy = resolve_source_policy(platform, source_key)
+                review_reason = queue_context.get("owner_override_reason")
+                review_approved = (
+                    platform == "tiktok"
+                    and queue_context.get("id") == "tiktok:" + external_id
+                    and queue_context.get("owner_review_state") == "approved"
+                    and queue_context.get("owner_override") is True
+                    and review_reason in {
+                        "music_probability_ambiguous", "edit_signal_not_found_by_brain",
+                    }
+                )
+                if review_approved:
+                    source_policy["owner_override"] = True
+                    source_policy["owner_override_reason"] = review_reason
                 candidates.append(Candidate(
                     platform=platform,
                     canonical_url=canonical_url,
@@ -89,7 +106,7 @@ def candidates_from_report(path: str | Path) -> list[Candidate]:
                     source_key=source_key,
                     media_type=media_type,
                     source_tier="unknown",
-                    source_policy=resolve_source_policy(platform, source_key),
+                    source_policy=source_policy,
                 ))
             except ValueError:
                 continue

@@ -141,7 +141,7 @@ def candidates_for_queue(
                 continue
             seen.add(identity)
             source_key = canonical_identity[0][:200]
-            rows.append({
+            queue_row = {
                 "platform": platform,
                 "external_id": external_id,
                 "canonical_url": canonical_identity[2][:2048],
@@ -155,7 +155,8 @@ def candidates_for_queue(
                 "freshness_source": str(raw.get("freshness_source") or "")[:100],
                 "freshness_verified": raw.get("freshness_verified") is True,
                 "method": str(raw.get("method") or "termux_phone")[:100],
-            })
+            }
+            rows.append(queue_row)
             if len(rows) >= max_items:
                 break
         if len(rows) >= max_items:
@@ -268,8 +269,8 @@ def run_intake(
     duplicate_count = invalid_count = api_received_count = 0
     skipped_existing_count = 0
 
-    # Send one identity at a time. If the API reports a duplicate/invalid row, keep
-    # going to the next fresh candidate so the run can still fill its four-new-item cap.
+    # Candidates are only metadata-enqueued here. Media/quality/audio/music checks run
+    # in the existing publish path before either of the two owner-review decisions.
     for item in ordered:
         identity = item["platform"] + ":" + item["external_id"]
         if identity in existing_ids:

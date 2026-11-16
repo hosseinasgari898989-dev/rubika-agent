@@ -508,6 +508,8 @@ const isOwnerOnlyPanelAction = (id) => {
     value === "p_mob_cancel" ||
     value === "p_mob_edit_cancel" ||
     /^p_mob_(?:publish|edit|nocap|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(value) ||
+    value === "p_tiktok_review" ||
+    value === "p_tiktok_review_input" ||
     value === "p_links_clear" ||
     value === "p_links_clear_yes" ||
     value === "p_failall" ||
@@ -521,7 +523,8 @@ const isOwnerOnlyPanelAction = (id) => {
 const isStaticMainPanelScreenClick = (id) =>
   ["p_home", "p_help"].includes(String(id || ""));
 const isMainPanelScreenClick = (id) =>
-  ["p_home", "p_help", "p_debug", "p_status", "p_queue", "p_ai", "p_report"].includes(String(id || "")) ||
+  ["p_home", "p_help", "p_debug", "p_status", "p_queue", "p_ai", "p_report",
+    "p_tiktok_review", "p_tiktok_review_input"].includes(String(id || "")) ||
   isScreenId(String(id || "")) ||
   isSettingsId(String(id || ""));
 const sha256Hex = async (value) => {
@@ -758,6 +761,25 @@ async function api(ui, path) {
   const startedAt = performance.now();
   try {
     const res = await ui.selfFetch(new Request(ui.origin + path, { headers: { authorization: `Bearer ${ui.env.AGENT_API_TOKEN}`, accept: "application/json" } }));
+    return await res.json();
+  } catch { return { ok: false }; }
+  finally { if (timing) timing.worker_api_ms += elapsedMs(startedAt); }
+}
+async function apiPost(ui, path, body) {
+  const timing = ui.env && ui.env[PANEL_TIMING];
+  if (timing) timing.worker_api_calls += 1;
+  const startedAt = performance.now();
+  try {
+    const payload = { ...body, chat_id: ui.chat };
+    const res = await ui.selfFetch(new Request(ui.origin + path, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${ui.env.AGENT_API_TOKEN}`,
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }));
     return await res.json();
   } catch { return { ok: false }; }
   finally { if (timing) timing.worker_api_ms += elapsedMs(startedAt); }
@@ -1180,13 +1202,45 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
   if (id !== "p_links_clear" && id !== "p_links_clear_yes") {
     await setState(env, "panel_links_clear_pending", "no");
   }
+  const previousMid = await getState(env, "panel_mid", "");
+  const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
+  if (id === "p_tiktok_review_input") {
+    await setStates(env, [["mode", "waiting_tiktok_review"], ["tiktok_review_challenge", ""]]);
+    const prompt = "📝 تصمیم گروهی تیک‌تاک\n\nهر تصمیم را در یک خط بفرست:\n" +
+      "لینک TikTok + «قبول» یا «رد»\nحداکثر ۲۰ خط. پس از پیش‌نمایش، تصمیم فقط با پاسخ «تأیید» اعمال می‌شود.";
+    const keypad = kb([[["✖️ لغو", "p_tiktok_review"]]]);
+    if (targetMid) return edit(env, chat, targetMid, prompt, keypad);
+    return send(env, chat, prompt, keypad);
+  }
+  if (id === "p_tiktok_review") {
+    await setState(env, "mode", "idle");
+    const result = await api(ui, "/api/brain/owner-console/tiktok-review?chat_id=" + encodeURIComponent(chat));
+    const items = Array.isArray(result && result.items) ? result.items.slice(0, 12) : [];
+    const reasonFa = (reason, probability) => reason === "music_probability_ambiguous" && typeof probability === "number"
+      ? "موسیقی نامشخص (" + probability.toFixed(2).replace(".", "٫").replace(/[0-9]/g, digit => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]) + ")"
+      : reason === "edit_signal_not_found_by_brain" ? "نشانهٔ ادیت پیدا نشد" : "نیازمند بررسی مالک";
+    const out = !result || result.ok !== true
+      ? "❌ فهرست موارد بازبینی فعلاً در دسترس نیست."
+      : !items.length
+        ? "🎵 در انتظار تأیید شما\n\nموردی برای بازبینی وجود ندارد."
+        : "🎵 در انتظار تأیید شما\n\n" + items.map((item, index) =>
+          (index + 1) + ". @" + esc(item.account || "unknown") + "\n" +
+          esc(String(item.caption_excerpt || "").slice(0, 100)) + "\n" +
+          esc(reasonFa(item.reason, item.music_probability)) + "\n" + String(item.url || "")
+        ).join("\n\n") + "\n\nبرای تصمیم گروهی، دکمهٔ پایین را بزن.";
+    const keypad = kb([
+      [["📝 ثبت تصمیم گروهی", "p_tiktok_review_input"]],
+      [["🔄 تازه‌سازی", "p_tiktok_review"], ["🏠 منوی اصلی", "p_home"]],
+    ]);
+    if (fresh) return sendFreshPanel(ui, out, keypad, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, out, keypad);
+    return send(env, chat, out, keypad);
+  }
   const statics = {
     p_help: [HELP_TEXT, BACK_KB],
     p_mob: ["📰 **خبر رسمی Mob از لینک X**\n\nلینک https://x.com/mobgamesstudios/status/شناسه را بفرست.", CANCEL_KB],
   };
   if (id === "p_mob") await setState(env, "mode", "waiting_link");
-  const previousMid = await getState(env, "panel_mid", "");
-  const targetMid = clickedMid && clickedMid === previousMid ? clickedMid : previousMid;
   if (isSettingsId(id)) {
     if (!(await hasOwnerRole(env, chat, await getOwner(env)))) {
       try { await rubika(env, "sendMessage", { chat_id: chat, text: "فقط نقش مالک اجازهٔ مشاهده و تغییر این تنظیمات را دارد." }); } catch {}
@@ -1395,7 +1449,9 @@ async function processEvent(env, selfFetch, origin, ev) {
       commandWord === "/panelmode" ||
       isOwnerOnlyPanelAction(COMMANDS[commandWord]) ||
       sensitiveFlowMode === "waiting_link" ||
-      sensitiveFlowMode === "waiting_mob_caption_edit"
+      sensitiveFlowMode === "waiting_mob_caption_edit" ||
+      sensitiveFlowMode === "waiting_tiktok_review" ||
+      sensitiveFlowMode === "waiting_tiktok_review_confirm"
     );
     const isOwner = actor.hasOwnerRole == null
       ? await hasOwnerRole(timedEnv, ev.chat, owner)
@@ -1426,7 +1482,8 @@ async function processEvent(env, selfFetch, origin, ev) {
         if (["p_mob_confirm", "p_mob_cancel", "p_links_clear", "p_links_clear_yes"].includes(staleButton)) refreshId = "p_links";
         else if (staleButton === "p_mob_edit_cancel") refreshId = "p_mob";
         else if (!isScreenId(staleButton) &&
-          !["p_home", "p_status", "p_queue", "p_qs", "p_ai", "p_report", "p_mob", "p_help", "p_debug"].includes(staleButton)) {
+          !["p_home", "p_status", "p_queue", "p_qs", "p_ai", "p_report", "p_mob", "p_help", "p_debug",
+            "p_tiktok_review", "p_tiktok_review_input"].includes(staleButton)) {
           refreshId = "p_home";
         }
         if (currentPanelMid && !isStaticMainPanelScreenClick(refreshId)) {
@@ -1504,6 +1561,43 @@ async function processEvent(env, selfFetch, origin, ev) {
         ui, jobId, row, result, caption,
         { clearEditMode: true, successText: "✅ کپشن ویرایش شد و پیش‌نمایش جدید ارسال شد." },
       );
+      return;
+    }
+    if (activeMode === "waiting_tiktok_review") {
+      const preview = await apiPost(ui, "/api/brain/owner-console/tiktok-review/preview", { lines: ev.text });
+      if (preview && preview.ok === true && typeof preview.challenge_id === "string") {
+        await setStates(timedEnv, [
+          ["tiktok_review_challenge", preview.challenge_id],
+          ["mode", "waiting_tiktok_review_confirm"],
+        ]);
+        await updateMobMain(ui, "🔎 پیش‌نمایش تصمیم‌ها\n\n" + esc(preview.summary_fa || "پیش‌نمایش آماده شد.") +
+          "\n\nبرای اعمال دقیق همین تصمیم‌ها، «تأیید» را بفرست. درخواست ۱۰ دقیقه اعتبار دارد.", HOME_KB);
+      } else {
+        await setState(timedEnv, "mode", "idle");
+        await updateMobMain(ui, "⚠️ پیش‌نمایش انجام نشد: " + esc(preview && preview.error || "no_valid_items") +
+          "\n" + esc(preview && preview.summary_fa || ""), HOME_KB);
+      }
+      return;
+    }
+    if (activeMode === "waiting_tiktok_review_confirm") {
+      const challengeId = await getState(timedEnv, "tiktok_review_challenge", "");
+      if (!["تأیید", "تایید"].includes(ev.text.trim()) || !challengeId) {
+        await setStates(timedEnv, [["mode", "idle"], ["tiktok_review_challenge", ""]]);
+        await updateMobMain(ui, "تصمیم‌های بازبینی لغو شد؛ هیچ موردی تغییر نکرد.", HOME_KB);
+        return;
+      }
+      const confirmed = await apiPost(ui, "/api/brain/owner-console/tiktok-review/confirm", {
+        challenge_id: challengeId, confirm: true,
+      });
+      await setStates(timedEnv, [["mode", "idle"], ["tiktok_review_challenge", ""]]);
+      if (confirmed && confirmed.ok === true) {
+        await updateMobMain(ui, "✅ تصمیم‌ها ثبت شدند.\nقبول: " + n(confirmed.approved_count) +
+          " | رد: " + n(confirmed.rejected_count) +
+          "\nموارد تأییدشده از مسیر عادی صف عبور می‌کنند؛ انتشار فوری انجام نشد.", HOME_KB);
+      } else {
+        await updateMobMain(ui, "⚠️ تأیید منقضی یا نامعتبر بود؛ هیچ ارسال جدیدی انجام نشد. خطا: " +
+          esc(confirmed && confirmed.error || "review_confirmation_failed"), HOME_KB);
+      }
       return;
     }
     if (activeMode === "waiting_link") {
