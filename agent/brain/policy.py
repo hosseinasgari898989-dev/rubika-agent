@@ -85,8 +85,6 @@ def precheck_edit_candidate(candidate: Candidate) -> tuple[str, ...]:
             return ("source_not_selected",)
         if not _tiktok_keyword_match(candidate):
             reasons.append("required_keyword_missing")
-        elif not source_policy.get("owner_override") and not has_edit_signal(candidate.caption, candidate.hashtags):
-            reasons.append("edit_signal_not_found_by_brain")
     elif not _has_poppy_relevance(candidate):
         reasons.append("poppy_relevance_not_found_by_python")
     if candidate.platform != "tiktok" and _has_any(_candidate_content_text(candidate), NEGATIVE_TEXT_TERMS):
@@ -150,8 +148,6 @@ def evaluate_edit_candidate(
             reasons.append("source_not_selected")
         elif not keyword_match:
             reasons.append("required_keyword_missing")
-        elif not policy.get("owner_override") and not edit_signal:
-            reasons.append("edit_signal_not_found_by_brain")
     else:
         relevant = _has_poppy_relevance(candidate)
         checks["python_metadata_relevance"] = relevant
@@ -237,6 +233,30 @@ def evaluate_edit_candidate(
                 "error_codes": [re.sub(r"[^A-Za-z0-9_-]", "", str(code))[:80] for code in value.get("error_codes", [])[:3]]
                 if isinstance(value.get("error_codes"), list) else [],
             }
+
+    # A missing edit marker is reviewable only after all hard media, dedupe,
+    # relevance, audio and positive-music checks pass. It must never turn a low-res,
+    # silent, duplicate, off-topic or failed download into an owner-review item.
+    owner_edit_override = (
+        policy.get("owner_override") is True
+        and policy.get("owner_override_reason") == "edit_signal_not_found_by_brain"
+    )
+    music_accepted = moderation.get("has_music") is True or owner_music_override
+    if (
+        candidate.platform == "tiktok"
+        and checks.get("selected_tiktok_source") is True
+        and checks.get("required_keyword_match") is True
+        and checks.get("edit_signal_found") is False
+        and not owner_edit_override
+        and not reasons
+        and not missing
+        and inspection.ok
+        and inspection.media_type == "video"
+        and inspection.has_audio is True
+        and min(inspection.width or 0, inspection.height or 0) >= 480
+        and music_accepted
+    ):
+        reasons.append("edit_signal_not_found_by_brain")
 
     requires_review = bool(missing)
     decision = "rejected" if reasons else "needs_review" if requires_review else "eligible"
