@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 35,
   "candidate_pool_size": 35,
-  "completed_at": "2026-11-16T17:04:45+00:00",
+  "completed_at": "2026-11-16T17:33:33+00:00",
   "discovered_candidate_count": 42,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -22,31 +22,25 @@
     "smyxae": 6
   },
   "filter_rejected_count": 7,
-  "inserted_count": 1,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 16,
     "processing": 0,
-    "queued": 1,
-    "sent": 88,
-    "sent_today": 0,
+    "queued": 0,
+    "sent": 89,
+    "sent_today": 1,
     "skipped": 37,
     "uncertain": 0,
     "usage_day": "2026-11-16"
   },
-  "queue_status": "enqueued",
-  "received_count": 1,
-  "report_generated_at": "2026-11-16T17:04:32.966356+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-11-16T17:33:17.316293+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7708695808870206742"
-  ],
-  "selected_source_distribution": {
-    "bendus.editz": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@bendus.editz/video/7708695808870206742"
-  ],
-  "skipped_existing_count": 34
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 35
 }
