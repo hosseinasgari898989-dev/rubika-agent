@@ -305,7 +305,6 @@ async function previewTikTokOwnerReview(env, h, actor, body) {
       invalidCount += 1;
       continue;
     }
-    seen.add(parsed.external_id);
     const isLegacy = LEGACY.has(parsed.handle);
     let tracked = isLegacy;
     if (!tracked) {
@@ -345,6 +344,7 @@ async function previewTikTokOwnerReview(env, h, actor, body) {
       invalidCount += 1;
       continue;
     }
+    seen.add(parsed.external_id);
     decisions.push({ ...parsed, id: String(row.id) });
   }
   if (!decisions.length) {
