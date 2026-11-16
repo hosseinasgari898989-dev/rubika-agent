@@ -193,6 +193,25 @@ def discover_tiktok_profiles(
     }
     candidates: dict[str, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
+    rejected_candidates: list[dict[str, Any]] = []
+
+    def record_rejection(entry: Any, reason: str, canonical_identity: tuple[str, str, str] | None = None) -> None:
+        if len(rejected_candidates) >= 100 or not isinstance(entry, dict):
+            return
+        raw_id = str(entry.get("id") or entry.get("video_id") or "").strip()
+        page_url = entry.get("webpage_url") or entry.get("original_url") or ""
+        identity = canonical_identity or (normalize_tiktok_url(page_url) if isinstance(page_url, str) else None)
+        external_id = raw_id if re.fullmatch(r"[0-9]{10,25}", raw_id) else (identity[1] if identity else "")
+        if not external_id:
+            return
+        timestamp = entry.get("timestamp") or entry.get("release_timestamp") or entry.get("upload_date")
+        rejected_candidates.append({
+            "platform": "tiktok",
+            "external_id": external_id,
+            "reason": reason,
+            "created_at": _to_iso_timestamp(timestamp),
+        })
+
     for raw_profile in profiles:
         if len(candidates) >= max(1, max_results):
             break
@@ -234,15 +253,19 @@ def discover_tiktok_profiles(
             if identity is not None:
                 found_handle, video_id, canonical_url = identity
                 if found_handle.casefold() != handle.casefold():
+                    record_rejection(entry, "creator_mismatch", identity)
                     continue
                 if raw_id and re.fullmatch(r"[0-9]{10,25}", raw_id) and raw_id != video_id:
+                    record_rejection(entry, "canonical_url_id_mismatch", identity)
                     continue
             else:
                 video_id = raw_id
                 if not re.fullmatch(r"[0-9]{10,25}", video_id):
+                    record_rejection(entry, "external_id_invalid")
                     continue
                 canonical_url = f"https://www.tiktok.com/@{handle}/video/{video_id}"
             if video_id in candidates:
+                record_rejection(entry, "duplicate_external_id", identity)
                 continue
             title = str(entry.get("description") or entry.get("title") or "")
             timestamp = entry.get("timestamp") or entry.get("release_timestamp") or entry.get("upload_date")
@@ -260,6 +283,7 @@ def discover_tiktok_profiles(
                 published = row.get("published_at")
                 if not published:
                     skipped_before_add += 1
+                    record_rejection(entry, "created_at_missing_for_managed_source", identity)
                     continue
                 try:
                     published_dt = datetime.fromisoformat(str(published).replace("Z", "+00:00"))
@@ -267,9 +291,11 @@ def discover_tiktok_profiles(
                         published_dt = published_dt.replace(tzinfo=timezone.utc)
                     if published_dt.astimezone(timezone.utc) < cutoff:
                         skipped_before_add += 1
+                        record_rejection(entry, "older_than_source_created_at", identity)
                         continue
                 except ValueError:
                     skipped_before_add += 1
+                    record_rejection(entry, "created_at_invalid", identity)
                     continue
             try:
                 row["duration_seconds"] = float(entry["duration"]) if entry.get("duration") is not None else None
@@ -287,5 +313,11 @@ def discover_tiktok_profiles(
         })
         if sleep_seconds > 0:
             time.sleep(min(2.0, sleep_seconds))
+    if rejected_candidates:
+        attempts.append({
+            "platform": "tiktok",
+            "result": "rejected_candidates_recorded",
+            "rejected_candidates": rejected_candidates[:100],
+        })
     return list(candidates.values())[:max_results], attempts
 

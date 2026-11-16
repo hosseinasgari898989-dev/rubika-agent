@@ -290,5 +290,72 @@ class TermuxDailyDiscoveryTests(unittest.TestCase):
 
 
 
+    def test_report_bounds_rejected_candidates_and_reports_provider_lag(self):
+        tiktok_rejected = [
+            {
+                "platform": "tiktok",
+                "external_id": str(7610592632179200000 + index),
+                "reason": "older_than_source_created_at",
+                "created_at": "2026-11-15T00:00:00+00:00",
+            }
+            for index in range(80)
+        ]
+        mob_rejected = [
+            {
+                "platform": "mob_official",
+                "external_id": str(2110158933356847500 + index),
+                "reason": "pin_state_unknown",
+                "created_at": "2026-11-15T01:00:00+00:00",
+            }
+            for index in range(80)
+        ]
+        mob_attempts = [
+            {
+                "source": "mob_x_provider_freshness",
+                "newest_created_at_returned": {
+                    "x-cli": "2026-11-15T02:00:00+00:00",
+                    "fxtwitter": "2026-11-15T03:00:00+00:00",
+                    "vxtwitter": "2026-11-15T04:00:00+00:00",
+                },
+            },
+            {"source": "mob_x_rejections", "rejected_candidates": mob_rejected},
+        ]
+        with tempfile.TemporaryDirectory() as folder, patch.object(
+            daily_discovery, "discover_tiktok_profiles",
+            return_value=([], [{"result": "rejected_candidates_recorded", "rejected_candidates": tiktok_rejected}]),
+        ), patch.object(
+            daily_discovery, "discover_official_x_posts", return_value=([], mob_attempts)
+        ), patch.object(
+            daily_discovery, "load_lifecycle_policy",
+            return_value={"mode": "test", "born_at": None},
+        ), patch.object(
+            daily_discovery, "filter_candidates_by_birth",
+            side_effect=lambda rows, policy: (rows, []),
+        ):
+            output_path = Path(folder) / "report.json"
+            report = daily_discovery.collect_daily_report(output_path=output_path)
+            serialized_report = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(report["rejected_candidates"]), 100)
+        self.assertEqual(
+            sum(row["platform"] == "tiktok" for row in report["rejected_candidates"]),
+            80,
+        )
+        self.assertEqual(
+            sum(row["platform"] == "mob_official" for row in report["rejected_candidates"]),
+            20,
+        )
+        self.assertTrue(all({
+            "external_id", "reason", "created_at"
+        }.issubset(row) for row in report["rejected_candidates"]))
+        for provider in ("x-cli", "FxTwitter", "VxTwitter"):
+            freshness = report["source_freshness"][provider]
+            self.assertIsNotNone(freshness["newest_created_at_returned"])
+            self.assertGreater(freshness["lag_seconds"], 0)
+        self.assertEqual(
+            serialized_report["rejected_candidates"],
+            report["rejected_candidates"],
+        )
+
 if __name__ == "__main__":
     unittest.main()

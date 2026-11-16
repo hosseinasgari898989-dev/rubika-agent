@@ -382,6 +382,40 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("token_length_bucket", summary)
         self.assertNotIn("AGENT_API_TOKEN", summary)
 
+    def test_mob_test_delivery_reconcile_is_manual_exact_and_dry_run_by_default(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "reconcile-owner-confirmed-mob-test-delivery.yml"
+        ).read_text(encoding="utf-8")
+        trigger = workflow.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertNotIn("\\n  push:\\n", trigger)
+        self.assertIn("default: true", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}", workflow)
+        self.assertIn(
+            "/api/brain/items/reconcile-owner-confirmed-mob-test-delivery", workflow
+        )
+        self.assertIn("mob_official:x-2121327753236729907", workflow)
+        self.assertIn("matched_count", workflow)
+        self.assertIn("changed_count", workflow)
+        self.assertIn("exactly_one_changed_row", workflow)
+        self.assertIn("DRY_RUN", workflow)
+        self.assertIn("CONFIRM", workflow)
+        self.assertIn("contents: read", workflow)
+        for forbidden in (
+            "RUBIKA_TOKEN",
+            "RUBIKA_CHANNEL_GUID",
+            "workflow_run:",
+            "workflow_call:",
+            "git push",
+            "curl --request GET",
+            "sendMessage",
+            "send_media",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, workflow)
+
 if __name__ == "__main__":
     unittest.main()
 
