@@ -6097,6 +6097,8 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
         music_probability: reason === "music_probability_ambiguous" ? 0.61 : null,
         created_at: createdAt || new Date().toISOString(),
         notified_at: notifiedAt,
+        has_audio: true,
+        has_music: reason === "edit_signal_not_found_by_brain" ? true : null,
       },
     };
     const url = "https://www.tiktok.com/@" + handle + "/video/" + externalId;
@@ -6150,13 +6152,14 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(metadata.owner_review.music_probability, 0.61);
     assert.equal(metadata.owner_review.has_audio, true);
 
-    for (const invalid of [
-      { reason: "off_topic", music_probability: 0.61, has_audio: true },
-      { reason: "music_probability_ambiguous", music_probability: 0.14, has_audio: true },
-      { reason: "music_probability_ambiguous", music_probability: 0.71, has_audio: true },
-      { reason: "music_probability_ambiguous", music_probability: 0.61, has_audio: false },
-    ]) {
-      const badId = "tiktok:" + reviewId(10 + Math.floor(Math.random() * 1000));
+    const invalidCases = [
+      { reason: "off_topic", music_probability: 0.61, has_audio: true, has_music: null },
+      { reason: "music_probability_ambiguous", music_probability: 0.14, has_audio: true, has_music: null },
+      { reason: "music_probability_ambiguous", music_probability: 0.71, has_audio: true, has_music: null },
+      { reason: "music_probability_ambiguous", music_probability: 0.61, has_audio: false, has_music: null },
+    ];
+    for (const [invalidIndex, invalid] of invalidCases.entries()) {
+      const badId = "tiktok:" + reviewId(10 + invalidIndex);
       sqlite.prepare(
         "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
         "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'processing')"
@@ -6165,6 +6168,45 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
         encodeURIComponent(badId) + "/owner-review", { method: "POST", body: invalid }), state));
       assert.equal(bad.status, 400);
       assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(badId).status, "processing");
+    }
+    // Edit-marker review requires a positive music verdict and audio stream.
+    const editId = "tiktok:" + reviewId(2);
+    sqlite.prepare(
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
+      "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'processing')"
+    ).run(editId, reviewId(2), "https://www.tiktok.com/@tracked_a/video/" + reviewId(2));
+    const editAccepted = await read(await worker.fetch(request("/api/brain/automation-queue/" +
+      encodeURIComponent(editId) + "/owner-review", {
+        method: "POST",
+        body: {
+          reason: "edit_signal_not_found_by_brain",
+          has_audio: true,
+          has_music: true,
+          music_probability: null,
+        },
+      }), state));
+    assert.equal(editAccepted.status, 200);
+    const editRow = sqlite.prepare("SELECT status, last_error_code, metadata_json FROM automation_queue WHERE id = ?").get(editId);
+    assert.equal(editRow.status, "failed");
+    assert.equal(editRow.last_error_code, "needs_owner_review");
+    const editMetadata = JSON.parse(editRow.metadata_json).owner_review;
+    assert.equal(editMetadata.reason, "edit_signal_not_found_by_brain");
+    assert.equal(editMetadata.has_audio, true);
+    assert.equal(editMetadata.has_music, true);
+
+    for (const invalidEdit of [
+      { reason: "edit_signal_not_found_by_brain", has_audio: false, has_music: true, music_probability: null },
+      { reason: "edit_signal_not_found_by_brain", has_audio: true, has_music: false, music_probability: null },
+    ]) {
+      const invalidEditId = "tiktok:" + reviewId(20 + Math.floor(Math.random() * 100));
+      sqlite.prepare(
+        "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
+        "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'processing')"
+      ).run(invalidEditId, invalidEditId.slice(7), "https://www.tiktok.com/@tracked_a/video/" + invalidEditId.slice(7));
+      const response = await read(await worker.fetch(request("/api/brain/automation-queue/" +
+        encodeURIComponent(invalidEditId) + "/owner-review", { method: "POST", body: invalidEdit }), state));
+      assert.equal(response.status, 400);
+      assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(invalidEditId).status, "processing");
     }
     sqlite.close();
   }
@@ -6304,6 +6346,27 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     sqlite.close();
   }
 
+  // Five reviews already notified today still count after owner decisions have closed them.
+  {
+    const { sqlite, state } = createRealD1();
+    const notified = Array.from({ length: 5 }, (_, i) =>
+      queueReview(sqlite, reviewId(520 + i), { notifiedAt: new Date().toISOString() })
+    );
+    for (const item of notified) {
+      sqlite.prepare(
+        "UPDATE automation_queue SET status = 'skipped', last_error_code = 'owner_rejected', " +
+        "metadata_json = json_set(metadata_json, '$.owner_review.state', 'rejected') WHERE id = ?"
+      ).run(item.id);
+    }
+    queueReview(sqlite, reviewId(530));
+    const claim = await read(await worker.fetch(request(
+      "/api/brain/automation-queue/owner-review/notifications/claim", { method: "POST", body: {} }
+    ), state));
+    assert.equal(claim.status, 200);
+    assert.equal(claim.body.items.length, 0);
+    sqlite.close();
+  }
+
   // A newer preview replaces the challenge; the old confirmation is stale and cannot act.
   {
     const { sqlite, state } = createRealD1();
@@ -6317,6 +6380,22 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     const current = await postConfirm(state, second.body.challenge_id);
     assert.equal(current.status, 200);
     assert.equal(sqlite.prepare("SELECT status, last_error_code FROM automation_queue WHERE id = ?").get(item.id).status, "skipped");
+    sqlite.close();
+  }
+
+  // The preview is cryptographically signed with the existing owner token; D1 tampering is rejected.
+  {
+    const { sqlite, state } = createRealD1();
+    const item = queueReview(sqlite, reviewId(502));
+    const preview = await postPreview(state, item.url + " قبول");
+    sqlite.prepare(
+      "UPDATE automation_queue SET metadata_json = json_set(metadata_json, " +
+      "'$.owner_review.pending_confirmation.owner_signature', ?) WHERE id = ?"
+    ).run("0".repeat(64), item.id);
+    const tampered = await postConfirm(state, preview.body.challenge_id);
+    assert.equal(tampered.status, 403);
+    assert.equal(tampered.body.error, "tiktok_owner_review_signature_invalid");
+    assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(item.id).status, "failed");
     sqlite.close();
   }
 
