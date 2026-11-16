@@ -41,21 +41,57 @@ class TikTokSourcePolicyTests(unittest.TestCase):
         self.assertEqual(policy["minimum_source_short_side"],0)
         self.assertIn("source_not_selected",precheck_edit_candidate(self.candidate("unlisted_creator")))
 
-    def test_poppy_or_playtime_substring_is_sufficient_without_edit_signal(self):
+    def test_missing_edit_signal_enters_review_only_after_all_media_gates_pass(self):
         for caption in ("poppy","PLAYTIME montage","a #PoPpYPlaytime tag"):
             with self.subTest(caption=caption):
-                c=self.candidate("meloaep_",caption=caption)
-                self.assertEqual(precheck_edit_candidate(c),())
-                result=evaluate_edit_candidate(c,self.inspection(),moderation={"has_music":True})
-                self.assertTrue(result.eligible,result.reasons)
-                self.assertNotIn("is_edit",result.checks)
-                self.assertNotIn("high_quality_edit",result.checks)
+                candidate = self.candidate("meloaep_", caption=caption)
+                self.assertEqual(precheck_edit_candidate(candidate), ())
+                result = evaluate_edit_candidate(
+                    candidate, self.inspection(), moderation={"has_music": True},
+                )
+                self.assertIn("edit_signal_not_found_by_brain", result.reasons)
+                self.assertFalse(result.eligible)
 
-    def test_hashtag_keyword_works_but_unrelated_caption_rejects(self):
-        c=self.candidate("rickkzn_",caption="new clip",hashtags=("#PLAYTIME",))
-        self.assertTrue(evaluate_edit_candidate(c,self.inspection(),moderation={"has_music":True}).eligible)
-        bad=self.candidate("rickkzn_",caption="unrelated gameplay")
-        self.assertIn("required_keyword_missing",evaluate_edit_candidate(bad,self.inspection(),moderation={"has_music":True}).reasons)
+        edit = self.candidate("meloaep_", caption="Poppy Playtime velocity edit")
+        accepted = evaluate_edit_candidate(edit, self.inspection(), moderation={"has_music": True})
+        self.assertTrue(accepted.eligible, accepted.reasons)
+
+    def test_off_topic_low_resolution_no_audio_and_duplicate_never_enter_edit_review(self):
+        moderation = {"has_music": True}
+        off_topic = evaluate_edit_candidate(
+            self.candidate("rickkzn_", caption="unrelated gameplay"),
+            self.inspection(), moderation=moderation,
+        )
+        self.assertIn("required_keyword_missing", off_topic.reasons)
+        self.assertNotIn("edit_signal_not_found_by_brain", off_topic.reasons)
+
+        low_resolution = evaluate_edit_candidate(
+            self.candidate("meloaep_", caption="Poppy Playtime clip"),
+            self.inspection(width=320, height=240), moderation=moderation,
+        )
+        self.assertIn("source_below_policy_minimum_resolution", low_resolution.reasons)
+        self.assertNotIn("edit_signal_not_found_by_brain", low_resolution.reasons)
+
+        silent = evaluate_edit_candidate(
+            self.candidate("meloaep_", caption="Poppy Playtime clip"),
+            self.inspection(audio=False), moderation={},
+        )
+        self.assertIn("no_audio", silent.reasons)
+        self.assertNotIn("edit_signal_not_found_by_brain", silent.reasons)
+
+        duplicate = evaluate_edit_candidate(
+            self.candidate("meloaep_", caption="Poppy Playtime clip"),
+            self.inspection(), seen_external_ids={"7616247520657771796"}, moderation=moderation,
+        )
+        self.assertIn("duplicate_external_id", duplicate.reasons)
+        self.assertNotIn("edit_signal_not_found_by_brain", duplicate.reasons)
+
+    def test_hashtag_keyword_works_and_edit_marker_is_still_required_for_delivery(self):
+        candidate = self.candidate("rickkzn_", caption="new clip", hashtags=("#PLAYTIME",))
+        result = evaluate_edit_candidate(candidate, self.inspection(), moderation={"has_music": True})
+        self.assertIn("edit_signal_not_found_by_brain", result.reasons)
+        marked = self.candidate("rickkzn_", caption="new clip", hashtags=("#PLAYTIMEedit",))
+        self.assertTrue(evaluate_edit_candidate(marked, self.inspection(), moderation={"has_music": True}).eligible)
 
     def test_no_audio_rejects_with_exact_reason(self):
         result=evaluate_edit_candidate(self.candidate("meloaep_"),self.inspection(audio=False),moderation={})
