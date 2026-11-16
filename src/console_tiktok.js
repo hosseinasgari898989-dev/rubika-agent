@@ -201,12 +201,33 @@ const OWNER_REVIEW_REASON_CODES = new Set([
   "music_probability_ambiguous", "edit_signal_not_found_by_brain",
 ]);
 
-async function ownerReviewHash(actor) {
+async function ownerReviewSignature(env, actor, challengeId, expiresAt) {
   const ownerIdentity = actor?.kind === "rubika"
     ? "rubika:" + String(actor.chat_id || "")
     : "web:owner";
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ownerIdentity));
-  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
+  const secret = actor?.kind === "rubika"
+    ? String(env.AGENT_API_TOKEN || "")
+    : String(env.OWNER_WEB_TOKEN || "");
+  if (secret.length < 32) throw new Error("owner_review_signing_key_unavailable");
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const payload = [
+    "rubika-agent-tiktok-owner-review-v1", ownerIdentity, challengeId, expiresAt,
+  ].join("\n");
+  const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+  return Array.from(new Uint8Array(signed), value => value.toString(16).padStart(2, "0")).join("");
+}
+
+function constantTimeHexEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string" ||
+      !/^[a-f0-9]{64}$/.test(left) || !/^[a-f0-9]{64}$/.test(right)) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index++) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
 }
 
 function parseOwnerReviewDecisionLine(line) {
@@ -235,7 +256,7 @@ async function expireTikTokOwnerReviews(env) {
     "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') " +
     "WHERE platform = 'tiktok' AND status = 'failed' AND last_error_code = 'needs_owner_review' " +
     "AND json_extract(metadata_json, '$.owner_review.state') = 'pending' " +
-    "AND julianday(created_at) <= julianday('now', '-3 days')"
+    "AND julianday(json_extract(metadata_json, '$.owner_review.created_at')) <= julianday('now', '-3 days')"
   ).run();
   return Number(result?.meta?.changes || 0);
 }
@@ -335,8 +356,8 @@ async function previewTikTokOwnerReview(env, h, actor, body) {
   }
   const challengeId = Array.from(crypto.getRandomValues(new Uint8Array(24)),
     value => value.toString(16).padStart(2, "0")).join("");
-  const ownerHash = await ownerReviewHash(actor);
   const expiresAt = new Date(Date.now() + OWNER_REVIEW_CHALLENGE_MS).toISOString();
+  const signature = await ownerReviewSignature(env, actor, challengeId, expiresAt);
   const statements = decisions.map(decision => env.DB.prepare(
     "UPDATE automation_queue SET metadata_json = json_set(metadata_json, " +
     "'$.owner_review.pending_confirmation', json(?)), " +
@@ -352,7 +373,7 @@ async function previewTikTokOwnerReview(env, h, actor, body) {
     "AND (da.status IN ('sent','uncertain','started') OR da.rubika_message_id IS NOT NULL))"
   ).bind(JSON.stringify({
     challenge_id: challengeId,
-    owner_hash: ownerHash,
+    owner_signature: signature,
     decision: decision.decision,
     expected_count: decisions.length,
     expires_at: expiresAt,
@@ -388,17 +409,22 @@ async function confirmTikTokOwnerReview(env, h, actor, body) {
   if (actor?.kind === "rubika" && body.chat_id !== actor.chat_id) {
     return h.json({ ok: false, error: "tiktok_owner_review_owner_mismatch" }, 403);
   }
-  const ownerHash = await ownerReviewHash(actor);
   const sample = await env.DB.prepare(
-    "SELECT json_extract(metadata_json, '$.owner_review.pending_confirmation.expected_count') AS expected_count " +
+    "SELECT json_extract(metadata_json, '$.owner_review.pending_confirmation.expected_count') AS expected_count, " +
+    "json_extract(metadata_json, '$.owner_review.pending_confirmation.expires_at') AS expires_at, " +
+    "json_extract(metadata_json, '$.owner_review.pending_confirmation.owner_signature') AS owner_signature " +
     "FROM automation_queue WHERE platform = 'tiktok' AND status = 'failed' " +
     "AND last_error_code = 'needs_owner_review' " +
-    "AND json_extract(metadata_json, '$.owner_review.pending_confirmation.challenge_id') = ? " +
-    "AND json_extract(metadata_json, '$.owner_review.pending_confirmation.owner_hash') = ? LIMIT 1"
-  ).bind(body.challenge_id, ownerHash).first();
+    "AND json_extract(metadata_json, '$.owner_review.pending_confirmation.challenge_id') = ? LIMIT 1"
+  ).bind(body.challenge_id).first();
   const expected = Number(sample?.expected_count || 0);
-  if (!Number.isInteger(expected) || expected < 1 || expected > OWNER_REVIEW_MAX_LINES) {
+  if (!Number.isInteger(expected) || expected < 1 || expected > OWNER_REVIEW_MAX_LINES ||
+      typeof sample?.expires_at !== "string" || sample.expires_at <= new Date().toISOString()) {
     return h.json({ ok: false, error: "tiktok_owner_review_challenge_stale", changed_count: 0 }, 409);
+  }
+  const expectedSignature = await ownerReviewSignature(env, actor, body.challenge_id, sample.expires_at);
+  if (!constantTimeHexEqual(sample.owner_signature, expectedSignature)) {
+    return h.json({ ok: false, error: "tiktok_owner_review_signature_invalid", changed_count: 0 }, 403);
   }
   const now = new Date().toISOString();
   const update = await env.DB.prepare(
@@ -420,7 +446,7 @@ async function confirmTikTokOwnerReview(env, h, actor, body) {
     "WHERE platform = 'tiktok' AND status = 'failed' AND last_error_code = 'needs_owner_review' " +
     "AND json_extract(metadata_json, '$.owner_review.state') = 'pending' " +
     "AND json_extract(metadata_json, '$.owner_review.pending_confirmation.challenge_id') = ? " +
-    "AND json_extract(metadata_json, '$.owner_review.pending_confirmation.owner_hash') = ? " +
+    "AND json_extract(metadata_json, '$.owner_review.pending_confirmation.owner_signature') = ? " +
     "AND json_extract(metadata_json, '$.owner_review.pending_confirmation.expires_at') > ? " +
     "AND NOT EXISTS (SELECT 1 FROM items i WHERE i.platform = 'tiktok' " +
     "AND i.external_id = automation_queue.external_id AND " +
@@ -441,7 +467,10 @@ async function confirmTikTokOwnerReview(env, h, actor, body) {
     "WHERE i.platform = 'tiktok' AND i.external_id = q2.external_id " +
     "AND (da.status IN ('sent','uncertain','started') OR da.rubika_message_id IS NOT NULL))) = ? " +
     "RETURNING id, status, external_id"
-  ).bind(now, body.challenge_id, ownerHash, now, body.challenge_id, ownerHash, now, expected).all();
+  ).bind(
+    now, body.challenge_id, sample.owner_signature, now,
+    body.challenge_id, sample.owner_signature, now, expected,
+  ).all();
   const rows = update?.results || [];
   if (rows.length !== expected) {
     return h.json({
