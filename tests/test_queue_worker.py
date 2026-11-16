@@ -31,6 +31,7 @@ def make_item(platform: str, external_id: str, title: str) -> dict:
 
 class FakeCloud:
     def __init__(self, *args, **kwargs):
+        self.owner_reviews = []
         self.items = [
             make_item("tiktok", "7616247520657771796", "First failed candidate"),
             make_item("tiktok", "7616247520657771797", "Success 1"),
@@ -52,6 +53,28 @@ class FakeCloud:
         item["status"] = status
         item["last_error_code"] = error_code
         return {"ok": True, "id": item_id, "status": status}
+
+    def mark_tiktok_owner_review(
+        self, item_id, *, reason, has_audio, music_probability=None, has_music=None
+    ):
+        item = next(item for item in self.items if item["id"] == item_id)
+        item["status"] = "failed"
+        item["last_error_code"] = "needs_owner_review"
+        item["metadata_json"] = json.dumps({
+            "owner_review": {
+                "state": "pending",
+                "reason": reason,
+                "original_reason": reason,
+                "music_probability": music_probability,
+                "has_audio": has_audio,
+                "has_music": has_music,
+            }
+        })
+        self.owner_reviews.append({
+            "id": item_id, "reason": reason, "music_probability": music_probability,
+            "has_audio": has_audio, "has_music": has_music,
+        })
+        return {"ok": True}
 
     def get_automation_queue_summary(self):
         result = {}
@@ -147,6 +170,58 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertIs(no_audio["has_audio_stream"], False)
         self.assertIsNone(errored["music_probability"])
         self.assertIsNone(errored["has_audio_stream"])
+
+    def test_routes_both_safe_tiktok_review_reasons_without_reviewing_low_resolution(self):
+        cloud = FakeCloud()
+        cloud.items = cloud.items[:3]
+        outcomes = [
+            {
+                "ok": False, "status": "staging_failed",
+                "reason": "music_probability_ambiguous",
+                "music_decision_reason": "music_probability_ambiguous",
+                "music_probability": 0.42, "has_audio_stream": True, "has_music": None,
+            },
+            {
+                "ok": False, "status": "staging_failed",
+                "reason": "edit_signal_not_found_by_brain",
+                "music_probability": 0.91, "has_audio_stream": True, "has_music": True,
+            },
+            {
+                "ok": False, "status": "staging_failed",
+                "reason": "source_below_policy_minimum_resolution",
+                "music_probability": 0.91, "has_audio_stream": True, "has_music": True,
+            },
+        ]
+        calls = {"count": 0}
+
+        def fake_run_one(*_args, **_kwargs):
+            outcome = outcomes[calls["count"]]
+            calls["count"] += 1
+            return outcome
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+            patch.object(queue_worker, "send_tiktok_owner_review_notifications", return_value={"sent": True, "sent_count": 0}),
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0)
+
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(
+            [item["reason"] for item in cloud.owner_reviews],
+            ["music_probability_ambiguous", "edit_signal_not_found_by_brain"],
+        )
+        self.assertEqual(report["owner_review_count"], 2)
+        self.assertEqual(cloud.items[0]["status"], "failed")
+        self.assertEqual(cloud.items[1]["status"], "failed")
+        self.assertEqual(cloud.items[2]["status"], "failed")
+        self.assertEqual(
+            cloud.items[2]["last_error_code"], "source_below_policy_minimum_resolution"
+        )
+        self.assertIsNone(cloud.owner_reviews[0]["has_music"])
+        self.assertIs(cloud.owner_reviews[1]["has_music"], True)
 
     def test_failure_report_preserves_sanitized_staging_diagnostics(self):
         def fake_run_one(*args, **kwargs):
