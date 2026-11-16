@@ -156,7 +156,14 @@ export async function dispatchMobXWorkflow(env, workflow, inputs, options = {}) 
   if (!token) return { ok: false, error: "github_dispatch_not_configured" };
 
   let cleanInputs = null;
-  if (workflow === "mob-x-link-processor.yml") {
+  if (workflow === "termux-docker-discovery.yml" && inputs != null) {
+    const dryRun = inputs && (inputs.dry_run === true || inputs.dry_run === "true");
+    if (!dryRun) return { ok: false, error: "github_dispatch_input_invalid" };
+    cleanInputs = { dry_run: "true" };
+  } else if (workflow === "termux-docker-discovery.yml" && inputs == null) {
+    // Preserve the existing scheduled Worker-Cron behavior when no inputs are supplied.
+    cleanInputs = { dry_run: "false" };
+  } else if (workflow === "mob-x-link-processor.yml") {
     const rawLinkId = inputs && inputs.panel_link_id;
     if (rawLinkId != null && String(rawLinkId).trim() !== "") {
       const panelLinkId = Number(rawLinkId);
@@ -195,8 +202,7 @@ export async function dispatchMobXWorkflow(env, workflow, inputs, options = {}) 
     const externalStartedAt = performance.now();
     if (timing) timing.external_calls += 1;
     try {
-      const payload = workflow === "mob-x-link-processor.yml" ||
-        workflow === "termux-docker-discovery.yml" || cleanInputs === null
+      const payload = workflow === "mob-x-link-processor.yml" || cleanInputs === null
         ? { ref: "main" }
         : { ref: "main", inputs: cleanInputs };
       response = await fetch(endpoint, {
@@ -242,6 +248,60 @@ export async function dispatchMobXWorkflow(env, workflow, inputs, options = {}) 
   return safeStatusOnly
     ? { ok: false, error: lastError, status: lastStatus }
     : { ok: false, error: lastError, ...(lastErrorDetail ? { error_detail: lastErrorDetail } : {}) };
+}
+
+export async function dispatchTermuxDiscoveryOnce(env) {
+  const token = typeof env?.GITHUB_DISPATCH_TOKEN === "string" ? env.GITHUB_DISPATCH_TOKEN.trim() : "";
+  if (!token) return { ok: false, error: "github_dispatch_not_configured" };
+
+  const endpoint = "https://api.github.com/repos/hosseinasgari898989-dev/rubika-agent/actions/workflows/termux-docker-discovery.yml/runs?per_page=100";
+  let response;
+  const timing = env && env[PANEL_TIMING];
+  const startedAt = performance.now();
+  if (timing) timing.external_calls += 1;
+  try {
+    response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        "User-Agent": "rubika-agent-worker",
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        Authorization: "Bearer " + token,
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: error && (error.name === "TimeoutError" || error.name === "AbortError")
+        ? "github_discovery_status_timeout"
+        : "github_discovery_status_network",
+    };
+  } finally {
+    if (timing) timing.external_ms += elapsedMs(startedAt);
+  }
+  if (!response || !response.ok) {
+    const status = Number(response && response.status) || null;
+    return { ok: false, error: status ? "github_discovery_status_http_" + status : "github_discovery_status_unavailable", status };
+  }
+
+  let payload = null;
+  try { payload = await response.json(); } catch { payload = null; }
+  if (!payload || !Array.isArray(payload.workflow_runs)) {
+    return { ok: false, error: "github_discovery_status_invalid" };
+  }
+  if (payload.workflow_runs.some(run =>
+    run && (run.status === "queued" || run.status === "in_progress")
+  )) {
+    return { ok: true, skipped: true, reason: "workflow_active" };
+  }
+
+  return dispatchMobXWorkflow(
+    env,
+    "termux-docker-discovery.yml",
+    { dry_run: true },
+    { maxAttempts: 1, safeStatusOnly: true },
+  );
 }
 
 export async function dispatchMobXJobOnce(env, jobId, markerKey, workflow, inputs, allowedStatuses) {
@@ -510,6 +570,9 @@ const isOwnerOnlyPanelAction = (id) => {
     /^p_mob_(?:publish|edit|nocap|reject|manualconfirm)_job_[A-Fa-f0-9]{8,80}$/.test(value) ||
     value === "p_tiktok_review" ||
     value === "p_tiktok_review_input" ||
+    value === "p_scan" ||
+    value === "p_scan_confirm" ||
+    value === "p_scan_cancel" ||
     value === "p_links_clear" ||
     value === "p_links_clear_yes" ||
     value === "p_failall" ||
@@ -524,7 +587,8 @@ const isStaticMainPanelScreenClick = (id) =>
   ["p_home", "p_help"].includes(String(id || ""));
 const isMainPanelScreenClick = (id) =>
   ["p_home", "p_help", "p_debug", "p_status", "p_queue", "p_ai", "p_report",
-    "p_tiktok_review", "p_tiktok_review_input"].includes(String(id || "")) ||
+    "p_tiktok_review", "p_tiktok_review_input",
+    "p_scan", "p_scan_confirm", "p_scan_cancel"].includes(String(id || "")) ||
   isScreenId(String(id || "")) ||
   isSettingsId(String(id || ""));
 const sha256Hex = async (value) => {
@@ -1235,6 +1299,48 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     if (fresh) return sendFreshPanel(ui, out, keypad, previousMid);
     if (targetMid) return edit(env, chat, targetMid, out, keypad);
     return send(env, chat, out, keypad);
+  }
+  if (id === "p_scan") {
+    const text = [
+      "🔎 **اسکن فوری — فقط گزارش**",
+      "",
+      "این اجرا فقط Termux metadata را جمع می‌کند و artifact گزارش می‌سازد.",
+      "در حالت امنِ این دکمه:",
+      "• هیچ گزارشی روی شاخهٔ main نوشته نمی‌شود.",
+      "• هیچ ردیفی به D1 یا صف انتشار اضافه نمی‌شود.",
+      "• صف TikTok اجرا نمی‌شود و هیچ پیامی منتشر نمی‌شود.",
+      "",
+      "تأیید می‌کنی اسکن گزارش‌محور شروع شود؟",
+    ].join("\n");
+    const keypad = kb([
+      [["▶️ شروع اسکن فقط‌گزارش", "p_scan_confirm"]],
+      [["✖️ لغو", "p_scan_cancel"], ["🏠 منوی اصلی", "p_home"]],
+    ]);
+    if (fresh) return sendFreshPanel(ui, text, keypad, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, text, keypad);
+    return send(env, chat, text, keypad);
+  }
+  if (id === "p_scan_cancel") {
+    return render(ui, "p_home", { fresh, clickedMid });
+  }
+  if (id === "p_scan_confirm") {
+    const result = await dispatchTermuxDiscoveryOnce(env);
+    let text;
+    if (result.skipped) {
+      text = "⏸️ اسکن جدید شروع نشد؛ یک اجرای Termux از قبل در صف یا در حال اجراست. برای جلوگیری از اجرای تکراری، همان اجرا حفظ شد.";
+    } else if (result.ok) {
+      text = "✅ اسکن فقط‌گزارش به GitHub Actions سپرده شد. پس از پایان، artifact با نام online-termux-discovery در اجرای Online Termux discovery and queue sync قرار می‌گیرد. این مسیر D1، صف یا انتشار را اجرا نمی‌کند.";
+    } else {
+      text = "❌ شروع اسکن تأیید نشد: " + esc(result.error || "github_dispatch_failed") +
+        (result.status ? " (HTTP " + Number(result.status) + ")" : "") +
+        ". هیچ اجرای جایگزینی آغاز نشد.";
+    }
+    const keypad = kb([
+      [["🔄 بازگشت به پنل", "p_home"]],
+    ]);
+    if (fresh) return sendFreshPanel(ui, text, keypad, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, text, keypad);
+    return send(env, chat, text, keypad);
   }
   const statics = {
     p_help: [HELP_TEXT, BACK_KB],

@@ -42,6 +42,23 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("TERMUX_ERROR_CODE=TERMUX_PKG_INDEX_FETCH_FAILED", retry_script)
         self.assertNotIn("pkg install", retry_script)
 
+    def test_owner_scan_now_is_dry_run_only_and_never_intakes_or_publishes(self):
+        workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
+        trigger = workflow.split("permissions:", 1)[0]
+        dispatch = trigger.split("workflow_dispatch:", 1)[1]
+        self.assertIn("type: boolean", dispatch)
+        self.assertIn("default: true", dispatch)
+        dry_run_guard = "github.event_name != 'workflow_dispatch' || inputs.dry_run != true"
+        push_report = workflow.split("name: Validate report and push only the metadata report", 1)[1].split("\n      - name:", 1)[0]
+        queue_intake = workflow.split("name: Add TikTok metadata to the persistent D1 edit queue", 1)[1].split("\n      - name:", 1)[0]
+        queue_dispatch = workflow.split("name: Start the serialized TEST-only TikTok queue processor", 1)[1].split("\n      - name:", 1)[0]
+        cycle_record = workflow.split("name: Record successful five-hour collection cycle", 1)[1].split("\n      - name:", 1)[0]
+        for block in (push_report, queue_intake, queue_dispatch, cycle_record):
+            with self.subTest(block=block[:80]):
+                self.assertIn(dry_run_guard, block)
+        self.assertIn("Upload collection report and queue result", workflow)
+        self.assertIn("inputs.dry_run == true && 'dry-run report only'", workflow)
+
     def test_online_discovery_uses_main_as_single_source_of_truth(self):
         workflow = (ROOT / ".github" / "workflows" / "termux-docker-discovery.yml").read_text(encoding="utf-8")
         self.assertIn("ref: main", workflow)

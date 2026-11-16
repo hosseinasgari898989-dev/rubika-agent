@@ -3010,6 +3010,68 @@ async function withDispatchFetch(responder, fn) {
     String(url).startsWith("https://api.github.com/") ? new Response(null, { status: 204 }) : null);
 }
 
+
+// Scan Now is owner-only and the explicit second click dispatches only a report-only run.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "scan-now-owner-panel");
+    state.GITHUB_DISPATCH_TOKEN = "mock-github-dispatch-token-never-log";
+    const secret = await panel.hookSecret(state);
+    const click = button => postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "scan-now-owner-panel", chat_id: "b0actualowner", text: "",
+        aux_data: { button_id: button },
+      } },
+    }, secret);
+    await click("p_scan");
+    const confirmPrompt = calls.filter(call => call.method === "editMessageText").at(-1);
+    assert.ok(confirmPrompt && confirmPrompt.payload.text.includes("فقط گزارش"));
+    assert.ok(confirmPrompt.payload.text.includes("هیچ ردیفی به D1"));
+    const promptButtons = confirmPrompt.payload.inline_keypad.rows.flatMap(row => row.buttons).map(button => button.id);
+    assert.deepEqual(promptButtons, ["p_scan_confirm", "p_scan_cancel", "p_home"]);
+
+    await click("p_scan_confirm");
+    const githubCalls = calls.filter(call => call.url && call.url.startsWith("https://api.github.com/"));
+    assert.equal(githubCalls.length, 2);
+    assert.ok(githubCalls.some(call => call.url.includes("/runs?per_page=100")));
+    const dispatchCall = githubCalls.find(call => call.method === "dispatches");
+    assert.ok(dispatchCall);
+    assert.deepEqual(dispatchCall.payload, { ref: "main", inputs: { dry_run: "true" } });
+    assert.equal(state.DB.state.get("panel_mid"), "scan-now-owner-panel");
+  }, async ({ url }) => {
+    if (String(url).startsWith("https://api.github.com/")) {
+      if (String(url).includes("/runs?per_page=100")) {
+        return new Response(JSON.stringify({ workflow_runs: [] }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    }
+    return null;
+  });
+}
+
+// A non-owner cannot open or confirm Scan Now, even if they know the callback ID.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "scan-now-viewer-panel");
+    state.GITHUB_DISPATCH_TOKEN = "mock-github-dispatch-token-never-log";
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0viewer", new_message: {
+        message_id: "scan-now-viewer-panel", chat_id: "b0viewer", text: "",
+        aux_data: { button_id: "p_scan_confirm" },
+      } },
+    }, secret);
+    assert.equal(calls.some(call => call.url && call.url.startsWith("https://api.github.com/")), false);
+    assert.ok(calls.some(call => call.method === "sendMessage" && call.payload.text.includes("فقط برای نقش مالک")));
+  });
+}
+
 // The PV no-caption action is job-scoped, bold, idempotent and never approves or dispatches publication.
 {
   await withMockRubikaFetch(async calls => {
@@ -5793,6 +5855,58 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   assert.equal(JSON.stringify(logs).includes("cron-test-token-never-real"), false);
 }
 
+
+// The PV scan-now preflight is owner-triggered, skips an active run, and always requests dry_run=true.
+{
+  const fakeToken = "mock-github-dispatch-token-never-log";
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      if (String(url).includes("/runs?per_page=100")) {
+        return new Response(JSON.stringify({ workflow_runs: [] }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    };
+    const started = await panel.dispatchTermuxDiscoveryOnce({ GITHUB_DISPATCH_TOKEN: fakeToken });
+    assert.equal(started.ok, true);
+    assert.equal(started.status, 204);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].init.method, "GET");
+    assert.equal(calls[0].init.headers.Authorization, "Bearer " + fakeToken);
+    assert.equal(calls[1].init.method, "POST");
+    assert.deepEqual(JSON.parse(calls[1].init.body), {
+      ref: "main", inputs: { dry_run: "true" },
+    });
+
+    calls.length = 0;
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({
+        workflow_runs: [{ status: "in_progress" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const active = await panel.dispatchTermuxDiscoveryOnce({ GITHUB_DISPATCH_TOKEN: fakeToken });
+    assert.deepEqual(active, { ok: true, skipped: true, reason: "workflow_active" });
+    assert.equal(calls.length, 1, "active discovery must never receive a second dispatch");
+
+    calls.length = 0;
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      return new Response(null, { status: 403 });
+    };
+    const unavailable = await panel.dispatchTermuxDiscoveryOnce({ GITHUB_DISPATCH_TOKEN: fakeToken });
+    assert.equal(unavailable.ok, false);
+    assert.equal(unavailable.error, "github_discovery_status_http_403");
+    assert.equal(calls.length, 1, "failed status preflight must fail closed");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 // The shared dispatch helper accepts the exact scheduled inputs and performs one safe attempt.
 {
   const originalFetch = globalThis.fetch;
@@ -5825,7 +5939,28 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     );
     assert.equal(calls.length, 1);
     assert.equal(termux.status, 503);
-    assert.deepEqual(JSON.parse(calls[0].options.body), { ref: "main" });
+    assert.deepEqual(JSON.parse(calls[0].options.body), { ref: "main", inputs: { dry_run: "false" } });
+
+    calls.length = 0;
+    const termuxDryRun = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real" },
+      "termux-docker-discovery.yml",
+      { dry_run: true },
+      { maxAttempts: 1, safeStatusOnly: true },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(termuxDryRun.status, 503);
+    assert.deepEqual(JSON.parse(calls[0].options.body), { ref: "main", inputs: { dry_run: "true" } });
+    calls.length = 0;
+    const unsafeTermux = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: "cron-test-token-never-real" },
+      "termux-docker-discovery.yml",
+      { dry_run: false },
+      { maxAttempts: 1, safeStatusOnly: true },
+    );
+    assert.equal(unsafeTermux.ok, false);
+    assert.equal(unsafeTermux.error, "github_dispatch_input_invalid");
+    assert.equal(calls.length, 0);
 
     calls.length = 0;
     const news = await panel.dispatchMobXWorkflow(
