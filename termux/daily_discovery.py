@@ -171,6 +171,40 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
     mob_candidates, stale_mob = filter_candidates_by_birth(
         mob_candidates, policy=lifecycle_policy
     )
+    rejected_candidates: list[dict[str, Any]] = []
+
+    def record_rejection(row: Any, reason: str, platform: str) -> None:
+        if len(rejected_candidates) >= 100 or not isinstance(row, dict):
+            return
+        external_id = row.get("external_id") or row.get("id")
+        if not isinstance(external_id, (str, int)) or not str(external_id).strip():
+            return
+        created_at = row.get("created_at") or row.get("published_at")
+        rejected_candidates.append({
+            "platform": platform,
+            "external_id": str(external_id)[:120],
+            "reason": reason[:80],
+            "created_at": str(created_at)[:80] if created_at is not None else None,
+        })
+
+    # Preserve the source-level rejected identities before normalizing the survivors.
+    for attempt in [*tiktok_attempts, *mob_attempts]:
+        if not isinstance(attempt, dict):
+            continue
+        entries = attempt.get("rejected_candidates")
+        if not isinstance(entries, list):
+            continue
+        for rejected in entries:
+            if len(rejected_candidates) >= 100:
+                break
+            if not isinstance(rejected, dict):
+                continue
+            platform = str(rejected.get("platform") or ("tiktok" if attempt in tiktok_attempts else "mob_official"))
+            record_rejection(rejected, str(rejected.get("reason") or "source_rejected"), platform)
+
+    for row in stale_mob:
+        record_rejection(row, "before_lifecycle_birth_cutoff", "mob_official")
+
     lifecycle_attempt = {
         "source": "agent_lifecycle",
         "mode": lifecycle_policy["mode"],
@@ -188,19 +222,54 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
         normalized[platform] = []
         for row in rows:
             if not isinstance(row, dict) or row.get("platform") != platform:
+                record_rejection(row, "candidate_platform_or_shape_invalid", platform)
                 continue
             item_id = row.get("id") or row.get("external_id")
             url = row.get("url") or row.get("canonical_url")
             if not isinstance(item_id, str) or not item_id or not isinstance(url, str):
+                record_rejection(row, "candidate_identity_or_url_missing", platform)
                 continue
             if platform == "tiktok" and not (isinstance(row.get("source_policy"), dict) and row["source_policy"].get("known_source") is True):
+                record_rejection(row, "source_not_tracked", platform)
                 continue
             if item_id in seen:
+                record_rejection(row, "duplicate_candidate_in_run", platform)
                 continue
             seen.add(item_id)
             normalized[platform].append(row)
 
     now = datetime.now(timezone.utc)
+    provider_timestamps: dict[str, str | None] = {
+        "x-cli": None,
+        "FxTwitter": None,
+        "VxTwitter": None,
+    }
+    for attempt in mob_attempts:
+        if not isinstance(attempt, dict) or attempt.get("source") != "mob_x_provider_freshness":
+            continue
+        raw = attempt.get("newest_created_at_returned")
+        if not isinstance(raw, dict):
+            continue
+        provider_timestamps["x-cli"] = raw.get("x-cli")
+        provider_timestamps["FxTwitter"] = raw.get("fxtwitter")
+        provider_timestamps["VxTwitter"] = raw.get("vxtwitter")
+
+    source_freshness: dict[str, dict[str, Any]] = {}
+    for provider, created_at in provider_timestamps.items():
+        lag_seconds: int | None = None
+        if isinstance(created_at, str) and created_at:
+            try:
+                timestamp = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                lag_seconds = max(0, int((now - timestamp.astimezone(timezone.utc)).total_seconds()))
+            except ValueError:
+                created_at = None
+        source_freshness[provider] = {
+            "newest_created_at_returned": created_at,
+            "lag_seconds": lag_seconds,
+        }
+
     report = {
         "schema_version": 1,
         "generated_at": now.isoformat(),
@@ -229,6 +298,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             "ready_to_publish": False,
         },
         "candidates": normalized,
+        "rejected_candidates": rejected_candidates[:100],
+        "source_freshness": source_freshness,
         "attempts": [*tiktok_attempts, *mob_attempts, lifecycle_attempt],
         "limits": {
             "tiktok_max_creator_profiles": len(profiles),

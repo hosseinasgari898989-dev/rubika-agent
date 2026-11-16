@@ -883,10 +883,26 @@ def discover_official_x_posts(
             return 0.0
 
     combined: list[dict[str, Any]] = []
+    policy_rejected: list[dict[str, Any]] = []
+
+    def reject_x_row(row: dict[str, Any], reason: str) -> None:
+        if len(policy_rejected) >= 100:
+            return
+        external_id = str(row.get("external_id") or row.get("id") or "").strip()
+        if not external_id:
+            return
+        policy_rejected.append({
+            "platform": "mob_official",
+            "external_id": external_id[:120],
+            "reason": reason[:80],
+            "created_at": str(row.get("created_at") or row.get("published_at") or "")[:80] or None,
+        })
+
     for row in x_rows:
         if not isinstance(row, dict) or row.get("platform") != "mob_official":
             continue
         if row.get("source_platform") != "x" or row.get("official_source") is not True:
+            reject_x_row(row, "source_is_not_verified_official_x")
             continue
         canonical = str(row.get("canonical_url") or "")
         parsed = urlparse(canonical)
@@ -897,25 +913,33 @@ def discover_official_x_posts(
             or parsed.fragment
             or not re.fullmatch(r"/mobgamesstudios/status/[0-9]{15,22}/?", parsed.path)
         ):
+            reject_x_row(row, "canonical_x_url_invalid")
             continue
         published = _timestamp(row.get("published_at"))
         if not published:
+            reject_x_row(row, "created_at_unverified")
             continue
         try:
             published_dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
         except ValueError:
+            reject_x_row(row, "created_at_invalid")
             continue
         if published_dt < cutoff:
+            reject_x_row(row, "before_since_utc")
             continue
         if row.get("pinned") is not False:
+            reject_x_row(row, "pinned_or_pin_state_unverified")
             continue
         pin_state = str(row.get("pin_state") or "")
         if pin_state not in {"known_not_pinned", "inferred_not_pinned"} or not str(row.get("pin_state_source") or "").strip():
+            reject_x_row(row, "pin_state_unknown")
             continue
         if not str(row.get("original_caption") or row.get("caption") or "").strip():
+            reject_x_row(row, "caption_missing")
             continue
         media_url = str(row.get("media_url") or "")
         if not media_url.startswith("https://") or row.get("media_type") not in {"image", "video"}:
+            reject_x_row(row, "media_invalid")
             continue
         combined.append(row)
 
@@ -941,6 +965,12 @@ def discover_official_x_posts(
 
     limit = max(1, min(int(max_results), 40))
     attempts = list(x_attempts) if isinstance(x_attempts, list) else []
+    if policy_rejected:
+        attempts.append({
+            "source": "mob_x_policy_rejections",
+            "result": "rejected_candidates_recorded",
+            "rejected_candidates": policy_rejected[:100],
+        })
     attempts.append({
         "source": "mob_x_only_policy",
         "result": "ok" if output else "no_complete_official_x_posts",

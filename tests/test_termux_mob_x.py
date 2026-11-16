@@ -131,6 +131,51 @@ class TermuxMobXDiscoveryTests(unittest.TestCase):
         self.assertIn("public_syndication", str(attempts))
         self.assertTrue(all("AGENT_API_TOKEN" not in str(call) for call in session.calls))
 
+    def test_provider_freshness_tracks_x_cli_fxtwitter_and_vxtwitter_created_at(self):
+        post_id = "2110158933356847501"
+        timeline_row = {
+            "id": post_id,
+            "author": "mobgamesstudios",
+            "created_at": "Thu Nov 05 12:00:00 +0000 2026",
+            "is_pinned": False,
+        }
+        vx_payload = {
+            "id": post_id,
+            "author": "mobgamesstudios",
+            "created_at": "Thu Nov 05 13:00:00 +0000 2026",
+            "text": "Official Mob update from VxTwitter",
+            "is_pinned": False,
+            "media_extended": [{
+                "type": "video",
+                "variants": [{
+                    "content_type": "video/mp4",
+                    "url": "https://video.twimg.com/example.mp4",
+                    "bitrate": 1000,
+                }],
+            }],
+        }
+        session = FakeSession(
+            "<rss><channel></channel></rss>",
+            {},
+            fx_timeline_response=FakeResponse(payload={"statuses": [timeline_row]}),
+            vx_status_responses={
+                f"https://api.vxtwitter.com/Twitter/status/{post_id}": FakeResponse(payload=vx_payload),
+            },
+        )
+        with patch.dict("os.environ", {"MOB_X_CLI_PATH": "/fake/x-cli"}), patch(
+            "agent.discovery.termux_mob_x._run_x_cli_timeline",
+            return_value=([timeline_row], {
+                "source": "x-cli", "result": "timeline_found", "candidate_count": 1,
+            }),
+        ):
+            candidates, attempts = discover_mob_x_posts(session=session, sleep_seconds=0)
+
+        self.assertEqual(len(candidates), 1)
+        freshness = next(row for row in attempts if row.get("source") == "mob_x_provider_freshness")
+        self.assertEqual(freshness["newest_created_at_returned"]["x-cli"], "2026-11-05T12:00:00+00:00")
+        self.assertEqual(freshness["newest_created_at_returned"]["fxtwitter"], "2026-11-05T12:00:00+00:00")
+        self.assertEqual(freshness["newest_created_at_returned"]["vxtwitter"], "2026-11-05T13:00:00+00:00")
+
     def test_unordered_public_index_results_are_sorted_oldest_first_by_verified_time(self):
         older_id = "1734258130186559716"
         newer_id = "1734258130186559717"
