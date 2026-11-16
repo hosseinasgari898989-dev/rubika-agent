@@ -53,7 +53,8 @@ class WorkflowSafetyTests(unittest.TestCase):
         queue_intake = workflow.split("name: Add TikTok metadata to the persistent D1 edit queue", 1)[1].split("\n      - name:", 1)[0]
         queue_dispatch = workflow.split("name: Start the serialized TEST-only TikTok queue processor", 1)[1].split("\n      - name:", 1)[0]
         cycle_record = workflow.split("name: Record successful five-hour collection cycle", 1)[1].split("\n      - name:", 1)[0]
-        for block in (push_report, queue_intake, queue_dispatch, cycle_record):
+        advisor = workflow.split("name: Get safe advisory diagnosis for pipeline failure", 1)[1].split("\n      - name:", 1)[0]
+        for block in (push_report, queue_intake, queue_dispatch, cycle_record, advisor):
             with self.subTest(block=block[:80]):
                 self.assertIn(dry_run_guard, block)
         self.assertIn("Upload collection report and queue result", workflow)

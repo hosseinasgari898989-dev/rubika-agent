@@ -453,7 +453,7 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin HEAD:main
 
       - name: Get safe advisory diagnosis for pipeline failure
-        if: failure()
+        if: failure() && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
         shell: bash
