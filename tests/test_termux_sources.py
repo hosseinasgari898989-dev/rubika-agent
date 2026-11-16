@@ -64,6 +64,15 @@ class TermuxMetadataParserTests(unittest.TestCase):
         date_only = next(row for row in found if row["id"].endswith("7561"))
         self.assertEqual(date_only["published_at"], "2026-11-06T00:00:00+00:00")
         self.assertEqual(attempts[0]["skipped_before_account_added"], 2)
+        rejected = next(row["rejected_candidates"] for row in attempts if row.get("result") == "rejected_candidates_recorded")
+        self.assertEqual(
+            {(row["external_id"], row["reason"]) for row in rejected},
+            {
+                ("7610592632179297558", "older_than_source_created_at"),
+                ("7610592632179297560", "created_at_missing_for_managed_source"),
+            },
+        )
+        self.assertTrue(all("created_at" in row for row in rejected))
         set_dynamic_tiktok_sources([])
 
     def test_old_and_undated_selected_profile_items_are_not_date_filtered_here(self):

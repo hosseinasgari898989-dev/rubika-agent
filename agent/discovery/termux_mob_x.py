@@ -915,6 +915,20 @@ def _row_id(row: dict[str, Any]) -> str:
     return ""
 
 
+def _created_at_value(row: dict[str, Any]) -> str | None:
+    legacy = row.get("legacy") if isinstance(row.get("legacy"), dict) else {}
+    return _timestamp(str(
+        row.get("created_at") or row.get("date") or row.get("published_at")
+        or legacy.get("created_at") or ""
+    ))
+
+
+def _newest_created_at(rows: list[dict[str, Any]]) -> str | None:
+    values = [value for row in rows if isinstance(row, dict)
+              if (value := _created_at_value(row))]
+    return max(values) if values else None
+
+
 def _timeline_objects(payload: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     visited: set[int] = set()
@@ -1053,6 +1067,7 @@ def _fetch_fxtwitter_timeline(
                 pin_states[post_id] = pin
         summary["result"] = "timeline_found" if rows else "empty"
         summary["candidate_count"] = len(rows)
+        summary["newest_created_at_returned"] = _newest_created_at(rows)
         summary["candidate_post_ids"] = sorted(_row_id(row) for row in rows if _row_id(row))
         summary["profile_pin_evidence"] = profile_pin_evidence
         return rows, pin_states, summary
@@ -1133,6 +1148,7 @@ def _run_x_cli_timeline(
     rows = _timeline_objects_from_jsonl(str(completed.stdout or ""))
     summary["candidate_count"] = len(rows)
     summary["result"] = "timeline_found" if rows else "empty"
+    summary["newest_created_at_returned"] = _newest_created_at(rows)
     summary["candidate_post_ids"] = sorted(_row_id(row) for row in rows if _row_id(row))
     return rows, summary
 
@@ -1183,6 +1199,7 @@ def _fallback_post_by_id(
     pin_evidence: dict[str, Any] | None,
     cutoff: datetime,
     timeout_seconds: int = 10,
+    source_timestamps: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     providers = (
         ("fxtwitter", _FX_STATUS_URL.format(handle=OFFICIAL_HANDLE, post_id=post_id)),
@@ -1209,6 +1226,10 @@ def _fallback_post_by_id(
         post = (payload.get("tweet") or payload.get("status")) if provider == "fxtwitter" else payload
         if not isinstance(post, dict):
             continue
+        created_returned = _created_at_value(post)
+        if created_returned and source_timestamps is not None:
+            previous = source_timestamps.get(provider)
+            source_timestamps[provider] = max(previous, created_returned) if previous else created_returned
         if _row_id(post) != post_id or _row_author(post) != OFFICIAL_HANDLE:
             continue
         reason = _row_skip_reason(post, cutoff)
@@ -1302,6 +1323,24 @@ def discover_mob_x_posts(
     })
     fx_rows, pin_states, fx_attempt = _fetch_fxtwitter_timeline(client)
     attempts: list[dict[str, Any]] = [x_cli_attempt, fx_attempt]
+    source_newest_created_at: dict[str, str] = {}
+    for source_name, source_rows in (("x-cli", x_cli_rows), ("fxtwitter", fx_rows)):
+        newest = _newest_created_at(source_rows)
+        if newest:
+            source_newest_created_at[source_name] = newest
+    rejected_candidates: list[dict[str, Any]] = []
+
+    def record_rejection(row: dict[str, Any] | None, external_id: str, reason: str) -> None:
+        if len(rejected_candidates) >= 100:
+            return
+        value = _created_at_value(row) if isinstance(row, dict) else None
+        rejected_candidates.append({
+            "platform": "mob_official",
+            "external_id": str(external_id)[:120],
+            "reason": reason[:80],
+            "created_at": value,
+        })
+
     verified: dict[str, dict[str, Any]] = {}
     skipped: dict[str, int] = {}
     cutoff_rows: dict[str, dict[str, Any]] = {}
@@ -1332,6 +1371,7 @@ def discover_mob_x_posts(
             reason = _row_skip_reason(row, cutoff)
             if reason:
                 skipped[reason] = skipped.get(reason, 0) + 1
+                record_rejection(row, post_id, reason)
                 continue
             pin_evidence_by_id[post_id] = _merge_pin_evidence(
                 pin_evidence_by_id.get(post_id),
@@ -1388,6 +1428,7 @@ def discover_mob_x_posts(
                 post_id,
                 pin_evidence=evidence,
                 cutoff=cutoff,
+                source_timestamps=source_newest_created_at,
             )
             result = "verified_by_" + fallback_source if item else result
         if item is not None:
@@ -1398,6 +1439,7 @@ def discover_mob_x_posts(
         else:
             skip_key = "post_" + result
             skipped[skip_key] = skipped.get(skip_key, 0) + 1
+            record_rejection(candidate_rows.get(post_id), post_id, skip_key)
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
 
@@ -1422,9 +1464,11 @@ def discover_mob_x_posts(
         published = _timestamp(str(row.get("published_at") or ""))
         if not published or datetime.fromisoformat(published) < cutoff:
             skipped["before_since_utc_or_unverified"] = skipped.get("before_since_utc_or_unverified", 0) + 1
+            record_rejection(row, post_id, "before_since_utc_or_unverified")
             continue
         if not str(row.get("original_caption") or "").strip() or row.get("media_type") not in {"image", "video"}:
             skipped["text_only_or_media_invalid"] = skipped.get("text_only_or_media_invalid", 0) + 1
+            record_rejection(row, post_id, "text_only_or_media_invalid")
             continue
         row_evidence = _merge_pin_evidence(
             pin_evidence_by_id.get(post_id),
@@ -1439,6 +1483,7 @@ def discover_mob_x_posts(
         if pin_state is None:
             reason = "pinned" if pin_state_source.startswith(("known_pinned_flag:", "profile_pinned_id_match:")) else "pin_state_unknown"
             skipped[reason] = skipped.get(reason, 0) + 1
+            record_rejection(row, post_id, reason)
             continue
         row["published_at"] = published
         row["pinned"] = False
@@ -1454,6 +1499,21 @@ def discover_mob_x_posts(
         cutoff_rows.values(),
         key=lambda row: (str(row.get("published_at") or ""), str(row.get("external_id") or "")),
     )
+    attempts.append({
+        "source": "mob_x_provider_freshness",
+        "result": "measured",
+        "newest_created_at_returned": {
+            "x-cli": source_newest_created_at.get("x-cli"),
+            "fxtwitter": source_newest_created_at.get("fxtwitter"),
+            "vxtwitter": source_newest_created_at.get("vxtwitter"),
+        },
+    })
+    if rejected_candidates:
+        attempts.append({
+            "source": "mob_x_rejections",
+            "result": "rejected_candidates_recorded",
+            "rejected_candidates": rejected_candidates[:100],
+        })
     attempts.append({
         "source": "mob_x_final_filter",
         "result": "eligible_candidates_found" if final else "empty",
