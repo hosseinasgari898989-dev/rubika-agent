@@ -619,8 +619,8 @@ def main() -> int:
             if "Poppy Playtime fan edit" not in page.locator("#view").inner_text():
                 failures.append("TikTok owner review list did not render the Worker-provided pending item")
             review_lines = (
-                "https://www.tiktok.com/@fixture/video/7616247520657771796 قبول\\n"
-                "https://www.tiktok.com/@fixture/video/7616247520657771797 رد\\n"
+                "https://www.tiktok.com/@fixture/video/7616247520657771796 قبول\n"
+                "https://www.tiktok.com/@fixture/video/7616247520657771797 رد\n"
                 "not-a-tiktok-link قبول"
             )
             page.locator("#tk_review_lines").fill(review_lines)
