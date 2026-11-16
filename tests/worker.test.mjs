@@ -8,6 +8,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const publishingControlHtml = fs.readFileSync(path.join(root, "docs/console/v2.html"), "utf8");
+const publishingControlPanel = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8");
+const publishingControlScreens = fs.readFileSync(path.join(root, "src/panel_screens_ext.js"), "utf8");
+assert.match(publishingControlHtml, /V\.publishing=async/);
+assert.match(publishingControlHtml, /A\.pubPreview=async/);
+assert.match(publishingControlHtml, /A\.pubConfirm=async/);
+assert.match(publishingControlHtml, /\['publishing','توقف اضطراری'/);
+assert.match(publishingControlPanel, /p_pub_confirm_\(\?:pause\|resume\)_\[a-f0-9\]\{32\}/);
+assert.match(publishingControlScreens, /PUBLISHING_CONTROL_HOME_ROW/);
 const dataModuleUrl = source => "data:text/javascript;base64," + Buffer.from(source).toString("base64");
 const screensSource = fs.readFileSync(path.join(root, "src/panel_screens.js"), "utf8");
 const screensModuleUrl = dataModuleUrl(screensSource);

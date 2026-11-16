@@ -387,9 +387,7 @@ class TestChannelPublishingGateTests(unittest.TestCase):
     def test_publishing_control_guard_fails_closed_for_paused_or_missing_control(self):
         class PausedCloud:
             def get_publishing_control(self):
-                class PauseError(RuntimeError):
-                    code = "publishing_paused"
-                raise PauseError("paused")
+                raise mob_official_trial.CloudStateError("publishing_paused")
 
         class UnknownCloud:
             pass
