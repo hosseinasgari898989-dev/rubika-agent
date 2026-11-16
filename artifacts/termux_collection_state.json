@@ -1,13 +1,13 @@
 {
-  "candidate_pool_count": 34,
-  "candidate_pool_size": 34,
-  "completed_at": "2026-11-16T16:34:10+00:00",
-  "discovered_candidate_count": 41,
+  "candidate_pool_count": 35,
+  "candidate_pool_size": 35,
+  "completed_at": "2026-11-16T17:04:45+00:00",
+  "discovered_candidate_count": 42,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 34,
+  "filter_eligible_count": 35,
   "filter_input_by_source": {
-    "bendus.editz": 1,
+    "bendus.editz": 2,
     "meloaep_": 8,
     "menezxl9": 8,
     "poppytv_ae": 8,
@@ -22,25 +22,31 @@
     "smyxae": 6
   },
   "filter_rejected_count": 7,
-  "inserted_count": 0,
+  "inserted_count": 1,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 16,
     "processing": 0,
-    "queued": 0,
+    "queued": 1,
     "sent": 88,
     "sent_today": 0,
     "skipped": 37,
     "uncertain": 0,
     "usage_day": "2026-11-16"
   },
-  "queue_status": "no_new_candidates",
-  "received_count": 0,
-  "report_generated_at": "2026-11-16T16:34:04.475745+00:00",
+  "queue_status": "enqueued",
+  "received_count": 1,
+  "report_generated_at": "2026-11-16T17:04:32.966356+00:00",
   "schema_version": 1,
-  "selected_external_ids": [],
-  "selected_source_distribution": {},
-  "selected_urls": [],
+  "selected_external_ids": [
+    "7708695808870206742"
+  ],
+  "selected_source_distribution": {
+    "bendus.editz": 1
+  },
+  "selected_urls": [
+    "https://www.tiktok.com/@bendus.editz/video/7708695808870206742"
+  ],
   "skipped_existing_count": 34
 }
