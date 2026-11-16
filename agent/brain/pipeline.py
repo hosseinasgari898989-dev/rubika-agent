@@ -74,9 +74,11 @@ def _music_diagnostic_fields(moderation: Any, has_audio: Any) -> dict[str, Any]:
                 probability = numeric
         except (OverflowError, TypeError, ValueError):
             pass
+    raw_music = checks.get("has_music")
     return {
         "music_probability": probability,
         "has_audio_stream": has_audio if type(has_audio) is bool else None,
+        "has_music": raw_music if type(raw_music) is bool else None,
     }
 
 
