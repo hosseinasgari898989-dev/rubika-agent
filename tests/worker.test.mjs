@@ -67,7 +67,8 @@ const failedMedia = await import(consoleFailedMediaModuleUrl);
 const publishingControlSource = fs.readFileSync(path.join(root, "src/publishing_control.js"), "utf8");
 const publishingControlModuleUrl = dataModuleUrl(publishingControlSource);
 const consoleTikTokSource = fs.readFileSync(path.join(root, "src/console_tiktok.js"), "utf8")
-  .replace('from "./publishing_control.js";', 'from "' + publishingControlModuleUrl + '";');
+  .replaceAll('"./publishing_control.js"', '"' + publishingControlModuleUrl + '"');
+assert.ok(!consoleTikTokSource.includes("./publishing_control.js"), "TikTok module must resolve shared publishing control from its data URL");
 const consoleTikTokModuleUrl = dataModuleUrl(consoleTikTokSource);
 const retryScreensSource = fs.readFileSync(path.join(root, "src/panel_retry_screens.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
