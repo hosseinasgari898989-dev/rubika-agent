@@ -88,6 +88,38 @@ class FakeCloud:
 
 
 class QueueWorkerTests(unittest.TestCase):
+    def test_failure_sanitizer_keeps_only_allowlisted_music_verdict_fields(self):
+        result = queue_worker._safe_failure_diagnostics({
+            "music_probability": 0.61,
+            "has_audio_stream": True,
+            "has_music": True,
+            "music_decision_reason": "edit_signal_not_found_by_brain",
+            "provider_body": "never expose",
+        })
+        self.assertEqual(result["music_probability"], 0.61)
+        self.assertIs(result["has_audio_stream"], True)
+        self.assertIs(result["has_music"], True)
+        self.assertNotIn("music_decision_reason", result)
+
+        ambiguous = queue_worker._safe_failure_diagnostics({
+            "music_probability": 0.61,
+            "has_audio_stream": True,
+            "has_music": None,
+            "music_decision_reason": "music_probability_ambiguous",
+        })
+        self.assertIsNone(ambiguous["has_music"])
+        self.assertEqual(ambiguous["music_decision_reason"], "music_probability_ambiguous")
+
+        malicious = queue_worker._safe_failure_diagnostics({
+            "music_probability": 0.61,
+            "has_audio_stream": True,
+            "has_music": True,
+            "music_decision_reason": "https://provider.invalid/?token=hidden",
+        })
+        self.assertNotIn("music_decision_reason", malicious)
+        self.assertNotIn("provider_body", json.dumps(result))
+        self.assertNotIn("never expose", json.dumps(result))
+
     def test_processes_more_than_four_successes_across_queue_pages(self):
         cloud = FakeCloud()
         cloud.items = [
