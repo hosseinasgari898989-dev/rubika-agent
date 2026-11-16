@@ -736,6 +736,9 @@ export async function handleConsoleApi(request, env, h) {
     }
 
     if (sub === "/mob-x/publish-claim" && m === "POST") {
+      const publishingControl = await getPublishingControl(env.DB);
+      if (!publishingControl.ok || publishingControl.paused) return json({ ok: false,
+        error: publishingControl.error || "publishing_paused", reason_fa: publishingControlReasonFa(publishingControl) }, 409);
       const parsed = await readJson(request);
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const requestedJobId = parsed.value.job_id;
