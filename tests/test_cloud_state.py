@@ -405,6 +405,72 @@ class CloudStateTests(unittest.TestCase):
 
 
 
+    def test_tiktok_owner_review_posts_only_the_two_approved_reasons(self):
+        state = CloudState("https://worker.example", TOKEN)
+        captured = []
+
+        def fake_open(request, timeout):
+            captured.append({
+                "url": request.full_url,
+                "method": request.method,
+                "body": json.loads(request.data.decode("utf-8")),
+                "authorization": request.get_header("Authorization"),
+            })
+            return io.BytesIO(b'{"ok":true}')
+
+        with patch("urllib.request.urlopen", side_effect=fake_open):
+            state.mark_tiktok_owner_review(
+                "tiktok:7616247520657771796",
+                reason="music_probability_ambiguous",
+                music_probability=0.61,
+                has_audio=True,
+            )
+            state.mark_tiktok_owner_review(
+                "tiktok:7616247520657771797",
+                reason="edit_signal_not_found_by_brain",
+                has_audio=True,
+                has_music=True,
+            )
+
+        self.assertEqual(len(captured), 2)
+        self.assertTrue(all(row["method"] == "POST" for row in captured))
+        self.assertTrue(all(row["url"].endswith("/owner-review") for row in captured))
+        self.assertEqual(captured[0]["body"], {
+            "reason": "music_probability_ambiguous",
+            "music_probability": 0.61,
+            "has_audio": True,
+            "has_music": None,
+        })
+        self.assertEqual(captured[1]["body"], {
+            "reason": "edit_signal_not_found_by_brain",
+            "music_probability": None,
+            "has_audio": True,
+            "has_music": True,
+        })
+        self.assertTrue(all(row["authorization"] == "Bearer " + TOKEN for row in captured))
+
+        with self.assertRaises(ValueError):
+            state.mark_tiktok_owner_review(
+                "tiktok:7616247520657771798",
+                reason="edit_signal_not_found_by_brain",
+                has_audio=True,
+                has_music=False,
+            )
+        with self.assertRaises(ValueError):
+            state.mark_tiktok_owner_review(
+                "tiktok:7616247520657771799",
+                reason="music_probability_ambiguous",
+                music_probability=0.71,
+                has_audio=True,
+            )
+        with self.assertRaises(ValueError):
+            state.mark_tiktok_owner_review(
+                "tiktok:7616247520657780000",
+                reason="off_topic",
+                has_audio=True,
+                has_music=True,
+            )
+
     def test_console_tiktok_source_get_uses_agent_token_and_timeout_is_specific(self):
         state = CloudState("https://worker.example", TOKEN)
         captured = {}
