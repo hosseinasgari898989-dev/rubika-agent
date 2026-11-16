@@ -77,10 +77,14 @@ def _music_report_fields(moderation: Any, validation: Any) -> dict[str, Any]:
     media = validation if isinstance(validation, Mapping) else {}
     raw_audio = media.get("has_audio")
     raw_reason = checks.get("music_decision_reason")
+    raw_music = checks.get("has_music")
     return {
         "music_probability": _safe_music_probability(checks.get("music_probability")),
         "has_audio_stream": raw_audio if type(raw_audio) is bool else None,
-        "music_decision_reason": raw_reason if raw_reason == "music_probability_ambiguous" else None,
+        "has_music": raw_music if type(raw_music) is bool else None,
+        "music_decision_reason": raw_reason if raw_reason in {
+            "music_probability_ambiguous", "music_not_detected",
+        } else None,
     }
 
 
@@ -143,7 +147,11 @@ def _stage_failure_summary(
                 diagnostic_row = row
                 break
     stage_diagnostics = _music_report_fields(
-        {"music_probability": diagnostic_row.get("music_probability")} if diagnostic_row else None,
+        {
+            "music_probability": diagnostic_row.get("music_probability"),
+            "has_music": diagnostic_row.get("has_music"),
+            "music_decision_reason": diagnostic_row.get("music_decision_reason"),
+        } if diagnostic_row else None,
         {"has_audio": diagnostic_row.get("has_audio_stream")} if diagnostic_row else None,
     )
 
