@@ -458,7 +458,7 @@ async function confirmTikTokOwnerReview(env, h, actor, body) {
     "AND q2.status = 'failed' AND q2.last_error_code = 'needs_owner_review' " +
     "AND json_extract(q2.metadata_json, '$.owner_review.state') = 'pending' " +
     "AND json_extract(q2.metadata_json, '$.owner_review.pending_confirmation.challenge_id') = ? " +
-    "AND json_extract(q2.metadata_json, '$.owner_review.pending_confirmation.owner_hash') = ? " +
+    "AND json_extract(q2.metadata_json, '$.owner_review.pending_confirmation.owner_signature') = ? " +
     "AND json_extract(q2.metadata_json, '$.owner_review.pending_confirmation.expires_at') > ? " +
     "AND NOT EXISTS (SELECT 1 FROM items i WHERE i.platform = 'tiktok' " +
     "AND i.external_id = q2.external_id AND " +
