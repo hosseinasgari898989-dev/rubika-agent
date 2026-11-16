@@ -116,6 +116,7 @@ class TikTokSourcePolicyTests(unittest.TestCase):
     def test_basic_minimum_quality_remains_and_upscale_is_disabled(self):
         result=evaluate_edit_candidate(self.candidate("meloaep_"),self.inspection(width=320,height=240),moderation={"has_music":True})
         self.assertIn("source_below_policy_minimum_resolution",result.reasons)
+        self.assertNotIn("edit_signal_not_found_by_brain", result.reasons)
         self.assertEqual(download_quality_max(),1080)
         self.assertFalse(allow_upscale())
         self.assertFalse(delivery_enabled("youtube")); self.assertTrue(delivery_enabled("tiktok"))
