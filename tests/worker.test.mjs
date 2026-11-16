@@ -3029,7 +3029,10 @@ async function withDispatchFetch(responder, fn) {
     const confirmPrompt = calls.filter(call => call.method === "editMessageText").at(-1);
     assert.ok(confirmPrompt && confirmPrompt.payload.text.includes("فقط گزارش"));
     assert.ok(confirmPrompt.payload.text.includes("هیچ ردیفی به D1"));
-    const promptButtons = confirmPrompt.payload.inline_keypad.rows.flatMap(row => row.buttons).map(button => button.id);
+    const confirmKeypad = calls.filter(call => call.method === "editMessageKeypad").at(-1);
+    assert.ok(confirmKeypad && confirmKeypad.payload.inline_keypad,
+      "the owner confirmation keypad is sent through editMessageKeypad separately from the text edit");
+    const promptButtons = confirmKeypad.payload.inline_keypad.rows.flatMap(row => row.buttons).map(button => button.id);
     assert.deepEqual(promptButtons, ["p_scan_confirm", "p_scan_cancel", "p_home"]);
 
     await click("p_scan_confirm");
