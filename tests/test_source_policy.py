@@ -2,7 +2,7 @@ from __future__ import annotations
 import unittest
 from agent.brain.models import Candidate, InspectionResult
 from agent.brain.policy import evaluate_edit_candidate, precheck_edit_candidate
-from agent.source_policy import allow_upscale, delivery_enabled, download_quality_max, known_tiktok_profiles, load_source_policy_config, resolve_source_policy, set_dynamic_tiktok_sources
+from agent.source_policy import allow_upscale, delivery_enabled, download_quality_max, has_edit_signal, known_tiktok_profiles, load_source_policy_config, resolve_source_policy, set_dynamic_tiktok_sources
 
 
 class TikTokSourcePolicyTests(unittest.TestCase):
@@ -92,6 +92,10 @@ class TikTokSourcePolicyTests(unittest.TestCase):
         self.assertIn("edit_signal_not_found_by_brain", result.reasons)
         marked = self.candidate("rickkzn_", caption="new clip", hashtags=("#PLAYTIMEedit",))
         self.assertTrue(evaluate_edit_candidate(marked, self.inspection(), moderation={"has_music": True}).eligible)
+
+    def test_caption_edit_hashtag_is_detected_without_credit_false_positive(self):
+        self.assertTrue(has_edit_signal("A clip tagged #PoppyPlaytimeEdit"))
+        self.assertFalse(has_edit_signal("credit to the Poppy Playtime creator"))
 
     def test_no_audio_rejects_with_exact_reason(self):
         result=evaluate_edit_candidate(self.candidate("meloaep_"),self.inspection(audio=False),moderation={})

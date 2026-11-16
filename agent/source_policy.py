@@ -131,7 +131,11 @@ def has_edit_signal(caption: str, hashtags: Any = None) -> bool:
     # suffix form intentionally recognizes community tags such as #poppyedit.
     if any(re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", text) for term in _EDIT_SIGNAL_TERMS):
         return True
-    for raw in hashtags if isinstance(hashtags, (list, tuple)) else ([hashtags] if isinstance(hashtags, str) else []):
+    tag_values = list(hashtags) if isinstance(hashtags, (list, tuple)) else ([hashtags] if isinstance(hashtags, str) else [])
+    if isinstance(caption, str):
+        # Hashtags may be embedded in the caption instead of supplied separately.
+        tag_values.extend(re.findall(r"(?<![a-z0-9])#([a-z0-9._]+)", caption.casefold()))
+    for raw in tag_values:
         tag = str(raw).strip().lstrip("#").casefold()
         if tag.endswith(("edit", "editz", "edits")) and len(tag) > 5:
             return True
