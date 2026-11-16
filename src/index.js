@@ -1764,7 +1764,7 @@ async function claimTikTokOwnerReviewNotifications(env) {
       "AND json_extract(q.metadata_json, '$.owner_review.notified_at') IS NULL " +
       "ORDER BY q.created_at ASC, q.id ASC " +
       "LIMIT (SELECT MAX(0, 5 - COUNT(*)) FROM automation_queue n " +
-      "WHERE n.platform = 'tiktok' AND n.status = 'failed' AND n.last_error_code = 'needs_owner_review' " +
+      "WHERE n.platform = 'tiktok' " +
       "AND date(json_extract(n.metadata_json, '$.owner_review.notified_at')) = date('now'))) " +
       "AND status = 'failed' AND last_error_code = 'needs_owner_review' " +
       "AND json_extract(metadata_json, '$.owner_review.state') = 'pending' " +
