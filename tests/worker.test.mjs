@@ -3061,6 +3061,12 @@ async function withDispatchFetch(responder, fn) {
   await withMockRubikaFetch(async calls => {
     const state = panelEnv();
     state.DB.ownerChat = "b0actualowner";
+    state.DB.consoleOwners.set(1, {
+      id: 1, chat_id: "b0actualowner", role: "owner", enabled: 1,
+    });
+    state.DB.consoleOwners.set(2, {
+      id: 2, chat_id: "b0viewer", role: "viewer", enabled: 1,
+    });
     state.DB.state.set("panel_mid", "scan-now-viewer-panel");
     state.GITHUB_DISPATCH_TOKEN = "mock-github-dispatch-token-never-log";
     const secret = await panel.hookSecret(state);
