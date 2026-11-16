@@ -1391,6 +1391,21 @@ const YOUTUBE_PARKED_QUEUE_IDS = Object.freeze([
   "youtube:SOjI2Tg8yfA"
 ]);
 
+const OWNER_CONFIRMED_MOB_TEST_ITEM_ID = "mob_official:x-2121327753236729907";
+const OWNER_CONFIRMED_MOB_TEST_ITEM_SELECT_SQL =
+  "SELECT id FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'uncertain' " +
+  "AND last_error_code = 'publisher_apirequesterror' AND rubika_message_id IS NULL AND sent_at IS NULL " +
+  "AND NOT EXISTS (SELECT 1 FROM delivery_attempts WHERE item_id = items.id " +
+  "AND (status = 'sent' OR rubika_message_id IS NOT NULL))";
+const OWNER_CONFIRMED_MOB_TEST_ITEM_UPDATE_SQL =
+  "UPDATE items SET status = 'sent', last_error_code = 'owner_confirmed_in_test_channel', " +
+  "last_error_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), " +
+  "sent_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
+  "WHERE id = ? AND platform = 'mob_official' AND status = 'uncertain' " +
+  "AND last_error_code = 'publisher_apirequesterror' AND rubika_message_id IS NULL AND sent_at IS NULL " +
+  "AND NOT EXISTS (SELECT 1 FROM delivery_attempts WHERE item_id = items.id " +
+  "AND (status = 'sent' OR rubika_message_id IS NOT NULL)) RETURNING id";
+
 const QUEUE_PLATFORMS = new Set(["tiktok"]);
 const QUEUE_STATUSES = new Set(["queued", "processing", "sent", "failed", "uncertain", "skipped"]);
 
@@ -1430,22 +1445,12 @@ async function automationQueueIngest(env, body) {
       invalid.push({ index, error: "invalid_media_type" });
       continue;
     }
-    const reviewReason = raw.owner_review_reason === "edit_signal_not_found_by_brain"
-      ? "edit_signal_not_found_by_brain" : "";
-    const ownerReview = reviewReason ? {
-      state: "pending",
-      reason: reviewReason,
-      original_reason: reviewReason,
-      created_at: new Date().toISOString(),
-      notified_at: null,
-    } : null;
     const metadata = {
       author: text(raw.author, 100),
       query: text(raw.query, 200),
       freshness_source: text(raw.freshness_source, 100),
       freshness_verified: raw.freshness_verified === true,
-      source_method: text(raw.method, 100),
-      ...(ownerReview ? { owner_review: ownerReview } : {}),
+      source_method: text(raw.method, 100)
     };
     rows.push({
       id: identity,
@@ -1459,8 +1464,6 @@ async function automationQueueIngest(env, body) {
       mediaType,
       freshnessVerified: raw.freshness_verified === true ? 1 : 0,
       method: text(raw.method, 100),
-      status: ownerReview ? "failed" : "queued",
-      lastErrorCode: ownerReview ? "needs_owner_review" : null,
       metadataJson: JSON.stringify(metadata)
     });
   }
@@ -1469,12 +1472,11 @@ async function automationQueueIngest(env, body) {
   }
   try {
     const statements = rows.map(row => env.DB.prepare(
-      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, title, caption, published_at, media_type, freshness_verified, method, status, last_error_code, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(platform, external_id) DO NOTHING"
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, title, caption, published_at, media_type, freshness_verified, method, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(platform, external_id) DO NOTHING"
     ).bind(
       row.id, row.platform, row.externalId, row.canonicalUrl, row.sourceKey,
       row.title || null, row.caption || null, row.publishedAt || null,
-      row.mediaType, row.freshnessVerified, row.method || null, row.status,
-      row.lastErrorCode, row.metadataJson
+      row.mediaType, row.freshnessVerified, row.method || null, row.metadataJson
     ));
     const results = await env.DB.batch(statements);
     const inserted = results.reduce((total, result) => total + Number(result.meta?.changes || 0), 0);
@@ -1568,6 +1570,80 @@ async function parkOwnerApprovedYoutubeQueue(env, body) {
   }
 }
 
+async function reconcileOwnerConfirmedMobTestDelivery(env, body) {
+  if (!isObject(body) || Object.keys(body).some(key => !["dry_run", "confirm"].includes(key))) {
+    return json({ ok: false, error: "mob_test_reconcile_fields_invalid" }, 400);
+  }
+  const dryRun = body.dry_run === undefined ? true : body.dry_run;
+  const confirm = body.confirm === undefined ? false : body.confirm;
+  if (typeof dryRun !== "boolean" || typeof confirm !== "boolean") {
+    return json({ ok: false, error: "mob_test_reconcile_confirmation_invalid" }, 400);
+  }
+  if (!dryRun && !confirm) {
+    return json({ ok: false, error: "confirm_true_required" }, 400);
+  }
+
+  try {
+    const selected = await env.DB.prepare(OWNER_CONFIRMED_MOB_TEST_ITEM_SELECT_SQL)
+      .bind(OWNER_CONFIRMED_MOB_TEST_ITEM_ID).all();
+    const matchedIds = (selected.results || []).map(row => String(row.id));
+    if (dryRun) {
+      return json({
+        ok: true,
+        dry_run: true,
+        expected_count: 1,
+        matched_count: matchedIds.length,
+        matched_ids: matchedIds,
+        changed_count: 0,
+        changed_ids: [],
+        note: "owner_confirmed_in_test_channel",
+      });
+    }
+    if (matchedIds.length !== 1 || matchedIds[0] !== OWNER_CONFIRMED_MOB_TEST_ITEM_ID) {
+      return json({
+        ok: false,
+        error: "mob_test_reconcile_expected_exactly_one_eligible_uncertain_item_without_receipt",
+        dry_run: false,
+        expected_count: 1,
+        matched_count: matchedIds.length,
+        matched_ids: matchedIds,
+        changed_count: 0,
+        changed_ids: [],
+        no_change: true,
+      }, 409);
+    }
+
+    // Repeat every eligibility predicate inside one guarded UPDATE. No send or retry occurs.
+    const changed = await env.DB.prepare(OWNER_CONFIRMED_MOB_TEST_ITEM_UPDATE_SQL)
+      .bind(OWNER_CONFIRMED_MOB_TEST_ITEM_ID).all();
+    const changedIds = (changed.results || []).map(row => String(row.id));
+    if (changedIds.length !== 1 || changedIds[0] !== OWNER_CONFIRMED_MOB_TEST_ITEM_ID) {
+      return json({
+        ok: false,
+        error: "mob_test_reconcile_atomic_update_did_not_change_exactly_one_item",
+        dry_run: false,
+        expected_count: 1,
+        changed_count: changedIds.length,
+        changed_ids: changedIds,
+        no_change: changedIds.length === 0,
+      }, 409);
+    }
+    return json({
+      ok: true,
+      dry_run: false,
+      expected_count: 1,
+      matched_count: 1,
+      changed_count: 1,
+      changed_ids: changedIds,
+      note: "owner_confirmed_in_test_channel",
+      resent: false,
+      deleted: false,
+    });
+  } catch {
+    return json({ ok: false, error: "mob_test_reconcile_failed_closed" }, 503);
+  }
+}
+
 async function automationQueueList(env, url) {
   const requested = Number(url.searchParams.get("limit") || "100");
   const limit = Number.isInteger(requested) ? Math.min(100, Math.max(1, requested)) : 100;
@@ -1606,21 +1682,40 @@ async function automationQueueOwnerReview(env, queueId, body) {
     return json({ ok: false, error: "invalid_tiktok_queue_id" }, 400);
   }
   if (!isObject(body) ||
-      Object.keys(body).some(key => !["reason", "music_probability", "has_audio"].includes(key)) ||
-      body.reason !== "music_probability_ambiguous" ||
-      body.has_audio !== true ||
-      typeof body.music_probability !== "number" ||
-      !Number.isFinite(body.music_probability) ||
-      body.music_probability < 0.15 || body.music_probability > 0.70) {
+      Object.keys(body).some(key => !["reason", "music_probability", "has_audio", "has_music"].includes(key)) ||
+      body.has_audio !== true) {
     return json({ ok: false, error: "tiktok_owner_review_candidate_invalid" }, 400);
   }
+  const reason = body.reason;
+  let musicProbability = null;
+  let hasMusic = null;
+  if (reason === "music_probability_ambiguous") {
+    if (
+      typeof body.music_probability !== "number" ||
+      !Number.isFinite(body.music_probability) ||
+      body.music_probability < 0.15 || body.music_probability > 0.70 ||
+      body.has_music !== null
+    ) {
+      return json({ ok: false, error: "tiktok_owner_review_music_probability_invalid" }, 400);
+    }
+    musicProbability = body.music_probability;
+  } else if (reason === "edit_signal_not_found_by_brain") {
+    if (body.has_music !== true || (body.music_probability !== undefined && body.music_probability !== null)) {
+      return json({ ok: false, error: "tiktok_owner_review_edit_marker_invalid" }, 400);
+    }
+    hasMusic = true;
+  } else {
+    return json({ ok: false, error: "tiktok_owner_review_reason_invalid" }, 400);
+  }
+
   try {
     const review = {
       state: "pending",
-      reason: "music_probability_ambiguous",
-      original_reason: "music_probability_ambiguous",
-      music_probability: body.music_probability,
+      reason,
+      original_reason: reason,
+      music_probability: musicProbability,
       has_audio: true,
+      has_music: hasMusic,
       created_at: new Date().toISOString(),
       notified_at: null,
     };
@@ -1639,7 +1734,10 @@ async function automationQueueOwnerReview(env, queueId, body) {
     if (Number(result?.meta?.changes || 0) !== 1) {
       return json({ ok: false, error: "tiktok_owner_review_queue_item_stale", changed_count: 0 }, 409);
     }
-    return json({ ok: true, id: queueId, status: "failed", last_error_code: "needs_owner_review", reason: review.reason });
+    return json({
+      ok: true, id: queueId, status: "failed", last_error_code: "needs_owner_review",
+      reason, original_reason: reason,
+    });
   } catch {
     return json({ ok: false, error: "tiktok_owner_review_record_failed" }, 503);
   }
@@ -1654,7 +1752,7 @@ async function claimTikTokOwnerReviewNotifications(env) {
       "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') " +
       "WHERE platform = 'tiktok' AND status = 'failed' AND last_error_code = 'needs_owner_review' " +
       "AND json_extract(metadata_json, '$.owner_review.state') = 'pending' " +
-      "AND julianday(created_at) <= julianday('now', '-3 days')"
+      "AND julianday(json_extract(metadata_json, '$.owner_review.created_at')) <= julianday('now', '-3 days')"
     ).run();
     const claimed = await env.DB.prepare(
       "UPDATE automation_queue SET metadata_json = json_set(metadata_json, " +
@@ -1679,8 +1777,11 @@ async function claimTikTokOwnerReviewNotifications(env) {
         let metadata = {};
         try { metadata = JSON.parse(row.metadata_json || "{}"); } catch {}
         return {
-          id: row.id, external_id: row.external_id, url: row.canonical_url,
-          account: row.source_key, caption: String(row.caption || row.title || "").slice(0, 160),
+          id: String(row.id),
+          external_id: String(row.external_id),
+          url: String(row.canonical_url),
+          account: String(row.source_key || ""),
+          caption: String(row.caption || row.title || "").slice(0, 160),
           reason: metadata.owner_review?.reason || "needs_owner_review",
           music_probability: metadata.owner_review?.music_probability ?? null,
         };
@@ -1823,6 +1924,12 @@ async function route(request, env, ctx) {
       if (!parsedPark.ok) return json({ ok: false, error: parsedPark.error }, parsedPark.status);
       return parkOwnerApprovedYoutubeQueue(env, parsedPark.value);
     }
+    if (path === "/api/brain/items/reconcile-owner-confirmed-mob-test-delivery") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedReconcile = await readJson(request);
+      if (!parsedReconcile.ok) return json({ ok: false, error: parsedReconcile.error }, parsedReconcile.status);
+      return reconcileOwnerConfirmedMobTestDelivery(env, parsedReconcile.value);
+    }
     if (path === "/api/brain/automation-queue/owner-review/notifications/claim") {
       if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
       return claimTikTokOwnerReviewNotifications(env);
@@ -1834,7 +1941,7 @@ async function route(request, env, ctx) {
       if (!parsedOwnerReview.ok) return json({ ok: false, error: parsedOwnerReview.error }, parsedOwnerReview.status);
       return automationQueueOwnerReview(env, decodeURIComponent(queueOwnerReviewMatch[1]), parsedOwnerReview.value);
     }
-    if (path.startsWith("/api/brain/owner-console/tiktok-review")) {
+    if (/^\/api\/brain\/owner-console\/tiktok-review(?:\/(?:preview|confirm))?$/.test(path)) {
       const action = path.slice("/api/brain/owner-console/tiktok-review".length);
       let actorBody = {};
       const reviewRequest = request.clone();
