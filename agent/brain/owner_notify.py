@@ -733,7 +733,10 @@ def send_tiktok_owner_review_notifications(cloud: Any) -> dict[str, Any]:
         reason = str(item.get("reason") or "")
         probability = item.get("music_probability")
         if reason == "music_probability_ambiguous" and type(probability) in {int, float}:
-            reason_fa = "موسیقی نامشخص (" + format(float(probability), ".2f").replace(".", "٫") + ")"
+            localized_probability = format(float(probability), ".2f").replace(".", "٫").translate(
+                str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+            )
+            reason_fa = "موسیقی نامشخص (" + localized_probability + ")"
         elif reason == "edit_signal_not_found_by_brain":
             reason_fa = "نشانهٔ ادیت پیدا نشد"
         else:
