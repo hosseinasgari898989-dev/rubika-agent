@@ -58,7 +58,7 @@ jobs:
     if: needs.five-hour-gate.outputs.should_run == 'true'
     name: Real Termux runtime, discovery, GitHub report and D1 queue intake
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 75
     env:
       AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
     steps:
@@ -213,7 +213,7 @@ jobs:
           print("SAFETY=metadata_only; no media downloads; no Rubika publishing")
           PY
 
-          timeout 25m docker run --rm -i \
+          timeout 65m docker run --rm -i \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -v "$output_dir:/out" \
             --mount "type=bind,src=$token_file,dst=/data/data/com.termux/files/usr/tmp/agent-api-token,readonly" \
@@ -225,7 +225,7 @@ jobs:
               set -eu
               echo "TERMUX_PKG_MANAGER=$(command -v pkg)"
               sh /workspace/termux/pkg_index_retry.sh
-              timeout 240s pkg install -y python git
+              sh /workspace/termux/pkg_install_retry.sh
               mkdir -p "$HOME/.venvs"
               VENV_DIR="$HOME/.venvs/termux-docker"
               python -m venv "$VENV_DIR"
