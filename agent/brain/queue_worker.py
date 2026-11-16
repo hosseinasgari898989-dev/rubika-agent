@@ -311,6 +311,25 @@ def run_daily(
     _source_rows, source_rows_available = refresh_dynamic_tiktok_sources(
         cloud, include_disabled=True
     )
+    try:
+        cloud.get_publishing_control()
+    except CloudStateError as exc:
+        if exc.code in {"publishing_paused", "publishing_control_unavailable"}:
+            return {
+                "ok": False,
+                "status": "blocked",
+                "stop_reason": exc.code,
+                "reason_fa": (
+                    "انتشار با فرمان مالک متوقف شده است؛ هیچ آیتمی claim یا ارسال نشد."
+                    if exc.code == "publishing_paused"
+                    else "وضعیت توقف انتشار قابل‌بررسی نیست؛ برای ایمنی هیچ ارسالی انجام نشد."
+                ),
+                "attempted_count": 0,
+                "sent_count": 0,
+                "failed_count": 0,
+            }
+        raise
+
     report: dict[str, Any] = {
         "ok": True,
         "status": "running",
