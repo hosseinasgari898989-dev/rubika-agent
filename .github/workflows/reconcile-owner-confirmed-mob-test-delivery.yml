@@ -1,0 +1,92 @@
+name: Reconcile owner-confirmed Mob TEST delivery
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Default true: inspect the one exact uncertain Mob item without changing D1."
+        required: true
+        type: boolean
+        default: true
+      confirm:
+        description: "Required true for a real reconciliation when dry_run is false."
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile-one-mob-test-item:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail closed without explicit apply confirmation
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$DRY_RUN" != "true" && "$CONFIRM" != "true" ]]; then
+            echo "::error::A real reconciliation requires both dry_run=false and confirm=true."
+            exit 2
+          fi
+
+      - name: Call the authenticated Worker endpoint for the fixed TEST item
+        env:
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${AGENT_API_TOKEN:-}" || ${#AGENT_API_TOKEN} -lt 32 ]]; then
+            echo "::error::The existing AGENT_API_TOKEN secret is missing or invalid."
+            exit 2
+          fi
+          body="$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              "dry_run": os.environ.get("DRY_RUN", "true").lower() == "true",
+              "confirm": os.environ.get("CONFIRM", "false").lower() == "true",
+          }))
+          PY
+          )"
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 10 --max-time 60 \
+            --request POST \
+            --header "Authorization: Bearer $AGENT_API_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "$body" \
+            "https://rubika-agent.h98609294.workers.dev/api/brain/items/reconcile-owner-confirmed-mob-test-delivery" \
+            --output "$RUNNER_TEMP/mob-test-reconcile-result.json"
+          python - "$RUNNER_TEMP/mob-test-reconcile-result.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          target_id = "mob_official:x-2121327753236729907"
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if result.get("ok") is not True or result.get("expected_count") != 1:
+              raise SystemExit("mob_test_reconcile_not_confirmed")
+          if result.get("note") != "owner_confirmed_in_test_channel":
+              raise SystemExit("mob_test_reconcile_note_mismatch")
+          if result.get("dry_run") is True:
+              if result.get("matched_count") != 1 or result.get("matched_ids") != [target_id]:
+                  raise SystemExit("mob_test_reconcile_dry_run_exact_match_required")
+              if result.get("changed_count") != 0 or result.get("changed_ids") != []:
+                  raise SystemExit("mob_test_reconcile_dry_run_must_not_change_rows")
+              print("DRY RUN — exact target is eligible; no D1 rows changed.")
+          else:
+              if result.get("changed_count") != 1 or result.get("changed_ids") != [target_id]:
+                  raise SystemExit("mob_test_reconcile_expected_exactly_one_changed_row")
+              if result.get("resent") is not False or result.get("deleted") is not False:
+                  raise SystemExit("mob_test_reconcile_must_not_resend_or_delete")
+              print("CONFIRMED — one owner-confirmed TEST delivery row reconciled to sent.")
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write("## Owner-confirmed Mob TEST delivery reconciliation\n\n")
+              out.write(f"- Mode: {'dry-run' if result.get('dry_run') else 'confirmed reconciliation'}\n")
+              out.write("- Exact item: `mob_official:x-2121327753236729907`\n")
+              out.write(f"- Matched: {result.get('matched_count', 0)}\n")
+              out.write(f"- Changed: {result.get('changed_count', 0)}\n")
+              out.write("- Send attempts: 0\n- Rows deleted: 0\n")
+          PY
