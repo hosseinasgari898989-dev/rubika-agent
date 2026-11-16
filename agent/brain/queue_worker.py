@@ -536,28 +536,54 @@ def run_daily(
 
             elif (
                 platform == "tiktok"
-                and result.get("music_decision_reason") == "music_probability_ambiguous"
                 and result.get("has_audio_stream") is True
-                and type(result.get("music_probability")) in {int, float}
-                and 0.15 <= float(result.get("music_probability")) <= 0.70
-            ):
-                try:
-                    cloud.mark_tiktok_owner_review(
-                        queue_id,
-                        reason="music_probability_ambiguous",
-                        music_probability=float(result["music_probability"]),
-                        has_audio=True,
+                and (
+                    (
+                        result.get("music_decision_reason") == "music_probability_ambiguous"
+                        and type(result.get("music_probability")) in {int, float}
+                        and 0.15 <= float(result.get("music_probability")) <= 0.70
+                        and result.get("has_music") is None
                     )
-                    report["owner_review_count"] += 1
-                    result_entry["queue_state"] = "failed_needs_owner_review"
-                    result_entry["owner_review_reason"] = "music_probability_ambiguous"
-                except Exception as exc:
-                    reason = "owner_review_persist_" + _safe_code(type(exc).__name__)
-                    cloud.update_automation_queue_item(queue_id, "failed", error_code=reason)
-                    report["failed_count"] += 1
-                    report["errors"].append({
-                        "platform": platform, "external_id": external_id, "error": reason,
-                    })
+                    or (
+                        result.get("reason") == "edit_signal_not_found_by_brain"
+                        and result.get("has_music") is True
+                    )
+                )
+            ):
+                review_reason = (
+                    "music_probability_ambiguous"
+                    if result.get("music_decision_reason") == "music_probability_ambiguous"
+                    else "edit_signal_not_found_by_brain"
+                )
+                if report["owner_review_count"] >= 5:
+                    cloud.update_automation_queue_item(
+                        queue_id, "queued", error_code="owner_review_run_limit"
+                    )
+                    result_entry["status"] = "deferred"
+                    result_entry["reason"] = "owner_review_run_limit"
+                    result_entry["queue_state"] = "left_queued"
+                else:
+                    try:
+                        cloud.mark_tiktok_owner_review(
+                            queue_id,
+                            reason=review_reason,
+                            music_probability=(
+                                float(result["music_probability"])
+                                if review_reason == "music_probability_ambiguous" else None
+                            ),
+                            has_audio=True,
+                            has_music=result.get("has_music"),
+                        )
+                        report["owner_review_count"] += 1
+                        result_entry["queue_state"] = "failed_needs_owner_review"
+                        result_entry["owner_review_reason"] = review_reason
+                    except Exception as exc:
+                        reason = "owner_review_persist_" + _safe_code(type(exc).__name__)
+                        cloud.update_automation_queue_item(queue_id, "failed", error_code=reason)
+                        report["failed_count"] += 1
+                        report["errors"].append({
+                            "platform": platform, "external_id": external_id, "error": reason,
+                        })
 
             elif status == "no_candidate":
                 cloud.update_automation_queue_item(
