@@ -7,6 +7,12 @@ on:
   schedule:
     - cron: "7,37 * * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Collect metadata and upload a report only; skip repository push, D1 intake and the TEST-only queue processor"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -257,6 +263,7 @@ jobs:
         run: rm -f -- "$RUNNER_TEMP/agent-api-token"
 
       - name: Validate report and push only the metadata report to the main branch
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         id: push_report
         env:
           GH_TOKEN: ${{ github.token }}
@@ -323,7 +330,7 @@ jobs:
       # Intake adds up to four genuinely new URLs in rotating creator order; this job never downloads or posts.
       - name: Add TikTok metadata to the persistent D1 edit queue
         id: queue_intake
-        if: steps.push_report.outcome == 'success' && steps.termux_discovery.outputs.agent_api_available == 'true'
+        if: steps.push_report.outcome == 'success' && steps.termux_discovery.outputs.agent_api_available == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
         env:
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
         shell: bash
@@ -357,7 +364,7 @@ jobs:
 
       - name: Start the serialized TEST-only TikTok queue processor after successful sync
         id: dispatch_queue_processor
-        if: steps.queue_intake.outcome == 'success'
+        if: steps.queue_intake.outcome == 'success' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -383,7 +390,7 @@ jobs:
 
       - name: Record successful five-hour collection cycle
         id: record_cycle
-        if: steps.queue_intake.outcome == 'success'
+        if: steps.queue_intake.outcome == 'success' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -446,7 +453,7 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin HEAD:main
 
       - name: Get safe advisory diagnosis for pipeline failure
-        if: failure()
+        if: failure() && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
         env:
           AGENT_API_BASE_URL: https://rubika-agent.h98609294.workers.dev
         shell: bash
@@ -511,6 +518,7 @@ jobs:
             echo "## Online Termux discovery"
             echo ""
             echo "- Runtime: real Termux Docker image"
+            echo "- Mode: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true && 'dry-run report only' || 'normal metadata intake' }}"
             echo "- Schedule: twice-hourly UTC gate; full collection after five hours from successful D1 intake"
             echo "- Full unit suite: completed before live discovery if preceding step passed"
             echo "- Report commit/push: ${{ steps.push_report.outcome }}"
