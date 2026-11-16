@@ -444,6 +444,48 @@ class WorkflowSafetyTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, workflow)
 
+
+    def test_read_only_workflows_disable_persisted_checkout_credentials(self):
+        workflow_names = (
+            "ai-health-check.yml",
+            "brain-ci.yml",
+            "ci.yml",
+            "console-playwright.yml",
+            "deploy-worker.yml",
+            "failed-media-delete.yml",
+            "media-download-smoke.yml",
+            "mega-ledger-smoke.yml",
+            "owner-console-local-checks.yml",
+            "owner-daily-digest.yml",
+            "owner-digest-refresh.yml",
+            "queue-intake.yml",
+            "rubika-publish-smoke.yml",
+        )
+        for workflow_name in workflow_names:
+            with self.subTest(workflow=workflow_name):
+                workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+                self.assertIn("contents: read", workflow)
+                lines = workflow.splitlines()
+                for index, line in enumerate(lines):
+                    if not line.lstrip().startswith("- uses: actions/checkout@"):
+                        continue
+                    indent = len(line) - len(line.lstrip(" "))
+                    block = [line]
+                    for following in lines[index + 1:]:
+                        if following.startswith(" " * indent + "- "):
+                            break
+                        block.append(following)
+                    step = "\n".join(block)
+                    self.assertIn("persist-credentials: false", step)
+                    self.assertNotIn("persist-credentials: true", step)
+
+                for line in lines:
+                    if any(token in line for token in ("git fetch ", "git push ", "git pull ", "git ls-remote ")):
+                        self.assertIn(
+                            "http.https://github.com/.extraheader",
+                            line,
+                            "Git network operations must use one-command host-side auth",
+                        )
 if __name__ == "__main__":
     unittest.main()
 
