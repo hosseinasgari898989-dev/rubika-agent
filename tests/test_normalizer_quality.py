@@ -28,7 +28,7 @@ class NoUpscaleQualityTests(unittest.TestCase):
 
     def test_pipeline_keeps_sub_1080_source_at_native_dimensions_and_persists_them(self):
         candidate=Candidate(platform="tiktok",canonical_url="https://www.tiktok.com/@meloaep_/video/7616247520657771796",
-            external_id="7616247520657771796",title="clip",caption="poppy playtime",source_key="meloaep_",
+            external_id="7616247520657771796",title="clip",caption="poppy playtime velocity edit",source_key="meloaep_",
             media_type="video",source_policy=resolve_source_policy("tiktok","meloaep_"))
         with tempfile.TemporaryDirectory() as temp:
             src=Path(temp)/"source.mp4";src.write_bytes(b"native source video bytes")
