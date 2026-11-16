@@ -1388,6 +1388,21 @@ const YOUTUBE_PARKED_QUEUE_IDS = Object.freeze([
   "youtube:SOjI2Tg8yfA"
 ]);
 
+const OWNER_CONFIRMED_MOB_TEST_ITEM_ID = "mob_official:x-2121327753236729907";
+const OWNER_CONFIRMED_MOB_TEST_ITEM_SELECT_SQL =
+  "SELECT id FROM items WHERE id = ? AND platform = 'mob_official' AND status = 'uncertain' " +
+  "AND last_error_code = 'publisher_apirequesterror' AND rubika_message_id IS NULL AND sent_at IS NULL " +
+  "AND NOT EXISTS (SELECT 1 FROM delivery_attempts WHERE item_id = items.id " +
+  "AND (status = 'sent' OR rubika_message_id IS NOT NULL))";
+const OWNER_CONFIRMED_MOB_TEST_ITEM_UPDATE_SQL =
+  "UPDATE items SET status = 'sent', last_error_code = 'owner_confirmed_in_test_channel', " +
+  "last_error_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), " +
+  "sent_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
+  "WHERE id = ? AND platform = 'mob_official' AND status = 'uncertain' " +
+  "AND last_error_code = 'publisher_apirequesterror' AND rubika_message_id IS NULL AND sent_at IS NULL " +
+  "AND NOT EXISTS (SELECT 1 FROM delivery_attempts WHERE item_id = items.id " +
+  "AND (status = 'sent' OR rubika_message_id IS NOT NULL)) RETURNING id";
+
 const QUEUE_PLATFORMS = new Set(["tiktok"]);
 const QUEUE_STATUSES = new Set(["queued", "processing", "sent", "failed", "uncertain", "skipped"]);
 
@@ -1549,6 +1564,80 @@ async function parkOwnerApprovedYoutubeQueue(env, body) {
     });
   } catch {
     return json({ ok: false, error: "youtube_park_queue_update_failed" }, 503);
+  }
+}
+
+async function reconcileOwnerConfirmedMobTestDelivery(env, body) {
+  if (!isObject(body) || Object.keys(body).some(key => !["dry_run", "confirm"].includes(key))) {
+    return json({ ok: false, error: "mob_test_reconcile_fields_invalid" }, 400);
+  }
+  const dryRun = body.dry_run === undefined ? true : body.dry_run;
+  const confirm = body.confirm === undefined ? false : body.confirm;
+  if (typeof dryRun !== "boolean" || typeof confirm !== "boolean") {
+    return json({ ok: false, error: "mob_test_reconcile_confirmation_invalid" }, 400);
+  }
+  if (!dryRun && !confirm) {
+    return json({ ok: false, error: "confirm_true_required" }, 400);
+  }
+
+  try {
+    const selected = await env.DB.prepare(OWNER_CONFIRMED_MOB_TEST_ITEM_SELECT_SQL)
+      .bind(OWNER_CONFIRMED_MOB_TEST_ITEM_ID).all();
+    const matchedIds = (selected.results || []).map(row => String(row.id));
+    if (dryRun) {
+      return json({
+        ok: true,
+        dry_run: true,
+        expected_count: 1,
+        matched_count: matchedIds.length,
+        matched_ids: matchedIds,
+        changed_count: 0,
+        changed_ids: [],
+        note: "owner_confirmed_in_test_channel",
+      });
+    }
+    if (matchedIds.length !== 1 || matchedIds[0] !== OWNER_CONFIRMED_MOB_TEST_ITEM_ID) {
+      return json({
+        ok: false,
+        error: "mob_test_reconcile_expected_exactly_one_eligible_uncertain_item_without_receipt",
+        dry_run: false,
+        expected_count: 1,
+        matched_count: matchedIds.length,
+        matched_ids: matchedIds,
+        changed_count: 0,
+        changed_ids: [],
+        no_change: true,
+      }, 409);
+    }
+
+    // Repeat every eligibility predicate inside one guarded UPDATE. No send or retry occurs.
+    const changed = await env.DB.prepare(OWNER_CONFIRMED_MOB_TEST_ITEM_UPDATE_SQL)
+      .bind(OWNER_CONFIRMED_MOB_TEST_ITEM_ID).all();
+    const changedIds = (changed.results || []).map(row => String(row.id));
+    if (changedIds.length !== 1 || changedIds[0] !== OWNER_CONFIRMED_MOB_TEST_ITEM_ID) {
+      return json({
+        ok: false,
+        error: "mob_test_reconcile_atomic_update_did_not_change_exactly_one_item",
+        dry_run: false,
+        expected_count: 1,
+        changed_count: changedIds.length,
+        changed_ids: changedIds,
+        no_change: changedIds.length === 0,
+      }, 409);
+    }
+    return json({
+      ok: true,
+      dry_run: false,
+      expected_count: 1,
+      matched_count: 1,
+      changed_count: 1,
+      changed_ids: changedIds,
+      note: "owner_confirmed_in_test_channel",
+      resent: false,
+      deleted: false,
+    });
+  } catch {
+    return json({ ok: false, error: "mob_test_reconcile_failed_closed" }, 503);
   }
 }
 
@@ -1716,6 +1805,12 @@ async function route(request, env, ctx) {
       const parsedPark = await readJson(request);
       if (!parsedPark.ok) return json({ ok: false, error: parsedPark.error }, parsedPark.status);
       return parkOwnerApprovedYoutubeQueue(env, parsedPark.value);
+    }
+    if (path === "/api/brain/items/reconcile-owner-confirmed-mob-test-delivery") {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedReconcile = await readJson(request);
+      if (!parsedReconcile.ok) return json({ ok: false, error: parsedReconcile.error }, parsedReconcile.status);
+      return reconcileOwnerConfirmedMobTestDelivery(env, parsedReconcile.value);
     }
     const queueStateMatch = /^\/api\/brain\/automation-queue\/([^/]+)\/state$/.exec(path);
     if (queueStateMatch && request.method === "POST") {
