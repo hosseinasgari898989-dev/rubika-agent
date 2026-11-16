@@ -1,4 +1,5 @@
 // Owner console TikTok account management and isolated failed-send queue.
+import { getPublishingControl, publishingControlReasonFa } from "./publishing_control.js";
 export const LEGACY_TIKTOK_PROFILES = Object.freeze([
   "meloaep_", "smyxae", "menezxl9", "rickkzn_", "saylex.aep812", "poppytv_ae",
 ]);
@@ -411,6 +412,7 @@ async function confirmTikTokOwnerReview(env, h, actor, body) {
   }
   const sample = await env.DB.prepare(
     "SELECT json_extract(metadata_json, '$.owner_review.pending_confirmation.expected_count') AS expected_count, " +
+    "json_extract(metadata_json, '$.owner_review.pending_confirmation.decision') AS decision, " +
     "json_extract(metadata_json, '$.owner_review.pending_confirmation.expires_at') AS expires_at, " +
     "json_extract(metadata_json, '$.owner_review.pending_confirmation.owner_signature') AS owner_signature " +
     "FROM automation_queue WHERE platform = 'tiktok' AND status = 'failed' " +
@@ -425,6 +427,13 @@ async function confirmTikTokOwnerReview(env, h, actor, body) {
   const expectedSignature = await ownerReviewSignature(env, actor, body.challenge_id, sample.expires_at);
   if (!constantTimeHexEqual(sample.owner_signature, expectedSignature)) {
     return h.json({ ok: false, error: "tiktok_owner_review_signature_invalid", changed_count: 0 }, 403);
+  }
+  if (sample.decision === "approve") {
+    const publishingControl = await getPublishingControl(env.DB);
+    if (!publishingControl.ok || publishingControl.paused) {
+      return h.json({ ok: false, error: publishingControl.error || "publishing_paused",
+        reason_fa: publishingControlReasonFa(publishingControl), changed_count: 0 }, 409);
+    }
   }
   const now = new Date().toISOString();
   const update = await env.DB.prepare(
