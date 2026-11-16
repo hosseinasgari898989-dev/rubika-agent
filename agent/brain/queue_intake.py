@@ -18,7 +18,7 @@ from typing import Any, Mapping
 from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.owner_notify import queue_inventory_lines, send_owner_notification
 # Official Mob news lifecycle cutoffs are not applied to the TikTok edit queue.
-from agent.source_policy import has_edit_signal, has_required_any_keyword, resolve_source_policy, refresh_dynamic_tiktok_sources
+from agent.source_policy import has_required_any_keyword, resolve_source_policy, refresh_dynamic_tiktok_sources
 from agent.brain.tiktok_urls import normalize_tiktok_url
 
 
@@ -79,8 +79,6 @@ def candidates_for_queue(
 
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    owner_review_count = 0
-    max_owner_review_items = 5
 
     def reject(reason: str, source: str) -> None:
         if diagnostics is None:
@@ -134,14 +132,6 @@ def candidates_for_queue(
                 reject("required_keyword_missing", source_name)
                 continue
 
-            missing_edit_signal = not has_edit_signal(
-                raw.get("caption") if isinstance(raw.get("caption"), str) else "",
-                raw.get("hashtags"),
-            )
-            if missing_edit_signal and owner_review_count >= max_owner_review_items:
-                reject("owner_review_limit_reached", source_name)
-                continue
-
             raw_published_at = raw.get("published_at")
             published_at = raw_published_at.strip() if isinstance(raw_published_at, str) and raw_published_at.strip() else None
 
@@ -166,18 +156,14 @@ def candidates_for_queue(
                 "freshness_verified": raw.get("freshness_verified") is True,
                 "method": str(raw.get("method") or "termux_phone")[:100],
             }
-            if missing_edit_signal:
-                queue_row["owner_review_reason"] = "edit_signal_not_found_by_brain"
-                owner_review_count += 1
             rows.append(queue_row)
-            if len(rows) >= max_items and not missing_edit_signal:
+            if len(rows) >= max_items:
                 break
         if len(rows) >= max_items:
             break
 
     if diagnostics is not None:
-        diagnostics["eligible_count"] = sum(1 for row in rows if not row.get("owner_review_reason"))
-        diagnostics["owner_review_count"] = owner_review_count
+        diagnostics["eligible_count"] = len(rows)
         diagnostics["rejected_count"] = sum(diagnostics["rejected_by_reason"].values())
         diagnostics["duplicate_within_report_count"] = int(
             diagnostics["rejected_by_reason"].get("duplicate_within_report", 0)
@@ -269,8 +255,6 @@ def run_intake(
     payload = load_report(report_path)
     filter_diagnostics: dict[str, Any] = {}
     candidates = candidates_for_queue(payload, diagnostics=filter_diagnostics)
-    review_candidates = [row for row in candidates if row.get("owner_review_reason") == "edit_signal_not_found_by_brain"][:5]
-    normal_candidates = [row for row in candidates if not row.get("owner_review_reason")]
     existing_ids, last_source_key = _existing_queue_inventory(cloud)
 
     # The separate media ledger may know about sends from an older pipeline version.
@@ -280,39 +264,13 @@ def run_intake(
         raise CloudStateError("control_api_invalid_seen_index")
     existing_ids.update(delivery_blocking_ids)
 
-    ordered = fair_round_robin(normal_candidates, last_source_key=last_source_key)
+    ordered = fair_round_robin(candidates, last_source_key=last_source_key)
     inserted_items: list[dict[str, Any]] = []
-    review_inserted_items: list[dict[str, Any]] = []
     duplicate_count = invalid_count = api_received_count = 0
     skipped_existing_count = 0
 
-    # Insert no more than five review-only rows per discovery run. They do not
-    # consume the normal four-item intake allowance and remain failed until owner approval.
-    for item in review_candidates:
-        identity = item["platform"] + ":" + item["external_id"]
-        if identity in existing_ids:
-            skipped_existing_count += 1
-            continue
-        result = cloud.enqueue_automation_items([item])
-        api_received_count += int(result.get("received_count") or 0)
-        inserted = int(result.get("inserted_count") or 0)
-        duplicate_count += int(result.get("duplicate_count") or 0)
-        invalid_count += int(result.get("invalid_count") or 0)
-        if inserted == 1:
-            existing_ids.add(identity)
-            review_inserted_items.append({
-                "platform": item["platform"], "external_id": item["external_id"],
-                "url": item["canonical_url"], "source_key": item["source_key"],
-                "title": item["title"], "published_at": item["published_at"],
-                "queue_status": "failed", "last_error_code": "needs_owner_review",
-                "review_reason": "edit_signal_not_found_by_brain",
-            })
-        elif inserted > 1:
-            raise CloudStateError("control_api_insert_count_exceeded_single_item")
-        else:
-            existing_ids.add(identity)
-
-    # Normal items retain their independent four-new-item cap.
+    # Candidates are only metadata-enqueued here. Media/quality/audio/music checks run
+    # in the existing publish path before either of the two owner-review decisions.
     for item in ordered:
         identity = item["platform"] + ":" + item["external_id"]
         if identity in existing_ids:
@@ -346,20 +304,16 @@ def run_intake(
             break
 
     queue_counts = cloud.get_automation_queue_summary()
-    inserted_sources = Counter(item["source_key"] for item in inserted_items + review_inserted_items)
-    total_inserted_count = len(inserted_items) + len(review_inserted_items)
+    inserted_sources = Counter(item["source_key"] for item in inserted_items)
     result: dict[str, Any] = {
         "ok": True,
-        "status": "enqueued" if total_inserted_count else "no_new_candidates",
+        "status": "enqueued" if inserted_items else "no_new_candidates",
         "tiktok_source_overlay_status": "console_sources_loaded" if source_rows_available else "console_sources_unavailable_using_legacy_six",
         "tiktok_account_removals_applied": source_rows_available,
         "report_generated_at": str(payload.get("generated_at") or "")[:80],
         "discovered_candidate_count": filter_diagnostics.get("input_count", 0),
         "candidate_pool_count": len(candidates),
-        "filter_eligible_count": filter_diagnostics.get("eligible_count", len(normal_candidates)),
-        "owner_review_candidate_count": len(review_candidates),
-        "owner_review_inserted_count": len(review_inserted_items),
-        "owner_review_items": review_inserted_items,
+        "filter_eligible_count": filter_diagnostics.get("eligible_count", len(candidates)),
         "filter_rejected_count": filter_diagnostics.get("rejected_count", 0),
         "filter_rejected_by_reason": filter_diagnostics.get("rejected_by_reason", {}),
         "filter_rejected_by_source": filter_diagnostics.get("rejected_by_source", {}),
@@ -367,16 +321,13 @@ def run_intake(
         "duplicate_within_report_count": filter_diagnostics.get("duplicate_within_report_count", 0),
         "ordered_candidate_count": len(ordered),
         "received_count": api_received_count,
-        "inserted_count": total_inserted_count,
-        "normal_inserted_count": len(inserted_items),
-        "owner_review_inserted_count": len(review_inserted_items),
+        "inserted_count": len(inserted_items),
         "duplicate_count": duplicate_count,
         "invalid_count": invalid_count,
         "skipped_existing_count": skipped_existing_count,
         "max_new_items_per_run": max_new_items,
         "selection_policy": "six_selected_sources_keyword_match_unique_round_robin",
         "selected_items": inserted_items,
-        "owner_review_items": review_inserted_items,
         "selected_source_distribution": dict(inserted_sources),
         "queue_counts": queue_counts,
         "queue_inventory": queue_inventory_lines(queue_counts),
