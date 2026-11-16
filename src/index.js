@@ -1,5 +1,6 @@
 import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";
 import { handleTikTokOwnerReviewApi } from "./console_tiktok.js";
+import { getPublishingControl, publishingControlReasonFa, startPublishingControlChallenge, confirmPublishingControl } from "./publishing_control.js";
 import { dispatchMobXWorkflow, handleOwnerPanel } from "./owner_panel.js";
 import { getLastWorkflowCronResult, runWorkflowCron } from "./workflow_cron.js";
 const SERVICE = "rubika-agent";
@@ -231,6 +232,8 @@ async function health(env) {
 
 async function status(env) {
   try {
+    const publishingControl = await getPublishingControl(env.DB);
+    if (!publishingControl.ok) return json({ ok: false, error: "publishing_control_unavailable" }, 503);
     const config = await env.DB
       .prepare("SELECT enabled, started_at, updated_at FROM agent_config WHERE id = 1")
       .first();
@@ -253,7 +256,10 @@ async function status(env) {
         download: false,
         publishing: env.PUBLISHING_ENABLED === "true"
       },
-      publishing: PUBLISHING_ENABLED
+      publishing: PUBLISHING_ENABLED,
+      publishing_paused: publishingControl.paused,
+      publishing_control_available: publishingControl.ok,
+      publishing_pause_reason_fa: publishingControlReasonFa(publishingControl)
     });
   } catch {
     return json({ ok: false, error: "database_not_initialized" }, 503);
@@ -1021,6 +1027,7 @@ async function ownerConsoleQueueSummary(env) {
 
 const PANEL_STATUS_SUMMARY_SQL =
   "SELECT " +
+  "COALESCE((SELECT value FROM panel_state WHERE key = 'publishing_paused'), 'false') AS publishing_paused, " +
   "(SELECT json_object('enabled', enabled, 'started_at', started_at, 'updated_at', updated_at) FROM agent_config WHERE id = 1) AS agent_json, " +
   "(SELECT COALESCE(json_group_array(json_object('status', status, 'total', total)), '[]') FROM (SELECT status, COUNT(*) AS total FROM items GROUP BY status)) AS item_counts_json, " +
   "(SELECT COALESCE(json_group_array(json_object('id', id, 'status', status, 'started_at', started_at, 'finished_at', finished_at, 'found_count', found_count, 'eligible_count', eligible_count, 'sent_count', sent_count, 'skipped_count', skipped_count, 'failed_count', failed_count)), '[]') FROM (SELECT id, status, started_at, finished_at, found_count, eligible_count, sent_count, skipped_count, failed_count FROM runs ORDER BY started_at DESC LIMIT 5)) AS recent_runs_json, " +
@@ -1044,6 +1051,8 @@ function parsePanelSummaryJson(value, fallback) {
 function panelStatusFromRow(row, usageDay) {
   return {
     ok: true,
+    publishing_paused: String(row && row.publishing_paused || "false") === "true",
+    publishing_pause_reason_fa: String(row && row.publishing_paused || "false") === "true" ? "انتشار با فرمان مالک موقتاً متوقف شده است." : "توقف اضطراری فعال نیست.",
     agent: parsePanelSummaryJson(row && row.agent_json, { enabled: 0, started_at: null, updated_at: null }),
     item_counts: parsePanelSummaryJson(row && row.item_counts_json, []),
     recent_runs: parsePanelSummaryJson(row && row.recent_runs_json, []),
