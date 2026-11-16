@@ -35,6 +35,7 @@ PAGES = [
     ("unsent", "ارسال‌نشده‌ها"),
     ("tkaccounts", "حساب‌های TikTok"),
     ("tiktok-unsent", "تیک‌تاک - ارسال‌نشده"),
+    ("tiktok-owner-review", "بازبینی مالک تیک‌تاک"),
 ]
 NOW = "2026-10-27T00:00:00Z"
 MEGA_KEY = "A" * 43
@@ -51,6 +52,7 @@ CORS = {
 MOB_REVIEW_JOBS: dict[str, dict] = {}
 MOB_REVIEW_ACTIONS: list[dict] = []
 TIKTOK_DELETE_BODIES: list[dict] = []
+TIKTOK_REVIEW_BODIES: list[dict] = []
 MOB_NO_CAPTION = "**ماب انترتینمنت در پیج خود پستی منتشر کرد.**"
 
 
@@ -161,6 +163,27 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
         return {"ok": True, "id": "tiktok:newfixture"}
     if path.startswith("/api/console/sources/") and method == "DELETE":
         return {"ok": True, "history_preserved": True}
+    if path == "/api/console/tiktok-owner-review" and method == "GET":
+        return {"ok": True, "items": [{
+            "id": "tiktok:7616247520657771796",
+            "external_id": "7616247520657771796",
+            "url": "https://www.tiktok.com/@fixture/video/7616247520657771796",
+            "account": "fixture", "caption_excerpt": "Poppy Playtime fan edit",
+            "created_at": NOW, "reason": "edit_signal_not_found_by_brain",
+            "music_probability": None,
+        }]}
+    if path == "/api/console/tiktok-owner-review/preview" and method == "POST":
+        return {
+            "ok": True, "challenge_id": "a" * 48, "expected_count": 2,
+            "approved_count": 1, "rejected_count": 1, "invalid_count": 1,
+            "expires_at": "2026-11-16T04:00:00.000Z",
+            "summary_fa": "۱ قبول، ۱ رد، ۱ نامعتبر — برای اجرا بنویس: تأیید",
+        }
+    if path == "/api/console/tiktok-owner-review/confirm" and method == "POST":
+        return {
+            "ok": True, "changed_count": 2, "approved_count": 1,
+            "rejected_count": 1, "permanent_rejection": True,
+        }
     if path == "/api/console/tiktok-unsent":
         return {"ok": True, "items": [{
             "id": "tiktok:7616247520657771796", "item_id": "tiktok:7616247520657771796",
@@ -308,9 +331,10 @@ def fixture_api(path: str, method: str, body: dict) -> dict:
 
 
 def main() -> int:
-    global MOB_REVIEW_JOBS, MOB_REVIEW_ACTIONS, TIKTOK_DELETE_BODIES
+    global MOB_REVIEW_JOBS, MOB_REVIEW_ACTIONS, TIKTOK_DELETE_BODIES, TIKTOK_REVIEW_BODIES
     MOB_REVIEW_ACTIONS = []
     TIKTOK_DELETE_BODIES = []
+    TIKTOK_REVIEW_BODIES = []
     MOB_REVIEW_JOBS = {
         "fixture-mob-ready": {
             "type": "mob_x_link", "status": "ready_for_review", "progress": 100,
@@ -344,7 +368,13 @@ def main() -> int:
                 "/api/console/failed-media/pending-delete", "/api/console/failed-media/delete-result",
                 "/api/console/d1/query",
             }
-            owner_mutation = req.method not in ("GET", "HEAD", "OPTIONS") and parts.path not in runner_posts
+            owner_only_read_or_write = (
+                parts.path == "/api/console/tiktok-owner-review"
+                or parts.path.startswith("/api/console/tiktok-owner-review/")
+            )
+            owner_mutation = owner_only_read_or_write or (
+                req.method not in ("GET", "HEAD", "OPTIONS") and parts.path not in runner_posts
+            )
             if parts.path.startswith("/api/console/mob-x/jobs/") and parts.path.rsplit("/", 1)[-1] in ("transition", "preview", "delivery"):
                 owner_mutation = False
             expected = "Bearer playwright-owner-fixture-only" if owner_mutation else "Bearer playwright-fixture-only"
@@ -359,6 +389,8 @@ def main() -> int:
             body = req.post_data_json if req.post_data else {}
             if not isinstance(body, dict):
                 body = {}
+            if parts.path.startswith("/api/console/tiktok-owner-review"):
+                TIKTOK_REVIEW_BODIES.append({"method": req.method, "path": parts.path, "body": dict(body)})
             payload = fixture_api(parts.path, req.method, body)
             route.fulfill(
                 status=200, content_type="application/json",
@@ -502,6 +534,7 @@ def main() -> int:
                 ("unsent", "ارسال‌نشده‌ها"),
                 ("tkaccounts", "حساب‌های TikTok"),
                 ("tiktok-unsent", "تیک‌تاک - ارسال‌نشده"),
+                ("tiktok-owner-review", "بازبینی مالک تیک‌تاک"),
             ]
             for viewport in ({"width": 390, "height": 844}, {"width": 1280, "height": 800}):
                 page.set_viewport_size(viewport)
@@ -578,6 +611,38 @@ def main() -> int:
             click_action(page, '#view button[data-a="tkRemove"]', "remove TikTok account")
             if "DELETE /api/console/sources/tiktok%3Afixture" not in mocked_requests:
                 failures.append("TikTok account remove did not use the existing source API")
+
+            # TikTok owner review uses OWNER_WEB_TOKEN even for GET; decisions call the same Worker API as Rubika PV.
+            active_page[0] = "tiktok-owner-review-actions"
+            page.locator('#nav button[data-id="tiktok-owner-review"]').click()
+            page.wait_for_selector("#tk_review_lines", timeout=5000)
+            if "Poppy Playtime fan edit" not in page.locator("#view").inner_text():
+                failures.append("TikTok owner review list did not render the Worker-provided pending item")
+            review_lines = (
+                "https://www.tiktok.com/@fixture/video/7616247520657771796 قبول\n"
+                "https://www.tiktok.com/@fixture/video/7616247520657771797 رد\n"
+                "not-a-tiktok-link قبول"
+            )
+            page.locator("#tk_review_lines").fill(review_lines)
+            click_action(page, '#view button[data-a="tkReviewPreview"]', "preview TikTok owner decisions")
+            page.wait_for_selector('#view button[data-a="tkReviewConfirm"]', timeout=5000)
+            review_preview_text = page.locator("#view").inner_text()
+            if "۱ قبول، ۱ رد، ۱ نامعتبر" not in review_preview_text:
+                failures.append("TikTok owner review preview summary/counts were not rendered")
+            click_action(page, '#view button[data-a="tkReviewConfirm"]', "confirm TikTok owner decisions")
+            page.wait_for_function(
+                "() => document.querySelector('#toast')?.innerText.includes('تصمیم‌ها ثبت شد')",
+                timeout=5000,
+            )
+            review_preview_calls = [x for x in TIKTOK_REVIEW_BODIES if x["path"] == "/api/console/tiktok-owner-review/preview"]
+            review_confirm_calls = [x for x in TIKTOK_REVIEW_BODIES if x["path"] == "/api/console/tiktok-owner-review/confirm"]
+            review_list_calls = [x for x in TIKTOK_REVIEW_BODIES if x["path"] == "/api/console/tiktok-owner-review"]
+            if len(review_preview_calls) != 1 or review_preview_calls[0]["body"].get("lines") != review_lines:
+                failures.append("TikTok owner review preview did not send the exact entered lines once")
+            if len(review_confirm_calls) != 1 or review_confirm_calls[0]["body"].get("challenge_id") != "a" * 48 or review_confirm_calls[0]["body"].get("confirm") is not True:
+                failures.append("TikTok owner review did not confirm the signed preview challenge exactly once")
+            if len(review_list_calls) < 2:
+                failures.append("TikTok owner review list was not loaded from its Worker GET endpoint")
 
             active_page[0] = "tiktok-unsent-actions"
             page.locator('#nav button[data-id="tiktok-unsent"]').click()

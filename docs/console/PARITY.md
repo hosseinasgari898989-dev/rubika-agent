@@ -10,6 +10,7 @@ Status: OK = complete, PART = partial, NONE = no real API (UI must be disabled +
 | History (runs/events/brain/delivery/audit) | 5 GET endpoints | yes | OK | - |
 | AI calls | GET /ai/calls | yes | OK | - |
 | Sources CRUD | /sources | yes | OK | only TikTok and X can be registered; X maps to mob_official |
+| TikTok owner review | GET /tiktok-owner-review; POST /preview and /confirm | yes | OK | same Worker handler as Rubika PV; all three routes require OWNER_WEB_TOKEN |
 | X links add/clear | /links, /links/clear | yes | PART | confirm/cancel missing -> ext: Instant page |
 | Owners CRUD + invite | /owners, /owners/invite | yes | OK | - |
 | Rules (cap, edit count, quiet hours) | GET/PUT /rules | yes | PART | no UTC+Tehran view; save dropped quiet_hours.enabled -> ext |

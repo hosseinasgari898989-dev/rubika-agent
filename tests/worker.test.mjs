@@ -6555,11 +6555,28 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     const allowed = await read(await worker.fetch(request("/api/console/tiktok-owner-review", { token: OWNER_TOKEN }), state));
     assert.equal(allowed.status, 200);
     assert.equal(allowed.body.items[0].id, item.id);
+    const deniedViewerPreview = await read(await worker.fetch(request("/api/console/tiktok-owner-review/preview", {
+      method: "POST", token: TOKEN, body: { lines: item.url + " قبول" },
+    }), state));
+    assert.equal(deniedViewerPreview.status, 403);
     const preview = await read(await worker.fetch(request("/api/console/tiktok-owner-review/preview", {
       method: "POST", token: OWNER_TOKEN, body: { lines: item.url + " قبول" },
     }), state));
     assert.equal(preview.status, 200);
     assert.equal(preview.body.expected_count, 1);
+    const deniedViewerConfirm = await read(await worker.fetch(request("/api/console/tiktok-owner-review/confirm", {
+      method: "POST", token: TOKEN,
+      body: { challenge_id: preview.body.challenge_id, confirm: true },
+    }), state));
+    assert.equal(deniedViewerConfirm.status, 403);
+    const confirmed = await read(await worker.fetch(request("/api/console/tiktok-owner-review/confirm", {
+      method: "POST", token: OWNER_TOKEN,
+      body: { challenge_id: preview.body.challenge_id, confirm: true },
+    }), state));
+    assert.equal(confirmed.status, 200);
+    assert.equal(confirmed.body.changed_count, 1);
+    assert.equal(confirmed.body.approved_count, 1);
+    assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(item.id).status, "queued");
     sqlite.close();
   }
 }
