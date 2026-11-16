@@ -1217,7 +1217,7 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     const result = await api(ui, "/api/brain/owner-console/tiktok-review?chat_id=" + encodeURIComponent(chat));
     const items = Array.isArray(result && result.items) ? result.items.slice(0, 12) : [];
     const reasonFa = (reason, probability) => reason === "music_probability_ambiguous" && typeof probability === "number"
-      ? "موسیقی نامشخص (" + probability.toFixed(2).replace(".", "٫") + ")"
+      ? "موسیقی نامشخص (" + probability.toFixed(2).replace(".", "٫").replace(/[0-9]/g, digit => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]) + ")"
       : reason === "edit_signal_not_found_by_brain" ? "نشانهٔ ادیت پیدا نشد" : "نیازمند بررسی مالک";
     const out = !result || result.ok !== true
       ? "❌ فهرست موارد بازبینی فعلاً در دسترس نیست."
