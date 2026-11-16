@@ -6194,11 +6194,12 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(editMetadata.has_audio, true);
     assert.equal(editMetadata.has_music, true);
 
-    for (const invalidEdit of [
+    const invalidEditCases = [
       { reason: "edit_signal_not_found_by_brain", has_audio: false, has_music: true, music_probability: null },
       { reason: "edit_signal_not_found_by_brain", has_audio: true, has_music: false, music_probability: null },
-    ]) {
-      const invalidEditId = "tiktok:" + reviewId(20 + Math.floor(Math.random() * 100));
+    ];
+    for (const [invalidIndex, invalidEdit] of invalidEditCases.entries()) {
+      const invalidEditId = "tiktok:" + reviewId(20 + invalidIndex);
       sqlite.prepare(
         "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
         "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'processing')"
