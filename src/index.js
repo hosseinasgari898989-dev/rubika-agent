@@ -1919,6 +1919,11 @@ async function route(request, env, ctx) {
       return json({ ok: false, error: "unauthorized" }, 401);
     }
 
+    if (path === "/api/brain/publishing-control" && request.method === "GET") {
+      const control = await getPublishingControl(env.DB);
+      if (!control.ok) return json({ ok: false, error: "publishing_control_unavailable", reason_fa: publishingControlReasonFa(control) }, 503);
+      return json({ ok: true, ...control, reason_fa: publishingControlReasonFa(control) });
+    }
     if (path === "/api/brain/owner-console/state") {
       if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
       return ownerConsoleState(env);
@@ -1995,6 +2000,35 @@ async function route(request, env, ctx) {
       const parsedOwnerReview = await readJson(request);
       if (!parsedOwnerReview.ok) return json({ ok: false, error: parsedOwnerReview.error }, parsedOwnerReview.status);
       return automationQueueOwnerReview(env, decodeURIComponent(queueOwnerReviewMatch[1]), parsedOwnerReview.value);
+    }
+    if (/^\/api\/brain\/owner-console\/publishing-control\/(?:preview|confirm)$/.test(path)) {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedControl = await readJson(request);
+      if (!parsedControl.ok) return json({ ok: false, error: parsedControl.error }, parsedControl.status);
+      const body = parsedControl.value;
+      const chatId = text(body.chat_id, 128);
+      if (!chatId) return json({ ok: false, error: "owner_chat_id_required" }, 400);
+      const ownerRow = await env.DB.prepare(
+        "SELECT role, enabled FROM console_owners WHERE chat_id = ? LIMIT 1"
+      ).bind(chatId).first();
+      const primary = await env.DB.prepare("SELECT chat_id FROM panel_owner WHERE id = 1").first();
+      const owner = ownerRow
+        ? ownerRow.role === "owner" && Number(ownerRow.enabled) === 1
+        : String(primary?.chat_id || "") === chatId;
+      if (!owner) return json({ ok: false, error: "owner_required" }, 403);
+      const actor = "rubika:" + chatId;
+      if (path.endsWith("/preview")) {
+        const result = await startPublishingControlChallenge(env.DB, body.action, actor);
+        return json(result, result.ok ? 201 : 400);
+      }
+      if (Object.keys(body).some(key => !["chat_id", "challenge_id", "confirm"].includes(key)) || body.confirm !== true) {
+        return json({ ok: false, error: "publishing_control_confirmation_invalid" }, 400);
+      }
+      const result = await confirmPublishingControl(env.DB, body.challenge_id, actor);
+      if (!result.ok) return json({ ...result, reason_fa: "تأیید معتبر نیست یا زمان آن تمام شده است؛ هیچ تغییری انجام نشد." }, 409);
+      return json({ ...result, reason_fa: result.paused
+        ? "انتشار متوقف شد. مسیرهای انتشار اجازهٔ ارسال ندارند."
+        : "انتشار از حالت توقف خارج شد." });
     }
     if (/^\/api\/brain\/owner-console\/tiktok-review(?:\/(?:preview|confirm))?$/.test(path)) {
       const action = path.slice("/api/brain/owner-console/tiktok-review".length);
