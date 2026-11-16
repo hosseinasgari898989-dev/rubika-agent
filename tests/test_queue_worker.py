@@ -171,6 +171,52 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertIsNone(errored["music_probability"])
         self.assertIsNone(errored["has_audio_stream"])
 
+    def test_owner_approved_review_uses_existing_publish_path_once(self):
+        cloud = FakeCloud()
+        cloud.items = cloud.items[:1]
+        cloud.items[0]["metadata_json"] = json.dumps({
+            "owner_review": {
+                "state": "approved",
+                "owner_override": True,
+                "owner_override_reason": "edit_signal_not_found_by_brain",
+            }
+        })
+        calls = []
+
+        def fake_run_one(report_path, platform, output_report, **_kwargs):
+            payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
+            calls.append(payload["queue_context"])
+            return {
+                "ok": True,
+                "status": "sent",
+                "platform": platform,
+                "external_id": payload["candidates"][platform][0]["id"],
+                "title": "Owner-approved TikTok edit",
+            }
+
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", side_effect=fake_run_one),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+            patch.object(queue_worker, "send_tiktok_owner_review_notifications", return_value={"sent": True, "sent_count": 0}),
+        ):
+            first = queue_worker.run_daily(send_delay_seconds=0)
+            second = queue_worker.run_daily(send_delay_seconds=0)
+
+        self.assertEqual(first["sent_count"], 1)
+        self.assertEqual(first["results"][0]["status"], "sent")
+        self.assertEqual(cloud.items[0]["status"], "sent")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], {
+            "id": "tiktok:7616247520657771796",
+            "owner_review_state": "approved",
+            "owner_override": True,
+            "owner_override_reason": "edit_signal_not_found_by_brain",
+        })
+        self.assertEqual(second["attempted_count"], 0)
+        self.assertEqual(second["queue_counts"]["sent"], 1)
+
     def test_routes_both_safe_tiktok_review_reasons_without_reviewing_low_resolution(self):
         cloud = FakeCloud()
         cloud.items = cloud.items[:3]
