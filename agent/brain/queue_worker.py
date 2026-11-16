@@ -143,6 +143,19 @@ def _safe_failure_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
     )
     diagnostics["music_probability"] = _safe_music_probability(raw_probability)
     diagnostics["has_audio_stream"] = raw_audio if type(raw_audio) is bool else None
+    raw_music = (
+        result.get("has_music")
+        if "has_music" in result
+        else moderation.get("has_music")
+    )
+    diagnostics["has_music"] = raw_music if type(raw_music) is bool else None
+    raw_music_reason = (
+        result.get("music_decision_reason")
+        if "music_decision_reason" in result
+        else moderation.get("music_decision_reason")
+    )
+    if raw_music_reason in {"music_probability_ambiguous", "music_not_detected"}:
+        diagnostics["music_decision_reason"] = raw_music_reason
 
     raw_details = result.get("failure_details")
     details: list[dict[str, str]] = []
