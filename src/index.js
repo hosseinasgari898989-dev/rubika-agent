@@ -798,6 +798,52 @@ async function ownerDigestAddEvent(env, body) {
   }
 }
 
+async function ownerDigestFailureAlert(env, body) {
+  const source = text(body.source, 32);
+  const failures = body.consecutive_failures;
+  const labels = { termux: "کشف Termux", daily_queue: "صف تیک‌تاک", mob_x: "انتشار Mob X" };
+  if (!Object.prototype.hasOwnProperty.call(labels, source) ||
+      !Number.isInteger(failures) || failures < 0 || failures > 100) {
+    return json({ ok: false, error: "owner_digest_failure_alert_invalid" }, 400);
+  }
+  const eventSource = "workflow-streak:" + source;
+  try {
+    const latest = await env.DB.prepare(
+      "SELECT category, occurred_at FROM owner_digest_events WHERE source = ? ORDER BY id DESC LIMIT 1"
+    ).bind(eventSource).first();
+    if (failures === 0) {
+      if (latest?.category !== "error") {
+        return json({ ok: true, alert_recorded: false, cleared: false, reason: "no_active_failure_alert" });
+      }
+      await recordOwnerDigestEvent(env, {
+        category: "success",
+        source: eventSource,
+        title: "✅ " + labels[source] + " دوباره موفق شد",
+        detail: "اجرای موفق، زنجیرهٔ شکست‌های متوالی را پاک کرد.",
+      });
+      return json({ ok: true, alert_recorded: false, cleared: true });
+    }
+    if (failures < 2) {
+      return json({ ok: true, alert_recorded: false, cleared: false, reason: "threshold_not_reached" });
+    }
+    if (latest?.category === "error") {
+      const lastAt = Date.parse(latest.occurred_at || "");
+      if (!Number.isFinite(lastAt) || Date.now() - lastAt < 6 * 60 * 60 * 1000) {
+        return json({ ok: true, alert_recorded: false, cleared: false, reason: "source_rate_limited" });
+      }
+    }
+    await recordOwnerDigestEvent(env, {
+      category: "error",
+      source: eventSource,
+      title: "🚨 دو شکست متوالی در " + labels[source],
+      detail: "تعداد شکست‌های پی‌درپی اجراهای اصلی: " + failures + ". هشدار برای هر منبع حداکثر هر شش ساعت ثبت می‌شود.",
+    });
+    return json({ ok: true, alert_recorded: true, cleared: false });
+  } catch {
+    return json({ ok: false, error: "owner_digest_failure_alert_unavailable" }, 503);
+  }
+}
+
 async function ownerDigestClaim(env) {
   try {
     const state = await ensureOwnerDigestWindow(env);
@@ -2014,6 +2060,7 @@ async function route(request, env, ctx) {
 
     // The request body was validated and parsed above; do not consume it twice.
     if (path === "/api/brain/owner-digest/events") return ownerDigestAddEvent(env, body);
+    if (path === "/api/brain/owner-digest/failure-alert") return ownerDigestFailureAlert(env, body);
     if (path === "/api/brain/owner-digest/claim") return ownerDigestClaim(env);
     if (path === "/api/brain/owner-digest/commit") return ownerDigestCommit(env, body);
     return json({ ok: false, error: "not_found" }, 404);
