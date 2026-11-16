@@ -6669,4 +6669,39 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(status.status, 503, "invalid pause state must fail closed");
     sqlite.close();
   }
+
+  // Consecutive workflow alerts use the real owner digest event table and enforce a six-hour source cooldown.
+  {
+    const { sqlite, state } = createRealD1();
+    const sendFailure = async consecutive_failures => read(await worker.fetch(request(
+      "/api/brain/owner-digest/failure-alert",
+      { method: "POST", body: { source: "termux", consecutive_failures } },
+    ), state));
+
+    const first = await sendFailure(1);
+    assert.equal(first.status, 200);
+    assert.equal(first.body.alert_recorded, false);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM owner_digest_events WHERE source = 'workflow-streak:termux'").get().n, 0);
+
+    const threshold = await sendFailure(2);
+    assert.equal(threshold.status, 201);
+    assert.equal(threshold.body.alert_recorded, true);
+    assert.equal(sqlite.prepare("SELECT category FROM owner_digest_events WHERE source = 'workflow-streak:termux' ORDER BY id DESC LIMIT 1").get().category, "error");
+
+    const cooldown = await sendFailure(4);
+    assert.equal(cooldown.status, 200);
+    assert.equal(cooldown.body.reason, "source_rate_limited");
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM owner_digest_events WHERE source = 'workflow-streak:termux'").get().n, 1);
+
+    const cleared = await sendFailure(0);
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.cleared, true);
+    assert.equal(sqlite.prepare("SELECT category FROM owner_digest_events WHERE source = 'workflow-streak:termux' ORDER BY id DESC LIMIT 1").get().category, "success");
+
+    const newStreak = await sendFailure(2);
+    assert.equal(newStreak.status, 201);
+    assert.equal(newStreak.body.alert_recorded, true);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM owner_digest_events WHERE source = 'workflow-streak:termux'").get().n, 3);
+    sqlite.close();
+  }
 }
