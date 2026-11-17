@@ -258,6 +258,40 @@ class OwnerNotifyTests(unittest.TestCase):
 
 
 
+    def test_workflow_streak_alerts_reuse_single_owner_digest_and_clear_on_success(self):
+        bot = FakeRubikaBot()
+        state = digest_state(message_id="rubika-existing", message_body="old body")
+        alerts = []
+        calls = []
+
+        def worker_post(path, payload):
+            calls.append(path)
+            if path.endswith("/failure-alert"):
+                alerts.append((payload["source"], payload["consecutive_failures"]))
+                return {"ok": True}
+            if path.endswith("/claim"):
+                return {"ok": True, "claimed": True, "lock_token": "b" * 32, "state": state}
+            if path.endswith("/commit"):
+                return {"ok": True}
+            raise AssertionError(path)
+
+        with (
+            patch.object(owner_notify, "collect_workflow_failures", return_value={
+                "termux": 2, "daily_queue": 0, "mob_x": None, "deploy": 2,
+            }),
+            patch.object(owner_notify, "_worker_post", side_effect=worker_post),
+            patch.object(owner_notify, "_make_rubika_bot", return_value=bot),
+        ):
+            result = owner_notify.refresh_daily_digest()
+
+        self.assertTrue(result["sent"])
+        self.assertTrue(result["updated"])
+        self.assertEqual(alerts, [("termux", 2), ("daily_queue", 0)])
+        self.assertEqual(len(bot.edited), 1)
+        self.assertEqual(bot.sent, [])
+        self.assertEqual(calls.count("/api/brain/owner-digest/claim"), 1)
+        self.assertEqual(calls.count("/api/brain/owner-digest/failure-alert"), 2)
+
     def test_workflow_failure_monitor_counts_consecutive_runs_and_ignores_pull_requests(self):
         fixtures = {
             "termux-docker-discovery.yml": [

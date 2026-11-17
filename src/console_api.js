@@ -5,6 +5,7 @@
 import { handleConsoleRetry } from "./console_retry.js";
 import { handleFailedMedia } from "./console_failed_media.js";
 import { handleTikTokConsoleApi } from "./console_tiktok.js";
+import { getPublishingControl, publishingControlReasonFa, startPublishingControlChallenge, confirmPublishingControl } from "./publishing_control.js";
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
 import { normalizeMobXLink } from "./mob_x_link.js";
 import { findMobXDuplicate, normalizeMobXExternalId } from "./mob_x_identity.js";
@@ -88,6 +89,33 @@ export async function handleConsoleApi(request, env, h) {
     if (failedMediaRes) return failedMediaRes;
     const tiktokConsoleRes = await handleTikTokConsoleApi(request, env, h, sub, m);
     if (tiktokConsoleRes) return tiktokConsoleRes;
+    if (sub === "/publishing-control" && m === "GET") {
+      const control = await getPublishingControl(env.DB);
+      if (!control.ok) return json({ ok: false, error: "publishing_control_unavailable",
+        reason_fa: publishingControlReasonFa(control) }, 503);
+      return json({ ok: true, paused: control.paused, reason_fa: publishingControlReasonFa(control) });
+    }
+    if (sub === "/publishing-control/preview" && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const result = await startPublishingControlChallenge(env.DB, parsed.value.action, "web-owner");
+      return json(result, result.ok ? 201 : 400);
+    }
+    if (sub === "/publishing-control/confirm" && m === "POST") {
+      const parsed = await readJson(request);
+      if (!parsed.ok) return fail(parsed.error, parsed.status);
+      const body = parsed.value;
+      if (Object.keys(body).some(key => !["challenge_id", "confirm"].includes(key)) || body.confirm !== true) {
+        return fail("publishing_control_confirmation_invalid", 400);
+      }
+      const result = await confirmPublishingControl(env.DB, body.challenge_id, "web-owner");
+      if (!result.ok) return json({ ...result,
+        reason_fa: "تأیید معتبر نیست یا زمان آن تمام شده است؛ هیچ تغییری انجام نشد." }, 409);
+      return json({ ...result, reason_fa: result.paused
+        ? "انتشار متوقف شد. مسیرهای انتشار اجازهٔ ارسال ندارند."
+        : "انتشار از حالت توقف خارج شد." });
+    }
+
     // ---------- read-only 24-hour owner digest ----------
     if (m === "GET" && sub === "/digest") {
       const state = await first(
@@ -708,6 +736,9 @@ export async function handleConsoleApi(request, env, h) {
     }
 
     if (sub === "/mob-x/publish-claim" && m === "POST") {
+      const publishingControl = await getPublishingControl(env.DB);
+      if (!publishingControl.ok || publishingControl.paused) return json({ ok: false,
+        error: publishingControl.error || "publishing_paused", reason_fa: publishingControlReasonFa(publishingControl) }, 409);
       const parsed = await readJson(request);
       if (!parsed.ok) return fail(parsed.error, parsed.status);
       const requestedJobId = parsed.value.job_id;

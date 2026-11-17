@@ -1,5 +1,6 @@
 import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";
 import { handleTikTokOwnerReviewApi } from "./console_tiktok.js";
+import { getPublishingControl, publishingControlReasonFa, startPublishingControlChallenge, confirmPublishingControl } from "./publishing_control.js";
 import { dispatchMobXWorkflow, handleOwnerPanel } from "./owner_panel.js";
 import { getLastWorkflowCronResult, runWorkflowCron } from "./workflow_cron.js";
 const SERVICE = "rubika-agent";
@@ -231,6 +232,8 @@ async function health(env) {
 
 async function status(env) {
   try {
+    const publishingControl = await getPublishingControl(env.DB);
+    if (!publishingControl.ok) return json({ ok: false, error: "publishing_control_unavailable" }, 503);
     const config = await env.DB
       .prepare("SELECT enabled, started_at, updated_at FROM agent_config WHERE id = 1")
       .first();
@@ -253,7 +256,10 @@ async function status(env) {
         download: false,
         publishing: env.PUBLISHING_ENABLED === "true"
       },
-      publishing: PUBLISHING_ENABLED
+      publishing: PUBLISHING_ENABLED,
+      publishing_paused: publishingControl.paused,
+      publishing_control_available: publishingControl.ok,
+      publishing_pause_reason_fa: publishingControlReasonFa(publishingControl)
     });
   } catch {
     return json({ ok: false, error: "database_not_initialized" }, 503);
@@ -792,6 +798,52 @@ async function ownerDigestAddEvent(env, body) {
   }
 }
 
+async function ownerDigestFailureAlert(env, body) {
+  const source = text(body.source, 32);
+  const failures = body.consecutive_failures;
+  const labels = { termux: "کشف Termux", daily_queue: "صف تیک‌تاک", mob_x: "انتشار Mob X" };
+  if (!Object.prototype.hasOwnProperty.call(labels, source) ||
+      !Number.isInteger(failures) || failures < 0 || failures > 100) {
+    return json({ ok: false, error: "owner_digest_failure_alert_invalid" }, 400);
+  }
+  const eventSource = "workflow-streak:" + source;
+  try {
+    const latest = await env.DB.prepare(
+      "SELECT category, occurred_at FROM owner_digest_events WHERE source = ? ORDER BY id DESC LIMIT 1"
+    ).bind(eventSource).first();
+    if (failures === 0) {
+      if (latest?.category !== "error") {
+        return json({ ok: true, alert_recorded: false, cleared: false, reason: "no_active_failure_alert" });
+      }
+      await recordOwnerDigestEvent(env, {
+        category: "success",
+        source: eventSource,
+        title: "✅ " + labels[source] + " دوباره موفق شد",
+        detail: "اجرای موفق، زنجیرهٔ شکست‌های متوالی را پاک کرد.",
+      });
+      return json({ ok: true, alert_recorded: false, cleared: true });
+    }
+    if (failures < 2) {
+      return json({ ok: true, alert_recorded: false, cleared: false, reason: "threshold_not_reached" });
+    }
+    if (latest?.category === "error") {
+      const lastAt = Date.parse(latest.occurred_at || "");
+      if (!Number.isFinite(lastAt) || Date.now() - lastAt < 6 * 60 * 60 * 1000) {
+        return json({ ok: true, alert_recorded: false, cleared: false, reason: "source_rate_limited" });
+      }
+    }
+    await recordOwnerDigestEvent(env, {
+      category: "error",
+      source: eventSource,
+      title: "🚨 دو شکست متوالی در " + labels[source],
+      detail: "تعداد شکست‌های پی‌درپی اجراهای اصلی: " + failures + ". هشدار برای هر منبع حداکثر هر شش ساعت ثبت می‌شود.",
+    });
+    return json({ ok: true, alert_recorded: true, cleared: false });
+  } catch {
+    return json({ ok: false, error: "owner_digest_failure_alert_unavailable" }, 503);
+  }
+}
+
 async function ownerDigestClaim(env) {
   try {
     const state = await ensureOwnerDigestWindow(env);
@@ -1021,6 +1073,7 @@ async function ownerConsoleQueueSummary(env) {
 
 const PANEL_STATUS_SUMMARY_SQL =
   "SELECT " +
+  "COALESCE((SELECT value FROM panel_state WHERE key = 'publishing_paused'), 'false') AS publishing_paused, " +
   "(SELECT json_object('enabled', enabled, 'started_at', started_at, 'updated_at', updated_at) FROM agent_config WHERE id = 1) AS agent_json, " +
   "(SELECT COALESCE(json_group_array(json_object('status', status, 'total', total)), '[]') FROM (SELECT status, COUNT(*) AS total FROM items GROUP BY status)) AS item_counts_json, " +
   "(SELECT COALESCE(json_group_array(json_object('id', id, 'status', status, 'started_at', started_at, 'finished_at', finished_at, 'found_count', found_count, 'eligible_count', eligible_count, 'sent_count', sent_count, 'skipped_count', skipped_count, 'failed_count', failed_count)), '[]') FROM (SELECT id, status, started_at, finished_at, found_count, eligible_count, sent_count, skipped_count, failed_count FROM runs ORDER BY started_at DESC LIMIT 5)) AS recent_runs_json, " +
@@ -1044,6 +1097,8 @@ function parsePanelSummaryJson(value, fallback) {
 function panelStatusFromRow(row, usageDay) {
   return {
     ok: true,
+    publishing_paused: String(row && row.publishing_paused || "false") === "true",
+    publishing_pause_reason_fa: String(row && row.publishing_paused || "false") === "true" ? "انتشار با فرمان مالک موقتاً متوقف شده است." : "توقف اضطراری فعال نیست.",
     agent: parsePanelSummaryJson(row && row.agent_json, { enabled: 0, started_at: null, updated_at: null }),
     item_counts: parsePanelSummaryJson(row && row.item_counts_json, []),
     recent_runs: parsePanelSummaryJson(row && row.recent_runs_json, []),
@@ -1864,6 +1919,11 @@ async function route(request, env, ctx) {
       return json({ ok: false, error: "unauthorized" }, 401);
     }
 
+    if (path === "/api/brain/publishing-control" && request.method === "GET") {
+      const control = await getPublishingControl(env.DB);
+      if (!control.ok) return json({ ok: false, error: "publishing_control_unavailable", reason_fa: publishingControlReasonFa(control) }, 503);
+      return json({ ok: true, ...control, reason_fa: publishingControlReasonFa(control) });
+    }
     if (path === "/api/brain/owner-console/state") {
       if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
       return ownerConsoleState(env);
@@ -1941,6 +2001,35 @@ async function route(request, env, ctx) {
       if (!parsedOwnerReview.ok) return json({ ok: false, error: parsedOwnerReview.error }, parsedOwnerReview.status);
       return automationQueueOwnerReview(env, decodeURIComponent(queueOwnerReviewMatch[1]), parsedOwnerReview.value);
     }
+    if (/^\/api\/brain\/owner-console\/publishing-control\/(?:preview|confirm)$/.test(path)) {
+      if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+      const parsedControl = await readJson(request);
+      if (!parsedControl.ok) return json({ ok: false, error: parsedControl.error }, parsedControl.status);
+      const body = parsedControl.value;
+      const chatId = text(body.chat_id, 128);
+      if (!chatId) return json({ ok: false, error: "owner_chat_id_required" }, 400);
+      const ownerRow = await env.DB.prepare(
+        "SELECT role, enabled FROM console_owners WHERE chat_id = ? LIMIT 1"
+      ).bind(chatId).first();
+      const primary = await env.DB.prepare("SELECT chat_id FROM panel_owner WHERE id = 1").first();
+      const owner = ownerRow
+        ? ownerRow.role === "owner" && Number(ownerRow.enabled) === 1
+        : String(primary?.chat_id || "") === chatId;
+      if (!owner) return json({ ok: false, error: "owner_required" }, 403);
+      const actor = "rubika:" + chatId;
+      if (path.endsWith("/preview")) {
+        const result = await startPublishingControlChallenge(env.DB, body.action, actor);
+        return json(result, result.ok ? 201 : 400);
+      }
+      if (Object.keys(body).some(key => !["chat_id", "challenge_id", "confirm"].includes(key)) || body.confirm !== true) {
+        return json({ ok: false, error: "publishing_control_confirmation_invalid" }, 400);
+      }
+      const result = await confirmPublishingControl(env.DB, body.challenge_id, actor);
+      if (!result.ok) return json({ ...result, reason_fa: "تأیید معتبر نیست یا زمان آن تمام شده است؛ هیچ تغییری انجام نشد." }, 409);
+      return json({ ...result, reason_fa: result.paused
+        ? "انتشار متوقف شد. مسیرهای انتشار اجازهٔ ارسال ندارند."
+        : "انتشار از حالت توقف خارج شد." });
+    }
     if (/^\/api\/brain\/owner-console\/tiktok-review(?:\/(?:preview|confirm))?$/.test(path)) {
       const action = path.slice("/api/brain/owner-console/tiktok-review".length);
       let actorBody = {};
@@ -2005,6 +2094,7 @@ async function route(request, env, ctx) {
 
     // The request body was validated and parsed above; do not consume it twice.
     if (path === "/api/brain/owner-digest/events") return ownerDigestAddEvent(env, body);
+    if (path === "/api/brain/owner-digest/failure-alert") return ownerDigestFailureAlert(env, body);
     if (path === "/api/brain/owner-digest/claim") return ownerDigestClaim(env);
     if (path === "/api/brain/owner-digest/commit") return ownerDigestCommit(env, body);
     return json({ ok: false, error: "not_found" }, 404);

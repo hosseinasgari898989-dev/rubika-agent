@@ -780,6 +780,41 @@ def _mob_x_discovery_payload(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+
+def _publishing_control_block(cloud: Any) -> dict[str, str] | None:
+    getter = getattr(cloud, "get_publishing_control", None)
+    if not callable(getter):
+        return {
+            "error": "publishing_control_unavailable",
+            "reason_fa": "وضعیت توقف انتشار قابل‌بررسی نیست؛ برای ایمنی هیچ ارسالی انجام نمی‌شود.",
+        }
+    try:
+        control = getter()
+    except CloudStateError as exc:
+        code = str(getattr(exc, "code", "") or "publishing_control_unavailable")
+        code = code if code in {"publishing_paused", "publishing_control_unavailable"} else "publishing_control_unavailable"
+        return {
+            "error": code,
+            "reason_fa": ("انتشار با فرمان مالک متوقف شده است؛ هیچ رسانه‌ای ارسال نشد."
+                          if code == "publishing_paused"
+                          else "وضعیت توقف انتشار قابل‌بررسی نیست؛ برای ایمنی هیچ ارسالی انجام نمی‌شود."),
+        }
+    except Exception:
+        return {
+            "error": "publishing_control_unavailable",
+            "reason_fa": "وضعیت توقف انتشار قابل‌بررسی نیست؛ برای ایمنی هیچ ارسالی انجام نمی‌شود.",
+        }
+    if not isinstance(control, dict) or control.get("paused") is not False:
+        return {
+            "error": "publishing_paused" if isinstance(control, dict) and control.get("paused") is True else "publishing_control_unavailable",
+            "reason_fa": ("انتشار با فرمان مالک متوقف شده است؛ هیچ رسانه‌ای ارسال نشد."
+                          if isinstance(control, dict) and control.get("paused") is True
+                          else "وضعیت توقف انتشار قابل‌بررسی نیست؛ برای ایمنی هیچ ارسالی انجام نمی‌شود."),
+        }
+    return None
+
+
 def run_trial(
     *,
     publish: bool,
@@ -1300,6 +1335,12 @@ def run_trial(
             _report(output_report, report)
             return report
 
+        control_block = _publishing_control_block(cloud)
+        if control_block:
+            report.update(status="blocked", error=control_block["error"], reason_fa=control_block["reason_fa"], publishing=False)
+            _report(output_report, report)
+            return report
+
         try:
             cloud.upsert_item(payload)
         except Exception as exc:
@@ -1323,6 +1364,16 @@ def run_trial(
             cloud.record_attempt(item_id, 1, "started")
         except Exception as exc:
             report["error"] = "cloud_attempt_start_failed_" + type(exc).__name__
+            _report(output_report, report)
+            return report
+
+        control_block = _publishing_control_block(cloud)
+        if control_block:
+            try:
+                cloud.record_attempt(item_id, 1, "failed", error_code=control_block["error"])
+            except Exception:
+                pass
+            report.update(status="blocked", error=control_block["error"], reason_fa=control_block["reason_fa"], publishing=False)
             _report(output_report, report)
             return report
 

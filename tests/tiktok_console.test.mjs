@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataModuleUrl = source => "data:text/javascript;base64," + Buffer.from(source).toString("base64");
-const tiktokModule = await import(dataModuleUrl(fs.readFileSync(path.join(root, "src/console_tiktok.js"), "utf8")));
+const publishingControlSource = fs.readFileSync(path.join(root, "src/publishing_control.js"), "utf8");
+const publishingControlModuleUrl = dataModuleUrl(publishingControlSource);
+const consoleTikTokSource = fs.readFileSync(path.join(root, "src/console_tiktok.js"), "utf8")
+  .replaceAll('"./publishing_control.js"', '"' + publishingControlModuleUrl + '"');
+assert.ok(!consoleTikTokSource.includes("./publishing_control.js"), "TikTok test must resolve shared publishing control from its data URL");
+const tiktokModule = await import(dataModuleUrl(consoleTikTokSource));
 const failedMediaModule = await import(dataModuleUrl(fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8")));
 const { handleTikTokConsoleApi, normalizeTikTokAccount } = tiktokModule;
 const { handleFailedMedia } = failedMediaModule;

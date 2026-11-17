@@ -20,6 +20,33 @@ TOKEN = "test-token-value-with-more-than-thirty-two-characters"
 
 
 class CloudStateTests(unittest.TestCase):
+    def test_get_publishing_control_requires_explicit_available_unpaused_status(self):
+        state = CloudState("https://worker.example", TOKEN)
+
+        def fake_open(payload):
+            return io.BytesIO(json.dumps(payload).encode("utf-8"))
+
+        active = {
+            "ok": True,
+            "publishing_control_available": True,
+            "publishing_paused": False,
+            "publishing_pause_reason_fa": "توقف اضطراری فعال نیست.",
+        }
+        with patch("urllib.request.urlopen", return_value=fake_open(active)):
+            self.assertEqual(state.get_publishing_control()["paused"], False)
+
+        paused = {**active, "publishing_paused": True}
+        with patch("urllib.request.urlopen", return_value=fake_open(paused)):
+            with self.assertRaises(CloudStateError) as caught:
+                state.get_publishing_control()
+        self.assertEqual(caught.exception.code, "publishing_paused")
+
+        unavailable = {key: value for key, value in active.items() if key != "publishing_control_available"}
+        with patch("urllib.request.urlopen", return_value=fake_open(unavailable)):
+            with self.assertRaises(CloudStateError) as caught:
+                state.get_publishing_control()
+        self.assertEqual(caught.exception.code, "publishing_control_unavailable")
+
     def test_removed_worker_supervisor_route_has_no_stale_remote_client_method(self):
         # Remote Worker supervision was retired; deterministic local supervision
         # remains in agent.brain.error_supervisor.

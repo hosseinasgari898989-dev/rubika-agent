@@ -8,6 +8,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const publishingControlHtml = fs.readFileSync(path.join(root, "docs/console/v2.html"), "utf8");
+const publishingControlPanel = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8");
+const publishingControlScreens = fs.readFileSync(path.join(root, "src/panel_screens_ext.js"), "utf8");
+assert.match(publishingControlHtml, /V\.publishing=async/);
+assert.match(publishingControlHtml, /A\.pubPreview=async/);
+assert.match(publishingControlHtml, /A\.pubConfirm=async/);
+assert.match(publishingControlHtml, /\['publishing','توقف اضطراری'/);
+assert.match(publishingControlPanel, /p_pub_confirm_\(\?:pause\|resume\)_\[a-f0-9\]\{32\}/);
+assert.match(publishingControlScreens, /PUBLISHING_CONTROL_HOME_ROW/);
 const dataModuleUrl = source => "data:text/javascript;base64," + Buffer.from(source).toString("base64");
 const screensSource = fs.readFileSync(path.join(root, "src/panel_screens.js"), "utf8");
 const screensModuleUrl = dataModuleUrl(screensSource);
@@ -55,7 +64,11 @@ const consoleRetryModuleUrl = dataModuleUrl(consoleRetrySource);
 const consoleFailedMediaSource = fs.readFileSync(path.join(root, "src/console_failed_media.js"), "utf8");
 const consoleFailedMediaModuleUrl = dataModuleUrl(consoleFailedMediaSource);
 const failedMedia = await import(consoleFailedMediaModuleUrl);
-const consoleTikTokSource = fs.readFileSync(path.join(root, "src/console_tiktok.js"), "utf8");
+const publishingControlSource = fs.readFileSync(path.join(root, "src/publishing_control.js"), "utf8");
+const publishingControlModuleUrl = dataModuleUrl(publishingControlSource);
+const consoleTikTokSource = fs.readFileSync(path.join(root, "src/console_tiktok.js"), "utf8")
+  .replaceAll('"./publishing_control.js"', '"' + publishingControlModuleUrl + '"');
+assert.ok(!consoleTikTokSource.includes("./publishing_control.js"), "TikTok module must resolve shared publishing control from its data URL");
 const consoleTikTokModuleUrl = dataModuleUrl(consoleTikTokSource);
 const retryScreensSource = fs.readFileSync(path.join(root, "src/panel_retry_screens.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";');
@@ -78,6 +91,7 @@ const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), 
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";')
   .replace('from "./console_failed_media.js";', 'from "' + consoleFailedMediaModuleUrl + '";')
   .replace('from "./console_tiktok.js";', 'from "' + consoleTikTokModuleUrl + '";')
+  .replace('from "./publishing_control.js";', 'from "' + publishingControlModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
   .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
   .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
@@ -87,17 +101,20 @@ const workerImport = 'import { dispatchMobXWorkflow, handleOwnerPanel } from "./
 const cronImport = 'import { getLastWorkflowCronResult, runWorkflowCron } from "./workflow_cron.js";';
 const consoleApiImport = 'import { handleConsoleApi, corsPreflight, withCors } from "./console_api.js";';
 const consoleOwnerReviewImport = 'import { handleTikTokOwnerReviewApi } from "./console_tiktok.js";';
+const publishingControlImport = 'import { getPublishingControl, publishingControlReasonFa, startPublishingControlChallenge, confirmPublishingControl } from "./publishing_control.js";';
 assert.ok(originalSource.includes(workerImport), "Worker must import owner panel handler and shared dispatcher");
 assert.ok(originalSource.includes(cronImport), "Worker must import cron dispatcher");
 assert.ok(originalSource.includes(consoleApiImport), "Worker must import console API handler");
 assert.ok(originalSource.includes(consoleOwnerReviewImport), "Worker must import shared TikTok owner review API");
+assert.ok(originalSource.includes(publishingControlImport), "Worker must import shared publishing-control API");
 const cronSourceForWorker = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
 const cronModuleUrlForWorker = dataModuleUrl(cronSourceForWorker);
 const source = originalSource
   .replace(workerImport, `const { dispatchMobXWorkflow, handleOwnerPanel } = await import("${panelModuleUrl}");`)
   .replace(cronImport, `const { getLastWorkflowCronResult, runWorkflowCron } = await import("${cronModuleUrlForWorker}");`)
   .replace(consoleApiImport, `const { handleConsoleApi, corsPreflight, withCors } = await import("${consoleApiModuleUrl}");`)
-  .replace(consoleOwnerReviewImport, `const { handleTikTokOwnerReviewApi } = await import("${consoleTikTokModuleUrl}");`);
+  .replace(consoleOwnerReviewImport, `const { handleTikTokOwnerReviewApi } = await import("${consoleTikTokModuleUrl}");`)
+  .replace(publishingControlImport, `const { getPublishingControl, publishingControlReasonFa, startPublishingControlChallenge, confirmPublishingControl } = await import("${publishingControlModuleUrl}");`);
 
 // Test-only baseline Worker restores direct getState reads while keeping all other code identical.
 const getStateStart = panelSource.indexOf("const getState = async (env, k, d) => {");
@@ -6577,6 +6594,116 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(confirmed.body.changed_count, 1);
     assert.equal(confirmed.body.approved_count, 1);
     assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(item.id).status, "queued");
+    sqlite.close();
+  }
+
+  // Emergency publishing control is exercised through the real Worker against all real D1 migrations.
+  {
+    const { sqlite, state } = createRealD1();
+    const getControl = async () => read(await worker.fetch(request("/api/brain/publishing-control"), state));
+    const initial = await getControl();
+    assert.equal(initial.status, 200);
+    assert.equal(initial.body.paused, false);
+
+    sqlite.prepare("UPDATE panel_owner SET chat_id = ? WHERE id = 1").run("123456789");
+    const nonOwnerPreview = await read(await worker.fetch(request(
+      "/api/brain/owner-console/publishing-control/preview",
+      { method: "POST", body: { chat_id: "987654321", action: "pause" } },
+    ), state));
+    assert.equal(nonOwnerPreview.status, 403);
+
+    const pausePreview = await read(await worker.fetch(request(
+      "/api/brain/owner-console/publishing-control/preview",
+      { method: "POST", body: { chat_id: "123456789", action: "pause" } },
+    ), state));
+    assert.equal(pausePreview.status, 201);
+    assert.match(pausePreview.body.challenge_id, /^[a-f0-9]{32}$/);
+    assert.equal((await getControl()).body.paused, false, "preview alone must not change state");
+
+    const pauseConfirm = await read(await worker.fetch(request(
+      "/api/brain/owner-console/publishing-control/confirm",
+      { method: "POST", body: { chat_id: "123456789", challenge_id: pausePreview.body.challenge_id, confirm: true } },
+    ), state));
+    assert.equal(pauseConfirm.status, 200);
+    assert.equal(pauseConfirm.body.paused, true);
+    assert.equal((await getControl()).body.paused, true);
+
+    const replay = await read(await worker.fetch(request(
+      "/api/brain/owner-console/publishing-control/confirm",
+      { method: "POST", body: { chat_id: "123456789", challenge_id: pausePreview.body.challenge_id, confirm: true } },
+    ), state));
+    assert.equal(replay.status, 409, "a challenge can be consumed only once");
+
+    const blockedMobClaim = await read(await worker.fetch(request(
+      "/api/console/mob-x/publish-claim", { method: "POST", body: {} },
+    ), state));
+    assert.equal(blockedMobClaim.status, 409);
+    assert.equal(blockedMobClaim.body.error, "publishing_paused");
+
+    const viewerRead = await read(await worker.fetch(request("/api/console/publishing-control", { token: TOKEN }), state));
+    assert.equal(viewerRead.status, 200);
+    assert.equal(viewerRead.body.paused, true);
+    const viewerPreview = await read(await worker.fetch(request(
+      "/api/console/publishing-control/preview",
+      { method: "POST", token: TOKEN, body: { action: "resume" } },
+    ), state));
+    assert.equal(viewerPreview.status, 403, "viewer credentials cannot change pause state");
+
+    const webPreview = await read(await worker.fetch(request(
+      "/api/console/publishing-control/preview",
+      { method: "POST", token: OWNER_TOKEN, body: { action: "resume" } },
+    ), state));
+    assert.equal(webPreview.status, 201);
+    assert.equal((await getControl()).body.paused, true, "web preview alone must not change state");
+    const webConfirm = await read(await worker.fetch(request(
+      "/api/console/publishing-control/confirm",
+      { method: "POST", token: OWNER_TOKEN,
+      body: { challenge_id: webPreview.body.challenge_id, confirm: true } },
+    ), state));
+    assert.equal(webConfirm.status, 200);
+    assert.equal(webConfirm.body.paused, false);
+    assert.equal((await getControl()).body.paused, false);
+
+    sqlite.prepare("UPDATE panel_state SET value = 'invalid', updated_at = datetime('now') WHERE key = 'publishing_paused'").run();
+    const invalid = await getControl();
+    assert.equal(invalid.status, 503);
+    const status = await read(await worker.fetch(request("/api/status"), state));
+    assert.equal(status.status, 503, "invalid pause state must fail closed");
+    sqlite.close();
+  }
+
+  // Consecutive workflow alerts use the real owner digest event table and enforce a six-hour source cooldown.
+  {
+    const { sqlite, state } = createRealD1();
+    const sendFailure = async consecutive_failures => read(await worker.fetch(request(
+      "/api/brain/owner-digest/failure-alert",
+      { method: "POST", body: { source: "termux", consecutive_failures } },
+    ), state));
+
+    const first = await sendFailure(1);
+    assert.equal(first.status, 200);
+    assert.equal(first.body.alert_recorded, false);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM owner_digest_events WHERE source = 'workflow-streak:termux'").get().n, 0);
+
+    const threshold = await sendFailure(2);
+    assert.equal(threshold.status, 200);
+    assert.equal(threshold.body.alert_recorded, true);
+    assert.equal(sqlite.prepare("SELECT category FROM owner_digest_events WHERE source = 'workflow-streak:termux' ORDER BY id DESC LIMIT 1").get().category, "error");
+
+    const cooldown = await sendFailure(4);
+    assert.equal(cooldown.status, 200);
+    assert.equal(cooldown.body.reason, "source_rate_limited");
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM owner_digest_events WHERE source = 'workflow-streak:termux'").get().n, 1);
+
+    const cleared = await sendFailure(0);
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.cleared, true);
+    assert.equal(sqlite.prepare("SELECT category FROM owner_digest_events WHERE source = 'workflow-streak:termux' ORDER BY id DESC LIMIT 1").get().category, "success");
+
+    const newStreak = await sendFailure(2);
+    assert.equal(newStreak.status, 200);
+    assert.equal(newStreak.body.alert_recorded, true);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM owner_digest_events WHERE source = 'workflow-streak:termux'").get().n, 3);
     sqlite.close();
   }
 }

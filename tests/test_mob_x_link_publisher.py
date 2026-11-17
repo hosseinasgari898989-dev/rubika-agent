@@ -27,7 +27,7 @@ class FakeClient:
             "claimed": True,
             "job": {"id": JOB_ID, "type": "mob_x_link", "status": "sending", "result": dict(PAYLOAD)},
         }
-        self.status_payload = status_payload or {"ok": True, "capabilities": {"publishing": True}}
+        self.status_payload = status_payload or {"ok": True, "capabilities": {"publishing": True}, "publishing_control_available": True, "publishing_paused": False}
         self.status_error = status_error
         self.calls = []
 
@@ -96,13 +96,47 @@ class MobXPublisherTests(unittest.TestCase):
         sender.assert_not_called()
 
     def test_worker_publishing_false_never_claims_or_sends(self):
-        client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": False}})
+        client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": False}, "publishing_control_available": True, "publishing_paused": False})
         sender = Mock()
         report = publish_one(client=client, sender=sender, notifier=Mock())
         self.assertEqual(report["status"], "blocked")
         self.assertEqual(report["error_code"], "publishing_disabled")
         self.assertFalse(report["publishing_attempted"])
         self.assertEqual(sum(path == "/api/console/mob-x/publish-claim" for _, path, _ in client.calls), 0)
+        sender.assert_not_called()
+
+    def test_pause_or_unknown_control_blocks_before_claim_or_send(self):
+        payloads = [
+            {"ok": True, "capabilities": {"publishing": True},
+             "publishing_control_available": True, "publishing_paused": True,
+             "publishing_pause_reason_fa": "توقف فعال"},
+            {"ok": True, "capabilities": {"publishing": True}},
+        ]
+        for payload, expected in zip(payloads, ("publishing_paused", "publishing_control_unavailable")):
+            with self.subTest(expected=expected):
+                client = FakeClient(status_payload=payload)
+                sender = Mock()
+                report = publish_one(client=client, sender=sender, notifier=Mock())
+                self.assertEqual(report["status"], "blocked")
+                self.assertEqual(report["error_code"], expected)
+                self.assertFalse(report["publishing_attempted"])
+                self.assertEqual(sum(path == "/api/console/mob-x/publish-claim" for _, path, _ in client.calls), 0)
+                sender.assert_not_called()
+
+    def test_pause_appearing_after_claim_is_rechecked_before_irreversible_send(self):
+        class PauseAfterClaim(FakeClient):
+            def request(self, method, path, payload=None):
+                result = super().request(method, path, payload)
+                if path == "/api/console/mob-x/publish-claim":
+                    self.status_payload = {**self.status_payload, "publishing_paused": True}
+                return result
+
+        client = PauseAfterClaim()
+        sender = Mock()
+        report = publish_one(client=client, sender=sender, notifier=Mock())
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["error_code"], "publishing_paused")
+        self.assertEqual(sum(path == "/api/status" for _, path, _ in client.calls), 2)
         sender.assert_not_called()
 
     def test_status_request_failure_is_fail_closed(self):
@@ -115,7 +149,7 @@ class MobXPublisherTests(unittest.TestCase):
         sender.assert_not_called()
 
     def test_explicit_job_id_is_forwarded_for_idempotent_claim(self):
-        client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": True}})
+        client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": True}, "publishing_control_available": True, "publishing_paused": False})
         sender = Mock(return_value="rubika-message-002")
         report = publish_one(client=client, sender=sender, notifier=Mock(), job_id=JOB_ID)
         self.assertEqual(report["status"], "sent")
@@ -125,7 +159,7 @@ class MobXPublisherTests(unittest.TestCase):
         sender.assert_called_once()
 
     def test_successful_owner_approved_test_send_occurs_once(self):
-        client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": True}})
+        client = FakeClient(status_payload={"ok": True, "capabilities": {"publishing": True}, "publishing_control_available": True, "publishing_paused": False})
         sender = Mock(return_value="rubika-message-001")
         report = publish_one(client=client, sender=sender, notifier=Mock())
         sender.assert_called_once_with("mock-rubika-token", TEST_CHANNEL_FOR_TESTS, "mock-file-001", "کپشن ساده")

@@ -96,6 +96,13 @@ def publish_one(
             report.update(status="blocked", error_code="publishing_disabled", capability_check="unavailable")
             return _write_report(report, report_path, 1)
         capabilities = status_payload.get("capabilities") if isinstance(status_payload, dict) else None
+        if status_payload.get("publishing_control_available") is not True or status_payload.get("publishing_paused") is True:
+            report.update(
+                status="blocked",
+                error_code="publishing_paused" if status_payload.get("publishing_paused") is True else "publishing_control_unavailable",
+                reason_fa=str(status_payload.get("publishing_pause_reason_fa") or "وضعیت توقف انتشار قابل‌بررسی نیست؛ برای ایمنی هیچ ارسالی انجام نمی‌شود.")[:240],
+            )
+            return _write_report(report, report_path, 1)
         if not isinstance(capabilities, dict) or capabilities.get("publishing") is not True:
             report.update(status="blocked", error_code="publishing_disabled", capability_check="disabled_or_invalid")
             return _write_report(report, report_path, 1)
@@ -131,6 +138,23 @@ def publish_one(
             except Exception:
                 pass
             report.update(status="failed", error_code=code)
+            return _write_report(report, report_path, 1)
+
+        # Re-check immediately before the irreversible Rubika send; a pause may
+        # have been enabled after the Worker claim was acquired.
+        try:
+            latest_status = worker.request("GET", "/api/status")
+        except Exception:
+            latest_status = {}
+        if latest_status.get("publishing_control_available") is not True or latest_status.get("publishing_paused") is True:
+            code = "publishing_paused" if latest_status.get("publishing_paused") is True else "publishing_control_unavailable"
+            try:
+                worker.request("POST", "/api/console/mob-x/jobs/" + job_id + "/delivery",
+                               {"status": "failed", "error_code": code})
+            except Exception:
+                pass
+            report.update(status="blocked", error_code=code,
+                          reason_fa=str(latest_status.get("publishing_pause_reason_fa") or "انتشار متوقف است؛ هیچ پیامی ارسال نشد.")[:240])
             return _write_report(report, report_path, 1)
 
         send = sender or send_test_channel_once

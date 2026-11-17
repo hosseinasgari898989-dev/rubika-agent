@@ -674,6 +674,7 @@ def _run_one(
             nonlocal last_response
             if publisher is None:
                 raise RuntimeError(publisher_error or "rubika_publisher_unavailable")
+            _assert_publishing_control(cloud)
             raw = publisher.send_media(
                 media_path, "video", caption=EDIT_CAPTION
             )
@@ -778,6 +779,26 @@ def _run_one(
         })
         return report_detail
 
+
+
+def _assert_publishing_control(cloud: Any) -> dict[str, Any]:
+    getter = getattr(cloud, "get_publishing_control", None)
+    if not callable(getter):
+        raise RuntimeError("publishing_control_unavailable")
+    try:
+        control = getter()
+    except Exception as exc:
+        code = getattr(exc, "code", None)
+        raise RuntimeError(
+            code if code in {"publishing_paused", "publishing_control_unavailable"}
+            else "publishing_control_unavailable"
+        ) from None
+    if not isinstance(control, dict) or control.get("paused") is not False:
+        raise RuntimeError(
+            "publishing_paused" if isinstance(control, dict) and control.get("paused") is True
+            else "publishing_control_unavailable"
+        )
+    return control
 
 
 def run_one(

@@ -109,6 +109,9 @@ class MobOfficialTrialReportTests(unittest.TestCase):
         )
 
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 self.upserts = []
 
@@ -311,6 +314,9 @@ class OfficialPreviewSafetyTests(unittest.TestCase):
 
     def test_publish_mode_is_blocked_while_lifecycle_is_test(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -337,6 +343,9 @@ class OfficialPreviewSafetyTests(unittest.TestCase):
 
     def test_publish_mode_also_requires_explicit_source_config_approval(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -375,12 +384,33 @@ class TestChannelPublishingGateTests(unittest.TestCase):
         )
         guard.start()
         self.addCleanup(guard.stop)
+    def test_publishing_control_guard_fails_closed_for_paused_or_missing_control(self):
+        class PausedCloud:
+            def get_publishing_control(self):
+                raise mob_official_trial.CloudStateError("publishing_paused")
+
+        class UnknownCloud:
+            pass
+
+        active = mob_official_trial._publishing_control_block(type("Active", (), {
+            "get_publishing_control": lambda self: {"paused": False},
+        })())
+        paused = mob_official_trial._publishing_control_block(PausedCloud())
+        unknown = mob_official_trial._publishing_control_block(UnknownCloud())
+
+        self.assertIsNone(active)
+        self.assertEqual(paused["error"], "publishing_paused")
+        self.assertEqual(unknown["error"], "publishing_control_unavailable")
+
     def test_config_allows_production_x_publishing_and_the_fixed_test_channel_trial(self):
         self.assertTrue(mob_official_trial._official_publishing_config_enabled())
         self.assertTrue(mob_official_trial._test_channel_publishing_config_enabled())
 
     def test_test_channel_trial_in_production_still_applies_mob_birth_cutoff(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -449,6 +479,9 @@ class TestChannelPublishingGateTests(unittest.TestCase):
 
     def test_production_publish_refuses_any_destination_other_than_fixed_test_channel(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -482,6 +515,9 @@ class TestChannelPublishingGateTests(unittest.TestCase):
 
     def test_test_channel_publish_refuses_a_different_destination(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -510,6 +546,9 @@ class TestChannelPublishingGateTests(unittest.TestCase):
 
     def test_test_channel_publish_requires_explicit_config_and_token(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -611,6 +650,9 @@ class OfficialSinceRuleTests(unittest.TestCase):
 
     def test_publish_run_sends_one_oldest_unseen_post_and_preserves_deduplication(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 self.upserted = []
                 self.attempts = []
@@ -707,6 +749,9 @@ class OfficialSinceRuleTests(unittest.TestCase):
 
     def test_d1_backlog_survives_single_post_run_and_resumes_without_rediscovery(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             items = {}
 
             def __init__(self, *args, **kwargs):
@@ -915,6 +960,9 @@ class MobXBacklogSafetyTests(unittest.TestCase):
 
     def test_dry_run_never_persists_new_discovery_rows(self):
         class FakeCloud:
+            def get_publishing_control(self):
+                return {"paused": False}
+
             def __init__(self, *args, **kwargs):
                 self.upsert_calls = []
 
