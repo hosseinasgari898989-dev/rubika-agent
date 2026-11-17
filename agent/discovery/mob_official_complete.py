@@ -252,7 +252,7 @@ def _detail_from_page(body: str, page_url: str) -> dict[str, Any]:
         if kind == "video" and (
             path.endswith((".mp4", ".webm", ".mov", ".m4v", ".m3u8"))
             or any(_is_host(host, h) for h in OFFICIAL_YOUTUBE_HOSTS)
-            or "vimeo.com" in host
+            or _is_host(host, "vimeo.com")
         ):
             video_url = video_url or candidate_url
         elif kind == "image" and not image_url and path.endswith((".jpg", ".jpeg", ".png", ".webp")):
