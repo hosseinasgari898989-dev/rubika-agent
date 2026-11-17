@@ -6664,7 +6664,7 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(webConfirm.body.paused, false);
     assert.equal((await getControl()).body.paused, false);
 
-    sqlite.prepare("INSERT INTO panel_state (key, value, updated_at) VALUES ('publishing_paused', 'invalid', datetime('now'))").run();
+    sqlite.prepare("UPDATE panel_state SET value = 'invalid', updated_at = datetime('now') WHERE key = 'publishing_paused'").run();
     const invalid = await getControl();
     assert.equal(invalid.status, 503);
     const status = await read(await worker.fetch(request("/api/status"), state));
