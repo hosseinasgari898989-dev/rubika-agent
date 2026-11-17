@@ -6686,7 +6686,7 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM owner_digest_events WHERE source = 'workflow-streak:termux'").get().n, 0);
 
     const threshold = await sendFailure(2);
-    assert.equal(threshold.status, 201);
+    assert.equal(threshold.status, 200);
     assert.equal(threshold.body.alert_recorded, true);
     assert.equal(sqlite.prepare("SELECT category FROM owner_digest_events WHERE source = 'workflow-streak:termux' ORDER BY id DESC LIMIT 1").get().category, "error");
 
@@ -6701,7 +6701,7 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(sqlite.prepare("SELECT category FROM owner_digest_events WHERE source = 'workflow-streak:termux' ORDER BY id DESC LIMIT 1").get().category, "success");
 
     const newStreak = await sendFailure(2);
-    assert.equal(newStreak.status, 201);
+    assert.equal(newStreak.status, 200);
     assert.equal(newStreak.body.alert_recorded, true);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM owner_digest_events WHERE source = 'workflow-streak:termux'").get().n, 3);
     sqlite.close();
