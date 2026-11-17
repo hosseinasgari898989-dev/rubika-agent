@@ -486,6 +486,41 @@ class WorkflowSafetyTests(unittest.TestCase):
                             line,
                             "Git network operations must use one-command host-side auth",
                         )
+    def test_deploy_worker_runs_read_only_api_health_smoke_after_deploy(self):
+        workflow = (ROOT / ".github" / "workflows" / "deploy-worker.yml").read_text(encoding="utf-8")
+        checkout = workflow.split("name: Check out repository", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("persist-credentials: false", checkout)
+        deploy_index = workflow.index("name: Deploy Worker")
+        smoke_index = workflow.index("name: Verify deployed Worker /api/health (read-only)")
+        self.assertLess(deploy_index, smoke_index)
+        smoke = workflow[smoke_index:]
+        self.assertIn("$AGENT_API_BASE_URL/api/health", smoke)
+        self.assertIn("curl --silent --show-error", smoke)
+        self.assertIn('body.get("database") != "connected"', smoke)
+        self.assertIn('body.get("publishing") is not False', smoke)
+        self.assertIn("Commit SHA: $GITHUB_SHA", smoke)
+        self.assertNotIn("--request POST", smoke)
+        self.assertNotIn(" -X POST ", smoke)
+
+    def test_groq_repair_preflight_logs_upstream_checked_out_and_main_shas(self):
+        workflow = (ROOT / ".github" / "workflows" / "groq-openrouter-code-repair.yml").read_text(encoding="utf-8")
+        preflight = workflow.split("name: Check freshness, secrets presence, and D1 budgets", 1)[1].split("\n      - name:", 1)[0]
+        for expected in (
+            "UPSTREAM_RUN_ID",
+            "UPSTREAM_SHA",
+            "git rev-parse HEAD",
+            "git rev-parse origin/main",
+            "Checked-out SHA:",
+            "Fetched current main SHA:",
+            "checked_sha=",
+            "main_sha=",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, preflight)
+        self.assertLess(preflight.index("git rev-parse HEAD"), preflight.index("fetch origin main"))
+        self.assertIn('if [[ "$checked_sha" != "$UPSTREAM_SHA" ]]', preflight)
+        self.assertIn('if [[ "$checked_sha" != "$main_sha" ]]', preflight)
+
 if __name__ == "__main__":
     unittest.main()
 
