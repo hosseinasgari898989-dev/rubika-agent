@@ -6605,15 +6605,16 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(initial.status, 200);
     assert.equal(initial.body.paused, false);
 
+    sqlite.prepare("UPDATE panel_owner SET chat_id = ? WHERE id = 1").run("123456789");
     const nonOwnerPreview = await read(await worker.fetch(request(
       "/api/brain/owner-console/publishing-control/preview",
-      { method: "POST", body: { chat_id: "not-the-owner", action: "pause" } },
+      { method: "POST", body: { chat_id: "987654321", action: "pause" } },
     ), state));
     assert.equal(nonOwnerPreview.status, 403);
 
     const pausePreview = await read(await worker.fetch(request(
       "/api/brain/owner-console/publishing-control/preview",
-      { method: "POST", body: { chat_id: "owner-review-chat", action: "pause" } },
+      { method: "POST", body: { chat_id: "123456789", action: "pause" } },
     ), state));
     assert.equal(pausePreview.status, 201);
     assert.match(pausePreview.body.challenge_id, /^[a-f0-9]{32}$/);
@@ -6621,7 +6622,7 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
 
     const pauseConfirm = await read(await worker.fetch(request(
       "/api/brain/owner-console/publishing-control/confirm",
-      { method: "POST", body: { chat_id: "owner-review-chat", challenge_id: pausePreview.body.challenge_id, confirm: true } },
+      { method: "POST", body: { chat_id: "123456789", challenge_id: pausePreview.body.challenge_id, confirm: true } },
     ), state));
     assert.equal(pauseConfirm.status, 200);
     assert.equal(pauseConfirm.body.paused, true);
@@ -6629,7 +6630,7 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
 
     const replay = await read(await worker.fetch(request(
       "/api/brain/owner-console/publishing-control/confirm",
-      { method: "POST", body: { chat_id: "owner-review-chat", challenge_id: pausePreview.body.challenge_id, confirm: true } },
+      { method: "POST", body: { chat_id: "123456789", challenge_id: pausePreview.body.challenge_id, confirm: true } },
     ), state));
     assert.equal(replay.status, 409, "a challenge can be consumed only once");
 
