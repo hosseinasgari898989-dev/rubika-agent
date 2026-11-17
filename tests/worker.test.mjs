@@ -6243,6 +6243,24 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
       },
     };
   };
+
+  // Exercise the deployed GET /api/health contract through the real Worker and all real D1 migrations.
+  {
+    const { sqlite, state } = createRealD1();
+    const health = await read(await worker.fetch(request("/api/health"), state));
+    assert.equal(health.status, 200);
+    assert.equal(health.body.ok, true);
+    assert.equal(health.body.service, "rubika-agent");
+    assert.equal(health.body.database, "connected");
+    assert.equal(health.body.publishing, false);
+
+    const rejectedMethod = await read(await worker.fetch(request("/api/health", {
+      method: "POST", body: {},
+    }), state));
+    assert.equal(rejectedMethod.status, 405);
+    sqlite.close();
+  }
+
   const queueReview = (sqlite, externalId, {
     handle = "tracked_a",
     reason = "edit_signal_not_found_by_brain",
