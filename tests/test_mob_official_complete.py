@@ -153,6 +153,37 @@ class OfficialMobCompleteDiscoveryTests(unittest.TestCase):
         self.assertEqual(detail["media_type"], "unknown")
         self.assertIsNone(detail["media_url"])
 
+    def test_vimeo_video_host_requires_exact_domain_or_subdomain(self):
+        def article_with_iframe(video_url):
+            return (
+                '<html><head>'
+                '<meta property="og:title" content="Official Mob Vimeo post">'
+                '<meta property="og:description" content="An official video announcement caption.">'
+                '</head><body><article><p>Watch the official video.</p>'
+                f'<iframe src="{video_url}"></iframe>'
+                '</article></body></html>'
+            )
+
+        page_url = "https://www.mobentertainment.com/news/vimeo-host-boundary"
+        for rejected in (
+            "https://notvimeo.com/video/123",
+            "https://vimeo.com.evil.example/video/123",
+            "https://fake-vimeo.com/video/123",
+        ):
+            with self.subTest(rejected=rejected):
+                detail = _detail_from_page(article_with_iframe(rejected), page_url)
+                self.assertEqual(detail["media_type"], "unknown")
+                self.assertIsNone(detail["media_url"])
+
+        for accepted in (
+            "https://vimeo.com/123",
+            "https://player.vimeo.com/video/123",
+        ):
+            with self.subTest(accepted=accepted):
+                detail = _detail_from_page(article_with_iframe(accepted), page_url)
+                self.assertEqual(detail["media_type"], "video")
+                self.assertEqual(detail["media_url"], accepted)
+
     def test_video_embedded_inside_article_is_selected_over_shared_header_logo(self):
         html = """
         <html><head>
