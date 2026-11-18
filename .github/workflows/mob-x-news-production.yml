@@ -32,6 +32,8 @@ jobs:
       OPENROUTER_MODEL: openrouter/free
       RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
       RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
+      RUBIKA_MAIN_CHANNEL_GUID: ${{ secrets.RUBIKA_MAIN_CHANNEL_GUID }}
+      RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE: ${{ vars.RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE || '' }}
       RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
     steps:
       - name: Check out the current main agent
@@ -74,9 +76,25 @@ jobs:
           if [[ "$missing" -ne 0 ]]; then exit 2; fi
           actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
           if [[ "$actual_hash" != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then
-            echo "::error::Production Mob publishing is locked to the registered test-channel hash."
+            echo "::error::The shared RUBIKA_CHANNEL_GUID secret must remain pinned to TEST."
             exit 2
           fi
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE" == "open" ]]; then
+            if [[ -z "${RUBIKA_MAIN_CHANNEL_GUID:-}" ]]; then
+              echo "::error::Mob X MAIN gate is open but the MAIN destination is unavailable."
+              exit 2
+            fi
+            main_hash="$(printf '%s' "$RUBIKA_MAIN_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
+            if [[ "$main_hash" == "$actual_hash" ]]; then
+              echo "::error::Mob X MAIN destination must differ from the pinned TEST channel."
+              exit 2
+            fi
+            printf 'RUBIKA_CHANNEL_GUID=%s\n' "$RUBIKA_MAIN_CHANNEL_GUID" >> "$GITHUB_ENV"
+            echo "mob_x_main_destination_gate_open=true"
+          else
+            echo "mob_x_main_destination_gate_open=false"
+          fi
+          echo "Shared TEST destination pin verified; no Secret was changed."
 
       - name: Record Mob automation start in the single editable owner digest
         continue-on-error: true
