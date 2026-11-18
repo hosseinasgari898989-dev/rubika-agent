@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import math
 import os
@@ -13,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from agent.brain import test_channel
 from agent.brain.cloud_state import CloudState, CloudStateError
 from agent.brain.delivery import _is_rate_limit_error
 from agent.brain.e2e_from_report import run_one
@@ -35,6 +37,23 @@ def _utc_now() -> str:
 
 def _safe_code(value: Any) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "", str(value or "unknown_error"))[:80] or "unknown_error"
+
+
+def tiktok_destination_guard_error() -> str | None:
+    """Allow the pinned TEST target by default; require an exact open gate for MAIN."""
+    destination = str(os.getenv("RUBIKA_CHANNEL_GUID", "") or "").strip()
+    if test_channel.is_test_channel_guid(destination):
+        return None
+
+    main_destination = str(os.getenv("RUBIKA_MAIN_CHANNEL_GUID", "") or "").strip()
+    production_gate = os.getenv("RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE", "")
+    if production_gate != "open":
+        return "tiktok_production_gate_closed"
+    if not main_destination or test_channel.is_test_channel_guid(main_destination):
+        return "tiktok_production_destination_invalid"
+    if not hmac.compare_digest(destination, main_destination):
+        return "tiktok_production_destination_mismatch"
+    return None
 
 
 _TIMING_FIELDS = (
@@ -294,6 +313,18 @@ def run_daily(
         or not 0 <= float(send_delay_seconds) <= MAX_SEND_DELAY_SECONDS
     ):
         raise ValueError("send_delay_seconds_out_of_range")
+
+    destination_error = tiktok_destination_guard_error()
+    if destination_error:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "stop_reason": destination_error,
+            "reason_fa": "مقصد صف TikTok با گیت مستقل تولید تأیید نشد؛ هیچ آیتمی claim یا ارسال نشد.",
+            "attempted_count": 0,
+            "sent_count": 0,
+            "failed_count": 0,
+        }
 
     monotonic = clock or time.monotonic
     sleep = sleeper or time.sleep

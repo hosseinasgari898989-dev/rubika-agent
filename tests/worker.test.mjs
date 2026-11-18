@@ -6604,6 +6604,10 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     const initial = await getControl();
     assert.equal(initial.status, 200);
     assert.equal(initial.body.paused, false);
+    const statusInitially = await read(await worker.fetch(request("/api/status"), state));
+    assert.equal(statusInitially.status, 200);
+    assert.equal(statusInitially.body.publishing_control_available, true);
+    assert.equal(statusInitially.body.publishing_paused, false);
 
     sqlite.prepare("UPDATE panel_owner SET chat_id = ? WHERE id = 1").run("123456789");
     const nonOwnerPreview = await read(await worker.fetch(request(
@@ -6627,6 +6631,10 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
     assert.equal(pauseConfirm.status, 200);
     assert.equal(pauseConfirm.body.paused, true);
     assert.equal((await getControl()).body.paused, true);
+    const statusPaused = await read(await worker.fetch(request("/api/status"), state));
+    assert.equal(statusPaused.status, 200);
+    assert.equal(statusPaused.body.publishing_control_available, true);
+    assert.equal(statusPaused.body.publishing_paused, true);
 
     const replay = await read(await worker.fetch(request(
       "/api/brain/owner-console/publishing-control/confirm",
