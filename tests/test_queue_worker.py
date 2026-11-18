@@ -91,6 +91,90 @@ class FakeCloud:
 
 
 class QueueWorkerTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "fixture-test-channel",
+            "RUBIKA_MAIN_CHANNEL_GUID": "",
+            "RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE": "",
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+        pin = patch.object(
+            queue_worker.test_channel,
+            "is_test_channel_guid",
+            side_effect=lambda value: str(value or "").strip() == "fixture-test-channel",
+        )
+        pin.start()
+        self.addCleanup(pin.stop)
+
+    def test_test_destination_remains_available_when_main_gate_is_closed(self):
+        self.assertIsNone(queue_worker.tiktok_destination_guard_error())
+
+    def test_main_destination_requires_exact_open_gate_and_secret_match(self):
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "main-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+        }):
+            self.assertEqual(queue_worker.tiktok_destination_guard_error(), "tiktok_production_gate_closed")
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "main-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+            "RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE": "open",
+        }):
+            self.assertIsNone(queue_worker.tiktok_destination_guard_error())
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "other-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+            "RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE": "open",
+        }):
+            self.assertEqual(queue_worker.tiktok_destination_guard_error(), "tiktok_production_destination_mismatch")
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "main-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+            "RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE": "unreadable",
+        }):
+            self.assertEqual(queue_worker.tiktok_destination_guard_error(), "tiktok_production_gate_closed")
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "main-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "",
+            "RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE": "open",
+        }):
+            self.assertEqual(queue_worker.tiktok_destination_guard_error(), "tiktok_production_destination_invalid")
+
+    def test_unauthorized_main_target_blocks_before_worker_or_d1_access(self):
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "main-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+            "RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE": "",
+        }):
+            with (
+                patch.object(queue_worker, "CloudState") as cloud_factory,
+                patch.object(queue_worker, "run_one") as run_one,
+            ):
+                report = queue_worker.run_daily(send_delay_seconds=0)
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["stop_reason"], "tiktok_production_gate_closed")
+        self.assertEqual(report["attempted_count"], 0)
+        self.assertEqual(report["sent_count"], 0)
+        cloud_factory.assert_not_called()
+        run_one.assert_not_called()
+
+    def test_workflow_keeps_shared_test_secret_and_defaults_main_gate_closed(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github" / "workflows" / "daily-queue-processor.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}", workflow)
+        self.assertIn("RUBIKA_MAIN_CHANNEL_GUID: ${{ secrets.RUBIKA_MAIN_CHANNEL_GUID }}", workflow)
+        self.assertIn("RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE: ${{ vars.RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE || '' }}", workflow)
+        self.assertIn('if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE" == "open" ]]; then', workflow)
+        self.assertIn("RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}", workflow.split("Verify Rubika bot and TEST destination without sending a message", 1)[1])
+        self.assertIn("RUBIKA_CHANNEL_GUID=%s", workflow)
+        self.assertIn('>> "$GITHUB_ENV"', workflow)
+        self.assertIn("مقصد این اجرا طبق gate مستقل تعیین شده است.", workflow)
+        self.assertNotIn("فقط مقصد تست", workflow)
+
+
     def test_emergency_pause_blocks_queue_before_any_claim_or_publish(self):
         cloud = FakeCloud()
         cloud.get_publishing_control = lambda: (_ for _ in ()).throw(CloudStateError("publishing_paused"))
