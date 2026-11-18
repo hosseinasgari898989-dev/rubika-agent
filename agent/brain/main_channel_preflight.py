@@ -25,7 +25,7 @@ def verify_main_channel(
     main_channel_guid: str,
     bot_factory: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """Verify getMe/getChat and the TEST-pin separation without exposing credentials."""
+    """Verify getMe/getChat and TEST-pin separation without exposing credentials."""
     normalized_token = str(token or "").strip()
     normalized_guid = str(main_channel_guid or "").strip()
     guid_hash = test_channel.channel_guid_sha256(normalized_guid) if normalized_guid else ""
@@ -40,6 +40,7 @@ def verify_main_channel(
         "main_destination_accessible": False,
         "message_sent": False,
         "published": False,
+        "failure_stage": "missing_credentials",
     }
     if not normalized_token or not normalized_guid:
         return result
@@ -47,10 +48,12 @@ def verify_main_channel(
     if bot_factory is None:
         try:
             from rubka import Bot
-        except ImportError:
+        except Exception:
+            result["failure_stage"] = "rubka_import_failed"
             return result
         bot_factory = Bot
 
+    result["failure_stage"] = "bot_identity_failed"
     try:
         bot = bot_factory(token=normalized_token, timeout=30, show_progress=False)
         identity = _response_payload(bot.get_me())
@@ -58,13 +61,16 @@ def verify_main_channel(
         return result
 
     if identity.get("status") != "OK":
+        result["failure_stage"] = "bot_status_not_ok"
         return result
     result["bot_identity_ok"] = True
 
     # Never call getChat on the pinned TEST destination from this MAIN-only preflight.
     if result["main_matches_test_pin"]:
+        result["failure_stage"] = "test_pin_match"
         return result
 
+    result["failure_stage"] = "main_chat_failed"
     try:
         destination = _response_payload(bot.get_chat(normalized_guid))
     except Exception:
@@ -75,6 +81,7 @@ def verify_main_channel(
 
     result["main_destination_accessible"] = True
     result["ok"] = True
+    result["failure_stage"] = "none"
     return result
 
 
@@ -83,7 +90,7 @@ def main() -> int:
         os.getenv("RUBIKA_TOKEN", ""),
         os.getenv("RUBIKA_MAIN_CHANNEL_GUID", ""),
     )
-    # The report intentionally contains only booleans and a short hash prefix.
+    # The report intentionally contains only booleans, an allowlisted stage and a short hash prefix.
     print(json.dumps(result, sort_keys=True))
     return 0 if result["ok"] is True else 1
 
