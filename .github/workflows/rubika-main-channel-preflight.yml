@@ -1,6 +1,12 @@
 name: Rubika main-channel credential preflight
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/rubika-main-channel-preflight.yml"
+      - "agent/brain/main_channel_preflight.py"
+      - "agent/brain/test_channel.py"
+      - "tests/test_main_channel_preflight.py"
   push:
     branches:
       - main
@@ -8,6 +14,7 @@ on:
       - ".github/workflows/rubika-main-channel-preflight.yml"
       - "agent/brain/main_channel_preflight.py"
       - "agent/brain/test_channel.py"
+      - "tests/test_main_channel_preflight.py"
   workflow_dispatch:
 
 permissions:
@@ -18,7 +25,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  read-only-preflight-unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Rubka library for runtime inspection
+        run: python -m pip install --disable-pip-version-check "rubka==8.1.7" "Pillow>=10,<13"
+      - name: Run fake-bot read-only preflight tests and inspect installed Bot methods
+        run: python -m unittest discover -s tests -p 'test_main_channel_preflight.py' -v
+
   verify-main-channel-read-only:
+    if: github.event_name != 'pull_request'
+    needs: read-only-preflight-unit-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
