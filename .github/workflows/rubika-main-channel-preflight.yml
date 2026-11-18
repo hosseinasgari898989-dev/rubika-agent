@@ -6,7 +6,8 @@ on:
       - main
     paths:
       - ".github/workflows/rubika-main-channel-preflight.yml"
-      - ".github/workflows/daily-queue-processor.yml"
+      - "agent/brain/main_channel_preflight.py"
+      - "agent/brain/test_channel.py"
   workflow_dispatch:
 
 permissions:
@@ -17,26 +18,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify-without-sending:
+  verify-main-channel-read-only:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
-      RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}
+      RUBIKA_MAIN_CHANNEL_GUID: ${{ secrets.RUBIKA_MAIN_CHANNEL_GUID }}
     steps:
-      - name: Check that required credentials exist without displaying values
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "${RUBIKA_TOKEN:-}" ]]; then
-            echo "::error::RUBIKA_TOKEN is not configured."
-            exit 2
-          fi
-          if [[ -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
-            echo "::error::RUBIKA_CHANNEL_GUID is not configured."
-            exit 2
-          fi
-          echo "Rubika token and destination secrets are present; values are hidden."
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,75 +36,19 @@ jobs:
           python-version: "3.12"
 
       - name: Install the pinned Rubka client
-        run: python -m pip install --disable-pip-version-check "rubka==8.1.7" "Pillow>=10,<13"
+        run: python -m pip install --disable-pip-version-check "rubka==8.1.7"
 
-      - name: Validate bot authentication with a read-only call
+      - name: Check required inputs without displaying values
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import logging
-          import os
-          import sys
-          logging.disable(logging.CRITICAL)
-          try:
-              from rubka import Bot
-              bot = Bot(token=os.environ["RUBIKA_TOKEN"], timeout=15)
-              me = bot.get_me()
-              if not isinstance(me, dict):
-                  print("bot_api_response_type=" + type(me).__name__, file=sys.stderr)
-                  raise SystemExit(1)
-              status = me.get("status")
-              if status != "OK":
-                  import re
-                  status_code = str(status or "missing")
-                  detail_code = str(me.get("status_det") or me.get("error") or "missing")
-                  status_code = status_code if re.fullmatch(r"[A-Za-z0-9_-]{1,48}", status_code) else "unrecognized"
-                  detail_code = detail_code if re.fullmatch(r"[A-Za-z0-9 _-]{1,64}", detail_code) else "unrecognized"
-                  print("bot_api_status=" + status_code + "; bot_api_detail=" + detail_code, file=sys.stderr)
-                  raise SystemExit(1)
-          except SystemExit:
-              raise
-          except Exception as exc:
-              import re
-              exception_name = type(exc).__name__
-              missing_module = getattr(exc, "name", None)
-              if not re.fullmatch(r"[A-Za-z0-9_]{1,60}", exception_name):
-                  exception_name = "unknown_exception"
-              if isinstance(missing_module, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", missing_module):
-                  print("bot_authentication_preflight_failed:" + exception_name + ":" + missing_module, file=sys.stderr)
-              else:
-                  print("bot_authentication_preflight_failed:" + exception_name, file=sys.stderr)
-              raise SystemExit(1) from None
-          print("Rubika bot authentication passed; no message was sent.")
-          PY
+          token_present=false
+          main_guid_present=false
+          [[ -n "${RUBIKA_TOKEN:-}" ]] && token_present=true
+          [[ -n "${RUBIKA_MAIN_CHANNEL_GUID:-}" ]] && main_guid_present=true
+          echo "token_present=$token_present"
+          echo "main_guid_present=$main_guid_present"
+          [[ "$token_present" == "true" && "$main_guid_present" == "true" ]]
 
-      - name: Require a real main-channel GUID before checking destination
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "${RUBIKA_CHANNEL_GUID:-}" ]]; then
-            echo "::error::RUBIKA_CHANNEL_GUID is missing; main-channel preflight stays blocked."
-            exit 2
-          fi
-          actual_hash="$(printf '%s' "$RUBIKA_CHANNEL_GUID" | sha256sum | awk '{print $1}')"
-          if [[ "$actual_hash" == "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then
-            echo "::error::RUBIKA_CHANNEL_GUID hashes to the registered test-channel pin; main-channel publishing stays blocked."
-            exit 2
-          fi
-          python - <<'PY'
-          import logging
-          import os
-          import sys
-          logging.disable(logging.CRITICAL)
-          try:
-              from rubka import Bot
-              bot = Bot(token=os.environ["RUBIKA_TOKEN"], timeout=15)
-              destination = bot.get_chat(os.environ["RUBIKA_CHANNEL_GUID"])
-              if not isinstance(destination, dict) or destination.get("status") != "OK":
-                  raise RuntimeError("main_destination_unavailable")
-          except Exception:
-              print("main_destination_preflight_failed", file=sys.stderr)
-              raise SystemExit(1) from None
-          print("Configured main-channel destination validated; no message was sent.")
-          PY
+      - name: Verify bot identity and distinct MAIN destination (read-only)
+        run: python -m agent.brain.main_channel_preflight
