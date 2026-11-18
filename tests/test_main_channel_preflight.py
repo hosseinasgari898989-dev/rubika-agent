@@ -304,7 +304,9 @@ class MainChannelPreflightTests(unittest.TestCase):
         except ImportError:
             self.skipTest("Rubka is installed in the dedicated workflow job")
 
-        bot = Bot(token="unit-test-placeholder", timeout=1, show_progress=False)
+        # Bypass Bot.__init__: in Rubka 8.1.7 it validates the token during
+        # construction. The inventory must be local introspection only.
+        bot = object.__new__(Bot)
         inventory = {
             name: bool(hasattr(bot, name))
             for name in main_channel_preflight.READ_ONLY_CHAT_METHODS
