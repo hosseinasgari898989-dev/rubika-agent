@@ -1030,5 +1030,77 @@ class MobXBacklogSafetyTests(unittest.TestCase):
         self.assertEqual(fake_cloud.upsert_calls, [])
 
 
+class MobXMainDestinationGateTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(
+            test_channel,
+            "is_test_channel_guid",
+            side_effect=lambda value: str(value or "").strip() == "fixture-test-guid",
+        )
+        guard.start()
+        self.addCleanup(guard.stop)
+
+    def test_fixed_test_destination_remains_available_when_main_gate_is_closed(self):
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "fixture-test-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "",
+            "RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE": "",
+        }):
+            self.assertIsNone(mob_official_trial.official_publishing_target_error())
+
+    def test_main_destination_requires_exact_mob_gate_open(self):
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "main-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+            "RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE": "",
+        }):
+            self.assertEqual(
+                mob_official_trial.official_publishing_target_error(),
+                "mob_x_main_channel_gate_closed",
+            )
+
+    def test_open_mob_gate_allows_only_the_separate_main_destination(self):
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "main-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+            "RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE": "open",
+        }):
+            self.assertIsNone(mob_official_trial.official_publishing_target_error())
+
+        with patch.dict("os.environ", {
+            "RUBIKA_CHANNEL_GUID": "other-guid",
+            "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+            "RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE": "open",
+        }):
+            self.assertEqual(
+                mob_official_trial.official_publishing_target_error(),
+                "mob_x_main_destination_mismatch",
+            )
+
+    def test_missing_or_test_pinned_main_destination_fails_closed(self):
+        for main_guid in ("", "fixture-test-guid"):
+            with self.subTest(main_guid_present=bool(main_guid)), patch.dict("os.environ", {
+                "RUBIKA_CHANNEL_GUID": "main-guid",
+                "RUBIKA_MAIN_CHANNEL_GUID": main_guid,
+                "RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE": "open",
+            }):
+                self.assertEqual(
+                    mob_official_trial.official_publishing_target_error(),
+                    "mob_x_main_destination_invalid",
+                )
+
+    def test_unreadable_or_unrecognized_mob_gate_is_closed(self):
+        for gate in ("", "unreadable", "approved", "true"):
+            with self.subTest(gate=gate), patch.dict("os.environ", {
+                "RUBIKA_CHANNEL_GUID": "main-guid",
+                "RUBIKA_MAIN_CHANNEL_GUID": "main-guid",
+                "RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE": gate,
+            }):
+                self.assertEqual(
+                    mob_official_trial.official_publishing_target_error(),
+                    "mob_x_main_channel_gate_closed",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -203,6 +204,24 @@ def _official_publishing_config_enabled() -> bool:
         and policy.get("target_channel_guid_sha256") == test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256
         and policy.get("max_posts_per_run") == 1
     )
+
+
+def official_publishing_target_error() -> str | None:
+    """Allow the fixed TEST pin by default; MAIN requires the Mob-only explicit gate."""
+    destination = str(os.getenv("RUBIKA_CHANNEL_GUID", "") or "").strip()
+    if test_channel.is_test_channel_guid(destination):
+        return None
+
+    gate = os.getenv("RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE", "")
+    if gate != "open":
+        return "mob_x_main_channel_gate_closed"
+
+    main_destination = str(os.getenv("RUBIKA_MAIN_CHANNEL_GUID", "") or "").strip()
+    if not main_destination or test_channel.is_test_channel_guid(main_destination):
+        return "mob_x_main_destination_invalid"
+    if not hmac.compare_digest(destination, main_destination):
+        return "mob_x_main_destination_mismatch"
+    return None
 
 
 def _test_channel_publishing_config_enabled() -> bool:
@@ -841,6 +860,13 @@ def run_trial(
         "attempts": [],
         "error": None,
     }
+    if publish:
+        destination_error = official_publishing_target_error()
+        if destination_error:
+            report["error"] = destination_error
+            _report(output_report, report)
+            return report
+
     api_base = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
     token = os.getenv("AGENT_API_TOKEN", "")
     try:
@@ -878,8 +904,9 @@ def run_trial(
             _report(output_report, report)
             return report
         configured_target_sha256 = _official_publishing_policy().get("target_channel_guid_sha256")
-        if configured_target_sha256 != test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256 or not test_channel.is_test_channel_guid(os.getenv("RUBIKA_CHANNEL_GUID", "")):
-            report["error"] = "official_publishing_target_mismatch"
+        destination_error = official_publishing_target_error()
+        if configured_target_sha256 != test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256 or destination_error:
+            report["error"] = destination_error or "official_publishing_target_mismatch"
             report["lifecycle"] = {
                 "mode": lifecycle_policy["mode"],
                 "born_at": lifecycle_policy["born_at"],
