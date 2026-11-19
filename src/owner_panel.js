@@ -1006,6 +1006,8 @@ async function saveMobCaptionAndRefresh(ui, jobId, row, result, caption, {
 }
 
 async function debugText(env) {
+  let channelEvent = null;
+  try { channelEvent = JSON.parse(await getState(env, "last_channel_event", "null")); } catch { /* ignore */ }
   const lastError = clean(await getState(env, "last_error", "none"), 80) || "none";
   const readCounter = async (key) => {
     const value = Number(await getState(env, key, "0"));
@@ -1057,6 +1059,7 @@ async function debugText(env) {
     "message_id_tail: " + String(event && event.message_id_tail || "none").slice(-4),
     "button: " + (clean(event && event.button, 60) || "none"),
     "botAuthored: " + (event && event.botAuthored === true ? "true" : "false"),
+    "last_channel_event: " + (channelEvent ? "`" + JSON.stringify(channelEvent) + "`" : "none"),
   ].join("\n");
 }
 
@@ -1547,6 +1550,30 @@ async function tryClaim(env, ev) {
 }
 
 const idTail = (value) => String(value ?? "").slice(-4);
+const CHANNEL_HASH_LABELS = { "83dc2fe315b4": "main", "0c939688dd55": "test" };
+async function recordChannelProbe(env, ev) {
+  try {
+    if (!ev || typeof ev.chat !== "string" || !ev.chat) return;
+    const lower = ev.chat.toLowerCase();
+    const channelish = lower.startsWith("c0") || ev.isGroupish === true ||
+      (Array.isArray(ev.types) && ev.types.some((t) => String(t).includes("channel")));
+    if (!channelish) return;
+    const hash12 = (await sha256Hex(ev.chat)).slice(0, 12);
+    const match = CHANNEL_HASH_LABELS[hash12] || "other";
+    const record = {
+      at: new Date().toISOString(),
+      kind: clean(ev.kind, 16) || "unknown",
+      first2: lower.slice(0, 2),
+      len: ev.chat.length,
+      hash12,
+      match,
+      types: Array.isArray(ev.types) ? ev.types.slice(0, 4).map((v) => clean(v, 24)).filter(Boolean) : [],
+      botAuthored: ev.botAuthored === true,
+    };
+    if (match === "other") record.chat_id = String(ev.chat).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+    await setState(env, "last_channel_event", JSON.stringify(record));
+  } catch { /* diagnostics only; never affect the panel */ }
+}
 async function processEvent(env, selfFetch, origin, ev) {
   if (!ev) return;
   const timing = {
@@ -1559,6 +1586,7 @@ async function processEvent(env, selfFetch, origin, ev) {
   };
   const receivedAt = Date.now();
   const timedEnv = withPanelTiming(env, timing);
+  await recordChannelProbe(timedEnv, ev);
   if (ev.kind === "text" && !ev.botAuthored && isPrivateChat(ev) && /^\/claim\s+\S{1,128}\s*$/.test(ev.text)) {
     await tryClaim(timedEnv, ev);
     return;
