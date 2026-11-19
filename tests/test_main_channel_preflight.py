@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import json
+import re
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -18,6 +19,15 @@ ALLOWED_FAILURE_STAGES = {
     "main_chat_failed",
     "none",
 }
+EXPECTED_METHODS = {
+    "get_chat",
+    "get_chat_info",
+    "get_channel_info",
+    "get_chat_admins",
+    "get_admin_chats",
+    "get_chat_member",
+    "get_chats",
+}
 
 
 class FakeBot:
@@ -25,6 +35,7 @@ class FakeBot:
         self.kwargs = kwargs
         self.identity_calls = 0
         self.chat_calls: list[str] = []
+        self.send_calls = 0
 
     def get_me(self):
         self.identity_calls += 1
@@ -35,7 +46,13 @@ class FakeBot:
         return {"status": "OK", "chat": {"chat_id": "must-not-be-logged"}}
 
     def send_message(self, *_args, **_kwargs):
-        raise AssertionError("preflight must never send a message")
+        self.send_calls += 1
+
+    def send_file(self, *_args, **_kwargs):
+        self.send_calls += 1
+
+    def sendMessage(self, *_args, **_kwargs):
+        self.send_calls += 1
 
 
 class MainChannelPreflightTests(unittest.TestCase):
@@ -48,16 +65,20 @@ class MainChannelPreflightTests(unittest.TestCase):
         guard.start()
         self.addCleanup(guard.stop)
 
-    def assert_safe_no_send_result(self, result):
+    def assert_safe_no_send_result(self, result, *sensitive_values):
         self.assertFalse(result["message_sent"])
         self.assertFalse(result["published"])
         self.assertIn(result["failure_stage"], ALLOWED_FAILURE_STAGES)
-        encoded = json.dumps(result)
-        self.assertNotIn("dummy-token", encoded)
-        self.assertNotIn("sensitive-token-value", encoded)
-        self.assertNotIn("must-not-be-logged", encoded)
-        self.assertNotIn("main-guid", encoded)
-        self.assertNotIn("private exception", encoded)
+        encoded = json.dumps(result, sort_keys=True)
+        for sensitive in (
+            "dummy-token",
+            "sensitive-token-value",
+            "must-not-be-logged",
+            "main-guid",
+            *sensitive_values,
+        ):
+            if sensitive:
+                self.assertNotIn(sensitive, encoded)
 
     def test_success_checks_identity_and_main_destination_without_sending(self):
         bot = FakeBot()
@@ -68,15 +89,131 @@ class MainChannelPreflightTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["bot_identity_ok"])
         self.assertTrue(result["main_destination_accessible"])
+        self.assertEqual(result["accessible_via"], "get_chat")
         self.assertFalse(result["main_matches_test_pin"])
         self.assertEqual(result["failure_stage"], "none")
         self.assertEqual(bot.identity_calls, 1)
         self.assertEqual(bot.chat_calls, ["main-guid"])
+        self.assertEqual(bot.send_calls, 0)
+        self.assertEqual(set(result["read_only_method_presence"]), EXPECTED_METHODS)
+        self.assertTrue(result["read_only_method_presence"]["get_chat"])
+        self.assertFalse(result["read_only_method_presence"]["get_chat_info"])
+        self.assertEqual(
+            result["read_only_checks"],
+            [{"method": "get_chat", "ok": True, "status": "OK"}],
+        )
         self.assertEqual(
             result["main_guid_sha256_prefix"],
             test_channel.channel_guid_sha256("main-guid")[:12],
         )
         self.assert_safe_no_send_result(result)
+
+    def test_get_chat_fails_but_get_chat_info_confirms_destination(self):
+        class FallbackBot(FakeBot):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.chat_info_calls: list[str] = []
+
+            def get_chat(self, chat_id):
+                self.chat_calls.append(chat_id)
+                raise RuntimeError("private exception with dummy-token and main-guid")
+
+            def get_chat_info(self, chat_id):
+                self.chat_info_calls.append(chat_id)
+                return {"status": "OK", "chat": {"id": "not-for-output"}}
+
+        bot = FallbackBot()
+        result = main_channel_preflight.verify_main_channel(
+            "dummy-token", "main-guid", lambda **kwargs: bot
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["main_destination_accessible"])
+        self.assertEqual(result["accessible_via"], "get_chat_info")
+        self.assertEqual(result["failure_stage"], "none")
+        self.assertEqual(bot.chat_calls, ["main-guid"])
+        self.assertEqual(bot.chat_info_calls, ["main-guid"])
+        self.assertEqual(result["chat_exception_type"], "RuntimeError")
+        self.assertEqual(
+            result["read_only_checks"],
+            [
+                {"method": "get_chat", "ok": False, "exception_type": "RuntimeError"},
+                {"method": "get_chat_info", "ok": True, "status": "OK"},
+            ],
+        )
+        self.assertEqual(bot.send_calls, 0)
+        self.assert_safe_no_send_result(result)
+
+    def test_no_read_only_candidate_confirms_destination(self):
+        class NoSuccessBot(FakeBot):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.chat_info_calls: list[str] = []
+                self.chat_member_calls = 0
+                self.admin_chats_calls = 0
+
+            def get_chat(self, chat_id):
+                self.chat_calls.append(chat_id)
+                return {"status": "ERROR", "description": "not accessible"}
+
+            def get_chat_info(self, chat_id):
+                self.chat_info_calls.append(chat_id)
+                return {"status": "DENIED"}
+
+            def get_chat_member(self, chat_id, user_id):
+                self.chat_member_calls += 1
+                raise AssertionError("must not invent a member id")
+
+            def get_admin_chats(self):
+                self.admin_chats_calls += 1
+                raise AssertionError("does not accept a chat id")
+
+        bot = NoSuccessBot()
+        result = main_channel_preflight.verify_main_channel(
+            "dummy-token", "main-guid", lambda **kwargs: bot
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["main_destination_accessible"])
+        self.assertIsNone(result["accessible_via"])
+        self.assertEqual(result["failure_stage"], "main_chat_failed")
+        self.assertEqual(bot.chat_calls, ["main-guid"])
+        self.assertEqual(bot.chat_info_calls, ["main-guid"])
+        self.assertEqual(bot.chat_member_calls, 0)
+        self.assertEqual(bot.admin_chats_calls, 0)
+        self.assertEqual(result["chat_response_status"], "ERROR")
+        self.assertEqual(result["chat_response_description"], "not accessible")
+        self.assertEqual(bot.send_calls, 0)
+        self.assert_safe_no_send_result(result)
+
+    def test_long_odd_response_description_is_truncated_and_sanitized(self):
+        raw_guid = "c0ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        raw_token = "987654321:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+        class OddDescriptionBot(FakeBot):
+            def get_chat(self, chat_id):
+                self.chat_calls.append(chat_id)
+                return {
+                    "status": "ERROR",
+                    "description": (
+                        f"Denied {raw_guid} token={raw_token} {raw_guid} "
+                        "odd<unicode>message " + ("x" * 70)
+                    ),
+                }
+
+        bot = OddDescriptionBot()
+        result = main_channel_preflight.verify_main_channel(
+            "dummy-token", raw_guid, lambda **kwargs: bot
+        )
+        description = result["chat_response_description"]
+        self.assertIsNotNone(description)
+        self.assertLessEqual(len(description), 40)
+        self.assertRegex(description, re.compile(r"^[A-Za-z0-9 _.,:;!?()/+-]*$"))
+        self.assertNotIn(raw_guid, description)
+        self.assertNotIn(raw_token, description)
+        self.assertEqual(result["chat_response_status"], "ERROR")
+        self.assert_safe_no_send_result(result, raw_guid, raw_token)
+        self.assertEqual(bot.send_calls, 0)
 
     def test_missing_credentials_fail_before_client_creation(self):
         created = []
@@ -143,7 +280,7 @@ class MainChannelPreflightTests(unittest.TestCase):
         self.assertEqual(bot.chat_calls, [])
         self.assert_safe_no_send_result(result)
 
-    def test_test_pin_match_is_blocked_before_get_chat(self):
+    def test_test_pin_match_is_blocked_before_any_chat_method(self):
         bot = FakeBot()
         result = main_channel_preflight.verify_main_channel(
             "dummy-token", "test-guid", lambda **kwargs: bot
@@ -153,53 +290,52 @@ class MainChannelPreflightTests(unittest.TestCase):
         self.assertTrue(result["bot_identity_ok"])
         self.assertTrue(result["main_matches_test_pin"])
         self.assertFalse(result["main_destination_accessible"])
+        self.assertIsNone(result["accessible_via"])
         self.assertEqual(result["failure_stage"], "test_pin_match")
         self.assertEqual(bot.identity_calls, 1)
         self.assertEqual(bot.chat_calls, [])
+        self.assertEqual(bot.send_calls, 0)
+        self.assertEqual(result["read_only_checks"], [])
         self.assert_safe_no_send_result(result)
 
-    def test_main_chat_exception_and_non_ok_response_are_sanitized(self):
-        class BrokenChatBot(FakeBot):
-            def get_chat(self, chat_id):
-                self.chat_calls.append(chat_id)
-                raise RuntimeError("private exception with sensitive-token-value")
+    def test_installed_rubka_bot_read_only_method_inventory_uses_hasattr(self):
+        try:
+            from rubka import Bot
+        except ImportError:
+            self.skipTest("Rubka is installed in the dedicated workflow job")
 
-        class RejectedChatBot(FakeBot):
-            def get_chat(self, chat_id):
-                self.chat_calls.append(chat_id)
-                return {"status": "ERROR", "description": "private exception"}
+        # Bypass Bot.__init__: in Rubka 8.1.7 it validates the token during
+        # construction. The inventory must be local introspection only.
+        bot = object.__new__(Bot)
+        inventory = {
+            name: bool(hasattr(bot, name))
+            for name in main_channel_preflight.READ_ONLY_CHAT_METHODS
+        }
+        self.assertEqual(set(inventory), EXPECTED_METHODS)
+        self.assertTrue(all(type(value) is bool for value in inventory.values()))
+        print(json.dumps(inventory, sort_keys=True))
 
-        for bot in (BrokenChatBot(), RejectedChatBot()):
-            with self.subTest(bot=type(bot).__name__):
-                result = main_channel_preflight.verify_main_channel(
-                    "dummy-token", "main-guid", lambda **kwargs: bot
-                )
-                self.assertFalse(result["ok"])
-                self.assertTrue(result["bot_identity_ok"])
-                self.assertFalse(result["main_destination_accessible"])
-                self.assertEqual(result["failure_stage"], "main_chat_failed")
-                self.assertEqual(bot.chat_calls, ["main-guid"])
-                self.assert_safe_no_send_result(result)
-
-    def test_workflow_install_line_matches_pinned_requirements_including_pillow(self):
+    def test_workflow_installs_pinned_client_and_runs_read_only_tests(self):
         workflow = (
             Path(__file__).resolve().parents[1]
             / ".github" / "workflows" / "rubika-main-channel-preflight.yml"
         ).read_text(encoding="utf-8")
-        expected = (
+        expected_install = (
             'run: python -m pip install --disable-pip-version-check '
             '"rubka==8.1.7" "Pillow>=10,<13"'
         )
         install_lines = [
             line.strip()
             for line in workflow.splitlines()
-            if "Install the pinned Rubka client" in line
-            or "rubka==8.1.7" in line
+            if "rubka==8.1.7" in line
         ]
-        self.assertEqual(
-            install_lines,
-            ["- name: Install the pinned Rubka client", expected],
+        self.assertEqual(install_lines, [expected_install, expected_install])
+        self.assertIn('      - "tests/test_main_channel_preflight.py"', workflow)
+        self.assertIn(
+            "python -m unittest discover -s tests -p 'test_main_channel_preflight.py' -v",
+            workflow,
         )
+        self.assertIn("if: github.event_name != 'pull_request'", workflow)
 
     def test_response_payload_rejects_non_dict_json(self):
         self.assertEqual(main_channel_preflight._response_payload("[]"), {})
