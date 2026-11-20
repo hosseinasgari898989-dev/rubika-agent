@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-20T08:36:10.047650+00:00",
+  "generated_at": "2026-11-20T09:05:51.098734+00:00",
   "source": "github_actions_termux_docker",
   "mode": "metadata_only_no_download_no_publish",
   "lifecycle": {
@@ -10,7 +10,7 @@
   },
   "summary": {
     "tiktok_candidates": 42,
-    "mob_official_candidates": 5,
+    "mob_official_candidates": 0,
     "mob_official_source": "Mob Entertainment official sources",
     "mob_official_method": "official_x_syndication_and_verified_seed_urls",
     "mob_official_birth_cutoff_rejected": 0,
@@ -56,8 +56,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-19T21:00:00+00:00",
-        "view_count": 2614,
-        "like_count": 657,
+        "view_count": 2700,
+        "like_count": 685,
         "comment_count": 26,
         "share_count": null,
         "media_type": "video",
@@ -94,7 +94,7 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-15T21:56:50+00:00",
         "view_count": 26600,
-        "like_count": 3520,
+        "like_count": 3521,
         "comment_count": 94,
         "share_count": null,
         "media_type": "video",
@@ -242,7 +242,7 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-05T20:40:00+00:00",
         "view_count": 18900,
-        "like_count": 2467,
+        "like_count": 2468,
         "comment_count": 41,
         "share_count": null,
         "media_type": "video",
@@ -317,7 +317,7 @@
         "published_at": "2026-11-03T20:40:00+00:00",
         "view_count": 30500,
         "like_count": 2828,
-        "comment_count": 78,
+        "comment_count": 77,
         "share_count": null,
         "media_type": "video",
         "method": "termux_ytdlp_selected_creator_profile",
@@ -574,7 +574,7 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-09-07T18:17:42+00:00",
-        "view_count": 3917,
+        "view_count": 3918,
         "like_count": 280,
         "comment_count": 28,
         "share_count": null,
@@ -906,7 +906,7 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-10-10T14:15:29+00:00",
         "view_count": 6291,
-        "like_count": 729,
+        "like_count": 730,
         "comment_count": 43,
         "share_count": null,
         "media_type": "video",
@@ -940,9 +940,9 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-19T21:22:02+00:00",
-        "view_count": 342,
-        "like_count": 61,
-        "comment_count": 8,
+        "view_count": 346,
+        "like_count": 63,
+        "comment_count": 9,
         "share_count": null,
         "media_type": "video",
         "method": "termux_ytdlp_selected_creator_profile",
@@ -975,8 +975,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-17T20:07:47+00:00",
-        "view_count": 4996,
-        "like_count": 636,
+        "view_count": 5011,
+        "like_count": 638,
         "comment_count": 37,
         "share_count": null,
         "media_type": "video",
@@ -1010,8 +1010,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-13T22:04:46+00:00",
-        "view_count": 80800,
-        "like_count": 8308,
+        "view_count": 80900,
+        "like_count": 8313,
         "comment_count": 76,
         "share_count": null,
         "media_type": "video",
@@ -1046,8 +1046,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-08T22:10:07+00:00",
-        "view_count": 103100,
-        "like_count": 15000,
+        "view_count": 103200,
+        "like_count": 15100,
         "comment_count": 221,
         "share_count": null,
         "media_type": "video",
@@ -1224,9 +1224,9 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-19T15:19:02+00:00",
-        "view_count": 5357,
-        "like_count": 995,
-        "comment_count": 27,
+        "view_count": 5424,
+        "like_count": 1005,
+        "comment_count": 28,
         "share_count": null,
         "media_type": "video",
         "method": "termux_ytdlp_selected_creator_profile",
@@ -1261,8 +1261,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-18T15:17:34+00:00",
-        "view_count": 30900,
-        "like_count": 5107,
+        "view_count": 31100,
+        "like_count": 5119,
         "comment_count": 435,
         "share_count": null,
         "media_type": "video",
@@ -1298,8 +1298,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-15T15:40:47+00:00",
-        "view_count": 65700,
-        "like_count": 7650,
+        "view_count": 65800,
+        "like_count": 7656,
         "comment_count": 206,
         "share_count": null,
         "media_type": "video",
@@ -1335,7 +1335,7 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-13T15:10:11+00:00",
-        "view_count": 90400,
+        "view_count": 90500,
         "like_count": 12300,
         "comment_count": 824,
         "share_count": null,
@@ -1372,7 +1372,7 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-12T16:58:27+00:00",
-        "view_count": 295700,
+        "view_count": 295800,
         "like_count": 31000,
         "comment_count": 323,
         "share_count": null,
@@ -1410,8 +1410,8 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-11T15:49:41+00:00",
         "view_count": 65100,
-        "like_count": 8838,
-        "comment_count": 228,
+        "like_count": 8840,
+        "comment_count": 227,
         "share_count": null,
         "media_type": "video",
         "method": "termux_ytdlp_selected_creator_profile",
@@ -1446,9 +1446,9 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-09T15:09:10+00:00",
-        "view_count": 228100,
+        "view_count": 228200,
         "like_count": 20600,
-        "comment_count": 1800,
+        "comment_count": 1799,
         "share_count": null,
         "media_type": "video",
         "method": "termux_ytdlp_selected_creator_profile",
@@ -1483,9 +1483,9 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-08T15:09:13+00:00",
-        "view_count": 229500,
+        "view_count": 229600,
         "like_count": 30500,
-        "comment_count": 757,
+        "comment_count": 758,
         "share_count": null,
         "media_type": "video",
         "method": "termux_ytdlp_selected_creator_profile",
@@ -1517,8 +1517,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-16T17:00:00+00:00",
-        "view_count": 6179,
-        "like_count": 1033,
+        "view_count": 6186,
+        "like_count": 1034,
         "comment_count": 32,
         "share_count": null,
         "media_type": "video",
@@ -1551,8 +1551,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-15T17:00:00+00:00",
-        "view_count": 8800,
-        "like_count": 1275,
+        "view_count": 8814,
+        "like_count": 1276,
         "comment_count": 24,
         "share_count": null,
         "media_type": "video",
@@ -1560,158 +1560,7 @@
         "duration_seconds": 17.0
       }
     ],
-    "mob_official": [
-      {
-        "platform": "mob_official",
-        "id": "2120660219986333936",
-        "external_id": "2120660219986333936",
-        "url": "https://x.com/mobgamesstudios/status/2120660219986333936",
-        "canonical_url": "https://x.com/mobgamesstudios/status/2120660219986333936",
-        "title": "Poppy Playtime Chapter 5 is out now for both iOS and Android! https://t.co/48XEBvClQl",
-        "caption": "Poppy Playtime Chapter 5 is out now for both iOS and Android! https://t.co/48XEBvClQl",
-        "original_caption": "Poppy Playtime Chapter 5 is out now for both iOS and Android! https://t.co/48XEBvClQl",
-        "author": "@mobgamesstudios",
-        "source_key": "x.com/mobgamesstudios",
-        "source_name": "Mob Entertainment on X",
-        "source_platform": "x",
-        "official_source": true,
-        "published_at": "2026-11-11T23:29:31+00:00",
-        "freshness_verified": true,
-        "freshness_source": "x_syndication_created_at",
-        "media_type": "video",
-        "media_url": "https://video.twimg.com/ext_tw_video/2120660135471112192/pu/vid/avc1/1280x720/faf9z_cpTf60F7KE.mp4?tag=12",
-        "thumbnail_url": null,
-        "method": "x_public_search_index_plus_syndication",
-        "query": "site:x.com/mobgamesstudios/status",
-        "pin_flags": [],
-        "profile_pinned_ids": [],
-        "discovery_source": "fxtwitter",
-        "id_source": "fxtwitter",
-        "pinned": false,
-        "pin_state": "inferred_not_pinned",
-        "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-      },
-      {
-        "platform": "mob_official",
-        "id": "2121327753236729907",
-        "external_id": "2121327753236729907",
-        "url": "https://x.com/mobgamesstudios/status/2121327753236729907",
-        "canonical_url": "https://x.com/mobgamesstudios/status/2121327753236729907",
-        "title": "new patch who dis 🌙 Got a new one for EFP cooked up for ya. Check out the patch notes on Steam: https://t.co/HQqdwoCxx7 https://t.co/yzqqCCRTiQ",
-        "caption": "new patch who dis 🌙 Got a new one for EFP cooked up for ya. Check out the patch notes on Steam: https://t.co/HQqdwoCxx7 https://t.co/yzqqCCRTiQ",
-        "original_caption": "new patch who dis 🌙 Got a new one for EFP cooked up for ya. Check out the patch notes on Steam: https://t.co/HQqdwoCxx7 https://t.co/yzqqCCRTiQ",
-        "author": "@mobgamesstudios",
-        "source_key": "x.com/mobgamesstudios",
-        "source_name": "Mob Entertainment on X",
-        "source_platform": "x",
-        "official_source": true,
-        "published_at": "2026-11-13T19:42:03+00:00",
-        "freshness_verified": true,
-        "freshness_source": "x_syndication_created_at",
-        "media_type": "image",
-        "media_url": "https://pbs.twimg.com/media/HXB3-vQbsAAaI-o.jpg",
-        "thumbnail_url": null,
-        "method": "x_public_search_index_plus_syndication",
-        "query": "site:x.com/mobgamesstudios/status",
-        "pin_flags": [],
-        "profile_pinned_ids": [],
-        "discovery_source": "fxtwitter",
-        "id_source": "fxtwitter",
-        "pinned": false,
-        "pin_state": "inferred_not_pinned",
-        "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-      },
-      {
-        "platform": "mob_official",
-        "id": "2121390526633001062",
-        "external_id": "2121390526633001062",
-        "url": "https://x.com/mobgamesstudios/status/2121390526633001062",
-        "canonical_url": "https://x.com/mobgamesstudios/status/2121390526633001062",
-        "title": "okay new deal disable 90k Boogie Bots, all of you combined, by Nov20 11:59 PM Pacific and I’ll tell you why they keep going pop whenever Miss Delight’s around https://t.co/yiCgsO1sqa",
-        "caption": "okay new deal disable 90k Boogie Bots, all of you combined, by Nov20 11:59 PM Pacific and I’ll tell you why they keep going pop whenever Miss Delight’s around https://t.co/yiCgsO1sqa",
-        "original_caption": "okay new deal disable 90k Boogie Bots, all of you combined, by Nov20 11:59 PM Pacific and I’ll tell you why they keep going pop whenever Miss Delight’s around https://t.co/yiCgsO1sqa",
-        "author": "@mobgamesstudios",
-        "source_key": "x.com/mobgamesstudios",
-        "source_name": "Mob Entertainment on X",
-        "source_platform": "x",
-        "official_source": true,
-        "published_at": "2026-11-13T23:51:29+00:00",
-        "freshness_verified": true,
-        "freshness_source": "x_syndication_created_at",
-        "media_type": "video",
-        "media_url": "https://video.twimg.com/tweet_video/HXCxcABXIAA16ft.mp4",
-        "thumbnail_url": null,
-        "method": "x_public_search_index_plus_syndication",
-        "query": "site:x.com/mobgamesstudios/status",
-        "pin_flags": [],
-        "profile_pinned_ids": [],
-        "discovery_source": "fxtwitter",
-        "id_source": "fxtwitter",
-        "pinned": false,
-        "pin_state": "inferred_not_pinned",
-        "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-      },
-      {
-        "platform": "mob_official",
-        "id": "2122751796464554269",
-        "external_id": "2122751796464554269",
-        "url": "https://x.com/mobgamesstudios/status/2122751796464554269",
-        "canonical_url": "https://x.com/mobgamesstudios/status/2122751796464554269",
-        "title": "update: you’ve disabled 56k Boogie Bots so far. Miss Delight has been watching and she seems… pleased? https://t.co/YIICzCgCOp",
-        "caption": "update: you’ve disabled 56k Boogie Bots so far. Miss Delight has been watching and she seems… pleased? https://t.co/YIICzCgCOp",
-        "original_caption": "update: you’ve disabled 56k Boogie Bots so far. Miss Delight has been watching and she seems… pleased? https://t.co/YIICzCgCOp",
-        "author": "@mobgamesstudios",
-        "source_key": "x.com/mobgamesstudios",
-        "source_name": "Mob Entertainment on X",
-        "source_platform": "x",
-        "official_source": true,
-        "published_at": "2026-11-17T18:00:41+00:00",
-        "freshness_verified": true,
-        "freshness_source": "x_syndication_created_at",
-        "media_type": "image",
-        "media_url": "https://pbs.twimg.com/media/HXWHgkmWkAAZRv2.jpg",
-        "thumbnail_url": null,
-        "method": "x_public_search_index_plus_syndication",
-        "query": "site:x.com/mobgamesstudios/status",
-        "pin_flags": [],
-        "profile_pinned_ids": [],
-        "discovery_source": "fxtwitter",
-        "id_source": "fxtwitter",
-        "pinned": false,
-        "pin_state": "inferred_not_pinned",
-        "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-      },
-      {
-        "platform": "mob_official",
-        "id": "2123476547268985131",
-        "external_id": "2123476547268985131",
-        "url": "https://x.com/mobgamesstudios/status/2123476547268985131",
-        "canonical_url": "https://x.com/mobgamesstudios/status/2123476547268985131",
-        "title": "only 2k to go! i’ve already started writing the answer pls don’t make me delete it https://t.co/dlpramtFQy",
-        "caption": "only 2k to go! i’ve already started writing the answer pls don’t make me delete it https://t.co/dlpramtFQy",
-        "original_caption": "only 2k to go! i’ve already started writing the answer pls don’t make me delete it https://t.co/dlpramtFQy",
-        "author": "@mobgamesstudios",
-        "source_key": "x.com/mobgamesstudios",
-        "source_name": "Mob Entertainment on X",
-        "source_platform": "x",
-        "official_source": true,
-        "published_at": "2026-11-19T18:00:35+00:00",
-        "freshness_verified": true,
-        "freshness_source": "x_syndication_created_at",
-        "media_type": "image",
-        "media_url": "https://pbs.twimg.com/media/HXgaqm6W0AA_ZkY.jpg",
-        "thumbnail_url": null,
-        "method": "x_public_search_index_plus_syndication",
-        "query": "site:x.com/mobgamesstudios/status",
-        "pin_flags": [],
-        "profile_pinned_ids": [],
-        "discovery_source": "fxtwitter",
-        "id_source": "fxtwitter",
-        "pinned": false,
-        "pin_state": "inferred_not_pinned",
-        "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-      }
-    ]
+    "mob_official": []
   },
   "rejected_candidates": [
     {
@@ -2064,93 +1913,27 @@
     },
     {
       "platform": "mob_official",
-      "external_id": "2123135983751496106",
-      "reason": "text_only",
-      "created_at": "2026-11-18T19:27:19+00:00"
+      "external_id": "2101713521020912076",
+      "reason": "before_since_utc_or_unverified",
+      "created_at": "2026-09-20T16:42:06+00:00"
     },
     {
       "platform": "mob_official",
-      "external_id": "2123136023198916952",
-      "reason": "reply",
-      "created_at": "2026-11-18T19:27:28+00:00"
+      "external_id": "2107878755079213476",
+      "reason": "before_since_utc_or_unverified",
+      "created_at": "2026-10-07T17:00:32+00:00"
     },
     {
       "platform": "mob_official",
-      "external_id": "2120660301611692202",
-      "reason": "reply",
-      "created_at": "2026-11-11T23:29:50+00:00"
+      "external_id": "2109690712006533267",
+      "reason": "before_since_utc_or_unverified",
+      "created_at": "2026-10-12T17:00:36+00:00"
     },
     {
       "platform": "mob_official",
-      "external_id": "2117706233830359208",
-      "reason": "before_since_utc",
-      "created_at": "2026-11-03T19:51:25+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2117706553239425054",
-      "reason": "before_since_utc",
-      "created_at": "2026-11-03T19:52:42+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2116950907237892428",
-      "reason": "before_since_utc",
-      "created_at": "2026-11-01T17:50:01+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2116636388833538274",
-      "reason": "before_since_utc",
-      "created_at": "2026-10-31T21:00:14+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2116575954520711270",
-      "reason": "before_since_utc",
-      "created_at": "2026-10-31T17:00:06+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2116332765180563910",
-      "reason": "before_since_utc",
-      "created_at": "2026-10-31T00:53:45+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2116320934391103931",
-      "reason": "before_since_utc",
-      "created_at": "2026-10-31T00:06:44+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2116325706078794181",
-      "reason": "before_since_utc",
-      "created_at": "2026-10-31T00:25:42+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2116275596812521477",
-      "reason": "before_since_utc",
-      "created_at": "2026-10-30T21:06:35+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2116219846736183701",
-      "reason": "not_official_author",
-      "created_at": "2026-10-30T17:25:03+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2115562527425704170",
-      "reason": "before_since_utc",
-      "created_at": "2026-10-28T21:53:06+00:00"
-    },
-    {
-      "platform": "mob_official",
-      "external_id": "2115141996188684704",
-      "reason": "before_since_utc",
-      "created_at": "2026-10-27T18:02:03+00:00"
+      "external_id": "2110370731628298519",
+      "reason": "before_since_utc_or_unverified",
+      "created_at": "2026-10-14T14:02:45+00:00"
     }
   ],
   "source_freshness": {
@@ -2159,8 +1942,8 @@
       "lag_seconds": null
     },
     "FxTwitter": {
-      "newest_created_at_returned": "2026-11-19T18:00:35+00:00",
-      "lag_seconds": 52535
+      "newest_created_at_returned": null,
+      "lag_seconds": null
     },
     "VxTwitter": {
       "newest_created_at_returned": null,
@@ -2588,36 +2371,9 @@
     {
       "source": "fxtwitter",
       "engine": "fxtwitter_profile_timeline",
-      "http_status": 200,
-      "result": "timeline_found",
-      "candidate_count": 20,
-      "newest_created_at_returned": "2026-11-19T18:00:35+00:00",
-      "candidate_post_ids": [
-        "2115141996188684704",
-        "2115562527425704170",
-        "2116219846736183701",
-        "2116275596812521477",
-        "2116320934391103931",
-        "2116325706078794181",
-        "2116332765180563910",
-        "2116575954520711270",
-        "2116636388833538274",
-        "2116950907237892428",
-        "2117706233830359208",
-        "2117706553239425054",
-        "2120660219986333936",
-        "2120660301611692202",
-        "2121327753236729907",
-        "2121390526633001062",
-        "2122751796464554269",
-        "2123135983751496106",
-        "2123136023198916952",
-        "2123476547268985131"
-      ],
-      "profile_pin_evidence": {
-        "flags": [],
-        "profile_pinned_ids": []
-      }
+      "http_status": 404,
+      "result": "http_error",
+      "candidate_count": 0
     },
     {
       "source": "x-cli_eligible_ids",
@@ -2626,45 +2382,130 @@
     },
     {
       "source": "fxtwitter_eligible_ids",
-      "result": "ids_found",
-      "candidate_count": 5
+      "result": "empty_or_no_eligible_ids",
+      "candidate_count": 0
     },
     {
       "source": "mob_x_id_union",
-      "result": "ids_found",
-      "candidate_count": 5,
-      "selected_count": 5,
-      "selected_ids": [
-        {
-          "external_id": "2120660219986333936",
-          "id_source": "fxtwitter"
-        },
-        {
-          "external_id": "2121327753236729907",
-          "id_source": "fxtwitter"
-        },
-        {
-          "external_id": "2121390526633001062",
-          "id_source": "fxtwitter"
-        },
-        {
-          "external_id": "2122751796464554269",
-          "id_source": "fxtwitter"
-        },
-        {
-          "external_id": "2123476547268985131",
-          "id_source": "fxtwitter"
-        }
-      ],
+      "result": "empty",
+      "candidate_count": 0,
+      "selected_count": 0,
+      "selected_ids": [],
       "ordering": "created_at_oldest_first",
       "cap": 12
+    },
+    {
+      "source": "mob_x",
+      "engine": "owner_seed_urls",
+      "result": "verified_again_through_syndication",
+      "post_urls_found": 4,
+      "candidate_post_ids": [
+        "2101713521020912076",
+        "2107878755079213476",
+        "2109690712006533267",
+        "2110370731628298519"
+      ],
+      "posts_returned": 4
+    },
+    {
+      "source": "mob_x",
+      "engine": "unifapi_public_profile",
+      "http_status": 402,
+      "result": "http_402",
+      "post_urls_found": 0,
+      "candidate_post_ids": [],
+      "posts_returned": 0
+    },
+    {
+      "source": "mob_x",
+      "engine": "bing_rss",
+      "http_status": 200,
+      "result": "no_indexed_official_posts",
+      "post_urls_found": 0,
+      "candidate_post_ids": [],
+      "posts_returned": 0
+    },
+    {
+      "source": "mob_x",
+      "engine": "public_profile_mirror",
+      "result": "unavailable_or_empty",
+      "hosts_tried": [
+        "mobile.twstalker.com",
+        "www.twstalker.com",
+        "twstalker.com",
+        "ww.twstalker.com",
+        "www6.twstalker.com"
+      ],
+      "outcomes": [
+        {
+          "host": "mobile.twstalker.com",
+          "http_status": 403,
+          "result": "unavailable",
+          "candidate_post_ids": [],
+          "posts_returned": 0
+        },
+        {
+          "host": "www.twstalker.com",
+          "http_status": 403,
+          "result": "unavailable",
+          "candidate_post_ids": [],
+          "posts_returned": 0
+        },
+        {
+          "host": "twstalker.com",
+          "http_status": 403,
+          "result": "unavailable",
+          "candidate_post_ids": [],
+          "posts_returned": 0
+        },
+        {
+          "host": "ww.twstalker.com",
+          "http_status": 403,
+          "result": "unavailable",
+          "candidate_post_ids": [],
+          "posts_returned": 0
+        },
+        {
+          "host": "www6.twstalker.com",
+          "http_status": 403,
+          "result": "unavailable",
+          "candidate_post_ids": [],
+          "posts_returned": 0
+        }
+      ],
+      "note": "Mirror pages provide candidate IDs only; no mirror caption or media is trusted for publishing.",
+      "candidate_post_ids": [],
+      "posts_returned": 0
+    },
+    {
+      "source": "mob_x",
+      "engine": "duckduckgo_html",
+      "http_status": 202,
+      "result": "blocked_http_202",
+      "post_urls_found": 0,
+      "candidate_post_ids": [],
+      "posts_returned": 0
+    },
+    {
+      "source": "mob_x",
+      "engine": "public_syndication",
+      "result": "metadata_found",
+      "candidate_count": 4,
+      "candidate_post_ids": [
+        "2101713521020912076",
+        "2107878755079213476",
+        "2109690712006533267",
+        "2110370731628298519"
+      ],
+      "posts_returned": 4,
+      "skipped": {}
     },
     {
       "source": "mob_x_provider_freshness",
       "result": "measured",
       "newest_created_at_returned": {
         "x-cli": null,
-        "fxtwitter": "2026-11-19T18:00:35+00:00",
+        "fxtwitter": null,
         "vxtwitter": null
       }
     },
@@ -2674,172 +2515,50 @@
       "rejected_candidates": [
         {
           "platform": "mob_official",
-          "external_id": "2123135983751496106",
-          "reason": "text_only",
-          "created_at": "2026-11-18T19:27:19+00:00"
+          "external_id": "2101713521020912076",
+          "reason": "before_since_utc_or_unverified",
+          "created_at": "2026-09-20T16:42:06+00:00"
         },
         {
           "platform": "mob_official",
-          "external_id": "2123136023198916952",
-          "reason": "reply",
-          "created_at": "2026-11-18T19:27:28+00:00"
+          "external_id": "2107878755079213476",
+          "reason": "before_since_utc_or_unverified",
+          "created_at": "2026-10-07T17:00:32+00:00"
         },
         {
           "platform": "mob_official",
-          "external_id": "2120660301611692202",
-          "reason": "reply",
-          "created_at": "2026-11-11T23:29:50+00:00"
+          "external_id": "2109690712006533267",
+          "reason": "before_since_utc_or_unverified",
+          "created_at": "2026-10-12T17:00:36+00:00"
         },
         {
           "platform": "mob_official",
-          "external_id": "2117706233830359208",
-          "reason": "before_since_utc",
-          "created_at": "2026-11-03T19:51:25+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2117706553239425054",
-          "reason": "before_since_utc",
-          "created_at": "2026-11-03T19:52:42+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2116950907237892428",
-          "reason": "before_since_utc",
-          "created_at": "2026-11-01T17:50:01+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2116636388833538274",
-          "reason": "before_since_utc",
-          "created_at": "2026-10-31T21:00:14+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2116575954520711270",
-          "reason": "before_since_utc",
-          "created_at": "2026-10-31T17:00:06+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2116332765180563910",
-          "reason": "before_since_utc",
-          "created_at": "2026-10-31T00:53:45+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2116320934391103931",
-          "reason": "before_since_utc",
-          "created_at": "2026-10-31T00:06:44+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2116325706078794181",
-          "reason": "before_since_utc",
-          "created_at": "2026-10-31T00:25:42+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2116275596812521477",
-          "reason": "before_since_utc",
-          "created_at": "2026-10-30T21:06:35+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2116219846736183701",
-          "reason": "not_official_author",
-          "created_at": "2026-10-30T17:25:03+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2115562527425704170",
-          "reason": "before_since_utc",
-          "created_at": "2026-10-28T21:53:06+00:00"
-        },
-        {
-          "platform": "mob_official",
-          "external_id": "2115141996188684704",
-          "reason": "before_since_utc",
-          "created_at": "2026-10-27T18:02:03+00:00"
+          "external_id": "2110370731628298519",
+          "reason": "before_since_utc_or_unverified",
+          "created_at": "2026-10-14T14:02:45+00:00"
         }
       ]
     },
     {
       "source": "mob_x_final_filter",
-      "result": "eligible_candidates_found",
-      "candidate_count": 5,
-      "candidate_post_ids": [
-        "2120660219986333936",
-        "2121327753236729907",
-        "2121390526633001062",
-        "2122751796464554269",
-        "2123476547268985131"
-      ],
+      "result": "empty",
+      "candidate_count": 0,
+      "candidate_post_ids": [],
       "ordering": "oldest_first",
-      "id_sources": [
-        {
-          "external_id": "2120660219986333936",
-          "id_source": "fxtwitter"
-        },
-        {
-          "external_id": "2121327753236729907",
-          "id_source": "fxtwitter"
-        },
-        {
-          "external_id": "2121390526633001062",
-          "id_source": "fxtwitter"
-        },
-        {
-          "external_id": "2122751796464554269",
-          "id_source": "fxtwitter"
-        },
-        {
-          "external_id": "2123476547268985131",
-          "id_source": "fxtwitter"
-        }
-      ],
-      "pin_states": [
-        {
-          "external_id": "2120660219986333936",
-          "pin_state": "inferred_not_pinned",
-          "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-        },
-        {
-          "external_id": "2121327753236729907",
-          "pin_state": "inferred_not_pinned",
-          "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-        },
-        {
-          "external_id": "2121390526633001062",
-          "pin_state": "inferred_not_pinned",
-          "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-        },
-        {
-          "external_id": "2122751796464554269",
-          "pin_state": "inferred_not_pinned",
-          "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-        },
-        {
-          "external_id": "2123476547268985131",
-          "pin_state": "inferred_not_pinned",
-          "pin_state_source": "created_at_at_or_after_cutoff_without_pin_evidence"
-        }
-      ],
+      "id_sources": [],
+      "pin_states": [],
       "pin_state_counts": {
         "known_not_pinned": 0,
-        "inferred_not_pinned": 5
+        "inferred_not_pinned": 0
       },
       "skipped": {
-        "text_only": 1,
-        "reply": 2,
-        "before_since_utc": 11,
-        "not_official_author": 1
+        "before_since_utc_or_unverified": 4
       }
     },
     {
       "source": "mob_x_only_policy",
-      "result": "ok",
-      "candidate_count": 5,
+      "result": "no_complete_official_x_posts",
+      "candidate_count": 0,
       "enabled_lanes": [
         "x"
       ]
