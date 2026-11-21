@@ -8,6 +8,8 @@ the parsed metadata payload; plain captions retain their plain text.
 """
 from __future__ import annotations
 
+import hmac
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -24,11 +26,24 @@ class RubikaDestinationGuardError(ValueError):
     code = "rubika_destination_not_test_channel"
 
 
+def _mob_main_destination_allowed(destination: str) -> bool:
+    """MAIN is allowed only for the Mob X news path: exact gate value, separate secret, never the TEST pin."""
+    if os.getenv("RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE", "") != "open":
+        return False
+    main = str(os.getenv("RUBIKA_MAIN_CHANNEL_GUID", "") or "").strip()
+    if not main or test_channel.is_test_channel_guid(main):
+        return False
+    return hmac.compare_digest(destination.encode("utf-8"), main.encode("utf-8"))
+
+
 def assert_test_channel_destination(channel_guid: str) -> str:
+    """TEST is always allowed; MAIN only through the Mob X gate (name kept for compatibility)."""
     destination = str(channel_guid or "").strip()
-    if not test_channel.is_test_channel_guid(destination):
-        raise RubikaDestinationGuardError("rubika_destination_not_test_channel")
-    return destination
+    if test_channel.is_test_channel_guid(destination):
+        return destination
+    if destination and _mob_main_destination_allowed(destination):
+        return destination
+    raise RubikaDestinationGuardError("rubika_destination_not_test_channel")
 
 
 def _escape_source_markup(value: str) -> str:
