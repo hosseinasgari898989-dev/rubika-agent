@@ -53,9 +53,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          checked_sha="$(git rev-parse HEAD)"
           auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 --wrap=0)"
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch origin main
-          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+          main_sha="$(git rev-parse origin/main)"
+          {
+            echo "## Repair preflight SHA verification"
+            echo "- Triggering upstream run ID: $UPSTREAM_RUN_ID"
+            echo "- Triggering upstream SHA: $UPSTREAM_SHA"
+            echo "- Checked-out SHA: $checked_sha"
+            echo "- Fetched current main SHA: $main_sha"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+          echo "checked_sha=$checked_sha" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+
+          if [[ "$checked_sha" != "$UPSTREAM_SHA" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Checked-out SHA does not match the triggering failed run; no provider request was sent." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$checked_sha" != "$main_sha" ]]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             echo "Main has advanced since the failed run; no provider request was sent." >> "$GITHUB_STEP_SUMMARY"
             exit 0
