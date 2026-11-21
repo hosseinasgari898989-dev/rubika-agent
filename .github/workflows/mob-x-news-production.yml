@@ -278,6 +278,8 @@ jobs:
       RUBIKA_OWNER_CHAT_ID: ${{ secrets.RUBIKA_OWNER_CHAT_ID }}
       RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014: ${{ vars.RUBIKA_AGENT_MOB_X_PUBLISH_GATE_20261014 }}
       PANEL_LINK_JOB_ID: ${{ inputs.panel_link_job_id }}
+      RUBIKA_MAIN_CHANNEL_GUID: ${{ secrets.RUBIKA_MAIN_CHANNEL_GUID }}
+      RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE: ${{ vars.RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE || '' }}
     steps:
       - name: Check out current main agent
         uses: actions/checkout@v4
@@ -297,6 +299,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ "${RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE:-}" = "open" ]; then
+            if [ -z "${RUBIKA_MAIN_CHANNEL_GUID:-}" ]; then
+              echo "::error::Mob X MAIN gate is open but the MAIN destination is unavailable."
+              exit 2
+            fi
+            export RUBIKA_CHANNEL_GUID="$RUBIKA_MAIN_CHANNEL_GUID"
+          fi
           if [ -n "${PANEL_LINK_JOB_ID:-}" ]; then
             if [[ ! "$PANEL_LINK_JOB_ID" =~ ^job_[A-Fa-f0-9]{8,80}$ ]]; then
               echo "::error::Invalid owner-approved Mob X job ID; no post was sent."

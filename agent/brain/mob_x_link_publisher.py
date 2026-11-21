@@ -15,6 +15,7 @@ from typing import Any
 
 from agent.brain import test_channel
 from agent.brain.mob_x_link_processor import MobXLinkError, WorkerClient
+from agent.brain.rubika_publisher import RubikaDestinationGuardError, assert_test_channel_destination
 from agent.brain.mob_x_rubika import send_test_channel_once, send_uncertain_notice
 
 
@@ -77,9 +78,13 @@ def publish_one(
     if not token or not owner_chat:
         report.update(status="blocked", error_code="mob_x_publish_credentials_missing")
         return _write_report(report, report_path, 2)
-    if not test_channel.is_test_channel_guid(channel):
+    try:
+        channel = assert_test_channel_destination(channel)
+    except RubikaDestinationGuardError:
         report.update(status="blocked", error_code="rubika_channel_not_exact_test_target")
         return _write_report(report, report_path, 2)
+    is_test_destination = test_channel.is_test_channel_guid(channel)
+    report["channel"] = "test" if is_test_destination else "main"
 
     worker = client
     try:
@@ -108,7 +113,7 @@ def publish_one(
             return _write_report(report, report_path, 1)
 
         rules = worker.rules()
-        if rules.get("test_channel_only") is not True:
+        if is_test_destination and rules.get("test_channel_only") is not True:
             report.update(status="blocked", error_code="console_test_channel_guard_not_enabled")
             return _write_report(report, report_path, 2)
 
@@ -125,7 +130,7 @@ def publish_one(
         if not JOB_ID_RE.fullmatch(job_id):
             report.update(status="failed", error_code="mob_x_publish_job_id_invalid")
             return _write_report(report, report_path, 1)
-        report.update(job_id=job_id, status="sending", channel="test")
+        report.update(job_id=job_id, status="sending", channel=report["channel"])
         file_id = str(result.get("rubika_file_id") or "")
         caption = str(result.get("caption") or "")
         item_id = str(result.get("item_id") or "")
@@ -233,7 +238,7 @@ def _write_report(report: dict, path: str | Path | None, exit_code: int) -> dict
             stream.write(f"- Status: {report.get('status', 'unknown')}\n")
             if report.get("error_code"):
                 stream.write(f"- Error code: {report['error_code']}\n")
-            stream.write("- Destination: test channel only\n")
+            stream.write(f"- Destination: {report.get('channel', 'test')} channel\n")
             stream.write(f"- Automatic retry: {str(report.get('automatic_retry', False)).lower()}\n")
     return report
 
