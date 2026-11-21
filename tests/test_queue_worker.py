@@ -167,7 +167,19 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertIn("RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}", workflow)
         self.assertIn("RUBIKA_MAIN_CHANNEL_GUID: ${{ secrets.RUBIKA_MAIN_CHANNEL_GUID }}", workflow)
         self.assertIn("RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE: ${{ vars.RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE || '' }}", workflow)
-        self.assertIn('if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE" == "open" ]]; then', workflow)
+        self.assertIn('if [[ "$RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE" == "open" && "${{ inputs.force_test_channel }}" != "true" ]]; then', workflow)
+        self.assertNotIn('if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE" == "open" ]]; then', workflow)
+        self.assertIn(
+            '      force_test_channel:\n'
+            '        description: "Send this manual or chained run to the fixed TEST channel even when the TikTok production gate is open"\n'
+            '        required: false\n'
+            '        type: boolean\n'
+            '        default: false',
+            workflow,
+        )
+        self.assertIn('if [[ "$actual_hash" != "0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8" ]]; then', workflow)
+        self.assertIn('if [[ "$main_hash" == "$actual_hash" ]]; then', workflow)
+        self.assertIn('echo "::error::MAIN destination must differ from the pinned TEST channel."', workflow)
         self.assertIn("RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}", workflow.split("Verify Rubika bot and TEST destination without sending a message", 1)[1])
         self.assertIn("RUBIKA_CHANNEL_GUID=%s", workflow)
         self.assertIn('>> "$GITHUB_ENV"', workflow)
