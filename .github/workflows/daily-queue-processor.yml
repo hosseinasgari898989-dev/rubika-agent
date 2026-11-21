@@ -10,6 +10,11 @@ on:
         required: true
         type: boolean
         default: false
+      force_test_channel:
+        description: "Send this manual or chained run to the fixed TEST channel even when the TikTok production gate is open"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -70,7 +75,7 @@ jobs:
             echo "::error::The shared RUBIKA_CHANNEL_GUID secret must remain pinned to TEST."
             exit 2
           fi
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE" == "open" ]]; then
+          if [[ "$RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE" == "open" && "${{ inputs.force_test_channel }}" != "true" ]]; then
             if [[ -z "${RUBIKA_MAIN_CHANNEL_GUID:-}" ]]; then
               echo "::error::TikTok production gate is open but the MAIN destination is unavailable."
               exit 2
