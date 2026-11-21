@@ -9,6 +9,25 @@ WORKFLOW = ROOT / ".github" / "workflows" / "mob-x-news-production.yml"
 
 
 class MobXNewsWorkflowTests(unittest.TestCase):
+    def test_main_channel_routing_has_its_own_closed_by_default_gate(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "RUBIKA_MAIN_CHANNEL_GUID: ${{ secrets.RUBIKA_MAIN_CHANNEL_GUID }}",
+            workflow,
+        )
+        self.assertIn(
+            "RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE: ${{ vars.RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE || '' }}",
+            workflow,
+        )
+        self.assertIn(
+            'if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE" == "open" ]]; then',
+            workflow,
+        )
+        self.assertIn('>> "$GITHUB_ENV"', workflow)
+        self.assertIn("RUBIKA_CHANNEL_GUID: ${{ secrets.RUBIKA_CHANNEL_GUID }}", workflow)
+        self.assertIn("0c939688dd5536447389134ba514e9353a6ef97214de3c4f848adb53e1cd4ab8", workflow)
+        self.assertIn('"max_posts_per_run") != 1', workflow)
+
     def test_x_cli_install_uses_the_two_independent_pinned_checksum_gates(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         lines = [line.strip() for line in workflow.splitlines()]
