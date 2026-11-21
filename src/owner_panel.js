@@ -916,7 +916,7 @@ async function renderPublishingControl(ui, actionId) {
 
 function mobPreviewKeypad(jobId) {
   return kb([
-    [["✅ انتشار در کانال تست", "p_mob_publish_" + jobId], ["✏️ ویرایش کپشن", "p_mob_edit_" + jobId]],
+    [["✅ انتشار در کانال", "p_mob_publish_" + jobId], ["✏️ ویرایش کپشن", "p_mob_edit_" + jobId]],
     [["🚫 بدون کپشن", "p_mob_nocap_" + jobId], ["✖️ رد", "p_mob_reject_" + jobId]],
   ]);
 }
@@ -1194,9 +1194,9 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
           await updateMobMain(ui, "⚠️ تأیید قبلاً ثبت شده، اما اجرای خودکار شروع نشد (" +
             dispatchResult.error + ")." +
             (dispatchResult.error_detail ? "\n" + dispatchResult.error_detail : "") +
-            " مقصد همچنان فقط کانال تست است.", HOME_KB);
+            " مقصد طبق gate مستقل Mob تعیین می‌شود.", HOME_KB);
         } else {
-          await updateMobMain(ui, "✅ تأیید قبلاً ثبت شده است؛ اجرای خودکار برای کانال تست " +
+          await updateMobMain(ui, "✅ تأیید قبلاً ثبت شده است؛ اجرای خودکار انتشار " +
             (dispatchResult.skipped ? "قبلاً آغاز یا ثبت شده." : "راه‌اندازی شد."), HOME_KB);
         }
         return;
@@ -1235,14 +1235,14 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         await updateMobMain(ui, "✅ تأیید مالک ثبت شد؛ اما اجرای خودکار شروع نشد (" +
           dispatchResult.error + ")." +
           (dispatchResult.error_detail ? "\n" + dispatchResult.error_detail : "") +
-          " مقصد فقط کانال تست است؛ ارسال زمان‌بندی‌شده همچنان فعال می‌ماند.", HOME_KB);
+          " مقصد طبق gate مستقل Mob تعیین می‌شود؛ ارسال زمان‌بندی‌شده همچنان فعال می‌ماند.", HOME_KB);
         return;
       }
       await updateMobMain(
         ui,
         "✅ تأیید مالک ثبت شد و اجرای خودکار " +
           (dispatchResult.skipped ? "قبلاً راه‌اندازی شده است." : "درخواست شد.") +
-          " مقصد فقط کانال تست است؛ اگر نتیجهٔ ارسال نامشخص شود، ارسال دوباره انجام نمی‌شود.",
+          " مقصد طبق gate مستقل Mob تعیین می‌شود؛ اگر نتیجهٔ ارسال نامشخص شود، ارسال دوباره انجام نمی‌شود.",
         HOME_KB,
       );
       return;

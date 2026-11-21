@@ -33,7 +33,7 @@ def _notify_uncertain(token: str, owner_chat: str, job_id: str, error_code: str)
             token,
             owner_chat,
             job_id,
-            "⚠️ نتیجهٔ ارسال خبر Mob در کانال تست نامشخص است (" + error_code + "). ارسال خودکار تکرار نمی‌شود. بعد از بررسی کانال، فقط اگر پست واقعاً منتشر شده است، دکمهٔ تأیید دستی را بزن.",
+            "⚠️ نتیجهٔ ارسال خبر Mob در کانال نامشخص است (" + error_code + "). ارسال خودکار تکرار نمی‌شود. بعد از بررسی کانال، فقط اگر پست واقعاً منتشر شده است، دکمهٔ تأیید دستی را بزن.",
         )
         return True
     except Exception:
@@ -234,7 +234,7 @@ def _write_report(report: dict, path: str | Path | None, exit_code: int) -> dict
     summary = os.getenv("GITHUB_STEP_SUMMARY")
     if summary:
         with Path(summary).open("a", encoding="utf-8") as stream:
-            stream.write("## Mob X test-channel publisher\n\n")
+            stream.write("## Mob X link publisher\n\n")
             stream.write(f"- Status: {report.get('status', 'unknown')}\n")
             if report.get("error_code"):
                 stream.write(f"- Error code: {report['error_code']}\n")
