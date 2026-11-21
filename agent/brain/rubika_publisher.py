@@ -26,9 +26,15 @@ class RubikaDestinationGuardError(ValueError):
     code = "rubika_destination_not_test_channel"
 
 
+_MAIN_GATE_ENV_NAMES = (
+    "RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE",
+    "RUBIKA_AGENT_TIKTOK_EDIT_QUEUE_PRODUCTION_GATE",
+)
+
+
 def _mob_main_destination_allowed(destination: str) -> bool:
-    """MAIN is allowed only for the Mob X news path: exact gate value, separate secret, never the TEST pin."""
-    if os.getenv("RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE", "") != "open":
+    """MAIN needs one exact open gate (Mob X news or TikTok edit queue), the separate MAIN secret, and never the TEST pin."""
+    if not any(os.getenv(name, "") == "open" for name in _MAIN_GATE_ENV_NAMES):
         return False
     main = str(os.getenv("RUBIKA_MAIN_CHANNEL_GUID", "") or "").strip()
     if not main or test_channel.is_test_channel_guid(main):
