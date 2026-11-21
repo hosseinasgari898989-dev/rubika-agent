@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 35,
   "candidate_pool_size": 35,
-  "completed_at": "2026-11-21T22:02:55+00:00",
+  "completed_at": "2026-11-21T22:33:16+00:00",
   "discovered_candidate_count": 43,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -22,31 +22,25 @@
     "smyxae": 6
   },
   "filter_rejected_count": 8,
-  "inserted_count": 1,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 16,
     "processing": 0,
-    "queued": 1,
-    "sent": 97,
-    "sent_today": 1,
+    "queued": 0,
+    "sent": 98,
+    "sent_today": 2,
     "skipped": 37,
     "uncertain": 0,
     "usage_day": "2026-11-21"
   },
-  "queue_status": "enqueued",
-  "received_count": 1,
-  "report_generated_at": "2026-11-21T22:02:46.112974+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-11-21T22:33:07.791950+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7710747010273512725"
-  ],
-  "selected_source_distribution": {
-    "rickkzn_": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@rickkzn_/video/7710747010273512725"
-  ],
-  "skipped_existing_count": 34
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 35
 }
