@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -203,6 +204,24 @@ def _official_publishing_config_enabled() -> bool:
         and policy.get("target_channel_guid_sha256") == test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256
         and policy.get("max_posts_per_run") == 1
     )
+
+
+def official_publishing_target_error() -> str | None:
+    """Allow the fixed TEST pin by default; MAIN requires the Mob-only explicit gate."""
+    destination = str(os.getenv("RUBIKA_CHANNEL_GUID", "") or "").strip()
+    if test_channel.is_test_channel_guid(destination):
+        return None
+
+    gate = os.getenv("RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE", "")
+    if gate != "open":
+        return "mob_x_main_channel_gate_closed"
+
+    main_destination = str(os.getenv("RUBIKA_MAIN_CHANNEL_GUID", "") or "").strip()
+    if not main_destination or test_channel.is_test_channel_guid(main_destination):
+        return "mob_x_main_destination_invalid"
+    if not hmac.compare_digest(destination.encode("utf-8"), main_destination.encode("utf-8")):
+        return "mob_x_main_destination_mismatch"
+    return None
 
 
 def _test_channel_publishing_config_enabled() -> bool:
@@ -841,18 +860,6 @@ def run_trial(
         "attempts": [],
         "error": None,
     }
-    api_base = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
-    token = os.getenv("AGENT_API_TOKEN", "")
-    try:
-        cloud = CloudState(api_base, token=token, timeout_seconds=20)
-        seen = cloud.get_seen_index()
-        get_official_items = getattr(cloud, "get_official_items", None)
-        known_official_items = get_official_items() if callable(get_official_items) else []
-    except Exception as exc:
-        report["error"] = "cloud_state_unavailable_" + type(exc).__name__
-        _report(output_report, report)
-        return report
-
     lifecycle_policy = load_lifecycle_policy()
     if publish and test_channel_publish:
         report["error"] = "conflicting_publish_modes"
@@ -878,7 +885,8 @@ def run_trial(
             _report(output_report, report)
             return report
         configured_target_sha256 = _official_publishing_policy().get("target_channel_guid_sha256")
-        if configured_target_sha256 != test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256 or not test_channel.is_test_channel_guid(os.getenv("RUBIKA_CHANNEL_GUID", "")):
+        destination_error = official_publishing_target_error()
+        if configured_target_sha256 != test_channel.EXPECTED_TEST_CHANNEL_GUID_SHA256 or destination_error:
             report["error"] = "official_publishing_target_mismatch"
             report["lifecycle"] = {
                 "mode": lifecycle_policy["mode"],
@@ -915,6 +923,18 @@ def run_trial(
             report["error"] = "rubika_credentials_missing"
             _report(output_report, report)
             return report
+
+    api_base = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
+    token = os.getenv("AGENT_API_TOKEN", "")
+    try:
+        cloud = CloudState(api_base, token=token, timeout_seconds=20)
+        seen = cloud.get_seen_index()
+        get_official_items = getattr(cloud, "get_official_items", None)
+        known_official_items = get_official_items() if callable(get_official_items) else []
+    except Exception as exc:
+        report["error"] = "cloud_state_unavailable_" + type(exc).__name__
+        _report(output_report, report)
+        return report
 
     if candidate_report is not None:
         candidates, source_result = load_official_candidates_from_report(candidate_report)
