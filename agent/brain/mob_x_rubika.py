@@ -55,7 +55,7 @@ def owner_preview_keypad(job_id: str) -> dict:
         raise ValueError("mob_x_job_id_invalid")
     return _keypad([
         [
-            ("✅ انتشار در کانال تست", "p_mob_publish_" + job_id),
+            ("✅ انتشار در کانال", "p_mob_publish_" + job_id),
             ("✏️ ویرایش کپشن", "p_mob_edit_" + job_id),
         ],
         [
@@ -132,9 +132,12 @@ def send_test_channel_once(
     token: str, channel_guid: str, file_id: str, caption: str, *,
     bot_factory: Any | None = None,
 ) -> str | None:
-    destination = str(channel_guid or "").strip()
-    if not test_channel.is_test_channel_guid(destination):
-        raise RuntimeError("rubika_destination_not_test_channel")
+    from agent.brain.rubika_publisher import RubikaDestinationGuardError, assert_test_channel_destination
+
+    try:
+        destination = assert_test_channel_destination(str(channel_guid or "").strip())
+    except RubikaDestinationGuardError:
+        raise RuntimeError("rubika_destination_not_test_channel") from None
     return _send_file_once(token, destination, file_id, caption, bot_factory=bot_factory)
 
 
