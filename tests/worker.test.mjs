@@ -133,6 +133,8 @@ const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString(
 const imported = await import(moduleUrl);
 const worker = imported.default;
 const panel = importedPanel;
+const botPowerSource = fs.readFileSync(path.join(root, "src/bot_power.js"), "utf8");
+const botPower = await import(dataModuleUrl(botPowerSource));
 
 // The real Worker mapper must return provider envelopes accepted by the real panel formatter.
 {
@@ -5963,6 +5965,38 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   } finally {
     globalThis.fetch = originalFetch;
   }
+}
+
+// Bot power switch: OFF sets flags then disables the 6 scheduled workflows; ON re-enables them.
+{
+  const db = {
+    prepare() { return { bind(...args) { return { args }; } }; },
+    async batch(list) { return list.map(() => ({ meta: { changes: 1 } })); },
+  };
+  const calls = [];
+  const fakeFetch = async (url, init = {}) => { calls.push({ url: String(url), method: init.method }); return new Response(null, { status: 204 }); };
+  const env = { DB: db, GITHUB_DISPATCH_TOKEN: "mock-token-never-log" };
+  const off = await botPower.setBotPower(env, false, fakeFetch);
+  assert.equal(off.ok, true);
+  assert.equal(off.bot_off, true);
+  assert.equal(off.results.length, 6);
+  assert.ok(calls.every((call) => call.method === "PUT" && call.url.endsWith("/disable")));
+  const on = await botPower.setBotPower(env, true, fakeFetch);
+  assert.equal(on.bot_off, false);
+  assert.ok(calls.slice(6).every((call) => call.url.endsWith("/enable")));
+  assert.equal(await botPower.isBotOff({ prepare: () => ({ bind: () => ({ first: async () => ({ value: "true" }) }) }) }), true);
+}
+
+{
+  const cronSource = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
+  const cron = await import(dataModuleUrl(cronSource));
+  const result = await cron.runWorkflowCron(
+    { scheduledTime: 1800000 },
+    { GITHUB_DISPATCH_TOKEN: "t", DB: { prepare: () => ({ first: async () => ({ value: "true" }) }) } },
+    async () => { throw new Error("must not dispatch"); },
+    { fetcher: async () => { throw new Error("must not fetch"); }, logger: () => {} },
+  );
+  assert.ok(result.entries.every((entry) => entry.result === "skipped"));
 }
 
 // The shared dispatch helper accepts the exact scheduled inputs and performs one safe attempt.
