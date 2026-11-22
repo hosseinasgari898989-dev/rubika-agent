@@ -31,6 +31,9 @@ const mobXLink = await import(mobXLinkModuleUrl);
 const mobXIdentitySource = fs.readFileSync(path.join(root, "src/mob_x_identity.js"), "utf8");
 const mobXIdentityModuleUrl = dataModuleUrl(mobXIdentitySource);
 const mobXIdentity = await import(mobXIdentityModuleUrl);
+const botPowerSource = fs.readFileSync(path.join(root, "src/bot_power.js"), "utf8");
+const botPowerModuleUrl = dataModuleUrl(botPowerSource);
+const botPower = await import(botPowerModuleUrl);
 
 // Shared duplicate identity checks both exact historical forms in item and job records.
 {
@@ -83,7 +86,8 @@ const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8
   .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
   .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
-  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
+  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";')
+  .replace('from "./bot_power.js";', 'from "' + botPowerModuleUrl + '";');
 const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
 const screens = await import(screensModuleUrl);
@@ -133,8 +137,6 @@ const moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString(
 const imported = await import(moduleUrl);
 const worker = imported.default;
 const panel = importedPanel;
-const botPowerSource = fs.readFileSync(path.join(root, "src/bot_power.js"), "utf8");
-const botPower = await import(dataModuleUrl(botPowerSource));
 
 // The real Worker mapper must return provider envelopes accepted by the real panel formatter.
 {
