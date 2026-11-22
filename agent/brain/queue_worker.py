@@ -559,7 +559,7 @@ def run_daily(
                     "✅ انتشار موفق ویدئوی ادیت\n"
                     f"پلتفرم: {platform}\n"
                     f"عنوان: {str(item.get('title') or 'بدون عنوان')[:250]}\n"
-                    "سقف روزانه: ندارد (مقصد فقط کانال تست)\n"
+                    "سقف روزانه: ندارد\n"
                     f"موفق‌های امروز: {sent_today_before + report['sent_count']}\n"
                     + inventory
                 )
