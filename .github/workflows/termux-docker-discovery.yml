@@ -143,6 +143,10 @@ jobs:
           printf '%s' "${AGENT_API_TOKEN:-}" > "$token_file"
           chmod 0444 "$token_file"
 
+          flag_file="$RUNNER_TEMP/ignore-source-created-at"
+          printf '%s' "${TERMUX_IGNORE_SOURCE_CREATED_AT:-false}" > "$flag_file"
+          chmod 0444 "$flag_file"
+
           cat > "$RUNNER_TEMP/termux_docker_discovery.py" <<'PY'
           from __future__ import annotations
 
@@ -187,6 +191,7 @@ jobs:
               "tiktok_source_overlay_reason": summary.get("tiktok_source_overlay_reason"),
               "tiktok_account_removals_applied": summary.get("tiktok_account_removals_applied"),
               "tiktok_missing_created_at_cutoff_count": summary.get("tiktok_missing_created_at_cutoff_count", 0),
+              "tiktok_source_cutoff_ignored": summary.get("tiktok_source_cutoff_ignored", False),
           }
           print("ONLINE_TERMUX_SUMMARY=" + json.dumps(
               safe_summary, ensure_ascii=False, sort_keys=True
@@ -223,6 +228,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -v "$output_dir:/out" \
             --mount "type=bind,src=$token_file,dst=/data/data/com.termux/files/usr/tmp/agent-api-token,readonly" \
+            --mount "type=bind,src=$flag_file,dst=/data/data/com.termux/files/usr/tmp/ignore-source-created-at,readonly" \
             -w /workspace \
             --env PYTHONPATH=/workspace \
             --env AGENT_API_BASE_URL \
@@ -245,6 +251,9 @@ jobs:
               timeout 90s python -m unittest discover -s tests -p "test_phone_report_integration.py" -v
               # termux-docker entrypoint uses su -i; export only after the privilege transition and test suite.
               export AGENT_API_TOKEN_FILE=/data/data/com.termux/files/usr/tmp/agent-api-token
+              TERMUX_IGNORE_SOURCE_CREATED_AT="$(cat /data/data/com.termux/files/usr/tmp/ignore-source-created-at 2>/dev/null || echo false)"
+              export TERMUX_IGNORE_SOURCE_CREATED_AT
+              echo "ignore_source_created_at=$TERMUX_IGNORE_SOURCE_CREATED_AT"
               timeout 12m python -
             ' < "$RUNNER_TEMP/termux_docker_discovery.py"
 
@@ -267,7 +276,7 @@ jobs:
       - name: Remove temporary Termux API token file
         if: always()
         shell: bash
-        run: rm -f -- "$RUNNER_TEMP/agent-api-token"
+        run: rm -f -- "$RUNNER_TEMP/agent-api-token" "$RUNNER_TEMP/ignore-source-created-at"
 
       - name: Validate report and push only the metadata report to the main branch
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
