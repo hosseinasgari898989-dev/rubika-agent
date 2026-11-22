@@ -59,7 +59,16 @@ export async function runWorkflowCron(controller, env, dispatchWorkflow, options
   const tick = Math.floor(scheduledTime / TICK_MS) + 1;
   const scheduledAt = new Date(scheduledTime).toISOString();
   const due = workflowsDueForTick(tick);
-  const enabled = env?.WORKFLOW_CRON_DISPATCH_ENABLED !== "false";
+  let botOff = false;
+  try {
+    const row = env && env.DB
+      ? await env.DB.prepare("SELECT value FROM panel_state WHERE key = 'bot_off'").first()
+      : null;
+    botOff = Boolean(row && row.value === "true");
+  } catch {
+    botOff = false;
+  }
+  const enabled = env?.WORKFLOW_CRON_DISPATCH_ENABLED !== "false" && !botOff;
   const token = typeof env?.GITHUB_DISPATCH_TOKEN === "string"
     ? env.GITHUB_DISPATCH_TOKEN.trim()
     : "";
