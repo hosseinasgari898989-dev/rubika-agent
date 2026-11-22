@@ -6,6 +6,7 @@ import { isSettingsId, applySettingsAction, settingsScreen } from "./panel_setti
 import { buildMobXNoCaptionCaption, maxMobXCaptionChars, normalizeMobXCaption } from "./mob_x_caption.js";
 import { normalizeMobXLink } from "./mob_x_link.js";
 import { findMobXDuplicate, normalizeMobXExternalId } from "./mob_x_identity.js";
+import { isBotOff, setBotPower } from "./bot_power.js";
 
 const RUBIKA_API = "https://botapi.rubika.ir/v3";
 const HOOK_TYPES = ["ReceiveUpdate", "ReceiveInlineMessage", "ReceiveQuery"];
@@ -576,6 +577,7 @@ const isOwnerOnlyPanelAction = (id) => {
     value === "p_scan_pub" ||
     value === "p_scan_pub_confirm" ||
     value === "p_pub_control" ||
+    /^p_bot_(?:power|off_ask|off_yes|on_ask|on_yes)$/.test(value) ||
     value === "p_pub_pause" ||
     value === "p_pub_resume" ||
     /^p_pub_confirm_(?:pause|resume)_[a-f0-9]{32}$/.test(value) ||
@@ -594,7 +596,7 @@ const isStaticMainPanelScreenClick = (id) =>
 const isMainPanelScreenClick = (id) =>
   ["p_home", "p_help", "p_debug", "p_status", "p_queue", "p_ai", "p_report",
     "p_tiktok_review", "p_tiktok_review_input",
-    "p_scan", "p_scan_confirm", "p_scan_cancel", "p_scan_pub", "p_scan_pub_confirm", "p_pub_control", "p_pub_pause", "p_pub_resume"].includes(String(id || "")) ||
+    "p_scan", "p_scan_confirm", "p_scan_cancel", "p_scan_pub", "p_scan_pub_confirm", "p_bot_power", "p_bot_off_ask", "p_bot_off_yes", "p_bot_on_ask", "p_bot_on_yes", "p_pub_control", "p_pub_pause", "p_pub_resume"].includes(String(id || "")) ||
   /^p_pub_confirm_(?:pause|resume)_[a-f0-9]{32}$/.test(String(id || "")) ||
   isScreenId(String(id || "")) ||
   isSettingsId(String(id || ""));
@@ -1449,6 +1451,50 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         text = "❌ شروع اسکن و انتشار تأیید نشد: " + esc(result.error || "github_dispatch_failed") +
           (result.status ? " (HTTP " + Number(result.status) + ")" : "") +
           ". هیچ اجرای جایگزینی آغاز نشد.";
+      }
+    }
+    if (fresh) return sendFreshPanel(ui, text, keypad, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, text, keypad);
+    return send(env, chat, text, keypad);
+  }
+  if (/^p_bot_(?:power|off_ask|off_yes|on_ask|on_yes)$/.test(id)) {
+    const off = await isBotOff(env.DB);
+    let text;
+    let keypad = kb([[["🔄 تازه‌سازی", "p_bot_power"], ["🏠 منوی اصلی", "p_home"]]]);
+    if (id === "p_bot_power") {
+      text = [
+        "⏻ **خاموش/روشن کردن ربات**",
+        "",
+        off ? "⛔ وضعیت: **خاموش**" : "✅ وضعیت: **روشن**",
+        "",
+        "خاموش‌کردن: انتشار متوقف می‌شود و کارهای زمان‌بندی‌شدهٔ GitHub و Worker (کشف، صف، خبر Mob، خلاصهٔ روزانه) غیرفعال می‌شوند. پنل روشن می‌ماند.",
+        "روشن‌کردن: همهٔ آن‌ها دوباره فعال می‌شوند و توقف انتشار برداشته می‌شود.",
+      ].join("\n");
+      keypad = kb([
+        [[off ? "▶️ درخواست روشن‌کردن" : "⏻ درخواست خاموش‌کردن", off ? "p_bot_on_ask" : "p_bot_off_ask"]],
+        [["🔄 تازه‌سازی", "p_bot_power"], ["🏠 منوی اصلی", "p_home"]],
+      ]);
+    } else if (id === "p_bot_off_ask" || id === "p_bot_on_ask") {
+      const turningOff = id === "p_bot_off_ask";
+      text = turningOff
+        ? "⚠️ **تأیید خاموش‌کردن**\n\nانتشار، کشف و صف متوقف و کارهای زمان‌بندی‌شده غیرفعال می‌شوند. ادامه می‌دهی؟"
+        : "⚠️ **تأیید روشن‌کردن**\n\nکارهای زمان‌بندی‌شده دوباره فعال و توقف انتشار برداشته می‌شود؛ ربات طبق gateها دوباره انتشار می‌کند. ادامه می‌دهی؟";
+      keypad = kb([
+        [[turningOff ? "⛔ تأیید خاموش‌کردن" : "▶️ تأیید روشن‌کردن", turningOff ? "p_bot_off_yes" : "p_bot_on_yes"]],
+        [["✖️ لغو", "p_bot_power"], ["🏠 منوی اصلی", "p_home"]],
+      ]);
+    } else {
+      const result = await setBotPower(env, id === "p_bot_on_yes");
+      if (!result.ok) {
+        text = "⚠️ تغییر انجام نشد: " + esc(result.error || "bot_power_failed") + ". وضعیت را از همین صفحه تازه‌سازی کن.";
+      } else {
+        const failed = (result.results || []).filter((item) => !item.ok).map((item) => item.workflow.replace(".yml", ""));
+        text = (result.bot_off ? "⛔ **ربات خاموش شد.**" : "✅ **ربات روشن شد.**") +
+          (!result.workflows_checked
+            ? "\nتوکن GitHub تنظیم نیست؛ فقط توقف انتشار و Worker اعمال شد."
+            : failed.length
+              ? "\n⚠️ این کارها تغییر نکردند (دسترسی GitHub را بررسی کن): " + esc(failed.join("، "))
+              : "\nهمهٔ کارهای زمان‌بندی‌شده تغییر کردند.");
       }
     }
     if (fresh) return sendFreshPanel(ui, text, keypad, previousMid);
