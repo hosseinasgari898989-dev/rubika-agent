@@ -13,6 +13,11 @@ on:
         type: boolean
         required: false
         default: true
+      ignore_source_created_at:
+        description: "Owner scan-and-publish: console-added TikTok pages also return videos published before they were added (max 8 per page; intake still adds at most 4 new items)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -123,6 +128,7 @@ jobs:
         id: termux_discovery
         env:
           AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          TERMUX_IGNORE_SOURCE_CREATED_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.ignore_source_created_at == true && 'true' || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -220,6 +226,7 @@ jobs:
             -w /workspace \
             --env PYTHONPATH=/workspace \
             --env AGENT_API_BASE_URL \
+            --env TERMUX_IGNORE_SOURCE_CREATED_AT \
             termux/termux-docker:x86_64 \
             sh -lc '
               set -eu

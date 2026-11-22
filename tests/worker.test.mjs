@@ -5958,7 +5958,7 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(calls[0].init.method, "GET");
     assert.equal(calls[1].init.method, "POST");
     assert.deepEqual(JSON.parse(calls[1].init.body), {
-      ref: "main", inputs: { dry_run: "false" },
+      ref: "main", inputs: { dry_run: "false", ignore_source_created_at: "true" },
     });
   } finally {
     globalThis.fetch = originalFetch;

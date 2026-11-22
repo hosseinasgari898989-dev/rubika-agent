@@ -76,6 +76,11 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
+def ignore_source_cutoff_enabled() -> bool:
+    """Owner-triggered scan only: managed sources may also return videos published before they were added."""
+    return os.getenv("TERMUX_IGNORE_SOURCE_CREATED_AT", "").strip().lower() == "true"
+
+
 def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_sources: bool = False) -> dict[str, Any]:
     """Collect TikTok edit metadata and official Mob X posts without downloads or publishing."""
     print("1/2 TikTok: loading owner-selected creator profiles (metadata only)...", flush=True)
@@ -148,6 +153,10 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
         set_dynamic_tiktok_sources([])
         profiles = TIKTOK_PROFILES
 
+    ignore_source_cutoff = ignore_source_cutoff_enabled()
+    if ignore_source_cutoff:
+        dynamic_cutoffs = {}
+        missing_cutoff_attempts = []
     max_tiktok_results = max(48, len(profiles) * 8) if profiles else 0
     if not profiles:
         tiktok_candidates, tiktok_attempts = [], [
@@ -293,6 +302,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             "tiktok_token_length_bucket": token_length_bucket,
             "tiktok_account_removals_applied": source_rows_available if load_remote_sources else None,
             "tiktok_missing_created_at_cutoff_count": len(missing_cutoff_attempts),
+            "tiktok_source_cutoff_ignored": ignore_source_cutoff,
             "agent_lifecycle_mode": lifecycle_policy["mode"],
             "paid_providers_used": [],
             "ready_to_publish": False,
