@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-22T23:04:12.606433+00:00",
+  "generated_at": "2026-11-22T23:15:05.419925+00:00",
   "source": "github_actions_termux_docker",
   "mode": "metadata_only_no_download_no_publish",
   "lifecycle": {
@@ -9,19 +9,19 @@
     "birth_cutoff_enabled": true
   },
   "summary": {
-    "tiktok_candidates": 43,
+    "tiktok_candidates": 56,
     "mob_official_candidates": 6,
     "mob_official_source": "Mob Entertainment official sources",
     "mob_official_method": "official_x_syndication_and_verified_seed_urls",
     "mob_official_birth_cutoff_rejected": 0,
-    "tiktok_selected_source_candidates": 43,
+    "tiktok_selected_source_candidates": 56,
     "tiktok_method": "yt_dlp_selected_creator_profiles_only",
     "tiktok_source_overlay_status": "console_sources_loaded",
     "tiktok_source_overlay_reason": null,
     "tiktok_token_length_bucket": "ok",
     "tiktok_account_removals_applied": true,
     "tiktok_missing_created_at_cutoff_count": 0,
-    "tiktok_source_cutoff_ignored": false,
+    "tiktok_source_cutoff_ignored": true,
     "agent_lifecycle_mode": "production",
     "paid_providers_used": [],
     "ready_to_publish": false
@@ -57,8 +57,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-21T20:40:00+00:00",
-        "view_count": 8534,
-        "like_count": 1925,
+        "view_count": 8558,
+        "like_count": 1935,
         "comment_count": 59,
         "share_count": null,
         "media_type": "video",
@@ -94,8 +94,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-19T21:00:00+00:00",
-        "view_count": 9607,
-        "like_count": 2077,
+        "view_count": 9614,
+        "like_count": 2078,
         "comment_count": 48,
         "share_count": null,
         "media_type": "video",
@@ -391,7 +391,7 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-10-13T18:15:49+00:00",
         "view_count": 28000,
-        "like_count": 1873,
+        "like_count": 1874,
         "comment_count": 16,
         "share_count": null,
         "media_type": "video",
@@ -575,7 +575,7 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-09-07T18:17:42+00:00",
-        "view_count": 3929,
+        "view_count": 3930,
         "like_count": 281,
         "comment_count": 28,
         "share_count": null,
@@ -761,7 +761,7 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-10-21T16:04:23+00:00",
         "view_count": 10700,
-        "like_count": 1126,
+        "like_count": 1127,
         "comment_count": 32,
         "share_count": null,
         "media_type": "video",
@@ -941,7 +941,7 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-21T21:56:39+00:00",
-        "view_count": 5825,
+        "view_count": 5837,
         "like_count": 953,
         "comment_count": 39,
         "share_count": null,
@@ -1011,7 +1011,7 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-17T20:07:47+00:00",
-        "view_count": 7205,
+        "view_count": 7207,
         "like_count": 901,
         "comment_count": 45,
         "share_count": null,
@@ -1225,8 +1225,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-22T15:15:06+00:00",
-        "view_count": 4144,
-        "like_count": 912,
+        "view_count": 4185,
+        "like_count": 919,
         "comment_count": 32,
         "share_count": null,
         "media_type": "video",
@@ -1263,7 +1263,7 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-20T16:35:44+00:00",
         "view_count": 10100,
-        "like_count": 1862,
+        "like_count": 1863,
         "comment_count": 64,
         "share_count": null,
         "media_type": "video",
@@ -1337,7 +1337,7 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-18T15:17:34+00:00",
         "view_count": 43100,
-        "like_count": 6596,
+        "like_count": 6597,
         "comment_count": 545,
         "share_count": null,
         "media_type": "video",
@@ -1374,7 +1374,7 @@
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-15T15:40:47+00:00",
         "view_count": 72200,
-        "like_count": 8148,
+        "like_count": 8149,
         "comment_count": 214,
         "share_count": null,
         "media_type": "video",
@@ -1486,7 +1486,7 @@
         "published_at": "2026-11-11T15:49:41+00:00",
         "view_count": 68100,
         "like_count": 9194,
-        "comment_count": 233,
+        "comment_count": 232,
         "share_count": null,
         "media_type": "video",
         "method": "termux_ytdlp_selected_creator_profile",
@@ -1518,8 +1518,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-20T19:00:00+00:00",
-        "view_count": 2383,
-        "like_count": 484,
+        "view_count": 2388,
+        "like_count": 485,
         "comment_count": 28,
         "share_count": null,
         "media_type": "video",
@@ -1552,8 +1552,8 @@
         },
         "creator_trust_tier": "owner_selected",
         "published_at": "2026-11-16T17:00:00+00:00",
-        "view_count": 8678,
-        "like_count": 1363,
+        "view_count": 8680,
+        "like_count": 1364,
         "comment_count": 43,
         "share_count": null,
         "media_type": "video",
@@ -1593,6 +1593,500 @@
         "media_type": "video",
         "method": "termux_ytdlp_selected_creator_profile",
         "duration_seconds": 17.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7707340397177097494",
+        "url": "https://www.tiktok.com/@bendus.editz/video/7707340397177097494",
+        "title": "the prototype hard edit || #poppyplaytime #poppyplaytimeedit #prototype #theprototype #edit ",
+        "caption": "the prototype hard edit || #poppyplaytime #poppyplaytimeedit #prototype #theprototype #edit ",
+        "author": "bendus.editz",
+        "hashtags": [
+          "poppyplaytime",
+          "poppyplaytimeedit",
+          "prototype",
+          "theprototype",
+          "edit"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "bendus.editz",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-11-12T18:05:00+00:00",
+        "view_count": 12400,
+        "like_count": 1439,
+        "comment_count": 27,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 20.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7706094290912677122",
+        "url": "https://www.tiktok.com/@bendus.editz/video/7706094290912677122",
+        "title": "the prototype edit || #poppyplaytime #poppyplaytimeedit #edit #prototype #theprototype ",
+        "caption": "the prototype edit || #poppyplaytime #poppyplaytimeedit #edit #prototype #theprototype ",
+        "author": "bendus.editz",
+        "hashtags": [
+          "poppyplaytime",
+          "poppyplaytimeedit",
+          "edit",
+          "prototype",
+          "theprototype"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "bendus.editz",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-11-09T18:00:00+00:00",
+        "view_count": 20700,
+        "like_count": 2576,
+        "comment_count": 57,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 20.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7705058505421573398",
+        "url": "https://www.tiktok.com/@bendus.editz/video/7705058505421573398",
+        "title": "no regrets trend with the prototype and poppy || #poppyplaytimeedit #poppyplaytime #theprototype #prototype #edit ",
+        "caption": "no regrets trend with the prototype and poppy || #poppyplaytimeedit #poppyplaytime #theprototype #prototype #edit ",
+        "author": "bendus.editz",
+        "hashtags": [
+          "poppyplaytimeedit",
+          "poppyplaytime",
+          "theprototype",
+          "prototype",
+          "edit"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "bendus.editz",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-11-06T17:00:00+00:00",
+        "view_count": 10300,
+        "like_count": 1263,
+        "comment_count": 15,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 16.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7704641815529426198",
+        "url": "https://www.tiktok.com/@bendus.editz/video/7704641815529426198",
+        "title": "catnap edit || #poppyplaytime #poppyplaytimeedit #catnappoppyplaytime #catnap #edit ",
+        "caption": "catnap edit || #poppyplaytime #poppyplaytimeedit #catnappoppyplaytime #catnap #edit ",
+        "author": "bendus.editz",
+        "hashtags": [
+          "poppyplaytime",
+          "poppyplaytimeedit",
+          "catnappoppyplaytime",
+          "catnap",
+          "edit"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "bendus.editz",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-11-05T17:00:00+00:00",
+        "view_count": 4102,
+        "like_count": 520,
+        "comment_count": 14,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 10.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7703167337976974624",
+        "url": "https://www.tiktok.com/@bendus.editz/video/7703167337976974624",
+        "title": "happy halloween! 🎃 (small delay) || #poppyplaytime #poppyplaytimeedit #theprototype #prototype #edit ",
+        "caption": "happy halloween! 🎃 (small delay) || #poppyplaytime #poppyplaytimeedit #theprototype #prototype #edit ",
+        "author": "bendus.editz",
+        "hashtags": [
+          "poppyplaytime",
+          "poppyplaytimeedit",
+          "theprototype",
+          "prototype",
+          "edit"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "bendus.editz",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-11-01T11:43:35+00:00",
+        "view_count": 30300,
+        "like_count": 3630,
+        "comment_count": 91,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 31.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7707146596940516638",
+        "url": "https://www.tiktok.com/@sexter.aep/video/7707146596940516638",
+        "title": "Seven deadly sins with Red Dead Redemption characters | Dutch Vander Linde edit | Hosea Matthews edit | Sean MacGuire edit | Micah Bell edit | Simon Pearson edit | John Marston edit | Uncle edit | Red Dead Redemption 2 (2018) | Red Dead Redemption (2010) | ib:@shaun_ontt (but with rdr) | #CapCut #edit #rdr #rdredit #reddeadredemption #rdr2 #dutchvanderlinde #dutchvanderlindeedit #hoseamatthews #hoseamatthewsedit #seanmacguire #seanmacguireedit #micahbell #micahbelledit #simonpearson #simonpearsonedit #johnmarston #johnmarstonedit #uncle #uncleedit #dutchvanderlindegang",
+        "caption": "Seven deadly sins with Red Dead Redemption characters | Dutch Vander Linde edit | Hosea Matthews edit | Sean MacGuire edit | Micah Bell edit | Simon Pearson edit | John Marston edit | Uncle edit | Red Dead Redemption 2 (2018) | Red Dead Redemption (2010) | ib:@shaun_ontt (but with rdr) | #CapCut #edit #rdr #rdredit #reddeadredemption #rdr2 #dutchvanderlinde #dutchvanderlindeedit #hoseamatthews #hoseamatthewsedit #seanmacguire #seanmacguireedit #micahbell #micahbelledit #simonpearson #simonpearsonedit #johnmarston #johnmarstonedit #uncle #uncleedit #dutchvanderlindegang",
+        "author": "sexter.aep",
+        "hashtags": [
+          "CapCut",
+          "edit",
+          "rdr",
+          "rdredit",
+          "reddeadredemption",
+          "rdr2",
+          "dutchvanderlinde",
+          "dutchvanderlindeedit",
+          "hoseamatthews",
+          "hoseamatthewsedit",
+          "seanmacguire",
+          "seanmacguireedit",
+          "micahbell",
+          "micahbelledit",
+          "simonpearson",
+          "simonpearsonedit",
+          "johnmarston",
+          "johnmarstonedit",
+          "uncle",
+          "uncleedit",
+          "dutchvanderlindegang"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "sexter.aep",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-11-12T21:00:00+00:00",
+        "view_count": 283800,
+        "like_count": 40900,
+        "comment_count": 472,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 46.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7706758959239138590",
+        "url": "https://www.tiktok.com/@sexter.aep/video/7706758959239138590",
+        "title": "Repost with a different method | Might be my best edit yet | Holy new shakes | Arthur Morgan edit | Red Dead Redemption 2 (2018) | #CapCut #edit #rdr #rdredit #reddeadredemption #rdr2 #arthurmorgan #arthurmorganedits #arthurmorganedit #reddeadredemption2edit",
+        "caption": "Repost with a different method | Might be my best edit yet | Holy new shakes | Arthur Morgan edit | Red Dead Redemption 2 (2018) | #CapCut #edit #rdr #rdredit #reddeadredemption #rdr2 #arthurmorgan #arthurmorganedits #arthurmorganedit #reddeadredemption2edit",
+        "author": "sexter.aep",
+        "hashtags": [
+          "CapCut",
+          "edit",
+          "rdr",
+          "rdredit",
+          "reddeadredemption",
+          "rdr2",
+          "arthurmorgan",
+          "arthurmorganedits",
+          "arthurmorganedit",
+          "reddeadredemption2edit"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "sexter.aep",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-11-11T21:00:00+00:00",
+        "view_count": 112900,
+        "like_count": 13300,
+        "comment_count": 347,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 24.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7706269472398609694",
+        "url": "https://www.tiktok.com/@sexter.aep/video/7706269472398609694",
+        "title": "Trick or treat smell my feet | Pennywise edit | IT: Welcome to Derry (2025) | #CapCut #edit #itwtd #itwelcometoderry #itwelcometoderrytvseries #itwelcometoderryedit #pennywise #pennywiseedit #trickortreatsmellmyfeet",
+        "caption": "Trick or treat smell my feet | Pennywise edit | IT: Welcome to Derry (2025) | #CapCut #edit #itwtd #itwelcometoderry #itwelcometoderrytvseries #itwelcometoderryedit #pennywise #pennywiseedit #trickortreatsmellmyfeet",
+        "author": "sexter.aep",
+        "hashtags": [
+          "CapCut",
+          "edit",
+          "itwtd",
+          "itwelcometoderry",
+          "itwelcometoderrytvseries",
+          "itwelcometoderryedit",
+          "pennywise",
+          "pennywiseedit",
+          "trickortreatsmellmyfeet"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "sexter.aep",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-11-09T20:21:46+00:00",
+        "view_count": 254500,
+        "like_count": 29000,
+        "comment_count": 267,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 16.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7700342245823761694",
+        "url": "https://www.tiktok.com/@sexter.aep/video/7700342245823761694",
+        "title": "Best Poppy Playtime characters | The Doctor edit | Catnap edit | Poppy Playtime (2021) | #CapCut #edit #poppyplaytime #poppyplaytimeedit #poppyplaytimechapter1 #poppyplaytimechapter2 #poppyplaytimechapter3 #poppyplaytimechapter4 #poppyplaytimechapter5 #thedoctor #thedoctoredit #catnap #catnapedit",
+        "caption": "Best Poppy Playtime characters | The Doctor edit | Catnap edit | Poppy Playtime (2021) | #CapCut #edit #poppyplaytime #poppyplaytimeedit #poppyplaytimechapter1 #poppyplaytimechapter2 #poppyplaytimechapter3 #poppyplaytimechapter4 #poppyplaytimechapter5 #thedoctor #thedoctoredit #catnap #catnapedit",
+        "author": "sexter.aep",
+        "hashtags": [
+          "CapCut",
+          "edit",
+          "poppyplaytime",
+          "poppyplaytimeedit",
+          "poppyplaytimechapter1",
+          "poppyplaytimechapter2",
+          "poppyplaytimechapter3",
+          "poppyplaytimechapter4",
+          "poppyplaytimechapter5",
+          "thedoctor",
+          "thedoctoredit",
+          "catnap",
+          "catnapedit"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "sexter.aep",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-10-27T08:00:00+00:00",
+        "view_count": 42300,
+        "like_count": 4767,
+        "comment_count": 197,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 20.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7700341411945909535",
+        "url": "https://www.tiktok.com/@sexter.aep/video/7700341411945909535",
+        "title": "Chapter 3 was so good | Catnap edit | Poppy Playtime (2021) | #CapCut #edit #poppyplaytime #poppyplaytimeedit #poppyplaytimechapter1 #poppyplaytimechapter2 #poppyplaytimechapter3 #poppyplaytimechapter4 #poppyplaytimechapter5 #catnap #catnapedit",
+        "caption": "Chapter 3 was so good | Catnap edit | Poppy Playtime (2021) | #CapCut #edit #poppyplaytime #poppyplaytimeedit #poppyplaytimechapter1 #poppyplaytimechapter2 #poppyplaytimechapter3 #poppyplaytimechapter4 #poppyplaytimechapter5 #catnap #catnapedit",
+        "author": "sexter.aep",
+        "hashtags": [
+          "CapCut",
+          "edit",
+          "poppyplaytime",
+          "poppyplaytimeedit",
+          "poppyplaytimechapter1",
+          "poppyplaytimechapter2",
+          "poppyplaytimechapter3",
+          "poppyplaytimechapter4",
+          "poppyplaytimechapter5",
+          "catnap",
+          "catnapedit"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "sexter.aep",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-10-26T08:00:00+00:00",
+        "view_count": 25300,
+        "like_count": 1666,
+        "comment_count": 74,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 13.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7700340786235215135",
+        "url": "https://www.tiktok.com/@sexter.aep/video/7700340786235215135",
+        "title": "The Prototype is the strongest | The Prototype edit | Poppy Playtime (2021) | #CapCut #edit #poppyplaytime #poppyplaytimeedit #poppyplaytimechapter1 #poppyplaytimechapter2 #poppyplaytimechapter3 #poppyplaytimechapter4 #poppyplaytimechapter5 #theprototype #theprototypeedit",
+        "caption": "The Prototype is the strongest | The Prototype edit | Poppy Playtime (2021) | #CapCut #edit #poppyplaytime #poppyplaytimeedit #poppyplaytimechapter1 #poppyplaytimechapter2 #poppyplaytimechapter3 #poppyplaytimechapter4 #poppyplaytimechapter5 #theprototype #theprototypeedit",
+        "author": "sexter.aep",
+        "hashtags": [
+          "CapCut",
+          "edit",
+          "poppyplaytime",
+          "poppyplaytimeedit",
+          "poppyplaytimechapter1",
+          "poppyplaytimechapter2",
+          "poppyplaytimechapter3",
+          "poppyplaytimechapter4",
+          "poppyplaytimechapter5",
+          "theprototype",
+          "theprototypeedit"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "sexter.aep",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-10-25T08:00:00+00:00",
+        "view_count": 38400,
+        "like_count": 2354,
+        "comment_count": 182,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 25.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7694869058080066846",
+        "url": "https://www.tiktok.com/@sexter.aep/video/7694869058080066846",
+        "title": "Best transition? | Dutch animation | Dutch Van Der Linde edit | Red Dead Redemption 2 (2018) | #CapCut #edit #reddeadredemtion2 #reddeadredemption2edit #dutchvanderlin #dutchvanderlindeedit #dutchvanderlinderdr2",
+        "caption": "Best transition? | Dutch animation | Dutch Van Der Linde edit | Red Dead Redemption 2 (2018) | #CapCut #edit #reddeadredemtion2 #reddeadredemption2edit #dutchvanderlin #dutchvanderlindeedit #dutchvanderlinderdr2",
+        "author": "sexter.aep",
+        "hashtags": [
+          "CapCut",
+          "edit",
+          "reddeadredemtion2",
+          "reddeadredemption2edit",
+          "dutchvanderlin",
+          "dutchvanderlindeedit",
+          "dutchvanderlinderdr2"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "sexter.aep",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-10-10T03:02:14+00:00",
+        "view_count": 17500,
+        "like_count": 1761,
+        "comment_count": 48,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 21.0
+      },
+      {
+        "platform": "tiktok",
+        "id": "7693082401106398494",
+        "url": "https://www.tiktok.com/@sexter.aep/video/7693082401106398494",
+        "title": "Sadie Adler is the best Rockstar character oat | I can't wait for GTA6 | Sadie Adler edit | Red Dead Redemption 2 (2018) | #CapCut #edit #reddeadredemtion2 #reddeadredemption2edit #sadieadlerrdr2 #sadieadleredit #sadieadleredits #sadieadlerredeadredemption2 #gta6 #luciacaminos",
+        "caption": "Sadie Adler is the best Rockstar character oat | I can't wait for GTA6 | Sadie Adler edit | Red Dead Redemption 2 (2018) | #CapCut #edit #reddeadredemtion2 #reddeadredemption2edit #sadieadlerrdr2 #sadieadleredit #sadieadleredits #sadieadlerredeadredemption2 #gta6 #luciacaminos",
+        "author": "sexter.aep",
+        "hashtags": [
+          "CapCut",
+          "edit",
+          "reddeadredemtion2",
+          "reddeadredemption2edit",
+          "sadieadlerrdr2",
+          "sadieadleredit",
+          "sadieadleredits",
+          "sadieadlerredeadredemption2",
+          "gta6",
+          "luciacaminos"
+        ],
+        "source_policy": {
+          "known_source": true,
+          "enabled": true,
+          "trust_tier": "owner_selected",
+          "source_handle": "sexter.aep",
+          "minimum_source_short_side": 480,
+          "output_format": "preserve_source",
+          "require_poppy_relevance_check": true,
+          "require_edit_signal_check": false
+        },
+        "creator_trust_tier": "owner_selected",
+        "published_at": "2026-10-05T07:29:44+00:00",
+        "view_count": 25600,
+        "like_count": 1868,
+        "comment_count": 71,
+        "share_count": null,
+        "media_type": "video",
+        "method": "termux_ytdlp_selected_creator_profile",
+        "duration_seconds": 18.0
       }
     ],
     "mob_official": [
@@ -1780,604 +2274,88 @@
   },
   "rejected_candidates": [
     {
-      "platform": "tiktok",
-      "external_id": "7707340397177097494",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-11-12T18:05:00+00:00"
+      "platform": "mob_official",
+      "external_id": "2123135983751496106",
+      "reason": "text_only",
+      "created_at": "2026-11-18T19:27:19+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7706094290912677122",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-11-09T18:00:00+00:00"
+      "platform": "mob_official",
+      "external_id": "2123136023198916952",
+      "reason": "reply",
+      "created_at": "2026-11-18T19:27:28+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7705058505421573398",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-11-06T17:00:00+00:00"
+      "platform": "mob_official",
+      "external_id": "2120660301611692202",
+      "reason": "reply",
+      "created_at": "2026-11-11T23:29:50+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7704641815529426198",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-11-05T17:00:00+00:00"
+      "platform": "mob_official",
+      "external_id": "2117706233830359208",
+      "reason": "before_since_utc",
+      "created_at": "2026-11-03T19:51:25+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7703167337976974624",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-11-01T11:43:35+00:00"
+      "platform": "mob_official",
+      "external_id": "2117706553239425054",
+      "reason": "before_since_utc",
+      "created_at": "2026-11-03T19:52:42+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7700637175687286038",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-25T17:00:00+00:00"
+      "platform": "mob_official",
+      "external_id": "2116950907237892428",
+      "reason": "before_since_utc",
+      "created_at": "2026-11-01T17:50:01+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7699890006374026519",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-23T16:15:00+00:00"
+      "platform": "mob_official",
+      "external_id": "2116636388833538274",
+      "reason": "before_since_utc",
+      "created_at": "2026-10-31T21:00:14+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7697331940881419553",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-16T18:19:13+00:00"
+      "platform": "mob_official",
+      "external_id": "2116575954520711270",
+      "reason": "before_since_utc",
+      "created_at": "2026-10-31T17:00:06+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7695495284989922562",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-11T19:32:06+00:00"
+      "platform": "mob_official",
+      "external_id": "2116332765180563910",
+      "reason": "before_since_utc",
+      "created_at": "2026-10-31T00:53:45+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7693443141164092694",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-06T16:00:00+00:00"
+      "platform": "mob_official",
+      "external_id": "2116320934391103931",
+      "reason": "before_since_utc",
+      "created_at": "2026-10-31T00:06:44+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7691732337586965782",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-01T16:09:57+00:00"
+      "platform": "mob_official",
+      "external_id": "2116325706078794181",
+      "reason": "before_since_utc",
+      "created_at": "2026-10-31T00:25:42+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7689471400502971670",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-09-25T15:00:00+00:00"
+      "platform": "mob_official",
+      "external_id": "2116275596812521477",
+      "reason": "before_since_utc",
+      "created_at": "2026-10-30T21:06:35+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7685101582534364438",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-09-13T19:19:15+00:00"
+      "platform": "mob_official",
+      "external_id": "2116219846736183701",
+      "reason": "not_official_author",
+      "created_at": "2026-10-30T17:25:03+00:00"
     },
     {
-      "platform": "tiktok",
-      "external_id": "7684691756016733462",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-09-12T17:15:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7684329200852995361",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-09-11T17:21:57+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7682867254618311958",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-09-07T18:48:53+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7682462431104208150",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-09-06T17:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7682014106831949078",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-09-05T15:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7679776298339798274",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-30T10:54:28+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7679182402987609347",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-28T20:29:48+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7678429131846995222",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-26T19:46:42+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7678369663495015702",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-26T15:55:57+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7676024517126262038",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-20T08:15:41+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7675270201432116502",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-18T07:28:36+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7674718573411044630",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-16T19:47:52+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7674343720266878230",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-15T19:33:15+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7674146641938533654",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-15T06:48:30+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7672799618375224598",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-11T15:41:25+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7672058935498640662",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-09T15:47:08+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7671700494493945110",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-08T16:36:10+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7671247976618003734",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-07T11:20:11+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7670238252909169942",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-04T18:01:58+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7669381627713178913",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-02T10:37:45+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7668974370408123670",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-01T08:17:25+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7668019289038818582",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-29T18:31:13+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7667905545906572547",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-29T11:09:52+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7667522464364104982",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-28T19:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7666186851497168161",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-24T20:00:22+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7665793887415373089",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-23T18:35:28+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7664979896489250081",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-21T13:56:46+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7663553331150851360",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-17T17:40:59+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7663204350705061153",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-16T19:06:44+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7663174995782225184",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-16T17:12:50+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7663103084003986721",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-16T12:33:49+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7662800811457580320",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-15T17:00:48+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7662442914445790486",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-14T17:52:01+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7662386802015210774",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-14T14:14:32+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7661692883514166550",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-12T17:22:03+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7661611317610024214",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-12T15:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7661213580531911958",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-11T17:30:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7660889727511334166",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-10T13:25:04+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7660626031950466327",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-09T20:22:01+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7660458888084458774",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-09T09:33:07+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7660202805407321366",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-08T16:59:16+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7659867602973379862",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-07T19:18:32+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7659763166099901718",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-07T12:33:18+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7659473102430096662",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-06T17:47:40+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7659424392916700439",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-06T14:38:41+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7707146596940516638",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-11-12T21:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7706758959239138590",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-11-11T21:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7706269472398609694",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-11-09T20:21:46+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7700342245823761694",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-27T08:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7700341411945909535",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-26T08:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7700340786235215135",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-25T08:00:00+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7694869058080066846",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-10T03:02:14+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7693082401106398494",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-05T07:29:44+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7692730386866081055",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-10-04T08:43:56+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7687706268089322783",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-09-20T19:46:54+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7677731918024133919",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-24T22:41:20+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7676030890186640671",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-20T08:41:02+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7675247120667954462",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-18T05:59:15+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7675130889621327135",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-17T22:28:01+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7674717665344113951",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-08-16T19:44:26+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7658558486824897823",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-07-04T06:38:42+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7649917790979149087",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-06-10T23:48:25+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7646131412294257950",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-31T18:55:17+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7643900527109016862",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-25T18:38:16+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7643232292336373022",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-23T23:25:08+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7642702603649862943",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-22T13:10:02+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7642340238831930655",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-21T13:43:29+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7642002486370323742",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-20T15:53:12+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7640612931570371871",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-16T22:00:50+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7639395563317873950",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-13T15:17:05+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7639025119888723231",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-05-12T15:19:35+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7634160050025663774",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-04-29T12:40:14+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7630160269091573023",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-04-18T17:59:08+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7629512601755454751",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-04-17T00:06:03+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7628606159645068575",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-04-14T13:28:33+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7626371300423896350",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-04-08T12:55:51+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7626001554327358751",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-04-07T13:01:07+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7625727963815873823",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-04-06T19:19:35+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7623400042912697630",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-31T12:46:14+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7622464522334391582",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-29T00:15:38+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7621660346645875999",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-26T20:14:54+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7621177801567128863",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-25T13:02:45+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7620805863753714974",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-24T12:59:41+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7619844377019501855",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-21T22:48:08+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7619128400753544479",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-20T00:29:47+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7617841369989664030",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-16T13:15:23+00:00"
-    },
-    {
-      "platform": "tiktok",
-      "external_id": "7616729716074056990",
-      "reason": "older_than_source_created_at",
-      "created_at": "2026-03-13T13:22:03+00:00"
+      "platform": "mob_official",
+      "external_id": "2115562527425704170",
+      "reason": "before_since_utc",
+      "created_at": "2026-10-28T21:53:06+00:00"
     }
   ],
   "source_freshness": {
@@ -2387,7 +2365,7 @@
     },
     "FxTwitter": {
       "newest_created_at_returned": "2026-11-21T18:00:20+00:00",
-      "lag_seconds": 104632
+      "lag_seconds": 105285
     },
     "VxTwitter": {
       "newest_created_at_returned": null,
@@ -2446,624 +2424,18 @@
     {
       "platform": "tiktok",
       "query": "@bendus.editz",
-      "parsed": 61,
-      "new_unique": 3,
-      "skipped_before_account_added": 58,
+      "parsed": 8,
+      "new_unique": 8,
+      "skipped_before_account_added": 0,
       "result": "metadata_found"
     },
     {
       "platform": "tiktok",
       "query": "@sexter.aep",
-      "parsed": 100,
-      "new_unique": 0,
-      "skipped_before_account_added": 100,
-      "result": "no_public_video_metadata"
-    },
-    {
-      "platform": "tiktok",
-      "result": "rejected_candidates_recorded",
-      "rejected_candidates": [
-        {
-          "platform": "tiktok",
-          "external_id": "7707340397177097494",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-11-12T18:05:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7706094290912677122",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-11-09T18:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7705058505421573398",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-11-06T17:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7704641815529426198",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-11-05T17:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7703167337976974624",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-11-01T11:43:35+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7700637175687286038",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-25T17:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7699890006374026519",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-23T16:15:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7697331940881419553",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-16T18:19:13+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7695495284989922562",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-11T19:32:06+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7693443141164092694",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-06T16:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7691732337586965782",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-01T16:09:57+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7689471400502971670",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-09-25T15:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7685101582534364438",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-09-13T19:19:15+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7684691756016733462",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-09-12T17:15:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7684329200852995361",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-09-11T17:21:57+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7682867254618311958",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-09-07T18:48:53+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7682462431104208150",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-09-06T17:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7682014106831949078",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-09-05T15:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7679776298339798274",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-30T10:54:28+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7679182402987609347",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-28T20:29:48+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7678429131846995222",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-26T19:46:42+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7678369663495015702",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-26T15:55:57+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7676024517126262038",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-20T08:15:41+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7675270201432116502",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-18T07:28:36+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7674718573411044630",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-16T19:47:52+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7674343720266878230",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-15T19:33:15+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7674146641938533654",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-15T06:48:30+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7672799618375224598",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-11T15:41:25+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7672058935498640662",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-09T15:47:08+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7671700494493945110",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-08T16:36:10+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7671247976618003734",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-07T11:20:11+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7670238252909169942",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-04T18:01:58+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7669381627713178913",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-02T10:37:45+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7668974370408123670",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-01T08:17:25+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7668019289038818582",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-29T18:31:13+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7667905545906572547",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-29T11:09:52+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7667522464364104982",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-28T19:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7666186851497168161",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-24T20:00:22+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7665793887415373089",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-23T18:35:28+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7664979896489250081",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-21T13:56:46+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7663553331150851360",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-17T17:40:59+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7663204350705061153",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-16T19:06:44+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7663174995782225184",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-16T17:12:50+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7663103084003986721",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-16T12:33:49+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7662800811457580320",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-15T17:00:48+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7662442914445790486",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-14T17:52:01+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7662386802015210774",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-14T14:14:32+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7661692883514166550",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-12T17:22:03+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7661611317610024214",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-12T15:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7661213580531911958",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-11T17:30:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7660889727511334166",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-10T13:25:04+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7660626031950466327",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-09T20:22:01+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7660458888084458774",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-09T09:33:07+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7660202805407321366",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-08T16:59:16+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7659867602973379862",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-07T19:18:32+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7659763166099901718",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-07T12:33:18+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7659473102430096662",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-06T17:47:40+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7659424392916700439",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-06T14:38:41+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7707146596940516638",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-11-12T21:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7706758959239138590",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-11-11T21:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7706269472398609694",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-11-09T20:21:46+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7700342245823761694",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-27T08:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7700341411945909535",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-26T08:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7700340786235215135",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-25T08:00:00+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7694869058080066846",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-10T03:02:14+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7693082401106398494",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-05T07:29:44+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7692730386866081055",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-10-04T08:43:56+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7687706268089322783",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-09-20T19:46:54+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7677731918024133919",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-24T22:41:20+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7676030890186640671",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-20T08:41:02+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7675247120667954462",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-18T05:59:15+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7675130889621327135",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-17T22:28:01+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7674717665344113951",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-08-16T19:44:26+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7658558486824897823",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-07-04T06:38:42+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7649917790979149087",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-06-10T23:48:25+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7646131412294257950",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-31T18:55:17+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7643900527109016862",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-25T18:38:16+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7643232292336373022",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-23T23:25:08+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7642702603649862943",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-22T13:10:02+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7642340238831930655",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-21T13:43:29+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7642002486370323742",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-20T15:53:12+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7640612931570371871",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-16T22:00:50+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7639395563317873950",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-13T15:17:05+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7639025119888723231",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-05-12T15:19:35+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7634160050025663774",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-04-29T12:40:14+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7630160269091573023",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-04-18T17:59:08+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7629512601755454751",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-04-17T00:06:03+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7628606159645068575",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-04-14T13:28:33+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7626371300423896350",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-04-08T12:55:51+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7626001554327358751",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-04-07T13:01:07+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7625727963815873823",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-04-06T19:19:35+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7623400042912697630",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-31T12:46:14+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7622464522334391582",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-29T00:15:38+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7621660346645875999",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-26T20:14:54+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7621177801567128863",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-25T13:02:45+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7620805863753714974",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-24T12:59:41+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7619844377019501855",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-21T22:48:08+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7619128400753544479",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-20T00:29:47+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7617841369989664030",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-16T13:15:23+00:00"
-        },
-        {
-          "platform": "tiktok",
-          "external_id": "7616729716074056990",
-          "reason": "older_than_source_created_at",
-          "created_at": "2026-03-13T13:22:03+00:00"
-        }
-      ]
+      "parsed": 8,
+      "new_unique": 8,
+      "skipped_before_account_added": 0,
+      "result": "metadata_found"
     },
     {
       "source": "x-cli",
