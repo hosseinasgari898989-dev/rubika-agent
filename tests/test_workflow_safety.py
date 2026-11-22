@@ -402,7 +402,7 @@ class WorkflowSafetyTests(unittest.TestCase):
 
         cleanup = workflow.split("name: Remove temporary Termux API token file", 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("if: always()", cleanup)
-        self.assertIn('rm -f -- "$RUNNER_TEMP/agent-api-token"', cleanup)
+        self.assertIn('rm -f -- "$RUNNER_TEMP/agent-api-token" "$RUNNER_TEMP/ignore-source-created-at"', cleanup)
 
         artifact = workflow.split("name: Upload collection report and queue result", 1)[1].split("\n      - name:", 1)[0]
         self.assertNotIn("agent-api-token", artifact)
