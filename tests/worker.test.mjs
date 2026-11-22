@@ -5933,6 +5933,38 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   }
 }
 
+// The PV scan-and-publish preflight dispatches a normal intake run (dry_run=false).
+{
+  const fakeToken = "mock-github-dispatch-token-never-log";
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      if (String(url).includes("/runs?per_page=100")) {
+        return new Response(JSON.stringify({ workflow_runs: [] }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    };
+    const started = await panel.dispatchTermuxDiscoveryOnce(
+      { GITHUB_DISPATCH_TOKEN: fakeToken },
+      { publish: true },
+    );
+    assert.equal(started.ok, true);
+    assert.equal(started.status, 204);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].init.method, "GET");
+    assert.equal(calls[1].init.method, "POST");
+    assert.deepEqual(JSON.parse(calls[1].init.body), {
+      ref: "main", inputs: { dry_run: "false" },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 // The shared dispatch helper accepts the exact scheduled inputs and performs one safe attempt.
 {
   const originalFetch = globalThis.fetch;

@@ -250,7 +250,7 @@ export async function dispatchMobXWorkflow(env, workflow, inputs, options = {}) 
     : { ok: false, error: lastError, ...(lastErrorDetail ? { error_detail: lastErrorDetail } : {}) };
 }
 
-export async function dispatchTermuxDiscoveryOnce(env) {
+export async function dispatchTermuxDiscoveryOnce(env, { publish = false } = {}) {
   const token = typeof env?.GITHUB_DISPATCH_TOKEN === "string" ? env.GITHUB_DISPATCH_TOKEN.trim() : "";
   if (!token) return { ok: false, error: "github_dispatch_not_configured" };
 
@@ -299,7 +299,7 @@ export async function dispatchTermuxDiscoveryOnce(env) {
   return dispatchMobXWorkflow(
     env,
     "termux-docker-discovery.yml",
-    { dry_run: true },
+    publish === true ? null : { dry_run: true },
     { maxAttempts: 1, safeStatusOnly: true },
   );
 }
@@ -573,6 +573,8 @@ const isOwnerOnlyPanelAction = (id) => {
     value === "p_scan" ||
     value === "p_scan_confirm" ||
     value === "p_scan_cancel" ||
+    value === "p_scan_pub" ||
+    value === "p_scan_pub_confirm" ||
     value === "p_pub_control" ||
     value === "p_pub_pause" ||
     value === "p_pub_resume" ||
@@ -592,7 +594,7 @@ const isStaticMainPanelScreenClick = (id) =>
 const isMainPanelScreenClick = (id) =>
   ["p_home", "p_help", "p_debug", "p_status", "p_queue", "p_ai", "p_report",
     "p_tiktok_review", "p_tiktok_review_input",
-    "p_scan", "p_scan_confirm", "p_scan_cancel", "p_pub_control", "p_pub_pause", "p_pub_resume"].includes(String(id || "")) ||
+    "p_scan", "p_scan_confirm", "p_scan_cancel", "p_scan_pub", "p_scan_pub_confirm", "p_pub_control", "p_pub_pause", "p_pub_resume"].includes(String(id || "")) ||
   /^p_pub_confirm_(?:pause|resume)_[a-f0-9]{32}$/.test(String(id || "")) ||
   isScreenId(String(id || "")) ||
   isSettingsId(String(id || ""));
@@ -1410,6 +1412,45 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     const keypad = kb([
       [["🔄 بازگشت به پنل", "p_home"]],
     ]);
+    if (fresh) return sendFreshPanel(ui, text, keypad, previousMid);
+    if (targetMid) return edit(env, chat, targetMid, text, keypad);
+    return send(env, chat, text, keypad);
+  }
+  if (id === "p_scan_pub" || id === "p_scan_pub_confirm") {
+    const control = await api(ui, "/api/brain/publishing-control");
+    const paused = !control || control.ok !== true || control.publishing_paused === true || control.paused === true;
+    let text;
+    let keypad = kb([[["🔄 بازگشت به پنل", "p_home"]]]);
+    if (paused) {
+      text = "⛔ **اسکن و انتشار** اجرا نشد: توقف اضطراری فعال است یا وضعیتش قابل‌بررسی نیست. هیچ اسکنی شروع نشد.";
+    } else if (id === "p_scan_pub") {
+      text = [
+        "🚀 **اسکن و انتشار**",
+        "",
+        "این دکمه همان اجرای عادی را همین حالا شروع می‌کند:",
+        "• ویدیوهای جدید حساب‌های انتخابی بررسی می‌شوند.",
+        "• هر مورد واجد شرایط وارد صف می‌شود و صف TikTok اجرا می‌شود.",
+        "• مقصد را gate مستقل TikTok تعیین می‌کند؛ اگر باز باشد، کانال اصلی.",
+        "• برای توقف فوری، «توقف اضطراری انتشار» را بزن.",
+        "",
+        "تأیید می‌کنی؟",
+      ].join("\n");
+      keypad = kb([
+        [["▶️ شروع اسکن و انتشار", "p_scan_pub_confirm"]],
+        [["✖️ لغو", "p_scan_cancel"], ["🏠 منوی اصلی", "p_home"]],
+      ]);
+    } else {
+      const result = await dispatchTermuxDiscoveryOnce(env, { publish: true });
+      if (result.skipped) {
+        text = "⏸️ اسکن جدید شروع نشد؛ یک اجرای Termux از قبل در صف یا در حال اجراست. همان اجرا حفظ شد.";
+      } else if (result.ok) {
+        text = "✅ اسکن و انتشار به GitHub Actions سپرده شد. ویدیوهای واجد شرایط وارد صف می‌شوند و صف TikTok اجرا می‌شود؛ مقصد طبق gate TikTok تعیین می‌شود. برای توقف فوری از «توقف اضطراری انتشار» استفاده کن.";
+      } else {
+        text = "❌ شروع اسکن و انتشار تأیید نشد: " + esc(result.error || "github_dispatch_failed") +
+          (result.status ? " (HTTP " + Number(result.status) + ")" : "") +
+          ". هیچ اجرای جایگزینی آغاز نشد.";
+      }
+    }
     if (fresh) return sendFreshPanel(ui, text, keypad, previousMid);
     if (targetMid) return edit(env, chat, targetMid, text, keypad);
     return send(env, chat, text, keypad);
