@@ -77,17 +77,18 @@ const screensExtSource = fs.readFileSync(path.join(root, "src/panel_screens_ext.
   .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
   .replace('from "./panel_retry_screens.js";', 'from "' + retryScreensModuleUrl + '";');
 const screensExtModuleUrl = dataModuleUrl(screensExtSource);
+const botPowerModuleUrl = dataModuleUrl(fs.readFileSync(path.join(root, "src/bot_power.js"), "utf8"));
 const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8")
   .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
   .replace('from "./panel_screens_ext.js";', 'from "' + screensExtModuleUrl + '";')
   .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
   .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
-  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
+  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";')
+  .replace('from "./bot_power.js";', 'from "' + botPowerModuleUrl + '";');
 const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
-const botPowerSource = fs.readFileSync(path.join(root, "src/bot_power.js"), "utf8");
-const botPower = await import(dataModuleUrl(botPowerSource));
+const botPower = await import(botPowerModuleUrl);
 const screens = await import(screensModuleUrl);
 const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";')
