@@ -4454,6 +4454,8 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     }
     assert.equal(state.DB.state.get("mode"), "idle");
   });
+}
+
 // Typed scan-and-publish maps to its confirmation screen; /fix clears stale state and sends a fresh home panel.
 {
   await withMockRubikaFetch(async calls => {
@@ -4492,7 +4494,6 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.ok(state.DB.state.get("panel_mid"));
     assert.notEqual(state.DB.state.get("panel_mid"), "stale-panel-before-fix");
   });
-}
 }
 
 // Link deletion confirmation edits the same main panel; a stale/direct confirmation never deletes.
