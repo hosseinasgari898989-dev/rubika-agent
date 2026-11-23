@@ -3700,6 +3700,18 @@ async function withDispatchFetch(responder, fn) {
       assert.equal(keypadEdits.length, 1, "p_help must perform one matching keypad edit");
       assert.notEqual(textEdits[0].payload.text, "⏳ در حال انجام…");
       assert.match(textEdits[0].payload.text, /راهنما/);
+      assert.ok(textEdits[0].payload.text.endsWith([
+        "دستورهای متنی (هر کدام همان دکمه است):",
+        "/اسکن_و_انتشار — 🚀 اسکن و انتشار (اسکن عمیق)",
+        "/اسکن — 🔎 اسکن فوری، فقط گزارش",
+        "/بازبینی — 🎵 تیک‌تاک، در انتظار تأیید شما",
+        "/توقف — 🛑 توقف اضطراری انتشار",
+        "/ربات — ⏻ خاموش/روشن کردن ربات",
+        "/تلاش_مجدد — 🔁 تلاش مجدد ناموفق‌ها (فقط لینک‌های Mob)",
+        "/وضعیت /صف /گزارش /خطاها /راهنما /منو — صفحه‌های همنام",
+        "/fix یا /تازه — ارسال پنل تازه وقتی دکمه‌ها به‌روز نمی‌شوند",
+        "(نیم‌فاصله/فاصله در دستور ممکن نیست؛ از زیرخط استفاده کن.)",
+      ].join("\n")), "p_help must append the full text-command block unchanged");
       assert.equal(textEdits[0].payload.message_id, "static-help-main-panel");
       assert.equal(keypadEdits[0].payload.message_id, "static-help-main-panel");
       if (scenario.stale) {
@@ -4442,6 +4454,45 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     }
     assert.equal(state.DB.state.get("mode"), "idle");
   });
+// Typed scan-and-publish maps to its confirmation screen; /fix clears stale state and sends a fresh home panel.
+{
+  await withMockRubikaFetch(async calls => {
+    const state = panelEnv();
+    state.DB.ownerChat = "b0actualowner";
+    state.DB.state.set("panel_mid", "text-command-old-panel");
+    state.DB.state.set("mode", "waiting_link");
+    const secret = await panel.hookSecret(state);
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "text-scanpub-command", chat_id: "b0actualowner", text: "/اسکن_و_انتشار",
+      } },
+    }, secret);
+    const scanPrompt = calls.filter(call => call.method === "sendMessage").at(-1);
+    assert.ok(scanPrompt && scanPrompt.payload.text.includes("۱۰۰ ویدیوی آخر"),
+      "the typed command must render the p_scan_pub deep-scan confirmation screen");
+    assert.ok(scanPrompt.payload.text.includes("تأیید می‌کنی؟"));
+    assert.equal(state.DB.state.get("mode"), "idle");
+    assert.equal(calls.some(call => call.url && call.url.startsWith("https://api.github.com/")), false,
+      "rendering the confirmation screen must not dispatch a workflow");
+
+    state.DB.state.set("panel_mid", "stale-panel-before-fix");
+    state.DB.state.set("mode", "waiting_tiktok_review");
+    const sendsBeforeFix = calls.filter(call => call.method === "sendMessage").length;
+    const editsBeforeFix = calls.filter(call => call.method === "editMessageText").length;
+    await postPanelUpdate(state, {
+      update: { type: "NewMessage", chat_id: "b0actualowner", new_message: {
+        message_id: "text-fix-command", chat_id: "b0actualowner", text: "/fix",
+      } },
+    }, secret);
+    const sendsAfterFix = calls.filter(call => call.method === "sendMessage");
+    assert.equal(sendsAfterFix.length, sendsBeforeFix + 1, "/fix must send a new home panel");
+    assert.equal(calls.filter(call => call.method === "editMessageText").length, editsBeforeFix,
+      "/fix must not try to edit a stale panel message");
+    assert.equal(state.DB.state.get("mode"), "idle");
+    assert.ok(state.DB.state.get("panel_mid"));
+    assert.notEqual(state.DB.state.get("panel_mid"), "stale-panel-before-fix");
+  });
+}
 }
 
 // Link deletion confirmation edits the same main panel; a stale/direct confirmation never deletes.
