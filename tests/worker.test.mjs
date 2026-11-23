@@ -6433,6 +6433,41 @@ console.log("Worker tests passed: live panel tracking, stage-two D1 screens, saf
       assert.equal(bad.status, 400);
       assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(badId).status, "processing");
     }
+    // An owner may review a no-music result only when an audio stream exists.
+    const noMusicId = "tiktok:" + reviewId(3);
+    sqlite.prepare(
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
+      "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'processing')"
+    ).run(noMusicId, reviewId(3), "https://www.tiktok.com/@tracked_a/video/" + reviewId(3));
+    const noMusicAccepted = await read(await worker.fetch(request("/api/brain/automation-queue/" +
+      encodeURIComponent(noMusicId) + "/owner-review", {
+        method: "POST",
+        body: { reason: "music_not_detected", music_probability: 0.0619, has_audio: true, has_music: false },
+      }), state));
+    assert.equal(noMusicAccepted.status, 200);
+    assert.equal(noMusicAccepted.body.last_error_code, "needs_owner_review");
+    const noMusicRow = sqlite.prepare("SELECT status, metadata_json FROM automation_queue WHERE id = ?").get(noMusicId);
+    assert.equal(noMusicRow.status, "failed");
+    const noMusicMetadata = JSON.parse(noMusicRow.metadata_json).owner_review;
+    assert.equal(noMusicMetadata.original_reason, "music_not_detected");
+    assert.equal(noMusicMetadata.music_probability, 0.0619);
+    assert.equal(noMusicMetadata.has_audio, true);
+    assert.equal(noMusicMetadata.has_music, false);
+
+    const invalidNoMusicId = "tiktok:" + reviewId(30);
+    sqlite.prepare(
+      "INSERT INTO automation_queue (id, platform, external_id, canonical_url, source_key, status) " +
+      "VALUES (?, 'tiktok', ?, ?, 'tracked_a', 'processing')"
+    ).run(invalidNoMusicId, reviewId(30), "https://www.tiktok.com/@tracked_a/video/" + reviewId(30));
+    const invalidNoMusic = await read(await worker.fetch(request("/api/brain/automation-queue/" +
+      encodeURIComponent(invalidNoMusicId) + "/owner-review", {
+        method: "POST",
+        body: { reason: "music_not_detected", has_audio: true, has_music: null },
+      }), state));
+    assert.equal(invalidNoMusic.status, 400);
+    assert.equal(invalidNoMusic.body.error, "tiktok_owner_review_no_music_invalid");
+    assert.equal(sqlite.prepare("SELECT status FROM automation_queue WHERE id = ?").get(invalidNoMusicId).status, "processing");
+
     // Edit-marker review requires a positive music verdict and audio stream.
     const editId = "tiktok:" + reviewId(2);
     sqlite.prepare(

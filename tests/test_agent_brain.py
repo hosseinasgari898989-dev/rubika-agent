@@ -91,6 +91,34 @@ class BrainModelPolicyTests(unittest.TestCase):
             {"music_probability": 0.55, "music_decision_reason": "music_probability_ambiguous"},
         ))
 
+    def test_owner_no_music_override_removes_only_the_music_rejection(self):
+        candidate = self.candidate(source_policy={
+            "owner_override": True,
+            "owner_override_reason": "music_not_detected",
+        })
+        approved = evaluate_edit_candidate(
+            candidate, self.inspection(), moderation=self.moderation(has_music=False),
+        )
+        self.assertNotIn("music_not_detected", approved.reasons)
+        self.assertTrue(approved.eligible, approved.reasons)
+
+        ordinary = evaluate_edit_candidate(
+            self.candidate(), self.inspection(), moderation=self.moderation(has_music=False),
+        )
+        self.assertIn("music_not_detected", ordinary.reasons)
+
+    def test_tiktok_final_gate_accepts_no_music_only_with_owner_override(self):
+        candidate = self.candidate(source_policy={
+            "owner_override": True,
+            "owner_override_reason": "music_not_detected",
+        })
+        self.assertTrue(_tiktok_publish_checks_pass(
+            candidate, {"has_audio": True}, {"has_music": False},
+        ))
+        self.assertFalse(_tiktok_publish_checks_pass(
+            self.candidate(), {"has_audio": True}, {"has_music": False},
+        ))
+
     def test_tiktok_final_gate_rejects_low_music_probability(self):
         self.assertFalse(_tiktok_publish_checks_pass(
             self.candidate(),

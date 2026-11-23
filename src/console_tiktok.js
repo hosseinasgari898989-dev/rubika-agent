@@ -199,7 +199,7 @@ async function resendTikTokUnsent(env, h, id) {
 const OWNER_REVIEW_MAX_LINES = 20;
 const OWNER_REVIEW_CHALLENGE_MS = 10 * 60 * 1000;
 const OWNER_REVIEW_REASON_CODES = new Set([
-  "music_probability_ambiguous", "edit_signal_not_found_by_brain",
+  "music_probability_ambiguous", "edit_signal_not_found_by_brain", "music_not_detected",
 ]);
 
 async function ownerReviewSignature(env, actor, challengeId, expiresAt) {

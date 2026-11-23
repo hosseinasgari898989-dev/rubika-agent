@@ -1759,6 +1759,17 @@ async function automationQueueOwnerReview(env, queueId, body) {
       return json({ ok: false, error: "tiktok_owner_review_edit_marker_invalid" }, 400);
     }
     hasMusic = true;
+  } else if (reason === "music_not_detected") {
+    if (
+      body.has_music !== false ||
+      (body.music_probability !== undefined && body.music_probability !== null &&
+        (typeof body.music_probability !== "number" || !Number.isFinite(body.music_probability) ||
+          body.music_probability < 0 || body.music_probability >= 0.15))
+    ) {
+      return json({ ok: false, error: "tiktok_owner_review_no_music_invalid" }, 400);
+    }
+    musicProbability = typeof body.music_probability === "number" ? body.music_probability : null;
+    hasMusic = false;
   } else {
     return json({ ok: false, error: "tiktok_owner_review_reason_invalid" }, 400);
   }

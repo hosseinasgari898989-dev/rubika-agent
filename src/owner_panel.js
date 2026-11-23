@@ -1364,7 +1364,8 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
     const items = Array.isArray(result && result.items) ? result.items.slice(0, 12) : [];
     const reasonFa = (reason, probability) => reason === "music_probability_ambiguous" && typeof probability === "number"
       ? "موسیقی نامشخص (" + probability.toFixed(2).replace(".", "٫").replace(/[0-9]/g, digit => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]) + ")"
-      : reason === "edit_signal_not_found_by_brain" ? "نشانهٔ ادیت پیدا نشد" : "نیازمند بررسی مالک";
+      : reason === "edit_signal_not_found_by_brain" ? "نشانهٔ ادیت پیدا نشد"
+        : reason === "music_not_detected" ? "موسیقی تشخیص داده نشد یا صدا کم است" : "نیازمند بررسی مالک";
     const out = !result || result.ok !== true
       ? "❌ فهرست موارد بازبینی فعلاً در دسترس نیست."
       : !items.length

@@ -624,11 +624,17 @@ def run_daily(
                         result.get("reason") == "edit_signal_not_found_by_brain"
                         and result.get("has_music") is True
                     )
+                    or (
+                        result.get("reason") == "music_not_detected"
+                        and result.get("has_music") is False
+                    )
                 )
             ):
                 review_reason = (
                     "music_probability_ambiguous"
                     if result.get("music_decision_reason") == "music_probability_ambiguous"
+                    else "music_not_detected"
+                    if result.get("reason") == "music_not_detected"
                     else "edit_signal_not_found_by_brain"
                 )
                 if report["owner_review_count"] >= 5:
@@ -645,7 +651,12 @@ def run_daily(
                             reason=review_reason,
                             music_probability=(
                                 float(result["music_probability"])
-                                if review_reason == "music_probability_ambiguous" else None
+                                if review_reason == "music_probability_ambiguous"
+                                or (
+                                    review_reason == "music_not_detected"
+                                    and type(result.get("music_probability")) in {int, float}
+                                )
+                                else None
                             ),
                             has_audio=True,
                             has_music=result.get("has_music"),

@@ -552,6 +552,12 @@ class CloudState:
         elif reason == "edit_signal_not_found_by_brain":
             if music_probability is not None or has_music is not True:
                 raise ValueError("invalid_tiktok_owner_review_edit_marker")
+        elif reason == "music_not_detected":
+            if has_music is not False or (
+                music_probability is not None
+                and (type(music_probability) not in {int, float} or not 0.0 <= float(music_probability) < 0.15)
+            ):
+                raise ValueError("invalid_tiktok_owner_review_no_music")
         else:
             raise ValueError("invalid_tiktok_owner_review_reason")
         escaped = urllib.parse.quote(item_id, safe="")
