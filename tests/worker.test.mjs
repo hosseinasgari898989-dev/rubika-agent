@@ -77,15 +77,18 @@ const screensExtSource = fs.readFileSync(path.join(root, "src/panel_screens_ext.
   .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
   .replace('from "./panel_retry_screens.js";', 'from "' + retryScreensModuleUrl + '";');
 const screensExtModuleUrl = dataModuleUrl(screensExtSource);
+const botPowerModuleUrl = dataModuleUrl(fs.readFileSync(path.join(root, "src/bot_power.js"), "utf8"));
 const panelSource = fs.readFileSync(path.join(root, "src/owner_panel.js"), "utf8")
   .replace('from "./panel_screens.js";', 'from "' + screensModuleUrl + '";')
   .replace('from "./panel_screens_ext.js";', 'from "' + screensExtModuleUrl + '";')
   .replace('from "./panel_settings.js";', 'from "' + settingsModuleUrl + '";')
   .replace('from "./mob_x_caption.js";', 'from "' + mobXCaptionModuleUrl + '";')
   .replace('from "./mob_x_link.js";', 'from "' + mobXLinkModuleUrl + '";')
-  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";');
+  .replace('from "./mob_x_identity.js";', 'from "' + mobXIdentityModuleUrl + '";')
+  .replace('from "./bot_power.js";', 'from "' + botPowerModuleUrl + '";');
 const panelModuleUrl = dataModuleUrl(panelSource);
 const importedPanel = await import(panelModuleUrl);
+const botPower = await import(botPowerModuleUrl);
 const screens = await import(screensModuleUrl);
 const consoleApiSource = fs.readFileSync(path.join(root, "src/console_api.js"), "utf8")
   .replace('from "./console_retry.js";', 'from "' + consoleRetryModuleUrl + '";')
@@ -5963,6 +5966,39 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
   } finally {
     globalThis.fetch = originalFetch;
   }
+}
+
+// Bot power switch: OFF sets flags then disables the 6 scheduled workflows; ON re-enables them.
+{
+  const db = {
+    prepare() { return { bind(...args) { return { args }; } }; },
+    async batch(list) { return list.map(() => ({ meta: { changes: 1 } })); },
+  };
+  const calls = [];
+  const fakeFetch = async (url, init = {}) => { calls.push({ url: String(url), method: init.method }); return new Response(null, { status: 204 }); };
+  const env = { DB: db, GITHUB_DISPATCH_TOKEN: "mock-token-never-log" };
+  const off = await botPower.setBotPower(env, false, fakeFetch);
+  assert.equal(off.ok, true);
+  assert.equal(off.bot_off, true);
+  assert.equal(off.results.length, 6);
+  assert.ok(calls.every((call) => call.method === "PUT" && call.url.endsWith("/disable")));
+  const on = await botPower.setBotPower(env, true, fakeFetch);
+  assert.equal(on.bot_off, false);
+  assert.ok(calls.slice(6).every((call) => call.url.endsWith("/enable")));
+  assert.equal(await botPower.isBotOff({ prepare: () => ({ bind: () => ({ first: async () => ({ value: "true" }) }) }) }), true);
+}
+
+// Worker cron stops all scheduled workflow work while bot_off is true.
+{
+  const cronSource = fs.readFileSync(path.join(root, "src/workflow_cron.js"), "utf8");
+  const cron = await import(dataModuleUrl(cronSource));
+  const result = await cron.runWorkflowCron(
+    { scheduledTime: 1800000 },
+    { GITHUB_DISPATCH_TOKEN: "t", DB: { prepare: () => ({ first: async () => ({ value: "true" }) }) } },
+    async () => { throw new Error("must not dispatch"); },
+    { fetcher: async () => { throw new Error("must not fetch"); }, logger: () => {} },
+  );
+  assert.ok(result.entries.every((entry) => entry.result === "skipped"));
 }
 
 // The shared dispatch helper accepts the exact scheduled inputs and performs one safe attempt.
