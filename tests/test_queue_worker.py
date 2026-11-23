@@ -418,6 +418,32 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertIsNone(cloud.owner_reviews[0]["has_music"])
         self.assertIs(cloud.owner_reviews[1]["has_music"], True)
 
+    def test_music_not_detected_failure_is_routed_to_owner_review(self):
+        cloud = FakeCloud()
+        cloud.items = cloud.items[:1]
+        outcome = {
+            "ok": False,
+            "status": "staging_failed",
+            "reason": "music_not_detected",
+            "music_probability": 0.0619,
+            "has_audio_stream": True,
+            "has_music": False,
+        }
+        with (
+            patch.object(queue_worker, "CloudState", return_value=cloud),
+            patch.object(queue_worker, "run_one", return_value=outcome),
+            patch.object(queue_worker, "_mega_inventory", return_value={"available": False}),
+            patch.object(queue_worker, "send_owner_notification", return_value={"sent": True}),
+            patch.object(queue_worker, "send_tiktok_owner_review_notifications", return_value={"sent": True, "sent_count": 0}),
+        ):
+            report = queue_worker.run_daily(send_delay_seconds=0)
+
+        self.assertEqual(report["owner_review_count"], 1)
+        self.assertEqual([item["reason"] for item in cloud.owner_reviews], ["music_not_detected"])
+        self.assertIs(cloud.owner_reviews[0]["has_audio"], True)
+        self.assertIs(cloud.owner_reviews[0]["has_music"], False)
+        self.assertEqual(cloud.owner_reviews[0]["music_probability"], 0.0619)
+
     def test_failure_report_preserves_sanitized_staging_diagnostics(self):
         def fake_run_one(*args, **kwargs):
             return {

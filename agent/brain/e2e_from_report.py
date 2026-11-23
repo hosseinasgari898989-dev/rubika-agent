@@ -106,6 +106,21 @@ def _owner_music_ambiguity_override(
     )
 
 
+def _owner_no_music_override(
+    candidate: Candidate, validation: Any, moderation: Any,
+) -> bool:
+    policy = candidate.source_policy if isinstance(candidate.source_policy, Mapping) else {}
+    return (
+        candidate.platform == "tiktok"
+        and policy.get("owner_override") is True
+        and policy.get("owner_override_reason") == "music_not_detected"
+        and isinstance(validation, Mapping)
+        and validation.get("has_audio") is True
+        and isinstance(moderation, Mapping)
+        and moderation.get("has_music") is False
+    )
+
+
 def _tiktok_publish_checks_pass(
     candidate: Candidate, validation: Any, moderation: Any,
 ) -> bool:
@@ -121,6 +136,7 @@ def _tiktok_publish_checks_pass(
         and (
             moderation.get("has_music") is True
             or _owner_music_ambiguity_override(candidate, validation, moderation)
+            or _owner_no_music_override(candidate, validation, moderation)
         )
     )
 
@@ -596,8 +612,9 @@ def _run_one(
         )
         policy = staged_candidate.source_policy or {}
         required_checks = {"has_music": True}
-        if platform == "tiktok" and _owner_music_ambiguity_override(
-            staged_candidate, payload.get("validation"), moderation,
+        if platform == "tiktok" and (
+            _owner_music_ambiguity_override(staged_candidate, payload.get("validation"), moderation)
+            or _owner_no_music_override(staged_candidate, payload.get("validation"), moderation)
         ):
             # Bypass only the ambiguous music boolean; audio is still required above,
             # and every other download, quality, dedupe and destination check remains.

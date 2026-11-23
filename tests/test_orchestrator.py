@@ -136,6 +136,34 @@ def allowed_registry():
 
 
 class StagingOrchestratorTests(unittest.TestCase):
+    def test_persistent_queue_music_not_detected_review_sets_owner_override(self):
+        payload = {
+            "schema_version": 1,
+            "source": "persistent_d1_queue",
+            "queue_context": {
+                "id": "tiktok:7616247520657771796",
+                "owner_review_state": "approved",
+                "owner_override": True,
+                "owner_override_reason": "music_not_detected",
+            },
+            "candidates": {
+                "tiktok": [{
+                    "id": "7616247520657771796",
+                    "url": "https://www.tiktok.com/@meloaep_/video/7616247520657771796",
+                    "author": "meloaep_",
+                    "caption": "Poppy Playtime clip",
+                    "title": "Poppy Playtime clip",
+                    "media_type": "video",
+                }]
+            },
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            report = Path(folder) / "queue.json"
+            report.write_text(json.dumps(payload), encoding="utf-8")
+            candidate = candidates_from_report(report)[0]
+        self.assertTrue(candidate.source_policy["owner_override"])
+        self.assertEqual(candidate.source_policy["owner_override_reason"], "music_not_detected")
+
     def test_persistent_queue_owner_override_is_bound_to_exact_item_and_allowlisted_reason(self):
         for reason in ("music_probability_ambiguous", "edit_signal_not_found_by_brain"):
             payload = {

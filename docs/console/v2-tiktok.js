@@ -204,6 +204,7 @@ const ownerReviewReason=row=>{
   if(row.reason==='music_probability_ambiguous'&&typeof row.music_probability==='number')
     return 'موسیقی نامشخص ('+Number(row.music_probability).toLocaleString('fa-IR',{maximumFractionDigits:2})+')';
   if(row.reason==='edit_signal_not_found_by_brain')return 'نشانهٔ ادیت پیدا نشد';
+  if(row.reason==='music_not_detected')return 'موسیقی تشخیص داده نشد یا صدا کم است';
   return 'نیازمند بازبینی مالک';
 };
 

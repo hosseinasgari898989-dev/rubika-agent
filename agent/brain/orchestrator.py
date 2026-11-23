@@ -91,7 +91,7 @@ def candidates_from_report(path: str | Path) -> list[Candidate]:
                     and queue_context.get("owner_review_state") == "approved"
                     and queue_context.get("owner_override") is True
                     and review_reason in {
-                        "music_probability_ambiguous", "edit_signal_not_found_by_brain",
+                        "music_probability_ambiguous", "edit_signal_not_found_by_brain", "music_not_detected",
                     }
                 )
                 if review_approved:

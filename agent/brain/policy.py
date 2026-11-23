@@ -52,7 +52,7 @@ def _policy_for(candidate: Candidate) -> dict[str, Any]:
         candidate.platform == "tiktok"
         and supplied.get("owner_override") is True
         and supplied.get("owner_override_reason") in {
-            "music_probability_ambiguous", "edit_signal_not_found_by_brain",
+            "music_probability_ambiguous", "edit_signal_not_found_by_brain", "music_not_detected",
         }
     ):
         policy["owner_override"] = True
@@ -116,6 +116,13 @@ def evaluate_edit_candidate(
         and type(moderation.get("music_probability")) in {int, float}
         and 0.15 <= float(moderation.get("music_probability")) <= 0.70
         and type(moderation.get("has_music")) is not bool
+    )
+    owner_no_music_override = (
+        candidate.platform == "tiktok"
+        and policy.get("owner_override") is True
+        and policy.get("owner_override_reason") == "music_not_detected"
+        and inspection.has_audio is True
+        and moderation.get("has_music") is False
     )
     reasons: list[str] = []
     warnings: list[str] = []
@@ -206,13 +213,15 @@ def evaluate_edit_candidate(
     ]
     if owner_music_override:
         checks["owner_override_music_ambiguity"] = True
+    if owner_no_music_override:
+        checks["owner_override_music_not_detected"] = True
     checks["moderation_fields_missing"] = missing
     if "has_music" in missing:
         warnings.append("music_detection_review_required")
     if missing:
         warnings.append("required_video_checks_missing")
     if type(moderation.get("has_music")) is bool:
-        if moderation["has_music"] is False and inspection.has_audio is not False:
+        if moderation["has_music"] is False and inspection.has_audio is not False and not owner_no_music_override:
             reasons.append("music_not_detected")
         if inspection.has_audio is not False:
             checks["music_detection_method"] = moderation.get("music_detection_method", "workers_ai_audio_check")
@@ -241,7 +250,7 @@ def evaluate_edit_candidate(
         policy.get("owner_override") is True
         and policy.get("owner_override_reason") == "edit_signal_not_found_by_brain"
     )
-    music_accepted = moderation.get("has_music") is True or owner_music_override
+    music_accepted = moderation.get("has_music") is True or owner_music_override or owner_no_music_override
     if (
         candidate.platform == "tiktok"
         and checks.get("selected_tiktok_source") is True
