@@ -8,7 +8,7 @@ ITEM = "tiktok:7700342245823761694"
 
 class MusicNotDetectedReviewTests(unittest.TestCase):
     def _cloud(self):
-        return CloudState("https://example.invalid", token="mock-token-never-log", timeout_seconds=5)
+        return CloudState("https://example.invalid", token="mock-agent-token-never-log-0123456789abcdef", timeout_seconds=5)
 
     def test_valid_no_music_review_is_posted(self):
         for probability in (0.0619, 0.0, None):
