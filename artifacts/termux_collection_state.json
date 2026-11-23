@@ -1,60 +1,46 @@
 {
-  "candidate_pool_count": 43,
-  "candidate_pool_size": 43,
-  "completed_at": "2026-11-23T10:20:27+00:00",
-  "discovered_candidate_count": 56,
+  "candidate_pool_count": 35,
+  "candidate_pool_size": 35,
+  "completed_at": "2026-11-23T10:33:14+00:00",
+  "discovered_candidate_count": 43,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 43,
+  "filter_eligible_count": 35,
   "filter_input_by_source": {
-    "bendus.editz": 8,
+    "bendus.editz": 3,
     "meloaep_": 8,
     "menezxl9": 8,
     "poppytv_ae": 8,
     "rickkzn_": 8,
-    "sexter.aep": 8,
     "smyxae": 8
   },
   "filter_rejected_by_reason": {
-    "required_keyword_missing": 13
+    "required_keyword_missing": 8
   },
   "filter_rejected_by_source": {
     "rickkzn_": 2,
-    "sexter.aep": 5,
     "smyxae": 6
   },
-  "filter_rejected_count": 13,
-  "inserted_count": 4,
+  "filter_rejected_count": 8,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
-    "failed": 17,
+    "failed": 18,
     "processing": 0,
-    "queued": 4,
-    "sent": 102,
-    "sent_today": 0,
+    "queued": 0,
+    "sent": 105,
+    "sent_today": 3,
     "skipped": 37,
     "uncertain": 0,
     "usage_day": "2026-11-23"
   },
-  "queue_status": "enqueued",
-  "received_count": 4,
-  "report_generated_at": "2026-11-23T10:20:15.767523+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-11-23T10:33:06.305297+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7706094290912677122",
-    "7705058505421573398",
-    "7704641815529426198",
-    "7703167337976974624"
-  ],
-  "selected_source_distribution": {
-    "bendus.editz": 4
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@bendus.editz/video/7706094290912677122",
-    "https://www.tiktok.com/@bendus.editz/video/7705058505421573398",
-    "https://www.tiktok.com/@bendus.editz/video/7704641815529426198",
-    "https://www.tiktok.com/@bendus.editz/video/7703167337976974624"
-  ],
-  "skipped_existing_count": 39
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 35
 }
