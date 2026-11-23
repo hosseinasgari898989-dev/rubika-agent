@@ -1,27 +1,25 @@
 {
-  "candidate_pool_count": 35,
-  "candidate_pool_size": 35,
-  "completed_at": "2026-11-23T03:03:20+00:00",
-  "discovered_candidate_count": 43,
+  "candidate_pool_count": 33,
+  "candidate_pool_size": 33,
+  "completed_at": "2026-11-23T03:33:31+00:00",
+  "discovered_candidate_count": 35,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 35,
+  "filter_eligible_count": 33,
   "filter_input_by_source": {
     "bendus.editz": 3,
     "meloaep_": 8,
     "menezxl9": 8,
     "poppytv_ae": 8,
-    "rickkzn_": 8,
-    "smyxae": 8
+    "rickkzn_": 8
   },
   "filter_rejected_by_reason": {
-    "required_keyword_missing": 8
+    "required_keyword_missing": 2
   },
   "filter_rejected_by_source": {
-    "rickkzn_": 2,
-    "smyxae": 6
+    "rickkzn_": 2
   },
-  "filter_rejected_count": 8,
+  "filter_rejected_count": 2,
   "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
@@ -37,10 +35,10 @@
   },
   "queue_status": "no_new_candidates",
   "received_count": 0,
-  "report_generated_at": "2026-11-23T03:03:14.825793+00:00",
+  "report_generated_at": "2026-11-23T03:33:24.797960+00:00",
   "schema_version": 1,
   "selected_external_ids": [],
   "selected_source_distribution": {},
   "selected_urls": [],
-  "skipped_existing_count": 35
+  "skipped_existing_count": 33
 }
