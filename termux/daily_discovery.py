@@ -81,6 +81,15 @@ def ignore_source_cutoff_enabled() -> bool:
     return os.getenv("TERMUX_IGNORE_SOURCE_CREATED_AT", "").strip().lower() == "true"
 
 
+def scan_depth_value() -> int:
+    """Videos examined per page: 8 by default; the owner deep scan raises it up to 100."""
+    try:
+        value = int(os.getenv("TERMUX_SCAN_DEPTH", "8").strip() or "8")
+    except ValueError:
+        value = 8
+    return max(8, min(100, value))
+
+
 def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_sources: bool = False) -> dict[str, Any]:
     """Collect TikTok edit metadata and official Mob X posts without downloads or publishing."""
     print("1/2 TikTok: loading owner-selected creator profiles (metadata only)...", flush=True)
@@ -157,7 +166,8 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
     if ignore_source_cutoff:
         dynamic_cutoffs = {}
         missing_cutoff_attempts = []
-    max_tiktok_results = max(48, len(profiles) * 8) if profiles else 0
+    scan_depth = scan_depth_value()
+    max_tiktok_results = max(48, len(profiles) * scan_depth) if profiles else 0
     if not profiles:
         tiktok_candidates, tiktok_attempts = [], [
             {"platform": "tiktok", "result": "no_enabled_sources"}
@@ -167,7 +177,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             profiles=profiles,
             selected_profiles=profiles,
             max_results=max_tiktok_results,
-            max_per_profile=8,
+            max_per_profile=scan_depth,
             created_after_by_profile=dynamic_cutoffs,
         )
     tiktok_attempts.extend(missing_cutoff_attempts)
@@ -303,6 +313,7 @@ def collect_daily_report(*, output_path: str | Path = REPORT_PATH, load_remote_s
             "tiktok_account_removals_applied": source_rows_available if load_remote_sources else None,
             "tiktok_missing_created_at_cutoff_count": len(missing_cutoff_attempts),
             "tiktok_source_cutoff_ignored": ignore_source_cutoff,
+            "tiktok_scan_depth": scan_depth,
             "agent_lifecycle_mode": lifecycle_policy["mode"],
             "paid_providers_used": [],
             "ready_to_publish": False,
