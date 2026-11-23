@@ -160,8 +160,12 @@ export async function dispatchMobXWorkflow(env, workflow, inputs, options = {}) 
   if (workflow === "termux-docker-discovery.yml" && inputs != null) {
     const dryRun = inputs && (inputs.dry_run === true || inputs.dry_run === "true");
     const ignoreAddedDate = inputs && (inputs.ignore_source_created_at === true || inputs.ignore_source_created_at === "true");
+    const deepScan = inputs && (inputs.deep_scan === true || inputs.deep_scan === "true");
     if (dryRun) cleanInputs = { dry_run: "true" };
-    else if (ignoreAddedDate) cleanInputs = { dry_run: "false", ignore_source_created_at: "true" };
+    else if (ignoreAddedDate || deepScan) {
+      cleanInputs = { dry_run: "false", ignore_source_created_at: "true" };
+      if (deepScan) cleanInputs.deep_scan = "true";
+    }
     else return { ok: false, error: "github_dispatch_input_invalid" };
   } else if (workflow === "termux-docker-discovery.yml" && inputs == null) {
     // Preserve the existing scheduled Worker-Cron behavior when no inputs are supplied.
@@ -302,7 +306,7 @@ export async function dispatchTermuxDiscoveryOnce(env, { publish = false } = {})
   return dispatchMobXWorkflow(
     env,
     "termux-docker-discovery.yml",
-    publish === true ? { ignore_source_created_at: true } : { dry_run: true },
+    publish === true ? { ignore_source_created_at: true, deep_scan: true } : { dry_run: true },
     { maxAttempts: 1, safeStatusOnly: true },
   );
 }
@@ -1432,8 +1436,8 @@ async function render(ui, id, { fresh = false, clickedMid = "" } = {}) {
         "🚀 **اسکن و انتشار**",
         "",
         "این دکمه همان اجرای عادی را همین حالا شروع می‌کند:",
-        "• ویدیوهای حساب‌های انتخابی بررسی می‌شوند؛ ویدیوهای قدیمی‌تر از زمان اضافه‌شدن پیج هم دیده می‌شوند (حداکثر ۸ ویدیو برای هر پیج).",
-        "• فقط ویدیوهای مرتبط با Poppy وارد صف می‌شوند و در هر اجرا حداکثر ۴ مورد جدید اضافه می‌شود.",
+        "• اسکن عمیق: تا ۱۰۰ ویدیوی آخر هر پیج بررسی می‌شود (اجرای خودکار فقط ۸ ویدیوی آخر).",
+        "• فقط ویدیوهای مرتبط با Poppy وارد صف می‌شوند و در هر بار حداکثر ۲۰ مورد جدید اضافه می‌شود.",
         "• هر مورد واجد شرایط وارد صف می‌شود و صف TikTok اجرا می‌شود.",
         "• مقصد را gate مستقل TikTok تعیین می‌کند؛ اگر باز باشد، کانال اصلی.",
         "• برای توقف فوری، «توقف اضطراری انتشار» را بزن.",

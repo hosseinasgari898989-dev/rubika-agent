@@ -28,7 +28,7 @@ PLATFORMS = ("tiktok",)
 QUEUE_STATUSES = ("queued", "processing", "sent", "failed", "uncertain", "skipped")
 MAX_ENQUEUE_ITEMS = 500
 DEFAULT_NEW_ITEMS_PER_RUN = 4
-MAX_NEW_ITEMS_PER_RUN = 4
+MAX_NEW_ITEMS_PER_RUN = 20  # scheduled runs still pass --max-new 4; only the owner deep scan raises it.
 MAX_QUEUE_PAGES_PER_STATUS = 100
 
 TIKTOK_CANONICAL_RE = re.compile(
@@ -246,7 +246,7 @@ def run_intake(
     max_new_items: int = DEFAULT_NEW_ITEMS_PER_RUN,
 ) -> dict[str, Any]:
     if type(max_new_items) is not int or not 1 <= max_new_items <= MAX_NEW_ITEMS_PER_RUN:
-        raise ValueError("max_new_items_must_be_between_1_and_4")
+        raise ValueError("max_new_items_must_be_between_1_and_20")
 
     base_url = os.getenv("AGENT_API_BASE_URL", "https://rubika-agent.h98609294.workers.dev")
     token = os.getenv("AGENT_API_TOKEN", "").strip()

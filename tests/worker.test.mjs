@@ -5961,8 +5961,43 @@ const screenStatuses = ["queued", "processing", "sent", "failed", "uncertain", "
     assert.equal(calls[0].init.method, "GET");
     assert.equal(calls[1].init.method, "POST");
     assert.deepEqual(JSON.parse(calls[1].init.body), {
-      ref: "main", inputs: { dry_run: "false", ignore_source_created_at: "true" },
+      ref: "main", inputs: { dry_run: "false", ignore_source_created_at: "true", deep_scan: "true" },
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+// Deep-scan dispatch requires explicit intent and remains a normal (non-dry-run) owner intake.
+{
+  const fakeToken = "mock-deep-scan-token-never-log";
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      return new Response(null, { status: 204 });
+    };
+    const started = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: fakeToken },
+      "termux-docker-discovery.yml",
+      { deep_scan: true },
+    );
+    assert.deepEqual(started, { ok: true });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(JSON.parse(calls[0].init.body), {
+      ref: "main",
+      inputs: { dry_run: "false", ignore_source_created_at: "true", deep_scan: "true" },
+    });
+
+    calls.length = 0;
+    const rejected = await panel.dispatchMobXWorkflow(
+      { GITHUB_DISPATCH_TOKEN: fakeToken },
+      "termux-docker-discovery.yml",
+      { dry_run: false },
+    );
+    assert.deepEqual(rejected, { ok: false, error: "github_dispatch_input_invalid" });
+    assert.equal(calls.length, 0, "invalid normal-intake inputs must not be dispatched");
   } finally {
     globalThis.fetch = originalFetch;
   }

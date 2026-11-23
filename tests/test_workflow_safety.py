@@ -194,8 +194,11 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn('"publish_four_tiktok_test":"true"', recovery)
         # Existing discovery throttles remain unchanged.
         self.assertIn('MINIMUM_INTERVAL = timedelta(hours=5)', (ROOT / "termux" / "collection_gate.py").read_text(encoding="utf-8"))
-        self.assertIn("max_per_profile=8", (ROOT / "termux" / "daily_discovery.py").read_text(encoding="utf-8"))
-        self.assertIn("--max-new 4", discovery)
+        daily_discovery = (ROOT / "termux" / "daily_discovery.py").read_text(encoding="utf-8")
+        self.assertIn("def scan_depth_value()", daily_discovery)
+        self.assertIn("max_per_profile=scan_depth", daily_discovery)
+        self.assertIn("INTAKE_MAX_NEW:", discovery)
+        self.assertIn("inputs.deep_scan == true && '20' || '4'", discovery)
 
     def test_edit_pipeline_does_not_apply_mob_birth_cutoff(self):
         intake = (ROOT / "agent" / "brain" / "queue_intake.py").read_text(encoding="utf-8")
