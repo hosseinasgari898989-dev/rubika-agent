@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 43,
   "candidate_pool_size": 43,
-  "completed_at": "2026-11-23T23:33:08+00:00",
+  "completed_at": "2026-11-24T00:14:40+00:00",
   "discovered_candidate_count": 56,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -28,18 +28,18 @@
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
-    "failed": 10,
+    "failed": 13,
     "processing": 0,
-    "queued": 3,
+    "queued": 0,
     "sent": 110,
-    "sent_today": 8,
+    "sent_today": 0,
     "skipped": 40,
     "uncertain": 0,
-    "usage_day": "2026-11-23"
+    "usage_day": "2026-11-24"
   },
   "queue_status": "no_new_candidates",
   "received_count": 0,
-  "report_generated_at": "2026-11-23T23:33:00.312462+00:00",
+  "report_generated_at": "2026-11-24T00:14:33.496535+00:00",
   "schema_version": 1,
   "selected_external_ids": [],
   "selected_source_distribution": {},
