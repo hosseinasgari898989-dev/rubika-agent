@@ -102,7 +102,7 @@ const HOME_TEXT = "🤖 **پنل مدیریت Rubika-Agent**\n\nیکی از بخ
 async function homeText(env) {
   try { return await homeSummary(env); } catch { return HOME_TEXT; }
 }
-const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /digest خلاصهٔ ۲۴ ساعت، /errors خطاها، /runs اجراها\n• /links لینک‌های X، /ailog تاریخچهٔ AI\n• /debug: خطای آخر و مشخصات امن رویداد آخر\n• /panelmode atomic|inplace: حالت هماهنگی پنل (مالک اصلی)\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه گزارش می‌دهد و لینک X را ذخیره می‌کند؛ انتشار خودکار از این پنل انجام نمی‌شود."; 
+const HELP_TEXT = "❓ **راهنما**\n\n• /menu یا «منو»: منوی اصلی\n• /status وضعیت، /queue صف، /ai هوش مصنوعی، /report گزارش کامل\n• /digest خلاصهٔ ۲۴ ساعت، /errors خطاها، /runs اجراها\n• /links لینک‌های X، /ailog تاریخچهٔ AI\n• /debug: خطای آخر و مشخصات امن رویداد آخر\n• /panelmode atomic|inplace: حالت هماهنگی پنل (مالک اصلی)\n• /register ثبت دوبارهٔ اتصال لحظه‌ای\n\nاین نسخه گزارش می‌دهد و لینک X را ذخیره می‌کند؛ انتشار خودکار از این پنل انجام نمی‌شود.\n\nدستورهای متنی (هر کدام همان دکمه است):\n/اسکن_و_انتشار — 🚀 اسکن و انتشار (اسکن عمیق)\n/اسکن — 🔎 اسکن فوری، فقط گزارش\n/بازبینی — 🎵 تیک‌تاک، در انتظار تأیید شما\n/توقف — 🛑 توقف اضطراری انتشار\n/ربات — ⏻ خاموش/روشن کردن ربات\n/تلاش_مجدد — 🔁 تلاش مجدد ناموفق‌ها (فقط لینک‌های Mob)\n/وضعیت /صف /گزارش /خطاها /راهنما /منو — صفحه‌های همنام\n/fix یا /تازه — ارسال پنل تازه وقتی دکمه‌ها به‌روز نمی‌شوند\n(نیم‌فاصله/فاصله در دستور ممکن نیست؛ از زیرخط استفاده کن.)"; 
 
 // ---------- event normalisation (webhook shapes: {update}, {inline_message}, or a bare update)
 const bad = (o, k) => o && typeof o === "object" && o[k] === true;
@@ -1576,6 +1576,13 @@ const COMMANDS = {
   "/queue": "p_qs", "/ai": "p_ai", "/ai-status": "p_ai", "/report": "p_report", "/debug": "p_debug",
   "/digest": "p_digest", "/errors": "p_errors", "/runs": "p_runs",
   "/links": "p_links", "/ailog": "p_ailog", "/settings": "p_set",
+  "/scan": "p_scan", "/اسکن": "p_scan",
+  "/scanpub": "p_scan_pub", "/اسکن_انتشار": "p_scan_pub", "/اسکن_و_انتشار": "p_scan_pub",
+  "/review": "p_tiktok_review", "/بازبینی": "p_tiktok_review",
+  "/pause": "p_pub_control", "/توقف": "p_pub_control",
+  "/power": "p_bot_power", "/ربات": "p_bot_power", "/خاموش": "p_bot_power", "/روشن": "p_bot_power",
+  "/وضعیت": "p_status", "/صف": "p_qs", "/گزارش": "p_report", "/خطاها": "p_errors", "/راهنما": "p_help", "/منو": "p_home",
+  "/retry": "p_fail", "/تلاش_مجدد": "p_fail",
 };
 
 async function tryClaim(env, ev) {
@@ -1816,6 +1823,11 @@ async function processEvent(env, selfFetch, origin, ev) {
         : "حالت atomic غیرفعال است؛ پنل همیشه با حالت inplace ویرایش می‌شود. برای بررسی: /panelmode inplace";
       if (currentMid) await edit(timedEnv, ev.chat, currentMid, notice, HOME_KB);
       else await send(timedEnv, ev.chat, notice, HOME_KB);
+      return;
+    }
+    if (word === "/fix" || word === "/تازه") {
+      await setStates(timedEnv, [["mode", "idle"], ["panel_mid", ""]]);
+      await render(ui, "p_home", { fresh: true });
       return;
     }
     if (COMMANDS[word]) { await render(ui, COMMANDS[word], { fresh: true }); return; }
