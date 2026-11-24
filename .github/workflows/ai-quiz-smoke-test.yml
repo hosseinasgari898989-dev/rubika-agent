@@ -28,5 +28,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install project requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Run the Persian quiz smoke test (no keys are printed)
         run: python agent/brain/ai_quiz_smoke.py
