@@ -83,6 +83,25 @@ def run_smoke() -> dict[str, Any]:
             t_status, t_payload = _generate(key, name, "Translate to Persian in one short sentence: New edit posted today.")
             entry["translation_status"] = t_status
             entry["translation"] = _text(t_payload)[:120]
+            if t_status != 200:
+                t_error = t_payload.get("error") if isinstance(t_payload.get("error"), dict) else {}
+                entry["translation_error_status"] = str(t_error.get("status", ""))[:40]
+                entry["translation_error"] = str(t_error.get("message", ""))[:160].replace(key, "<redacted>")
+            q_status, q_payload = _request("POST", f"/models/{name}:generateContent", key, {
+                "contents": [{"parts": [{"text": "Write one easy multiple-choice trivia question about the game Poppy Playtime in Persian with 3 short options. Reply only as JSON: {\"question\": string, \"options\": [string, string, string], \"answer_index\": integer}"}]}],
+                "generationConfig": {"maxOutputTokens": 300, "temperature": 0.4, "responseMimeType": "application/json"},
+            })
+            entry["quiz_status"] = q_status
+            try:
+                quiz = json.loads(_text(q_payload))
+                entry["quiz_json_ok"] = isinstance(quiz, dict) and isinstance(quiz.get("options"), list) and len(quiz["options"]) == 3
+                entry["quiz_question"] = str(quiz.get("question", ""))[:100] if isinstance(quiz, dict) else ""
+            except Exception:
+                entry["quiz_json_ok"] = False
+            if q_status != 200:
+                q_error = q_payload.get("error") if isinstance(q_payload.get("error"), dict) else {}
+                entry["quiz_error_status"] = str(q_error.get("status", ""))[:40]
+                entry["quiz_error"] = str(q_error.get("message", ""))[:160].replace(key, "<redacted>")
         else:
             error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
             entry["error_status"] = str(error.get("status", ""))[:40]
