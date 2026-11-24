@@ -1,4 +1,3 @@
-import io
 import json
 import unittest
 from unittest.mock import patch
@@ -116,7 +115,11 @@ class AIQuizSmokeTests(unittest.TestCase):
         env["OPENROUTER_MODEL"] = "openrouter/free"
         calls = []
 
-        with patch.object(smoke, "_request", side_effect=lambda *args, **kwargs: calls.append(args[0].provider)):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+            calls.append(config.provider)
+            return 200, OK, None
+
+        with patch.object(smoke, "_request", side_effect=fake_request):
             report = smoke.run_smoke(env)
 
         self.assertEqual(calls, ["groq"])
