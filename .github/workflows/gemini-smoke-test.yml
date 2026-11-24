@@ -26,4 +26,4 @@ jobs:
         with:
           python-version: "3.12"
       - name: Gemini smoke test (no key is printed)
-        run: python -m agent.brain.gemini_smoke
+        run: python agent/brain/gemini_smoke.py
