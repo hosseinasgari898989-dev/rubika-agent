@@ -1,14 +1,13 @@
 {
-  "candidate_pool_count": 42,
-  "candidate_pool_size": 42,
-  "completed_at": "2026-11-25T17:33:37+00:00",
-  "discovered_candidate_count": 56,
+  "candidate_pool_count": 34,
+  "candidate_pool_size": 34,
+  "completed_at": "2026-11-25T18:03:13+00:00",
+  "discovered_candidate_count": 48,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 42,
+  "filter_eligible_count": 34,
   "filter_input_by_source": {
     "bendus.editz": 8,
-    "meloaep_": 8,
     "menezxl9": 8,
     "poppytv_ae": 8,
     "rickkzn_": 8,
@@ -39,10 +38,10 @@
   },
   "queue_status": "no_new_candidates",
   "received_count": 0,
-  "report_generated_at": "2026-11-25T17:33:23.281614+00:00",
+  "report_generated_at": "2026-11-25T18:03:01.983611+00:00",
   "schema_version": 1,
   "selected_external_ids": [],
   "selected_source_distribution": {},
   "selected_urls": [],
-  "skipped_existing_count": 42
+  "skipped_existing_count": 34
 }
