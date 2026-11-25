@@ -212,13 +212,13 @@ def _error_detail(payload: Any, secret: str) -> dict[str, Any] | None:
         message = error.get("message")
         if isinstance(message, str):
             cleaned = message.replace(secret, "<redacted>") if secret else message
-            detail["message"] = re.sub(r"\\s+", " ", cleaned).strip()[:200]
+            detail["message"] = re.sub(r"\s+", " ", cleaned).strip()[:200]
         metadata = error.get("metadata")
         if isinstance(metadata, dict) and isinstance(metadata.get("provider_name"), str):
             detail["upstream_provider"] = re.sub(r"[^A-Za-z0-9_. -]", "", metadata["provider_name"])[:40]
     elif isinstance(error, str):
         cleaned = error.replace(secret, "<redacted>") if secret else error
-        detail["message"] = re.sub(r"\\s+", " ", cleaned).strip()[:200]
+        detail["message"] = re.sub(r"\s+", " ", cleaned).strip()[:200]
     retry_after = payload.get("_retry_after")
     if isinstance(retry_after, str):
         detail["retry_after"] = re.sub(r"[^0-9A-Za-z:, -]", "", retry_after)[:20]
