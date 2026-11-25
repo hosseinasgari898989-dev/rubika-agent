@@ -58,7 +58,7 @@ class AIQuizSmokeTests(unittest.TestCase):
     def test_calls_groq_first_then_openrouter_free_and_reports_only_metadata(self):
         calls = []
 
-        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS, **kwargs):
             calls.append((config.provider, config.model))
             return 200, OK, None
 
@@ -79,7 +79,7 @@ class AIQuizSmokeTests(unittest.TestCase):
     def test_groq_failure_does_not_prevent_openrouter_attempt(self):
         calls = []
 
-        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS, **kwargs):
             calls.append(config.provider)
             if config.provider == "groq":
                 return 429, {"error": {"message": "private key " + GROQ_KEY}}, "http_429"
@@ -99,7 +99,7 @@ class AIQuizSmokeTests(unittest.TestCase):
         env.pop("GROQ_API_KEY")
         calls = []
 
-        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS, **kwargs):
             calls.append(config.provider)
             return 200, OK, None
 
@@ -115,7 +115,7 @@ class AIQuizSmokeTests(unittest.TestCase):
         env["OPENROUTER_MODEL"] = "openrouter/free"
         calls = []
 
-        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS, **kwargs):
             calls.append(config.provider)
             return 200, OK, None
 

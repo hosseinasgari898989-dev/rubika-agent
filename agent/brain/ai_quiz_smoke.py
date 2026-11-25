@@ -26,14 +26,14 @@ from agent.brain.ai_provider_clients import (  # noqa: E402
 )
 
 PROVIDER_ORDER = ("groq", "openrouter")
-OPENROUTER_FREE_MODEL = "inclusionai/ling-3.2-flash:free"
+OPENROUTER_FREE_MODEL = "openrouter/free"
 DEFAULT_MODELS = {
     "groq": "openai/gpt-oss-20b",
     "openrouter": OPENROUTER_FREE_MODEL,
 }
 MAX_RESPONSE_BYTES = 1_000_000
 TIMEOUT_SECONDS = 45
-MAX_OUTPUT_TOKENS = 500
+MAX_OUTPUT_TOKENS = 1500
 
 SYSTEM_PROMPT = (
     "تو یک نویسندهٔ آزمون فارسی هستی. فقط یک شیء JSON معتبر برگردان؛ "
@@ -105,6 +105,7 @@ def _request(
     config: ProviderConfig,
     *,
     timeout: int = TIMEOUT_SECONDS,
+    json_mode: bool = True,
 ) -> tuple[int | None, dict[str, Any] | None, str | None]:
     """Make one OpenAI-compatible request and return only sanitized error codes."""
     body = {
@@ -116,8 +117,11 @@ def _request(
         "temperature": 0.2,
         "max_tokens": MAX_OUTPUT_TOKENS,
         "stream": False,
-        "response_format": {"type": "json_object"},
     }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    if "gpt-oss" in config.model and "groq" in config.url:
+        body["reasoning_effort"] = "low"
     request = urllib.request.Request(
         config.url,
         data=json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8"),
@@ -174,8 +178,16 @@ def _message_content(payload: Any) -> str:
     return ""
 
 
+def _extract_json_object(content: str) -> str:
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
+    start, end = text.find("{"), text.rfind("}")
+    return text[start:end + 1] if start != -1 and end > start else text
+
+
 def _quiz_json_ok(payload: Any) -> bool:
-    content = _message_content(payload)
+    content = _extract_json_object(_message_content(payload))
     if not content:
         return False
     try:
@@ -244,7 +256,7 @@ def _provider_result(
     try:
         config = provider_config(provider, environ=provider_env)
         entry["model"] = config.model
-        if provider == "openrouter" and not config.model.endswith(":free"):
+        if provider == "openrouter" and not (config.model.endswith(":free") or config.model == "openrouter/free"):
             entry["error"] = "openrouter_model_not_free"
             return entry
     except ProviderClientError as exc:
@@ -252,6 +264,9 @@ def _provider_result(
         return entry
 
     status, payload, request_error = _request(config)
+    if status == 400:
+        status, payload, request_error = _request(config, json_mode=False)
+        entry["retried_without_json_mode"] = True
     entry["http_status"] = status
     entry["tokens"] = _token_usage(payload)
     entry["error_detail"] = _error_detail(payload, config.api_key)
