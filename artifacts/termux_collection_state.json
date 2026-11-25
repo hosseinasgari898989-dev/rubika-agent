@@ -1,11 +1,11 @@
 {
-  "candidate_pool_count": 41,
-  "candidate_pool_size": 41,
-  "completed_at": "2026-11-25T21:33:41+00:00",
+  "candidate_pool_count": 42,
+  "candidate_pool_size": 42,
+  "completed_at": "2026-11-25T22:03:25+00:00",
   "discovered_candidate_count": 56,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 41,
+  "filter_eligible_count": 42,
   "filter_input_by_source": {
     "bendus.editz": 8,
     "meloaep_": 8,
@@ -16,14 +16,14 @@
     "smyxae": 8
   },
   "filter_rejected_by_reason": {
-    "required_keyword_missing": 15
+    "required_keyword_missing": 14
   },
   "filter_rejected_by_source": {
-    "rickkzn_": 4,
+    "rickkzn_": 3,
     "sexter.aep": 5,
     "smyxae": 6
   },
-  "filter_rejected_count": 15,
+  "filter_rejected_count": 14,
   "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
@@ -39,10 +39,10 @@
   },
   "queue_status": "no_new_candidates",
   "received_count": 0,
-  "report_generated_at": "2026-11-25T21:33:35.124609+00:00",
+  "report_generated_at": "2026-11-25T22:03:17.362641+00:00",
   "schema_version": 1,
   "selected_external_ids": [],
   "selected_source_distribution": {},
   "selected_urls": [],
-  "skipped_existing_count": 41
+  "skipped_existing_count": 42
 }
