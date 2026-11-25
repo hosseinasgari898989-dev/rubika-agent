@@ -142,6 +142,10 @@ def _request(
             payload, _ = _decode_payload(exc.read(MAX_RESPONSE_BYTES + 1))
         except OSError:
             payload = None
+        if isinstance(payload, dict):
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            if retry_after:
+                payload["_retry_after"] = str(retry_after)[:20]
         return int(exc.code), payload, "http_" + str(int(exc.code))
     except TimeoutError:
         return None, None, "timeout"
@@ -194,6 +198,33 @@ def _quiz_json_ok(payload: Any) -> bool:
     )
 
 
+def _error_detail(payload: Any, secret: str) -> dict[str, Any] | None:
+    """Sanitized provider error fields only: no raw body, no credentials."""
+    if not isinstance(payload, dict):
+        return None
+    detail: dict[str, Any] = {}
+    error = payload.get("error")
+    if isinstance(error, dict):
+        for key in ("type", "code", "param"):
+            value = error.get(key)
+            if isinstance(value, (str, int)) and not isinstance(value, bool):
+                detail[key] = re.sub(r"[^A-Za-z0-9_.:-]", "", str(value))[:60]
+        message = error.get("message")
+        if isinstance(message, str):
+            cleaned = message.replace(secret, "<redacted>") if secret else message
+            detail["message"] = re.sub(r"\\s+", " ", cleaned).strip()[:200]
+        metadata = error.get("metadata")
+        if isinstance(metadata, dict) and isinstance(metadata.get("provider_name"), str):
+            detail["upstream_provider"] = re.sub(r"[^A-Za-z0-9_. -]", "", metadata["provider_name"])[:40]
+    elif isinstance(error, str):
+        cleaned = error.replace(secret, "<redacted>") if secret else error
+        detail["message"] = re.sub(r"\\s+", " ", cleaned).strip()[:200]
+    retry_after = payload.get("_retry_after")
+    if isinstance(retry_after, str):
+        detail["retry_after"] = re.sub(r"[^0-9A-Za-z:, -]", "", retry_after)[:20]
+    return detail or None
+
+
 def _provider_result(
     provider: str,
     environ: Mapping[str, str],
@@ -223,6 +254,7 @@ def _provider_result(
     status, payload, request_error = _request(config)
     entry["http_status"] = status
     entry["tokens"] = _token_usage(payload)
+    entry["error_detail"] = _error_detail(payload, config.api_key)
     if request_error:
         entry["error"] = _safe_error_code(request_error)
         return entry
