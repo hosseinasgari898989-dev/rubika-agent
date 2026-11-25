@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 42,
   "candidate_pool_size": 42,
-  "completed_at": "2026-11-25T15:03:13+00:00",
+  "completed_at": "2026-11-25T15:33:23+00:00",
   "discovered_candidate_count": 56,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -24,25 +24,31 @@
     "smyxae": 6
   },
   "filter_rejected_count": 14,
-  "inserted_count": 0,
+  "inserted_count": 1,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 5,
     "processing": 0,
-    "queued": 0,
+    "queued": 1,
     "sent": 114,
     "sent_today": 0,
     "skipped": 46,
     "uncertain": 0,
     "usage_day": "2026-11-25"
   },
-  "queue_status": "no_new_candidates",
-  "received_count": 0,
-  "report_generated_at": "2026-11-25T15:03:02.235439+00:00",
+  "queue_status": "enqueued",
+  "received_count": 1,
+  "report_generated_at": "2026-11-25T15:33:13.052803+00:00",
   "schema_version": 1,
-  "selected_external_ids": [],
-  "selected_source_distribution": {},
-  "selected_urls": [],
-  "skipped_existing_count": 42
+  "selected_external_ids": [
+    "7712130621337799957"
+  ],
+  "selected_source_distribution": {
+    "poppytv_ae": 1
+  },
+  "selected_urls": [
+    "https://www.tiktok.com/@poppytv_ae/video/7712130621337799957"
+  ],
+  "skipped_existing_count": 41
 }
