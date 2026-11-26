@@ -6,12 +6,11 @@ import re
 from typing import Any
 
 SPECS = (
-    ("Debut", "debut", "اولین حضور «{name}» در کدام بخش بود؟"),
+    ("Debut", "debut", "اولین حضور «{name}» در کدام فصل بود؟"),
     ("Species", "species", "گونهٔ «{name}» چیست؟"),
-    ("Role", "role", "نقش «{name}» در بازی چیست؟"),
-    ("Status", "status", "وضعیت «{name}» چیست؟"),
     ("Voiced by", "voiced_by", "صداپیشهٔ «{name}» کیست؟"),
     ("Scent", "scent", "رایحهٔ «{name}» چیست؟"),
+    ("Pendant", "pendant", "آویزِ «{name}» چیست؟"),
 )
 _UNKNOWN = re.compile(r"^(unknown|n/?a|none|\?+)\b", re.IGNORECASE)
 _DIGITS = "۰۱۲۳۴۵۶۷۸۹"
@@ -28,6 +27,9 @@ def _answer(fields: dict[str, str], key: str) -> str | None:
     raw = fields.get(key)
     if not isinstance(raw, str):
         return None
+    if key == "Debut":
+        match = re.search(r"chapter\s*(\d)", raw, re.IGNORECASE)
+        return f"Chapter {match.group(1)}" if match else None
     value = plain(raw)
     if len(value) < 2 or _UNKNOWN.match(value):
         return None
