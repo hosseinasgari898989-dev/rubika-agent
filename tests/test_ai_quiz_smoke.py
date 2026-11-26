@@ -58,7 +58,7 @@ class AIQuizSmokeTests(unittest.TestCase):
     def test_calls_groq_first_then_openrouter_free_and_reports_only_metadata(self):
         calls = []
 
-        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS, **kwargs):
             calls.append((config.provider, config.model))
             return 200, OK, None
 
@@ -67,7 +67,7 @@ class AIQuizSmokeTests(unittest.TestCase):
 
         self.assertTrue(report["ok"])
         self.assertEqual([row[0] for row in calls], ["groq", "openrouter"])
-        self.assertTrue(calls[1][1].endswith(":free"))
+        self.assertEqual(calls[1][1], smoke.OPENROUTER_FREE_MODEL)
         self.assertEqual([row["http_status"] for row in report["providers"]], [200, 200])
         self.assertTrue(all(row["quiz_json_ok"] for row in report["providers"]))
         self.assertEqual(report["providers"][0]["tokens"]["total_tokens"], 61)
@@ -79,7 +79,7 @@ class AIQuizSmokeTests(unittest.TestCase):
     def test_groq_failure_does_not_prevent_openrouter_attempt(self):
         calls = []
 
-        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS, **kwargs):
             calls.append(config.provider)
             if config.provider == "groq":
                 return 429, {"error": {"message": "private key " + GROQ_KEY}}, "http_429"
@@ -99,7 +99,7 @@ class AIQuizSmokeTests(unittest.TestCase):
         env.pop("GROQ_API_KEY")
         calls = []
 
-        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS, **kwargs):
             calls.append(config.provider)
             return 200, OK, None
 
@@ -112,10 +112,10 @@ class AIQuizSmokeTests(unittest.TestCase):
 
     def test_openrouter_model_without_free_suffix_is_blocked(self):
         env = dict(self.environ)
-        env["OPENROUTER_MODEL"] = "openrouter/free"
+        env["OPENROUTER_MODEL"] = "openai/gpt-4o-mini"
         calls = []
 
-        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS):
+        def fake_request(config, *, timeout=smoke.TIMEOUT_SECONDS, **kwargs):
             calls.append(config.provider)
             return 200, OK, None
 
@@ -124,7 +124,7 @@ class AIQuizSmokeTests(unittest.TestCase):
 
         self.assertEqual(calls, ["groq"])
         self.assertEqual(report["providers"][1]["error"], "openrouter_model_not_free")
-        self.assertEqual(report["providers"][1]["model"], "openrouter/free")
+        self.assertEqual(report["providers"][1]["model"], "openai/gpt-4o-mini")
 
     def test_quiz_schema_rejects_invalid_answer_index_and_option_count(self):
         invalid = {
