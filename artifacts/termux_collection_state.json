@@ -1,11 +1,11 @@
 {
-  "candidate_pool_count": 42,
-  "candidate_pool_size": 42,
-  "completed_at": "2026-11-25T22:33:24+00:00",
+  "candidate_pool_count": 41,
+  "candidate_pool_size": 41,
+  "completed_at": "2026-11-26T00:03:52+00:00",
   "discovered_candidate_count": 56,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
-  "filter_eligible_count": 42,
+  "filter_eligible_count": 41,
   "filter_input_by_source": {
     "bendus.editz": 8,
     "meloaep_": 8,
@@ -16,14 +16,14 @@
     "smyxae": 8
   },
   "filter_rejected_by_reason": {
-    "required_keyword_missing": 14
+    "required_keyword_missing": 15
   },
   "filter_rejected_by_source": {
-    "rickkzn_": 3,
+    "rickkzn_": 4,
     "sexter.aep": 5,
     "smyxae": 6
   },
-  "filter_rejected_count": 14,
+  "filter_rejected_count": 15,
   "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
@@ -32,17 +32,17 @@
     "processing": 0,
     "queued": 0,
     "sent": 116,
-    "sent_today": 2,
+    "sent_today": 0,
     "skipped": 46,
     "uncertain": 0,
-    "usage_day": "2026-11-25"
+    "usage_day": "2026-11-26"
   },
   "queue_status": "no_new_candidates",
   "received_count": 0,
-  "report_generated_at": "2026-11-25T22:33:19.188699+00:00",
+  "report_generated_at": "2026-11-26T00:03:45.369087+00:00",
   "schema_version": 1,
   "selected_external_ids": [],
   "selected_source_distribution": {},
   "selected_urls": [],
-  "skipped_existing_count": 42
+  "skipped_existing_count": 41
 }
