@@ -36,6 +36,14 @@ def _answer(fields: dict[str, str], key: str) -> str | None:
     return value
 
 
+def _norm(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold()).rstrip("s")
+
+
+def quiz_explanation(draft: dict[str, Any]) -> str:
+    return ("منبع: " + str(draft.get("url", "")) + " (CC BY-SA)")[:190]
+
+
 def build_drafts(characters: list[dict[str, Any]], count: int = 3, seed: str | None = None) -> list[dict[str, Any]]:
     rng = random.Random(seed)
     pool = list(characters)
@@ -54,10 +62,19 @@ def build_drafts(characters: list[dict[str, Any]], count: int = 3, seed: str | N
             answer = _answer(character["fields"], key)
             if not answer:
                 continue
-            distractors = [v for v in value_pools[key] if v.casefold() != answer.casefold()]
-            if len(distractors) < 2:
+            chosen: list[str] = []
+            seen = {_norm(answer)}
+            for value in rng.sample(value_pools[key], len(value_pools[key])):
+                value_key = _norm(value)
+                if value_key in seen:
+                    continue
+                seen.add(value_key)
+                chosen.append(value)
+                if len(chosen) == 2:
+                    break
+            if len(chosen) < 2:
                 continue
-            options = rng.sample(distractors, 2) + [answer]
+            options = chosen + [answer]
             rng.shuffle(options)
             name = _answer(character["fields"], "Full Name") or character["title"]
             drafts.append({
