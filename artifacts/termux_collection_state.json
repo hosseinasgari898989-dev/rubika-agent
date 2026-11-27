@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 41,
   "candidate_pool_size": 41,
-  "completed_at": "2026-11-27T15:33:06+00:00",
+  "completed_at": "2026-11-27T16:03:12+00:00",
   "discovered_candidate_count": 56,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -24,31 +24,25 @@
     "smyxae": 6
   },
   "filter_rejected_count": 15,
-  "inserted_count": 1,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
-    "failed": 5,
+    "failed": 6,
     "processing": 0,
-    "queued": 1,
+    "queued": 0,
     "sent": 117,
     "sent_today": 0,
     "skipped": 46,
     "uncertain": 0,
     "usage_day": "2026-11-27"
   },
-  "queue_status": "enqueued",
-  "received_count": 1,
-  "report_generated_at": "2026-11-27T15:32:55.964707+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-11-27T16:03:03.814837+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7712865544197737749"
-  ],
-  "selected_source_distribution": {
-    "menezxl9": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@menezxl9/video/7712865544197737749"
-  ],
-  "skipped_existing_count": 40
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 41
 }
