@@ -9,6 +9,22 @@ import os
 from agent.source import quiz_templates, wiki_source
 
 
+def _send_to_owner(message: str) -> bool:
+    """One separate private message per draft (the digest helper only edits a single digest message)."""
+    token = os.getenv("RUBIKA_TOKEN", "").strip()
+    owner_id = os.getenv("RUBIKA_OWNER_CHAT_ID", "").strip()
+    if not token or not owner_id:
+        return False
+    try:
+        from agent.brain import owner_notify
+
+        bot = owner_notify._make_rubika_bot(token)
+        raw = bot.send_message(chat_id=owner_id, text=message)
+        return bool(owner_notify._rubika_ok(raw))
+    except Exception:
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=3)
@@ -21,16 +37,10 @@ def main(argv: list[str] | None = None) -> int:
     messages = [quiz_templates.render_message(draft, index) for index, draft in enumerate(drafts, 1)]
     report = {"ok": bool(drafts), "characters_read": len(characters), "drafts": len(drafts), "sent": 0, "send_failed": 0}
     if args.send and drafts:
-        from agent.brain.owner_notify import send_owner_notification
-
         for message in messages:
-            try:
-                result = send_owner_notification(message, source="source-draft")
-                if isinstance(result, dict) and result.get("ok") is False:
-                    report["send_failed"] += 1
-                else:
-                    report["sent"] += 1
-            except Exception:
+            if _send_to_owner(message):
+                report["sent"] += 1
+            else:
                 report["send_failed"] += 1
     report["preview"] = messages
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
