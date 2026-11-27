@@ -20,6 +20,14 @@ class MobXNewsWorkflowTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
+            '      force_test_channel:\n        description: "Send this run to the fixed TEST channel even when the Mob MAIN gate is open"\n        required: false\n        type: boolean\n        default: false',
+            workflow,
+        )
+        self.assertIn(
+            'if [[ "$RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE" == "open" && "${{ inputs.force_test_channel }}" != "true" ]]; then',
+            workflow,
+        )
+        self.assertNotIn(
             'if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE" == "open" ]]; then',
             workflow,
         )

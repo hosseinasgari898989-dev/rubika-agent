@@ -9,6 +9,11 @@ on:
         description: "Specific owner-approved Mob X link job; empty keeps the general workflow"
         required: false
         type: string
+      force_test_channel:
+        description: "Send this run to the fixed TEST channel even when the Mob MAIN gate is open"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -79,7 +84,7 @@ jobs:
             echo "::error::The shared RUBIKA_CHANNEL_GUID secret must remain pinned to TEST."
             exit 2
           fi
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE" == "open" ]]; then
+          if [[ "$RUBIKA_AGENT_MOB_X_NEWS_MAIN_CHANNEL_GATE" == "open" && "${{ inputs.force_test_channel }}" != "true" ]]; then
             if [[ -z "${RUBIKA_MAIN_CHANNEL_GUID:-}" ]]; then
               echo "::error::Mob X MAIN gate is open but the MAIN destination is unavailable."
               exit 2
