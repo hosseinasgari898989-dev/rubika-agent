@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 61,
   "candidate_pool_size": 61,
-  "completed_at": "2026-11-27T22:34:06+00:00",
+  "completed_at": "2026-11-27T23:03:27+00:00",
   "discovered_candidate_count": 80,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -34,32 +34,33 @@
   "queue_counts": {
     "failed": 5,
     "processing": 0,
-    "queued": 4,
-    "sent": 123,
-    "sent_today": 6,
+    "queued": 7,
+    "sent": 124,
+    "sent_today": 7,
     "skipped": 46,
     "uncertain": 0,
     "usage_day": "2026-11-27"
   },
   "queue_status": "enqueued",
   "received_count": 4,
-  "report_generated_at": "2026-11-27T22:33:58.655982+00:00",
+  "report_generated_at": "2026-11-27T23:03:16.508107+00:00",
   "schema_version": 1,
   "selected_external_ids": [
-    "7678435814283545874",
-    "7676853601704201480",
-    "7671816048550759698",
-    "7711120478064200968"
+    "7710376940330421525",
+    "7700085097793424661",
+    "7662757007253966087",
+    "7710045741611289864"
   ],
   "selected_source_distribution": {
     "fluxx841": 1,
-    "prot0typee_": 3
+    "pr0to7": 2,
+    "prot0typee_": 1
   },
   "selected_urls": [
-    "https://www.tiktok.com/@prot0typee_/video/7678435814283545874",
-    "https://www.tiktok.com/@prot0typee_/video/7676853601704201480",
-    "https://www.tiktok.com/@prot0typee_/video/7671816048550759698",
-    "https://www.tiktok.com/@fluxx841/video/7711120478064200968"
+    "https://www.tiktok.com/@pr0to7/video/7710376940330421525",
+    "https://www.tiktok.com/@pr0to7/video/7700085097793424661",
+    "https://www.tiktok.com/@prot0typee_/video/7662757007253966087",
+    "https://www.tiktok.com/@fluxx841/video/7710045741611289864"
   ],
-  "skipped_existing_count": 24
+  "skipped_existing_count": 33
 }
