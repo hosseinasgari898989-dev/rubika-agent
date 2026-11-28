@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 61,
   "candidate_pool_size": 61,
-  "completed_at": "2026-11-28T01:03:23+00:00",
+  "completed_at": "2026-11-28T01:33:33+00:00",
   "discovered_candidate_count": 80,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -35,24 +35,24 @@
     "failed": 12,
     "processing": 0,
     "queued": 1,
-    "sent": 132,
-    "sent_today": 1,
+    "sent": 133,
+    "sent_today": 2,
     "skipped": 46,
     "uncertain": 0,
     "usage_day": "2026-11-28"
   },
   "queue_status": "enqueued",
   "received_count": 1,
-  "report_generated_at": "2026-11-28T01:03:18.101636+00:00",
+  "report_generated_at": "2026-11-28T01:33:28.391332+00:00",
   "schema_version": 1,
   "selected_external_ids": [
-    "7713018414838615304"
+    "7713028827424836882"
   ],
   "selected_source_distribution": {
     "fluxx841": 1
   },
   "selected_urls": [
-    "https://www.tiktok.com/@fluxx841/video/7713018414838615304"
+    "https://www.tiktok.com/@fluxx841/video/7713028827424836882"
   ],
   "skipped_existing_count": 60
 }
