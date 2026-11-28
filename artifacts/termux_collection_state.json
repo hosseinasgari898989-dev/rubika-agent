@@ -1,7 +1,7 @@
 {
   "candidate_pool_count": 61,
   "candidate_pool_size": 61,
-  "completed_at": "2026-11-28T01:33:33+00:00",
+  "completed_at": "2026-11-28T02:03:42+00:00",
   "discovered_candidate_count": 80,
   "duplicate_count": 0,
   "duplicate_within_report_count": 0,
@@ -28,31 +28,25 @@
     "smyxae": 6
   },
   "filter_rejected_count": 19,
-  "inserted_count": 1,
+  "inserted_count": 0,
   "invalid_count": 0,
   "mode": "metadata_only_no_download_no_publish",
   "queue_counts": {
     "failed": 12,
     "processing": 0,
-    "queued": 1,
-    "sent": 133,
-    "sent_today": 2,
+    "queued": 0,
+    "sent": 134,
+    "sent_today": 3,
     "skipped": 46,
     "uncertain": 0,
     "usage_day": "2026-11-28"
   },
-  "queue_status": "enqueued",
-  "received_count": 1,
-  "report_generated_at": "2026-11-28T01:33:28.391332+00:00",
+  "queue_status": "no_new_candidates",
+  "received_count": 0,
+  "report_generated_at": "2026-11-28T02:03:37.277533+00:00",
   "schema_version": 1,
-  "selected_external_ids": [
-    "7713028827424836882"
-  ],
-  "selected_source_distribution": {
-    "fluxx841": 1
-  },
-  "selected_urls": [
-    "https://www.tiktok.com/@fluxx841/video/7713028827424836882"
-  ],
-  "skipped_existing_count": 60
+  "selected_external_ids": [],
+  "selected_source_distribution": {},
+  "selected_urls": [],
+  "skipped_existing_count": 61
 }
